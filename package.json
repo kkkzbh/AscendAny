@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @ascendany/desktop dev",
+    "build": "pnpm --filter @ascendany/desktop build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "pnpm@9.15.4"
+}

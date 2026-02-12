@@ -1,0 +1,15 @@
+export type Role = "user" | "assistant" | "system";
+
+export interface ChatMessage {
+  id: string;
+  role: Role;
+  content: string;
+  timestamp: number;
+}
+
+export interface ChatSession {
+  messages: ChatMessage[];
+  summary: string;
+  createdAt: number;
+  updatedAt: number;
+}

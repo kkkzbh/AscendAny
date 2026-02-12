@@ -57,3 +57,24 @@ dbname=AscendAny
 user=AscendAny
 # password: from ~/.pgpass
 ```
+
+## Linux 桌面端 GPU 兼容模式（Electron）
+
+在 Linux 下，桌面端默认使用 `ASCENDANY_LINUX_GPU_MODE=off`（关闭硬件加速）以规避
+`gbm_pixmap_wayland.cc` / GPU 进程反复崩溃问题。
+
+可按需切换：
+
+```bash
+# 默认（最稳妥）
+ASCENDANY_LINUX_GPU_MODE=off pnpm --filter @ascendany/desktop dev
+
+# 强制走 XWayland（某些驱动更稳定）
+ASCENDANY_LINUX_GPU_MODE=x11 pnpm --filter @ascendany/desktop dev
+
+# 使用软件渲染
+ASCENDANY_LINUX_GPU_MODE=swiftshader pnpm --filter @ascendany/desktop dev
+
+# 自动（不做降级处理）
+ASCENDANY_LINUX_GPU_MODE=auto pnpm --filter @ascendany/desktop dev
+```
