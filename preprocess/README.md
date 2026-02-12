@@ -1,21 +1,72 @@
 # preprocess（预处理与增量导入）
 
-本目录预留给“practice 增量数据 -> PostgreSQL -> 指标/rating”的代码实现。
+本目录已落地为可执行的增量导入流水线：
+- 扫描 `practice` 考试目录，按 `exam_type + source_path` 识别考试单位。
+- 以文件集合指纹（fingerprint）判断“新增考试”或“新增快照”。
+- 解析 `答卷 HTML + 提交记录 CSV + 成绩单 XLSX`。
+- 幂等写入 PostgreSQL（`(exam_id, row_hash)` 去重）。
+- 每场计算五大指标（0-100）与 rating 变化，并维护 `student_current_metrics`。
 
-设计约束（必须满足）：
-- 输入为增量：重复运行不会重复导入旧数据。
-- 旧数据永久保留：不得通过“清库重算”实现增量。
-- 以“考试单位目录”为事务边界导入。
+## 目录结构
 
-建议后续实现的入口：
-- `preprocess/discover.py`: 扫描 `PRACTICE_DATA_ROOT`，识别新增考试单位/快照
-- `preprocess/extract_*`: 按类型解析 CSV/XLSX/HTML
-- `preprocess/load.py`: 幂等写入 DB（`row_hash` 去重）
-- `preprocess/derive_metrics.py`: 五大指标相对打分
-- `preprocess/derive_rating.py`: rating 回放计算（参考 Codeforces 框架）
+- `preprocess/cli.py`：CLI 入口。
+- `preprocess/config.py`：配置加载（YAML + 环境变量覆盖）。
+- `preprocess/discover.py`：增量扫描与 fingerprint。
+- `preprocess/extract/`：CSV/XLSX/HTML 解析。
+- `preprocess/load/`：入库仓储与导入服务。
+- `preprocess/derive/`：指标、rating、当前画像融合。
+- `preprocess/tests/`：单元测试（编码、幂等 hash、指标与 rating）。
 
-更多规范见：
-- `doc/增量输入数据规范.md`
-- `doc/增量预处理与幂等导入.md`
-- `doc/数据库设计.md`
-- `doc/五大能力指标与综合能力分设计.md`
+## 安装依赖
+
+```bash
+python -m pip install -r preprocess/requirements-dev.txt
+```
+
+## 配置
+
+默认配置文件：`preprocess/config/default.yaml`  
+可通过以下方式覆盖：
+- 环境变量：`PRACTICE_DATA_ROOT`
+- CLI 参数：`--practice-root`、`--db-dsn`、`--db-host`、`--db-port`、`--db-name`、`--db-user`
+
+数据库默认走 PgBouncer `6432`，密码建议来自 `~/.pgpass` 或 `ASCENDANY_DB_PASSWORD`。
+
+## 使用方式
+
+仅扫描：
+
+```bash
+python -m preprocess.cli discover
+```
+
+执行增量导入：
+
+```bash
+python -m preprocess.cli run
+```
+
+试运行（只统计，不写库）：
+
+```bash
+python -m preprocess.cli run --dry-run
+```
+
+只处理特定考试类型：
+
+```bash
+python -m preprocess.cli run --exam-type datastructure --exam-type pta_icpc
+```
+
+限制处理数量（调试）：
+
+```bash
+python -m preprocess.cli run --limit 3
+```
+
+## 注意事项
+
+- 解析编码按顺序尝试：`utf-8` → `utf-8-sig` → `gb18030`。
+- CSV/XLSX 字段统一 `strip()`，去除尾部 `\t`。
+- 提交记录默认保留 actor 信息（`actor_source/actor_external_id/actor_name`），不强制绑定 `students`。
+- 每场考试导入以事务为边界；失败回滚并写入 `ingest_exam_runs`。
