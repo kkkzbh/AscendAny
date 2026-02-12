@@ -1,0 +1,39 @@
+practice_root: /home/kkkzbh/code/Ascend/data/practice
+
+db:
+  host: 127.0.0.1
+  port: 6432
+  dbname: AscendAny
+  user: AscendAny
+  password_env: ASCENDANY_DB_PASSWORD
+  dsn: null
+
+ingest:
+  encodings:
+    - utf-8
+    - utf-8-sig
+    - gb18030
+  fingerprint_roles:
+    - answer_html
+    - submission_csv
+    - scoreboard_xlsx
+  timezone: Asia/Shanghai
+
+metrics:
+  winsor_low: 0.05
+  winsor_high: 0.95
+  flexibility_mode_default: approx
+
+fusion:
+  half_life_days:
+    knowledge: 45
+    accuracy: 21
+    quality: 45
+    flexibility: 21
+    proficiency: 21
+
+rating:
+  initial_rating: 800
+  max_binary_search_rating: 8000
+  min_binary_search_rating: -2000
+  binary_search_steps: 30
