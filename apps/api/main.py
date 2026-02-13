@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .api.routes import (
+    auth_router,
     chat_router,
     health_router,
     meta_router,
@@ -20,6 +21,7 @@ from .core.config import Settings, load_settings
 from .core.errors import AppError
 from .db.pool import build_pool
 from .db.repository import ApiRepository
+from .services.auth import AuthService
 from .services.llm import LLMService
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,10 @@ def create_app(
             )
         else:
             app.state.llm_service = llm_service
+        app.state.auth_service = AuthService(
+            settings=app_settings,
+            repository=app.state.repository,
+        )
 
         yield
 
@@ -95,6 +101,7 @@ def create_app(
 
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(meta_router, prefix="/api/v1")
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(students_router, prefix="/api/v1")
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(model_router, prefix="/api/v1")

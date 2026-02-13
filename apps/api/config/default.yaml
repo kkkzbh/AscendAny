@@ -47,3 +47,11 @@ llm:
       base_url: https://api.deepseek.com/v1
       model: deepseek-chat
       api_key_env: DEEPSEEK_API_KEY
+
+auth:
+  enabled: true
+  signup_policy: username_password_only
+  jwt_secret_env: ASCENDANY_AUTH_JWT_SECRET
+  access_ttl_minutes: 15
+  refresh_ttl_days: 30
+  password_pepper_env: ASCENDANY_AUTH_PASSWORD_PEPPER

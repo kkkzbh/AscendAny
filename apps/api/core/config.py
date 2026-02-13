@@ -106,11 +106,22 @@ class LLMConfig:
 
 
 @dataclass(slots=True)
+class AuthConfig:
+    enabled: bool = True
+    signup_policy: str = "username_password_only"
+    jwt_secret_env: str = "ASCENDANY_AUTH_JWT_SECRET"
+    access_ttl_minutes: int = 15
+    refresh_ttl_days: int = 30
+    password_pepper_env: str = "ASCENDANY_AUTH_PASSWORD_PEPPER"
+
+
+@dataclass(slots=True)
 class Settings:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
 
 def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -169,6 +180,14 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             },
             "request_timeout_seconds": settings.llm.request_timeout_seconds,
             "providers": _providers_to_dict(settings.llm.providers),
+        },
+        "auth": {
+            "enabled": settings.auth.enabled,
+            "signup_policy": settings.auth.signup_policy,
+            "jwt_secret_env": settings.auth.jwt_secret_env,
+            "access_ttl_minutes": settings.auth.access_ttl_minutes,
+            "refresh_ttl_days": settings.auth.refresh_ttl_days,
+            "password_pepper_env": settings.auth.password_pepper_env,
         },
     }
 
@@ -238,6 +257,7 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
     api = raw.get("api", {})
     dashboard = raw.get("dashboard", {})
     llm = raw.get("llm", {})
+    auth = raw.get("auth", {})
 
     providers = _build_provider_map(llm.get("providers", {}) or {})
     server_default = _build_server_default_config(llm, providers)
@@ -266,6 +286,20 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             server_default=server_default,
             request_timeout_seconds=float(llm.get("request_timeout_seconds", 60.0)),
             providers=providers,
+        ),
+        auth=AuthConfig(
+            enabled=bool(auth.get("enabled", True)),
+            signup_policy=str(
+                auth.get("signup_policy", "username_password_only")
+            ).strip(),
+            jwt_secret_env=str(
+                auth.get("jwt_secret_env", "ASCENDANY_AUTH_JWT_SECRET")
+            ).strip(),
+            access_ttl_minutes=max(1, int(auth.get("access_ttl_minutes", 15))),
+            refresh_ttl_days=max(1, int(auth.get("refresh_ttl_days", 30))),
+            password_pepper_env=str(
+                auth.get("password_pepper_env", "ASCENDANY_AUTH_PASSWORD_PEPPER")
+            ).strip(),
         ),
     )
 
@@ -310,6 +344,26 @@ def _apply_env_overrides(settings: Settings) -> None:
         settings.api.cors_origins = [
             item.strip() for item in env_cors.split(",") if item.strip()
         ]
+    env_auth_enabled = os.getenv("ASCENDANY_AUTH_ENABLED", "").strip().lower()
+    if env_auth_enabled in {"0", "false", "no"}:
+        settings.auth.enabled = False
+    elif env_auth_enabled in {"1", "true", "yes"}:
+        settings.auth.enabled = True
+    env_signup_policy = os.getenv("ASCENDANY_AUTH_SIGNUP_POLICY", "").strip()
+    if env_signup_policy:
+        settings.auth.signup_policy = env_signup_policy
+    env_jwt_secret_env = os.getenv("ASCENDANY_AUTH_JWT_SECRET_ENV", "").strip()
+    if env_jwt_secret_env:
+        settings.auth.jwt_secret_env = env_jwt_secret_env
+    env_access_ttl = os.getenv("ASCENDANY_AUTH_ACCESS_TTL_MINUTES", "").strip()
+    if env_access_ttl:
+        settings.auth.access_ttl_minutes = max(1, int(env_access_ttl))
+    env_refresh_ttl = os.getenv("ASCENDANY_AUTH_REFRESH_TTL_DAYS", "").strip()
+    if env_refresh_ttl:
+        settings.auth.refresh_ttl_days = max(1, int(env_refresh_ttl))
+    env_password_pepper_env = os.getenv("ASCENDANY_AUTH_PASSWORD_PEPPER_ENV", "").strip()
+    if env_password_pepper_env:
+        settings.auth.password_pepper_env = env_password_pepper_env
 
 
 def load_settings(config_path: Path | None = None) -> Settings:

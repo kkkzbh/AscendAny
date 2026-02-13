@@ -43,9 +43,279 @@ class RatingHistoryRow:
     new_rating: int
 
 
+@dataclass(slots=True)
+class AccountRow:
+    account_id: int
+    username: str
+    password_hash: str
+    is_active: bool
+
+
+@dataclass(slots=True)
+class AccountProfileRow:
+    student_id: str | None
+    pta_nickname: str | None
+    updated_at: datetime | None
+
+
+@dataclass(slots=True)
+class RefreshTokenRow:
+    token_id: int
+    account_id: int
+    token_hash: str
+    expires_at: datetime
+    revoked_at: datetime | None
+    device_id: str | None
+
+
 class ApiRepository:
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
+
+    async def create_account(
+        self, username: str, password_hash: str
+    ) -> AccountRow | None:
+        query = """
+            INSERT INTO ascendany.user_accounts (username, password_hash)
+            VALUES (%s, %s)
+            ON CONFLICT (username_normalized) DO NOTHING
+            RETURNING account_id, username, password_hash, is_active
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (username, password_hash))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return AccountRow(
+            account_id=int(row["account_id"]),
+            username=str(row["username"]),
+            password_hash=str(row["password_hash"]),
+            is_active=bool(row["is_active"]),
+        )
+
+    async def add_account_contact(
+        self, account_id: int, contact_type: str, value: str
+    ) -> bool:
+        query = """
+            INSERT INTO ascendany.user_contacts (account_id, type, value)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (type, value_normalized) DO NOTHING
+            RETURNING contact_id
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (account_id, contact_type, value))
+                row = await cursor.fetchone()
+        return row is not None
+
+    async def fetch_account_by_username(self, username: str) -> AccountRow | None:
+        query = """
+            SELECT account_id, username, password_hash, is_active
+            FROM ascendany.user_accounts
+            WHERE username_normalized = lower(BTRIM(%s))
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (username,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return AccountRow(
+            account_id=int(row["account_id"]),
+            username=str(row["username"]),
+            password_hash=str(row["password_hash"]),
+            is_active=bool(row["is_active"]),
+        )
+
+    async def fetch_account_by_id(self, account_id: int) -> AccountRow | None:
+        query = """
+            SELECT account_id, username, password_hash, is_active
+            FROM ascendany.user_accounts
+            WHERE account_id = %s
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (account_id,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return AccountRow(
+            account_id=int(row["account_id"]),
+            username=str(row["username"]),
+            password_hash=str(row["password_hash"]),
+            is_active=bool(row["is_active"]),
+        )
+
+    async def touch_account_login(self, account_id: int) -> None:
+        query = """
+            UPDATE ascendany.user_accounts
+            SET last_login_at = now(), updated_at = now()
+            WHERE account_id = %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(query, (account_id,))
+
+    async def delete_account(self, account_id: int) -> None:
+        query = """
+            DELETE FROM ascendany.user_accounts
+            WHERE account_id = %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(query, (account_id,))
+
+    async def fetch_account_profile(self, account_id: int) -> AccountProfileRow | None:
+        query = """
+            SELECT student_id, pta_nickname, updated_at
+            FROM ascendany.user_profiles
+            WHERE account_id = %s
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (account_id,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return AccountProfileRow(
+            student_id=str(row["student_id"]) if row.get("student_id") else None,
+            pta_nickname=str(row["pta_nickname"])
+            if row.get("pta_nickname")
+            else None,
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else None,
+        )
+
+    async def upsert_account_profile(
+        self, account_id: int, student_id: str | None, pta_nickname: str | None
+    ) -> AccountProfileRow:
+        query = """
+            INSERT INTO ascendany.user_profiles (account_id, student_id, pta_nickname, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (account_id)
+            DO UPDATE SET
+                student_id = EXCLUDED.student_id,
+                pta_nickname = EXCLUDED.pta_nickname,
+                updated_at = now()
+            RETURNING student_id, pta_nickname, updated_at
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (account_id, student_id, pta_nickname))
+                row = await cursor.fetchone()
+        if not row:
+            return AccountProfileRow(student_id=None, pta_nickname=None, updated_at=None)
+        return AccountProfileRow(
+            student_id=str(row["student_id"]) if row.get("student_id") else None,
+            pta_nickname=str(row["pta_nickname"])
+            if row.get("pta_nickname")
+            else None,
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else None,
+        )
+
+    async def insert_refresh_token(
+        self,
+        account_id: int,
+        token_hash: str,
+        expires_at: datetime,
+        device_id: str | None,
+    ) -> RefreshTokenRow:
+        query = """
+            INSERT INTO ascendany.user_refresh_tokens (
+                account_id, token_hash, expires_at, device_id
+            )
+            VALUES (%s, %s, %s, %s)
+            RETURNING token_id, account_id, token_hash, expires_at, revoked_at, device_id
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (account_id, token_hash, expires_at, device_id))
+                row = await cursor.fetchone()
+        if not row:
+            raise RuntimeError("Failed to insert refresh token row")
+        return RefreshTokenRow(
+            token_id=int(row["token_id"]),
+            account_id=int(row["account_id"]),
+            token_hash=str(row["token_hash"]),
+            expires_at=row["expires_at"],
+            revoked_at=row.get("revoked_at"),
+            device_id=str(row["device_id"]) if row.get("device_id") else None,
+        )
+
+    async def fetch_refresh_token_by_hash(
+        self, token_hash: str
+    ) -> RefreshTokenRow | None:
+        query = """
+            SELECT token_id, account_id, token_hash, expires_at, revoked_at, device_id
+            FROM ascendany.user_refresh_tokens
+            WHERE token_hash = %s
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (token_hash,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        expires_at = row.get("expires_at")
+        if not isinstance(expires_at, datetime):
+            return None
+        revoked_at = row.get("revoked_at")
+        return RefreshTokenRow(
+            token_id=int(row["token_id"]),
+            account_id=int(row["account_id"]),
+            token_hash=str(row["token_hash"]),
+            expires_at=expires_at,
+            revoked_at=revoked_at if isinstance(revoked_at, datetime) else None,
+            device_id=str(row["device_id"]) if row.get("device_id") else None,
+        )
+
+    async def revoke_refresh_token_by_id(self, token_id: int) -> None:
+        query = """
+            UPDATE ascendany.user_refresh_tokens
+            SET revoked_at = now()
+            WHERE token_id = %s
+              AND revoked_at IS NULL
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(query, (token_id,))
+
+    async def revoke_refresh_token_by_hash(
+        self, account_id: int, token_hash: str
+    ) -> bool:
+        query = """
+            UPDATE ascendany.user_refresh_tokens
+            SET revoked_at = now()
+            WHERE account_id = %s
+              AND token_hash = %s
+              AND revoked_at IS NULL
+            RETURNING token_id
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (account_id, token_hash))
+                row = await cursor.fetchone()
+        return row is not None
+
+    async def revoke_all_refresh_tokens(self, account_id: int) -> int:
+        query = """
+            UPDATE ascendany.user_refresh_tokens
+            SET revoked_at = now()
+            WHERE account_id = %s
+              AND revoked_at IS NULL
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(query, (account_id,))
+                return cursor.rowcount or 0
 
     async def fetch_latest_exam_imported_at(self) -> datetime | None:
         query = """

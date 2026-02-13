@@ -73,6 +73,17 @@ def test_meta_latest_exam_route() -> None:
     assert payload["latestExamImportedAt"].startswith("2026-02-13T09:30:00")
 
 
+def test_auth_policy_route() -> None:
+    app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
+    with TestClient(app) as client:
+        response = client.get("/api/v1/auth/policy")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["signupPolicy"] == "username_password_only"
+    assert payload["requirePhone"] is False
+    assert payload["requireEmail"] is False
+
+
 def test_students_dashboard_ambiguous_pta_nickname_returns_409() -> None:
     app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
     with TestClient(app) as client:

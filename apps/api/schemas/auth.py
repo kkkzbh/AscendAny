@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+SignupPolicy = Literal[
+    "username_password_only",
+    "require_phone_or_email",
+    "require_phone_and_email",
+]
+
+
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=4, max_length=32)
+    password: str = Field(min_length=8, max_length=128)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=320)
+    deviceId: str | None = Field(default=None, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=4, max_length=32)
+    password: str = Field(min_length=1, max_length=128)
+    deviceId: str | None = Field(default=None, max_length=128)
+
+
+class RefreshRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    refreshToken: str = Field(min_length=16, max_length=512)
+    deviceId: str | None = Field(default=None, max_length=128)
+
+
+class LogoutRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    refreshToken: str | None = Field(default=None, max_length=512)
+
+
+class AuthPolicyResponse(BaseModel):
+    signupPolicy: SignupPolicy
+    requirePhone: bool
+    requireEmail: bool
+
+
+class AuthAccountResponse(BaseModel):
+    accountId: str
+    username: str
+    studentId: str | None = None
+    ptaNickname: str | None = None
+
+
+class AuthTokensResponse(BaseModel):
+    accessToken: str
+    accessTokenExpiresAt: datetime
+    refreshToken: str
+    refreshTokenExpiresAt: datetime
+    account: AuthAccountResponse
+
+
+class AuthMeResponse(BaseModel):
+    account: AuthAccountResponse
+
+
+class AuthProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    studentId: str | None = Field(default=None, max_length=64)
+    ptaNickname: str | None = Field(default=None, max_length=128)
+
+
+class AuthProfileResponse(BaseModel):
+    studentId: str | None = None
+    ptaNickname: str | None = None
