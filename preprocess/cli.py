@@ -44,11 +44,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--exam-type", action="append", default=None)
     run_parser.add_argument("--limit", type=int)
     run_parser.add_argument("--dry-run", action="store_true")
+    run_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="reprocess all discovered exams regardless of fingerprint",
+    )
 
     discover_parser = subparsers.add_parser("discover", help="list discovered exams")
     discover_parser.add_argument("--exam-type", action="append", default=None)
 
-    link_parser = subparsers.add_parser("link-actors", help="link submission actors to students")
+    link_parser = subparsers.add_parser(
+        "link-actors", help="link submission actors to students"
+    )
     link_parser.add_argument("--exam-type", action="append", default=None)
     link_parser.add_argument("--limit", type=int)
     link_parser.add_argument("--dry-run", action="store_true")
@@ -83,7 +90,9 @@ def main() -> int:
         repo = Repository(conn)
         if args.command == "link-actors":
             service = LinkActorsService(repo=repo, settings=settings)
-            summary = service.run(exam_types=args.exam_type, limit=args.limit, dry_run=args.dry_run)
+            summary = service.run(
+                exam_types=args.exam_type, limit=args.limit, dry_run=args.dry_run
+            )
             print(
                 json.dumps(
                     {
@@ -103,7 +112,12 @@ def main() -> int:
             return 0
 
         service = IngestService(repo=repo, settings=settings)
-        summary = service.run(exam_types=args.exam_type, limit=args.limit, dry_run=args.dry_run)
+        summary = service.run(
+            exam_types=args.exam_type,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
         print(
             json.dumps(
                 {

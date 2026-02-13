@@ -53,6 +53,12 @@ uv run --python .venv/bin/python -m preprocess.cli discover
 uv run --python .venv/bin/python -m preprocess.cli run
 ```
 
+强制重算（忽略 fingerprint，适用于算法修复后的全量回放）：
+
+```bash
+uv run --python .venv/bin/python -m preprocess.cli run --force
+```
+
 试运行（只统计，不写库）：
 
 ```bash
@@ -89,4 +95,5 @@ uv run --python .venv/bin/python -m preprocess.cli link-actors --dry-run
 - CSV/XLSX 字段统一 `strip()`，去除尾部 `\t`。
 - 提交记录默认保留 actor 信息（`actor_source/actor_external_id/actor_name`），不强制绑定 `students`。
 - 每场考试导入以事务为边界；失败回滚并写入 `ingest_exam_runs`。
+- 每次导入结束会自动清理“无身份映射的学生”残留数据（历史错误映射遗留）。
 - 建议始终用 `uv run --python .venv/bin/python ...` 执行命令，不使用系统全局 Python 依赖。

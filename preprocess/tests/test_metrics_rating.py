@@ -9,7 +9,9 @@ from preprocess.derive.rating import compute_exam_rating
 from preprocess.models import ParticipantRow
 
 
-def _participant(student_id: int, rank: int, score: float, time_used: int, attempts: int) -> ParticipantRow:
+def _participant(
+    student_id: int, rank: int, score: float, time_used: int, attempts: int
+) -> ParticipantRow:
     return ParticipantRow(
         identity_source="test",
         external_id=f"s{student_id}",
@@ -61,7 +63,9 @@ def test_compute_exam_rating_direction() -> None:
         _participant(3, rank=3, score=60.0, time_used=360, attempts=3),
     ]
     ratings = {1: 800, 2: 800, 3: 800}
-    results = compute_exam_rating(participants=participants, current_ratings=ratings, cfg=RatingConfig())
+    results = compute_exam_rating(
+        participants=participants, current_ratings=ratings, cfg=RatingConfig()
+    )
     by_id = {item.student_id: item for item in results}
     assert by_id[1].delta >= by_id[2].delta
     assert by_id[2].delta >= by_id[3].delta
@@ -113,3 +117,40 @@ def test_compute_exam_metrics_prefers_timeline_flexibility() -> None:
     by_id = {item.student_id: item for item in with_timeline}
     assert by_id[1].details["flexibility_mode"] == "timeline"
     assert by_id[1].details["ac_count"] == 2
+
+
+def test_compute_exam_metrics_quality_avoids_division_by_zero() -> None:
+    faster = _participant(1, rank=1, score=100.0, time_used=120, attempts=1)
+    slower = _participant(2, rank=2, score=80.0, time_used=240, attempts=1)
+    faster.problem_stats["P1"]["runtime_ms"] = 0
+    slower.problem_stats["P1"]["runtime_ms"] = 100
+
+    results = compute_exam_metrics(
+        participants=[faster, slower],
+        total_points=100.0,
+        winsor_low=0.05,
+        winsor_high=0.95,
+        flexibility_mode="approx",
+    )
+    by_id = {item.student_id: item for item in results}
+
+    assert by_id[1].quality is not None
+    assert 0 <= by_id[1].quality <= 100
+    assert by_id[2].quality is not None
+
+
+def test_compute_exam_metrics_quality_ignores_unsolved_runtime() -> None:
+    participant = _participant(1, rank=1, score=0.0, time_used=120, attempts=1)
+    participant.problem_stats["P1"]["score"] = 0.0
+    participant.problem_stats["P1"]["solved"] = False
+    participant.problem_stats["P1"]["runtime_ms"] = 0
+
+    results = compute_exam_metrics(
+        participants=[participant],
+        total_points=100.0,
+        winsor_low=0.05,
+        winsor_high=0.95,
+        flexibility_mode="approx",
+    )
+
+    assert results[0].quality is None

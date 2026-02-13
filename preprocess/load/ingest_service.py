@@ -26,7 +26,9 @@ class IngestService:
         self.repo = repo
         self.settings = settings
 
-    def discover_changed_units(self, exam_types: list[str] | None = None, limit: int | None = None) -> list[ExamUnit]:
+    def discover_changed_units(
+        self, exam_types: list[str] | None = None, limit: int | None = None
+    ) -> list[ExamUnit]:
         discovered = discover_exam_units(
             practice_root=self.settings.practice_root,
             exam_types=exam_types,
@@ -34,7 +36,9 @@ class IngestService:
         )
         changed: list[ExamUnit] = []
         for unit in discovered:
-            previous = self.repo.get_latest_success_fingerprint(unit.exam_type, unit.source_path)
+            previous = self.repo.get_latest_success_fingerprint(
+                unit.exam_type, unit.source_path
+            )
             if previous == unit.fingerprint:
                 continue
             changed.append(unit)
@@ -48,18 +52,24 @@ class IngestService:
         exam_types: list[str] | None = None,
         limit: int | None = None,
         dry_run: bool = False,
+        force: bool = False,
     ) -> RunSummary:
         discovered = discover_exam_units(
             practice_root=self.settings.practice_root,
             exam_types=exam_types,
             fingerprint_roles=set(self.settings.ingest.fingerprint_roles),
         )
-        changed: list[ExamUnit] = []
-        for unit in discovered:
-            previous = self.repo.get_latest_success_fingerprint(unit.exam_type, unit.source_path)
-            if previous == unit.fingerprint:
-                continue
-            changed.append(unit)
+        if force:
+            changed = list(discovered)
+        else:
+            changed = []
+            for unit in discovered:
+                previous = self.repo.get_latest_success_fingerprint(
+                    unit.exam_type, unit.source_path
+                )
+                if previous == unit.fingerprint:
+                    continue
+                changed.append(unit)
         changed = sorted(changed, key=lambda item: (item.exam_type, item.source_path))
         if limit is not None:
             changed = changed[:limit]
@@ -106,7 +116,9 @@ class IngestService:
                 exam_meta_for_failure = bundle.exam_meta
 
                 with self.repo.conn.transaction():
-                    exam_id = self.repo.upsert_exam(unit.exam_type, unit.source_path, bundle.exam_meta)
+                    exam_id = self.repo.upsert_exam(
+                        unit.exam_type, unit.source_path, bundle.exam_meta
+                    )
                     self.repo.insert_exam_files(exam_id, unit.files)
                     for problem in bundle.problems:
                         self.repo.upsert_exam_problem(exam_id, problem)
@@ -118,7 +130,9 @@ class IngestService:
                     for submission in bundle.submissions:
                         self.repo.insert_submission(exam_id, submission)
 
-                    timeline_by_student = self._build_submission_timeline(bundle.submissions)
+                    timeline_by_student = self._build_submission_timeline(
+                        bundle.submissions
+                    )
                     metric_results = compute_exam_metrics(
                         participants=participants,
                         total_points=bundle.exam_meta.total_points,
@@ -139,7 +153,11 @@ class IngestService:
                             details=metric.details,
                         )
 
-                    participant_ids = [item.student_id for item in participants if item.student_id is not None]
+                    participant_ids = [
+                        item.student_id
+                        for item in participants
+                        if item.student_id is not None
+                    ]
                     current_ratings = self.repo.fetch_current_ratings(participant_ids)
                     rating_results = compute_exam_rating(
                         participants=participants,
@@ -192,7 +210,16 @@ class IngestService:
         elif failed > 0 and succeeded == 0:
             status = "failed"
 
+        cleanup_stats = {
+            "submissions_unlinked": 0,
+            "participants_deleted": 0,
+            "metrics_deleted": 0,
+            "ratings_deleted": 0,
+            "current_metrics_deleted": 0,
+            "students_deleted": 0,
+        }
         with self.repo.conn.transaction():
+            cleanup_stats = self.repo.cleanup_orphan_students()
             self.repo.finish_ingest_run(
                 ingest_run_id=ingest_run_id,
                 status=status,
@@ -200,6 +227,7 @@ class IngestService:
                     "succeeded": succeeded,
                     "failed": failed,
                     "errors": errors,
+                    "cleanup": cleanup_stats,
                 },
             )
 
@@ -212,7 +240,9 @@ class IngestService:
             errors=errors,
         )
 
-    def _materialize_participants(self, participants: list[ParticipantRow]) -> list[ParticipantRow]:
+    def _materialize_participants(
+        self, participants: list[ParticipantRow]
+    ) -> list[ParticipantRow]:
         for participant in participants:
             student_id = self.repo.upsert_student_identity(
                 source=participant.identity_source,
@@ -233,12 +263,20 @@ class IngestService:
         }
         for student_id in unique_student_ids:
             history = self.repo.fetch_metric_history(student_id)
-            metrics = compute_current_metrics(history_rows=history, half_life_days=half_life)
-            rating = self.repo.fetch_latest_rating(student_id, default_rating=self.settings.rating.initial_rating)
-            self.repo.upsert_student_current_metrics(student_id=student_id, metrics=metrics, rating=rating)
+            metrics = compute_current_metrics(
+                history_rows=history, half_life_days=half_life
+            )
+            rating = self.repo.fetch_latest_rating(
+                student_id, default_rating=self.settings.rating.initial_rating
+            )
+            self.repo.upsert_student_current_metrics(
+                student_id=student_id, metrics=metrics, rating=rating
+            )
 
     @staticmethod
-    def _build_submission_timeline(submissions: list[Any]) -> dict[int, list[dict[str, Any]]]:
+    def _build_submission_timeline(
+        submissions: list[Any],
+    ) -> dict[int, list[dict[str, Any]]]:
         timeline: dict[int, list[dict[str, Any]]] = {}
         for row in submissions:
             if row.student_id is None:

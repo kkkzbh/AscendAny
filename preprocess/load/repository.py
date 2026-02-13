@@ -28,9 +28,14 @@ class Repository:
                 """,
                 (json.dumps(meta, ensure_ascii=False),),
             )
-            return int(cursor.fetchone()[0])
+            row = cursor.fetchone()
+            if row is None:
+                raise RuntimeError("failed to create ingest run")
+            return int(row[0])
 
-    def finish_ingest_run(self, ingest_run_id: int, status: str, meta: dict[str, Any]) -> None:
+    def finish_ingest_run(
+        self, ingest_run_id: int, status: str, meta: dict[str, Any]
+    ) -> None:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -43,7 +48,9 @@ class Repository:
                 (status, json.dumps(meta, ensure_ascii=False), ingest_run_id),
             )
 
-    def get_latest_success_fingerprint(self, exam_type: str, source_path: str) -> str | None:
+    def get_latest_success_fingerprint(
+        self, exam_type: str, source_path: str
+    ) -> str | None:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -98,7 +105,10 @@ class Repository:
                     json.dumps(meta.meta, ensure_ascii=False),
                 ),
             )
-            return int(cursor.fetchone()[0])
+            row = cursor.fetchone()
+            if row is None:
+                raise RuntimeError("failed to upsert exam")
+            return int(row[0])
 
     def insert_exam_files(self, exam_id: int, files: list[SourceFile]) -> None:
         if not files:
@@ -136,21 +146,74 @@ class Repository:
         external_id: str,
         external_name: str | None,
     ) -> int:
-        canonical_key = f"{source}:{external_id}"
+        normalized_external_id = external_id.strip()
+        is_student_no_source = source.endswith("_student_no")
+        is_name_fallback_id = normalized_external_id.startswith("name::")
+
+        canonical_key = f"{source}:{normalized_external_id}"
+        if is_student_no_source and not is_name_fallback_id:
+            canonical_key = f"student_no:{normalized_external_id}"
+
         with self.conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO ascendany.students (canonical_key, canonical_name)
-                VALUES (%s, %s)
-                ON CONFLICT (canonical_key)
-                DO UPDATE SET
-                    canonical_name = COALESCE(EXCLUDED.canonical_name, ascendany.students.canonical_name),
-                    updated_at = now()
-                RETURNING student_id
-                """,
-                (canonical_key, external_name),
-            )
-            student_id = int(cursor.fetchone()[0])
+            if is_student_no_source and not is_name_fallback_id:
+                cursor.execute(
+                    """
+                    SELECT si.student_id
+                    FROM ascendany.student_identities AS si
+                    WHERE si.external_id = %s
+                      AND si.source LIKE %s
+                    ORDER BY si.identity_id ASC
+                    LIMIT 1
+                    """,
+                    (normalized_external_id, "%student_no"),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    student_id = int(existing[0])
+                    cursor.execute(
+                        """
+                        UPDATE ascendany.students
+                        SET canonical_name = COALESCE(%s, canonical_name),
+                            updated_at = now()
+                        WHERE student_id = %s
+                        """,
+                        (external_name, student_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO ascendany.students (canonical_key, canonical_name)
+                        VALUES (%s, %s)
+                        ON CONFLICT (canonical_key)
+                        DO UPDATE SET
+                            canonical_name = COALESCE(EXCLUDED.canonical_name, ascendany.students.canonical_name),
+                            updated_at = now()
+                        RETURNING student_id
+                        """,
+                        (canonical_key, external_name),
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise RuntimeError("failed to upsert student")
+                    student_id = int(row[0])
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO ascendany.students (canonical_key, canonical_name)
+                    VALUES (%s, %s)
+                    ON CONFLICT (canonical_key)
+                    DO UPDATE SET
+                        canonical_name = COALESCE(EXCLUDED.canonical_name, ascendany.students.canonical_name),
+                        updated_at = now()
+                    RETURNING student_id
+                    """,
+                    (canonical_key, external_name),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RuntimeError("failed to upsert student")
+                student_id = int(row[0])
+
             cursor.execute(
                 """
                 INSERT INTO ascendany.student_identities (
@@ -165,7 +228,7 @@ class Repository:
                     student_id = EXCLUDED.student_id,
                     external_name = COALESCE(EXCLUDED.external_name, ascendany.student_identities.external_name)
                 """,
-                (student_id, source, external_id, external_name),
+                (student_id, source, normalized_external_id, external_name),
             )
             return student_id
 
@@ -208,7 +271,9 @@ class Repository:
                 ),
             )
 
-    def upsert_exam_participant(self, exam_id: int, participant: ParticipantRow) -> None:
+    def upsert_exam_participant(
+        self, exam_id: int, participant: ParticipantRow
+    ) -> None:
         if participant.student_id is None:
             return
         with self.conn.cursor() as cursor:
@@ -511,13 +576,101 @@ class Repository:
                 (ingest_run_id, exam_id, fingerprint, status, error_message),
             )
 
+    def cleanup_orphan_students(self) -> dict[str, int]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE ascendany.submissions AS s
+                SET student_id = NULL
+                WHERE s.student_id IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM ascendany.student_identities AS si
+                      WHERE si.student_id = s.student_id
+                  )
+                """
+            )
+            submissions_unlinked = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM ascendany.exam_participants AS ep
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM ascendany.student_identities AS si
+                    WHERE si.student_id = ep.student_id
+                )
+                """
+            )
+            participants_deleted = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM ascendany.exam_student_metrics AS esm
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM ascendany.student_identities AS si
+                    WHERE si.student_id = esm.student_id
+                )
+                """
+            )
+            metrics_deleted = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM ascendany.rating_history AS rh
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM ascendany.student_identities AS si
+                    WHERE si.student_id = rh.student_id
+                )
+                """
+            )
+            ratings_deleted = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM ascendany.student_current_metrics AS scm
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM ascendany.student_identities AS si
+                    WHERE si.student_id = scm.student_id
+                )
+                """
+            )
+            current_metrics_deleted = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM ascendany.students AS s
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM ascendany.student_identities AS si
+                    WHERE si.student_id = s.student_id
+                )
+                """
+            )
+            students_deleted = cursor.rowcount
+
+        return {
+            "submissions_unlinked": submissions_unlinked,
+            "participants_deleted": participants_deleted,
+            "metrics_deleted": metrics_deleted,
+            "ratings_deleted": ratings_deleted,
+            "current_metrics_deleted": current_metrics_deleted,
+            "students_deleted": students_deleted,
+        }
+
     def list_exams_with_unlinked_submissions(
         self,
         exam_types: list[str] | None,
         actor_sources: list[str],
         limit: int | None,
     ) -> list[dict[str, Any]]:
-        source_conditions = " OR ".join(["s.actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources]) or "TRUE"
+        source_conditions = (
+            " OR ".join(["s.actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources])
+            or "TRUE"
+        )
         params: list[Any] = [_to_sql_like_pattern(item) for item in actor_sources]
         query = f"""
             SELECT DISTINCT e.exam_id, e.exam_type, e.source_path
@@ -560,9 +713,17 @@ class Repository:
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def fetch_exam_unlinked_submissions(self, exam_id: int, actor_sources: list[str]) -> list[dict[str, Any]]:
-        source_conditions = " OR ".join(["actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources]) or "TRUE"
-        params: list[Any] = [exam_id, *[_to_sql_like_pattern(item) for item in actor_sources]]
+    def fetch_exam_unlinked_submissions(
+        self, exam_id: int, actor_sources: list[str]
+    ) -> list[dict[str, Any]]:
+        source_conditions = (
+            " OR ".join(["actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources])
+            or "TRUE"
+        )
+        params: list[Any] = [
+            exam_id,
+            *[_to_sql_like_pattern(item) for item in actor_sources],
+        ]
         with self.conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 f"""
@@ -630,7 +791,9 @@ class Repository:
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def fetch_exam_submission_timeline(self, exam_id: int) -> dict[int, list[dict[str, Any]]]:
+    def fetch_exam_submission_timeline(
+        self, exam_id: int
+    ) -> dict[int, list[dict[str, Any]]]:
         with self.conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
@@ -688,8 +851,13 @@ class Repository:
             )
             return cursor.rowcount > 0
 
-    def count_unlinked_submissions(self, exam_types: list[str] | None, actor_sources: list[str]) -> int:
-        source_conditions = " OR ".join(["s.actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources]) or "TRUE"
+    def count_unlinked_submissions(
+        self, exam_types: list[str] | None, actor_sources: list[str]
+    ) -> int:
+        source_conditions = (
+            " OR ".join(["s.actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources])
+            or "TRUE"
+        )
         params: list[Any] = [_to_sql_like_pattern(item) for item in actor_sources]
         query = f"""
             SELECT COUNT(1)

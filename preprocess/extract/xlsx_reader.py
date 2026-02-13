@@ -51,6 +51,36 @@ def _unique_column_names(values: list[str]) -> list[str]:
     return result
 
 
+def _detect_problem_columns(
+    df: pd.DataFrame,
+    header_index: int,
+    header_values: list[str],
+) -> list[tuple[int, str]]:
+    candidate_rows: list[list[str]] = []
+    start = max(0, header_index - 3)
+    for idx in range(start, header_index):
+        row_values = [clean_text(value) for value in df.iloc[idx].tolist()]
+        candidate_rows.append(row_values)
+
+    columns: list[tuple[int, str]] = []
+    seen_codes: set[str] = set()
+    for col_idx, header_value in enumerate(header_values):
+        problem_code = header_value if _PROBLEM_CODE_RE.match(header_value) else ""
+        if not problem_code:
+            for row_values in reversed(candidate_rows):
+                if col_idx >= len(row_values):
+                    continue
+                candidate = clean_text(row_values[col_idx])
+                if _PROBLEM_CODE_RE.match(candidate):
+                    problem_code = candidate
+                    break
+        if not problem_code or problem_code in seen_codes:
+            continue
+        seen_codes.add(problem_code)
+        columns.append((col_idx, problem_code))
+    return columns
+
+
 def _get_value(row: dict[str, Any], candidates: list[str]) -> str:
     for candidate in candidates:
         for key, value in row.items():
@@ -148,7 +178,11 @@ def _parse_sheet(
 
     header_values = [clean_text(value) for value in df.iloc[header_index].tolist()]
     columns = _unique_column_names(header_values)
-    problem_columns = [column for column in columns if _PROBLEM_CODE_RE.match(column)]
+    problem_columns = _detect_problem_columns(
+        df=df,
+        header_index=header_index,
+        header_values=header_values,
+    )
 
     results: list[_ParsedSheetRow] = []
     sheet_title = clean_text(df.iloc[0, 0]) if len(df) > 0 else ""
@@ -157,7 +191,10 @@ def _parse_sheet(
 
     for raw_index in range(header_index + 1, len(df)):
         row_series = df.iloc[raw_index].tolist()
-        row_map: dict[str, Any] = {columns[idx]: row_series[idx] for idx in range(min(len(columns), len(row_series)))}
+        row_map: dict[str, Any] = {
+            columns[idx]: row_series[idx]
+            for idx in range(min(len(columns), len(row_series)))
+        }
         cleaned_values = [clean_text(item) for item in row_map.values()]
         if not any(cleaned_values):
             continue
@@ -174,12 +211,21 @@ def _parse_sheet(
 
         if not external_id and not display_name:
             points: dict[str, float] = {}
-            for problem_code in problem_columns:
-                maybe_points = parse_optional_float(row_map.get(problem_code))
+            for column_index, problem_code in problem_columns:
+                raw_value = (
+                    row_series[column_index] if column_index < len(row_series) else None
+                )
+                maybe_points = parse_optional_float(raw_value)
                 if maybe_points is not None:
                     points[problem_code] = maybe_points
             if points:
-                results.append(_ParsedSheetRow(participant=None, problem_points=points, title=sheet_title or None))
+                results.append(
+                    _ParsedSheetRow(
+                        participant=None,
+                        problem_points=points,
+                        title=sheet_title or None,
+                    )
+                )
             continue
 
         identity = identity_source
@@ -188,8 +234,11 @@ def _parse_sheet(
             identity = f"{identity_source}_name_fallback"
 
         problem_stats: dict[str, dict[str, Any]] = {}
-        for problem_code in problem_columns:
-            cell_data = _parse_problem_cell(row_map.get(problem_code), exam_type=exam_type)
+        for column_index, problem_code in problem_columns:
+            raw_value = (
+                row_series[column_index] if column_index < len(row_series) else None
+            )
+            cell_data = _parse_problem_cell(raw_value, exam_type=exam_type)
             if cell_data.get("raw"):
                 problem_stats[problem_code] = cell_data
 
@@ -206,11 +255,17 @@ def _parse_sheet(
             problem_stats=problem_stats,
             raw={"sheet_name": sheet_name, "total_score_raw": total_score_text},
         )
-        results.append(_ParsedSheetRow(participant=participant, problem_points={}, title=sheet_title or None))
+        results.append(
+            _ParsedSheetRow(
+                participant=participant, problem_points={}, title=sheet_title or None
+            )
+        )
     return results
 
 
-def parse_scoreboards(files: list[SourceFile], exam_type: str) -> tuple[list[ParticipantRow], list[ProblemInfo], dict[str, Any]]:
+def parse_scoreboards(
+    files: list[SourceFile], exam_type: str
+) -> tuple[list[ParticipantRow], list[ProblemInfo], dict[str, Any]]:
     identity_source = f"{exam_type}_student_no"
     participants_by_key: dict[tuple[str, str], ParticipantRow] = {}
     problem_points: dict[str, float] = {}
@@ -220,7 +275,12 @@ def parse_scoreboards(files: list[SourceFile], exam_type: str) -> tuple[list[Par
     for source in sorted(files, key=lambda item: item.relative_path):
         workbook = pd.read_excel(source.absolute_path, sheet_name=None, dtype=object)
         for sheet_name, frame in workbook.items():
-            parsed_rows = _parse_sheet(frame, sheet_name=sheet_name, exam_type=exam_type, identity_source=identity_source)
+            parsed_rows = _parse_sheet(
+                frame,
+                sheet_name=sheet_name,
+                exam_type=exam_type,
+                identity_source=identity_source,
+            )
             for parsed in parsed_rows:
                 if parsed.title and workbook_title is None:
                     workbook_title = parsed.title
@@ -228,24 +288,35 @@ def parse_scoreboards(files: list[SourceFile], exam_type: str) -> tuple[list[Par
                 if parsed.participant is None:
                     continue
 
-                key = (parsed.participant.identity_source, parsed.participant.external_id)
+                key = (
+                    parsed.participant.identity_source,
+                    parsed.participant.external_id,
+                )
                 for problem_code in parsed.participant.problem_stats:
                     all_problem_codes.add(problem_code)
 
                 existing = participants_by_key.get(key)
-                if existing is None or _completeness(parsed.participant) > _completeness(existing):
+                if existing is None or _completeness(
+                    parsed.participant
+                ) > _completeness(existing):
                     participants_by_key[key] = parsed.participant
 
     for code in problem_points:
         all_problem_codes.add(code)
 
     problems = [
-        ProblemInfo(problem_code=code, points=problem_points.get(code), order_idx=index + 1)
+        ProblemInfo(
+            problem_code=code, points=problem_points.get(code), order_idx=index + 1
+        )
         for index, code in enumerate(sorted(all_problem_codes))
     ]
     participants = sorted(
         participants_by_key.values(),
-        key=lambda item: (item.rank is None, item.rank if item.rank is not None else 10**9, item.external_id),
+        key=lambda item: (
+            item.rank is None,
+            item.rank if item.rank is not None else 10**9,
+            item.external_id,
+        ),
     )
 
     return participants, problems, {"title": workbook_title}

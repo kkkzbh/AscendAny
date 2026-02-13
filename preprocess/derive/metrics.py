@@ -31,7 +31,9 @@ def _winsorize(values: list[float], low: float, high: float) -> dict[float, floa
     return {value: min(upper, max(lower, value)) for value in values}
 
 
-def _percentile_scores(raw_by_student: dict[int, float], low: float, high: float) -> dict[int, int]:
+def _percentile_scores(
+    raw_by_student: dict[int, float], low: float, high: float
+) -> dict[int, int]:
     if not raw_by_student:
         return {}
     raw_values = list(raw_by_student.values())
@@ -93,13 +95,22 @@ def _is_wrong_attempt(verdict: Any) -> bool:
     return not _is_accepted(text)
 
 
-def _timeline_flexibility_signal(events: list[dict[str, Any]]) -> tuple[float | None, dict[str, Any]]:
-    ordered = [item for item in events if isinstance(item.get("submitted_at"), datetime)]
+def _timeline_flexibility_signal(
+    events: list[dict[str, Any]],
+) -> tuple[float | None, dict[str, Any]]:
+    ordered = [
+        item for item in events if isinstance(item.get("submitted_at"), datetime)
+    ]
     ordered.sort(key=lambda item: item["submitted_at"])
     if not ordered:
-        return None, {"timeline_submission_count": 0, "timeline_reason": "missing_submitted_at"}
+        return None, {
+            "timeline_submission_count": 0,
+            "timeline_reason": "missing_submitted_at",
+        }
 
-    ac_times = [item["submitted_at"] for item in ordered if _is_accepted(item.get("verdict"))]
+    ac_times = [
+        item["submitted_at"] for item in ordered if _is_accepted(item.get("verdict"))
+    ]
     if not ac_times:
         return None, {
             "timeline_submission_count": len(ordered),
@@ -114,7 +125,9 @@ def _timeline_flexibility_signal(events: list[dict[str, Any]]) -> tuple[float | 
         ]
         ac_interval_minutes = float(np.mean(intervals)) if intervals else 0.0
     else:
-        ac_interval_minutes = max(0.0, (ac_times[0] - ordered[0]["submitted_at"]).total_seconds() / 60.0)
+        ac_interval_minutes = max(
+            0.0, (ac_times[0] - ordered[0]["submitted_at"]).total_seconds() / 60.0
+        )
 
     ac_pace = 1.0 / max(1.0, ac_interval_minutes)
 
@@ -152,7 +165,9 @@ def _timeline_flexibility_signal(events: list[dict[str, Any]]) -> tuple[float | 
 
         if problem_code != streak_problem:
             if streak_start is not None and streak_last is not None:
-                stuck_durations.append(max(0.0, (streak_last - streak_start).total_seconds() / 60.0))
+                stuck_durations.append(
+                    max(0.0, (streak_last - streak_start).total_seconds() / 60.0)
+                )
             if wrong_attempt:
                 streak_problem = problem_code
                 streak_start = event_time
@@ -166,13 +181,21 @@ def _timeline_flexibility_signal(events: list[dict[str, Any]]) -> tuple[float | 
         if wrong_attempt and streak_start is not None:
             streak_last = event_time
         if accepted and streak_start is not None:
-            stuck_durations.append(max(0.0, (event_time - streak_start).total_seconds() / 60.0))
+            stuck_durations.append(
+                max(0.0, (event_time - streak_start).total_seconds() / 60.0)
+            )
             streak_problem = None
             streak_start = None
             streak_last = None
 
-    if streak_problem is not None and streak_start is not None and streak_last is not None:
-        stuck_durations.append(max(0.0, (streak_last - streak_start).total_seconds() / 60.0))
+    if (
+        streak_problem is not None
+        and streak_start is not None
+        and streak_last is not None
+    ):
+        stuck_durations.append(
+            max(0.0, (streak_last - streak_start).total_seconds() / 60.0)
+        )
 
     max_stuck_minutes = max(stuck_durations) if stuck_durations else 0.0
     stuck_penalty = 1.0 + min(3.0, max_stuck_minutes / 30.0)
@@ -203,7 +226,9 @@ def compute_flexibility_scores(
     student_ids = set(approx_signals) | set(timeline)
     for student_id in student_ids:
         approx_signal = approx_signals.get(student_id)
-        timeline_signal, timeline_details = _timeline_flexibility_signal(timeline.get(student_id, []))
+        timeline_signal, timeline_details = _timeline_flexibility_signal(
+            timeline.get(student_id, [])
+        )
         if timeline_signal is not None:
             raw_flexibility[student_id] = timeline_signal
             details_by_student[student_id] = {
@@ -217,11 +242,15 @@ def compute_flexibility_scores(
             raw_flexibility[student_id] = float(approx_signal)
         details_by_student[student_id] = {
             "flexibility_mode": fallback_mode if approx_signal is not None else "none",
-            "flexibility_signal": float(approx_signal) if approx_signal is not None else None,
+            "flexibility_signal": float(approx_signal)
+            if approx_signal is not None
+            else None,
             **timeline_details,
         }
 
-    flexibility_scores = _percentile_scores(raw_flexibility, low=winsor_low, high=winsor_high)
+    flexibility_scores = _percentile_scores(
+        raw_flexibility, low=winsor_low, high=winsor_high
+    )
     return flexibility_scores, details_by_student
 
 
@@ -251,7 +280,9 @@ def compute_exam_metrics(
 
         solved_count = participant.solved_count
         if solved_count is None:
-            solved_count = sum(1 for stats in participant.problem_stats.values() if stats.get("solved"))
+            solved_count = sum(
+                1 for stats in participant.problem_stats.values() if stats.get("solved")
+            )
         solved_count = max(0, solved_count)
 
         total_score = participant.total_score
@@ -282,7 +313,9 @@ def compute_exam_metrics(
             for stats in participant.problem_stats.values()
             if stats.get("solved") and stats.get("attempts") is not None
         ]
-        avg_attempts = (sum(solved_attempts) / len(solved_attempts)) if solved_attempts else None
+        avg_attempts = (
+            (sum(solved_attempts) / len(solved_attempts)) if solved_attempts else None
+        )
         total_wrong_before_ac = sum(
             int(stats.get("wrong_before_ac", 0))
             for stats in participant.problem_stats.values()
@@ -297,15 +330,17 @@ def compute_exam_metrics(
         runtime_ratios: list[float] = []
         for problem_code, stats in participant.problem_stats.items():
             runtime_ms = stats.get("runtime_ms")
-            if runtime_ms is None:
+            if runtime_ms is None or not stats.get("solved"):
                 continue
             median_runtime = runtime_medians.get(problem_code)
-            if not median_runtime:
+            if median_runtime is None or median_runtime <= 0:
                 continue
-            runtime_ratios.append(float(runtime_ms) / median_runtime)
+            runtime_ratios.append(max(1e-6, float(runtime_ms) / median_runtime))
         quality_signal = None
         if runtime_ratios:
-            quality_signal = 1.0 / float(np.median(runtime_ratios))
+            median_runtime_ratio = float(np.median(runtime_ratios))
+            if median_runtime_ratio > 0:
+                quality_signal = 1.0 / median_runtime_ratio
 
         time_used_seconds = participant.time_used_seconds
         pace_signal = None
@@ -317,7 +352,9 @@ def compute_exam_metrics(
         if pace_signal is not None:
             flexibility_signal = pace_signal / (1.0 + waste)
 
-        proficiency_base = total_score if total_score is not None else float(solved_count)
+        proficiency_base = (
+            total_score if total_score is not None else float(solved_count)
+        )
         proficiency_signal = None
         if time_used_seconds and time_used_seconds > 0:
             proficiency_signal = proficiency_base / max(1.0, (time_used_seconds / 60.0))
@@ -345,7 +382,9 @@ def compute_exam_metrics(
             "time_used_seconds": time_used_seconds,
         }
 
-    knowledge_scores = _percentile_scores(raw_knowledge, low=winsor_low, high=winsor_high)
+    knowledge_scores = _percentile_scores(
+        raw_knowledge, low=winsor_low, high=winsor_high
+    )
     accuracy_scores = _percentile_scores(raw_accuracy, low=winsor_low, high=winsor_high)
     quality_scores = _percentile_scores(raw_quality, low=winsor_low, high=winsor_high)
     flexibility_scores, flexibility_details = compute_flexibility_scores(
@@ -355,7 +394,9 @@ def compute_exam_metrics(
         winsor_high=winsor_high,
         fallback_mode=flexibility_mode,
     )
-    proficiency_scores = _percentile_scores(raw_proficiency, low=winsor_low, high=winsor_high)
+    proficiency_scores = _percentile_scores(
+        raw_proficiency, low=winsor_low, high=winsor_high
+    )
 
     results: list[StudentMetricResult] = []
     for participant in participants:
@@ -376,7 +417,9 @@ def compute_exam_metrics(
                 )
             )
             continue
-        details.update(flexibility_details.get(student_id, {"flexibility_mode": "none"}))
+        details.update(
+            flexibility_details.get(student_id, {"flexibility_mode": "none"})
+        )
         results.append(
             StudentMetricResult(
                 student_id=student_id,
