@@ -12,6 +12,7 @@ const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 
 type LinuxGpuMode = "auto" | "off" | "x11" | "swiftshader";
+type LinuxImeMode = "auto" | "on" | "off";
 
 function resolveLinuxGpuMode(): LinuxGpuMode {
   const mode = (process.env.ASCENDANY_LINUX_GPU_MODE ?? "off").toLowerCase();
@@ -24,12 +25,40 @@ function resolveLinuxGpuMode(): LinuxGpuMode {
   return "off";
 }
 
-function configureLinuxGraphics() {
+function resolveLinuxImeMode(): LinuxImeMode {
+  const mode = (process.env.ASCENDANY_LINUX_IME_MODE ?? "auto").toLowerCase();
+  if (mode === "auto" || mode === "on" || mode === "off") {
+    return mode;
+  }
+  console.warn(
+    `[AscendAny] Unknown ASCENDANY_LINUX_IME_MODE="${process.env.ASCENDANY_LINUX_IME_MODE}", fallback to "auto".`,
+  );
+  return "auto";
+}
+
+function isWaylandSession() {
+  const sessionType = (process.env.XDG_SESSION_TYPE ?? "").toLowerCase();
+  return sessionType === "wayland" || Boolean(process.env.WAYLAND_DISPLAY);
+}
+
+function appendEnableFeatures(features: string[]) {
+  const existing = app.commandLine
+    .getSwitchValue("enable-features")
+    .split(",")
+    .map((feature) => feature.trim())
+    .filter(Boolean);
+  const merged = [...new Set([...existing, ...features])];
+  if (merged.length === existing.length) {
+    return;
+  }
+  app.commandLine.appendSwitch("enable-features", merged.join(","));
+}
+
+function configureLinuxGraphics(mode: LinuxGpuMode) {
   if (!isLinux) {
     return;
   }
 
-  const mode = resolveLinuxGpuMode();
   switch (mode) {
     case "off":
       // Most robust mode for mixed Wayland/GBM environments.
@@ -50,7 +79,42 @@ function configureLinuxGraphics() {
   }
 }
 
-configureLinuxGraphics();
+function configureLinuxInputMethod(gpuMode: LinuxGpuMode) {
+  if (!isLinux) {
+    return;
+  }
+
+  const imeMode = resolveLinuxImeMode();
+  const shouldEnableWaylandIme = imeMode === "on" || (imeMode === "auto" && isWaylandSession());
+  if (!shouldEnableWaylandIme) {
+    return;
+  }
+
+  if (gpuMode === "x11") {
+    console.info("[AscendAny] ASCENDANY_LINUX_GPU_MODE=x11; skip Wayland IME switches.");
+    return;
+  }
+
+  app.commandLine.appendSwitch("enable-wayland-ime");
+  if (!app.commandLine.hasSwitch("ozone-platform") && !app.commandLine.hasSwitch("ozone-platform-hint")) {
+    app.commandLine.appendSwitch("ozone-platform-hint", "wayland");
+  }
+  appendEnableFeatures(["UseOzonePlatform"]);
+
+  // Allow forcing IM module without overriding an existing desktop session setup.
+  const imModule = process.env.ASCENDANY_LINUX_IM_MODULE?.trim();
+  if (imModule) {
+    process.env.GTK_IM_MODULE ??= imModule;
+    process.env.QT_IM_MODULE ??= imModule;
+    process.env.XMODIFIERS ??= `@im=${imModule}`;
+  }
+}
+
+if (isLinux) {
+  const linuxGpuMode = resolveLinuxGpuMode();
+  configureLinuxGraphics(linuxGpuMode);
+  configureLinuxInputMethod(linuxGpuMode);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
