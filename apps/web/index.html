@@ -7,6 +7,16 @@
     <meta name="theme-color" content="#fafcff" />
     <link rel="icon" type="image/png" href="/image/LOGO.png" />
     <title>AscendAny - 学生能力分析平台</title>
+    <script>
+      // Apply saved theme before first paint to prevent flash
+      (function() {
+        try {
+          var t = localStorage.getItem('ascendany-theme');
+          if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+        } catch(e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
