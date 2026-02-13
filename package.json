@@ -2,7 +2,9 @@
   "private": true,
   "scripts": {
     "dev": "pnpm --filter @ascendany/desktop dev",
-    "build": "pnpm --filter @ascendany/desktop build"
+    "build": "pnpm --filter @ascendany/desktop build",
+    "dev:web": "pnpm --filter @ascendany/web dev",
+    "build:web": "pnpm --filter @ascendany/web build"
   },
   "engines": {
     "node": ">=18"

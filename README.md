@@ -134,3 +134,15 @@ ASCENDANY_LINUX_IM_MODULE=fcitx ASCENDANY_LINUX_IME_MODE=on pnpm --filter @ascen
 说明：
 - `ASCENDANY_LINUX_GPU_MODE=x11` 会强制 XWayland 路径，并跳过 Wayland IME 开关。
 - 若你只关心稳定输入法，建议优先使用 `ASCENDANY_LINUX_IME_MODE=on` 在 Wayland 下验证。
+
+## 产品官网（apps/web）
+
+产品介绍网页已独立放在 `apps/web/`，与桌面端 `apps/desktop/` 隔离。
+
+```bash
+# 本地开发
+pnpm --filter @ascendany/web dev
+
+# 生产构建
+pnpm --filter @ascendany/web build
+```
