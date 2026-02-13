@@ -6,6 +6,7 @@ export const PROVIDER_ORDER = [
 ] as const;
 
 export type ProviderType = (typeof PROVIDER_ORDER)[number];
+export type ThemeMode = "light" | "dark";
 
 export function isProviderType(value: string): value is ProviderType {
   return (PROVIDER_ORDER as readonly string[]).includes(value);
@@ -22,6 +23,7 @@ export interface ModelProvider {
 }
 
 export interface AppSettings {
+  theme: ThemeMode;
   activeProvider: ProviderType;
   providers: Record<ProviderType, ModelProvider>;
   /** Provider key configured by backend as server default target */

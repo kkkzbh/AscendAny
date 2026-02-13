@@ -58,8 +58,8 @@ export function RatingDisplay({ rating }: RatingDisplayProps) {
                     : "var(--rating-negative)",
                 backgroundColor:
                   delta >= 0
-                    ? "rgba(16, 185, 129, 0.08)"
-                    : "rgba(244, 63, 94, 0.08)",
+                    ? "var(--rating-positive-soft)"
+                    : "var(--rating-negative-soft)",
               }}
             >
               {delta >= 0 ? "+" : ""}

@@ -43,13 +43,14 @@ export function RadarChart({ metrics }: RadarChartProps) {
           />
           <Tooltip
             contentStyle={{
-              background: "rgba(255,255,255,0.96)",
+              background: "var(--tooltip-background)",
               backdropFilter: "blur(12px)",
               WebkitBackdropFilter: "blur(12px)",
-              border: "1px solid rgba(148,163,184,0.25)",
+              border: "1px solid var(--tooltip-border)",
               borderRadius: "8px",
               fontSize: "12px",
-              boxShadow: "0 8px 20px rgba(15,23,42,0.08)",
+              boxShadow: "var(--tooltip-shadow)",
+              color: "var(--text-strong)",
               padding: "6px 10px",
             }}
             formatter={(value: number) => [`${value}`, "得分"]}

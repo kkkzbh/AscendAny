@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ModelProvidersResponsePayload } from "@/lib/api";
-import type { AppSettings, ProviderType, ModelProvider } from "@/types/settings";
+import type {
+  AppSettings,
+  ProviderType,
+  ModelProvider,
+  ThemeMode,
+} from "@/types/settings";
 import {
   DEFAULT_PROVIDERS,
   PROVIDER_ORDER,
@@ -12,11 +17,17 @@ interface SettingsState extends AppSettings {
   isOpen: boolean;
   openSettings: () => void;
   closeSettings: () => void;
+  setTheme: (theme: ThemeMode) => void;
+  toggleTheme: () => void;
   setActiveProvider: (p: ProviderType) => void;
   updateProvider: (type: ProviderType, patch: Partial<ModelProvider>) => void;
   syncProviderOptions: (payload: ModelProvidersResponsePayload) => void;
   setStudentId: (id: string) => void;
   setPtaNickname: (nickname: string) => void;
+}
+
+function isThemeMode(value: unknown): value is ThemeMode {
+  return value === "light" || value === "dark";
 }
 
 function cloneDefaultProviders(): Record<ProviderType, ModelProvider> {
@@ -73,6 +84,7 @@ function mergeProviders(source: unknown): Record<ProviderType, ModelProvider> {
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
+      theme: "light",
       activeProvider: "server_default",
       providers: cloneDefaultProviders(),
       serverDefaultTarget: "openai",
@@ -84,6 +96,11 @@ export const useSettingsStore = create<SettingsState>()(
 
       openSettings: () => set({ isOpen: true }),
       closeSettings: () => set({ isOpen: false }),
+      setTheme: (theme) => set({ theme }),
+      toggleTheme: () =>
+        set((state) => ({
+          theme: state.theme === "light" ? "dark" : "light",
+        })),
 
       setActiveProvider: (providerType) =>
         set((state) => {
@@ -162,6 +179,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "ascendany_settings",
       partialize: (state) => ({
+        theme: state.theme,
         activeProvider: state.activeProvider,
         providers: state.providers,
         serverDefaultTarget: state.serverDefaultTarget,
@@ -185,6 +203,7 @@ export const useSettingsStore = create<SettingsState>()(
 
         return {
           ...currentState,
+          theme: isThemeMode(persisted.theme) ? persisted.theme : currentState.theme,
           activeProvider,
           providers,
           serverDefaultTarget:

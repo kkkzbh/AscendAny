@@ -47,17 +47,77 @@ body,
 
   --rating-positive: #059669;
   --rating-negative: #dc2626;
+  --rating-positive-soft: rgba(16, 185, 129, 0.08);
+  --rating-negative-soft: rgba(244, 63, 94, 0.08);
+
+  --body-background:
+    radial-gradient(circle at 20% 12%, rgba(56, 189, 248, 0.24), transparent 40%),
+    radial-gradient(circle at 86% 22%, rgba(251, 146, 60, 0.16), transparent 34%),
+    radial-gradient(circle at 78% 78%, rgba(14, 165, 233, 0.16), transparent 36%),
+    linear-gradient(160deg, #ebf2f8 0%, #e9eef6 42%, #f4f7fb 100%);
+  --app-shell-overlay:
+    linear-gradient(to right, rgba(255, 255, 255, 0.24), transparent 28%),
+    linear-gradient(to left, rgba(255, 255, 255, 0.24), transparent 28%);
+  --titlebar-background: linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.42));
+  --panel-shadow: 0 10px 35px rgba(15, 23, 42, 0.08);
+  --settings-dialog-background: rgba(255, 255, 255, 0.92);
+  --settings-dialog-shadow: 0 24px 80px rgba(15, 23, 42, 0.2);
+  --settings-nav-background: rgba(247, 250, 252, 0.88);
+  --settings-nav-active: rgba(2, 132, 199, 0.16);
+  --tooltip-background: rgba(255, 255, 255, 0.96);
+  --tooltip-border: rgba(148, 163, 184, 0.25);
+  --tooltip-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  --scrollbar-thumb: rgba(51, 65, 85, 0.25);
+  --scrollbar-thumb-hover: rgba(51, 65, 85, 0.4);
 
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+:root[data-theme="dark"] {
+  --surface-base: #0b1220;
+  --surface-elevated: rgba(15, 23, 42, 0.72);
+  --surface-raised: rgba(15, 23, 42, 0.86);
+  --surface-soft: rgba(56, 189, 248, 0.16);
+  --surface-hover: rgba(56, 189, 248, 0.24);
+
+  --accent-700: #7dd3fc;
+
+  --text-strong: #e2e8f0;
+  --text-muted: #cbd5e1;
+  --text-soft: #94a3b8;
+
+  --border: rgba(148, 163, 184, 0.24);
+  --border-subtle: rgba(148, 163, 184, 0.2);
+
+  --rating-positive: #34d399;
+  --rating-negative: #fb7185;
+  --rating-positive-soft: rgba(16, 185, 129, 0.18);
+  --rating-negative-soft: rgba(244, 63, 94, 0.18);
+
+  --body-background:
+    radial-gradient(circle at 18% 10%, rgba(14, 116, 144, 0.35), transparent 42%),
+    radial-gradient(circle at 88% 26%, rgba(249, 115, 22, 0.18), transparent 34%),
+    radial-gradient(circle at 76% 82%, rgba(2, 132, 199, 0.2), transparent 36%),
+    linear-gradient(160deg, #020617 0%, #0b1324 42%, #111827 100%);
+  --app-shell-overlay:
+    linear-gradient(to right, rgba(56, 189, 248, 0.08), transparent 28%),
+    linear-gradient(to left, rgba(15, 23, 42, 0.35), transparent 30%);
+  --titlebar-background: linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.56));
+  --panel-shadow: 0 12px 36px rgba(2, 6, 23, 0.52);
+  --settings-dialog-background: rgba(15, 23, 42, 0.92);
+  --settings-dialog-shadow: 0 24px 80px rgba(2, 6, 23, 0.65);
+  --settings-nav-background: rgba(2, 6, 23, 0.45);
+  --settings-nav-active: rgba(56, 189, 248, 0.2);
+  --tooltip-background: rgba(15, 23, 42, 0.94);
+  --tooltip-border: rgba(148, 163, 184, 0.3);
+  --tooltip-shadow: 0 8px 24px rgba(2, 6, 23, 0.5);
+  --scrollbar-thumb: rgba(148, 163, 184, 0.3);
+  --scrollbar-thumb-hover: rgba(148, 163, 184, 0.45);
+}
+
 body {
-  background:
-    radial-gradient(circle at 20% 12%, rgba(56, 189, 248, 0.24), transparent 40%),
-    radial-gradient(circle at 86% 22%, rgba(251, 146, 60, 0.16), transparent 34%),
-    radial-gradient(circle at 78% 78%, rgba(14, 165, 233, 0.16), transparent 36%),
-    linear-gradient(160deg, #ebf2f8 0%, #e9eef6 42%, #f4f7fb 100%);
+  background: var(--body-background);
   color: var(--text-strong);
 }
 
@@ -70,14 +130,12 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    linear-gradient(to right, rgba(255, 255, 255, 0.24), transparent 28%),
-    linear-gradient(to left, rgba(255, 255, 255, 0.24), transparent 28%);
+  background: var(--app-shell-overlay);
 }
 
 .titlebar {
   border-bottom: 1px solid var(--border-subtle);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.42));
+  background: var(--titlebar-background);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
@@ -101,7 +159,7 @@ body {
   background: var(--surface-elevated);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 10px 35px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--panel-shadow);
 }
 
 .panel-header {
@@ -259,15 +317,15 @@ body {
 
 .settings-dialog {
   border: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--settings-dialog-background);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.2);
+  box-shadow: var(--settings-dialog-shadow);
 }
 
 .settings-nav {
   border-right: 1px solid var(--border-subtle);
-  background: rgba(247, 250, 252, 0.88);
+  background: var(--settings-nav-background);
   padding: 14px 8px 10px;
 }
 
@@ -288,7 +346,7 @@ body {
 }
 
 .settings-nav-item.is-active {
-  background: rgba(2, 132, 199, 0.16);
+  background: var(--settings-nav-active);
   color: var(--accent-700);
 }
 
@@ -355,12 +413,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(51, 65, 85, 0.25);
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(51, 65, 85, 0.4);
+  background: var(--scrollbar-thumb-hover);
 }
 
 @keyframes fade-in {

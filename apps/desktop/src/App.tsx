@@ -5,7 +5,14 @@ import { fetchModelProviders } from "@/lib/api";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export default function App() {
+  const theme = useSettingsStore((s) => s.theme);
   const syncProviderOptions = useSettingsStore((s) => s.syncProviderOptions);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute("data-theme", theme);
+    root.style.colorScheme = theme;
+  }, [theme]);
 
   useEffect(() => {
     let cancelled = false;

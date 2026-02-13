@@ -2,8 +2,11 @@ import { useSettingsStore } from "@/stores/settingsStore";
 
 export function TitleBar() {
   const openSettings = useSettingsStore((s) => s.openSettings);
+  const theme = useSettingsStore((s) => s.theme);
+  const toggleTheme = useSettingsStore((s) => s.toggleTheme);
   const api = window.electronAPI;
   const isMac = api?.platform === "darwin";
+  const nextThemeLabel = theme === "light" ? "切换到暗色主题" : "切换到亮色主题";
 
   return (
     <header
@@ -29,6 +32,42 @@ export function TitleBar() {
           isMac ? "ml-auto" : "absolute right-2 top-0"
         }`}
       >
+        <button
+          onClick={toggleTheme}
+          className="ui-icon-button"
+          title={nextThemeLabel}
+          aria-label={nextThemeLabel}
+        >
+          {theme === "light" ? (
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 3v2.2M12 18.8V21M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M3 12h2.2M18.8 12H21M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" />
+              <circle cx="12" cy="12" r="4.2" />
+            </svg>
+          ) : (
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M20.4 14.5A8.5 8.5 0 1 1 9.5 3.6a6.8 6.8 0 0 0 10.9 10.9z" />
+            </svg>
+          )}
+        </button>
+
         <button
           onClick={openSettings}
           className="ui-icon-button"
