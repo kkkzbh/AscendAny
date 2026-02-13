@@ -146,3 +146,11 @@ pnpm --filter @ascendany/web dev
 # 生产构建
 pnpm --filter @ascendany/web build
 ```
+
+### GitHub Pages 自动发布
+
+仓库已提供 GitHub Actions 工作流：`.github/workflows/deploy-web-pages.yml`。
+
+- 发布触发：`main` 分支有前端相关变更时自动触发（也支持手动 `workflow_dispatch`）。
+- 发布地址：`https://<GitHub 用户名>.github.io/AscendAny/`（仓库级 Pages）。
+- 仓库设置：`Settings -> Pages -> Source` 选择 `GitHub Actions`。
