@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import type { ProviderType } from "@/types/settings";
+import {
+  PROVIDER_ORDER,
+} from "@/types/settings";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 type SettingsPage = "general" | "model";
@@ -60,9 +62,9 @@ export function SettingsSidebar({
 
 function GeneralSettingsPage() {
   const studentId = useSettingsStore((s) => s.studentId);
-  const apiBaseUrl = useSettingsStore((s) => s.apiBaseUrl);
+  const ptaNickname = useSettingsStore((s) => s.ptaNickname);
   const setStudentId = useSettingsStore((s) => s.setStudentId);
-  const setApiBaseUrl = useSettingsStore((s) => s.setApiBaseUrl);
+  const setPtaNickname = useSettingsStore((s) => s.setPtaNickname);
 
   return (
     <div className="settings-page animate-fade-in">
@@ -84,17 +86,17 @@ function GeneralSettingsPage() {
 
         <div className="settings-field">
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
-            API 服务地址
+            PTA 账号昵称
           </label>
           <input
             type="text"
-            value={apiBaseUrl}
-            onChange={(e) => setApiBaseUrl(e.target.value)}
-            placeholder="http://127.0.0.1:8000"
+            value={ptaNickname}
+            onChange={(e) => setPtaNickname(e.target.value)}
+            placeholder="输入你的 PTA 昵称"
             className="settings-input"
           />
-          <p className="text-[11px] text-[var(--text-soft)]">FastAPI 后端地址</p>
         </div>
+
       </div>
     </div>
   );
@@ -107,6 +109,7 @@ function ModelSettingsPage() {
   const updateProvider = useSettingsStore((s) => s.updateProvider);
 
   const current = providers[activeProvider];
+  const isServerDefault = current?.usesServerConfig;
 
   return (
     <div className="settings-page animate-fade-in">
@@ -117,23 +120,28 @@ function ModelSettingsPage() {
           模型提供商
         </label>
         <div className="flex flex-wrap gap-2">
-          {(Object.keys(providers) as ProviderType[]).map((key) => (
-            <button
-              key={key}
-              onClick={() => setActiveProvider(key)}
-              className={`rounded-lg px-4 py-2 text-sm transition-all duration-200 ${
-                activeProvider === key
-                  ? "bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)]"
-                  : "bg-[var(--surface-soft)] text-[var(--text-muted)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
-              }`}
-            >
-              {providers[key].label}
-            </button>
-          ))}
+          {PROVIDER_ORDER.map((providerType) => {
+            const provider = providers[providerType];
+            const isDisabled = !provider.enabled;
+            return (
+              <button
+                key={providerType}
+                onClick={() => setActiveProvider(providerType)}
+                disabled={isDisabled}
+                className={`rounded-lg px-4 py-2 text-sm transition-all duration-200 ${
+                  activeProvider === providerType
+                    ? "bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)]"
+                    : "bg-[var(--surface-soft)] text-[var(--text-muted)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
+                } ${isDisabled ? "cursor-not-allowed opacity-45 hover:bg-[var(--surface-soft)]" : ""}`}
+              >
+                {provider.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {current && (
+      {current && !isServerDefault && (
         <div className="settings-group animate-fade-in">
           <div className="settings-field">
             <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">

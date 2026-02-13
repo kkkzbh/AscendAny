@@ -1,0 +1,49 @@
+api:
+  cors_origins:
+    - "*"
+
+db:
+  host: 127.0.0.1
+  port: 6432
+  dbname: AscendAny
+  user: AscendAny
+  password_env: ASCENDANY_DB_PASSWORD
+  dsn: null
+  pool_min_size: 2
+  pool_max_size: 32
+  pool_timeout_seconds: 10
+
+dashboard:
+  default_rating: 800
+  default_metric: 0
+  rating_history_limit: 50
+
+llm:
+  server_default:
+    mode: openai_compatible
+    base_url: https://api.deepseek.com
+    model: deepseek-chat
+    api_key_env: DEFAULT_API_KEY
+  request_timeout_seconds: 60
+  providers:
+    openai:
+      label: OpenAI
+      enabled: true
+      mode: openai_compatible
+      base_url: https://api.openai.com/v1
+      model: gpt-4o-mini
+      api_key_env: OPENAI_API_KEY
+    anthropic:
+      label: Anthropic
+      enabled: false
+      mode: anthropic
+      base_url: https://api.anthropic.com
+      model: claude-sonnet-4-20250514
+      api_key_env: ANTHROPIC_API_KEY
+    deepseek:
+      label: DeepSeek
+      enabled: false
+      mode: openai_compatible
+      base_url: https://api.deepseek.com/v1
+      model: deepseek-chat
+      api_key_env: DEEPSEEK_API_KEY

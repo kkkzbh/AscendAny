@@ -1,47 +1,131 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
+import {
+  getApiErrorMessage,
+  postChatReply,
+  type ChatMessagePayload,
+  type ClientProviderConfigPayload,
+} from "@/lib/api";
 import { useChatStore } from "@/stores/chatStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import type { ProviderType } from "@/types/settings";
+
+function normalizeIdentifier(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveProviderMode(
+  providerType: ProviderType,
+): ClientProviderConfigPayload["mode"] {
+  return providerType === "anthropic" ? "anthropic" : "openai_compatible";
+}
 
 export function ChatInput() {
   const [text, setText] = useState("");
+  const [isSending, setIsSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const timerRef = useRef<number[]>([]);
+
   const addMessage = useChatStore((s) => s.addMessage);
   const clearContext = useChatStore((s) => s.clearContext);
+  const setSummary = useChatStore((s) => s.setSummary);
 
-  useEffect(() => {
-    return () => {
-      timerRef.current.forEach((timer) => window.clearTimeout(timer));
-      timerRef.current = [];
-    };
-  }, []);
+  const studentId = useSettingsStore((s) => s.studentId);
+  const ptaNickname = useSettingsStore((s) => s.ptaNickname);
+  const activeProvider = useSettingsStore((s) => s.activeProvider);
+  const providers = useSettingsStore((s) => s.providers);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || isSending) return;
+
+    const provider = providers[activeProvider];
+    if (!provider) {
+      addMessage("system", "当前模型配置不可用，请在设置里重新选择提供商。");
+      return;
+    }
+    if (!provider.enabled) {
+      addMessage("system", "当前模型提供商已被服务器禁用，请在设置中切换到可用选项。");
+      return;
+    }
+
+    let providerConfig: ClientProviderConfigPayload | undefined;
+    if (!provider.usesServerConfig) {
+      const baseUrl = provider.baseUrl.trim();
+      const model = provider.model.trim();
+      const apiKey = provider.apiKey.trim();
+
+      if (!baseUrl || !model || !apiKey) {
+        addMessage(
+          "system",
+          "请先在设置中完善当前模型的 Base URL、模型名称和 API Key。",
+        );
+        return;
+      }
+
+      providerConfig = {
+        baseUrl,
+        model,
+        apiKey,
+        mode: resolveProviderMode(activeProvider),
+      };
+    }
+
+    setIsSending(true);
 
     addMessage("user", trimmed);
     setText("");
-
-    const timer = window.setTimeout(() => {
-      addMessage(
-        "assistant",
-        "这是一条模拟回复。后端 API 接入后，这里将显示 AI 助手的真实回答。",
-      );
-      timerRef.current = timerRef.current.filter((id) => id !== timer);
-    }, 600);
-    timerRef.current.push(timer);
 
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [text, addMessage]);
+
+    try {
+      const latestSession = useChatStore.getState().session;
+      const messages: ChatMessagePayload[] = latestSession.messages
+        .filter((message) => message.role !== "system")
+        .map((message) => ({
+          role: message.role,
+          content: message.content.trim(),
+        }))
+        .filter((message) => message.content.length > 0);
+
+      const response = await postChatReply({
+        studentId: normalizeIdentifier(studentId),
+        ptaNickname: normalizeIdentifier(ptaNickname),
+        messages,
+        summary: latestSession.summary,
+        providerType: activeProvider,
+        providerConfig,
+      });
+
+      addMessage("assistant", response.reply);
+      if (response.summary !== latestSession.summary) {
+        setSummary(response.summary);
+      }
+    } catch (error) {
+      addMessage(
+        "system",
+        getApiErrorMessage(error, "请求失败，请检查后端服务后重试。"),
+      );
+    } finally {
+      setIsSending(false);
+    }
+  }, [
+    text,
+    isSending,
+    providers,
+    activeProvider,
+    addMessage,
+    studentId,
+    ptaNickname,
+    setSummary,
+  ]);
 
   const handleClear = useCallback(() => {
-    timerRef.current.forEach((timer) => window.clearTimeout(timer));
-    timerRef.current = [];
+    if (isSending) return;
     clearContext();
-  }, [clearContext]);
+  }, [clearContext, isSending]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -77,6 +161,7 @@ export function ChatInput() {
         <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
           <button
             onClick={handleClear}
+            disabled={isSending}
             className="ui-icon-button"
             title="清空上下文"
           >
@@ -96,9 +181,9 @@ export function ChatInput() {
           </button>
           <button
             onClick={handleSend}
-            disabled={!text.trim()}
+            disabled={!text.trim() || isSending}
             className="send-button flex h-8 w-8 items-center justify-center rounded-lg text-white disabled:opacity-30 disabled:shadow-none"
-            title="发送"
+            title={isSending ? "发送中" : "发送"}
           >
             <svg
               width="15"
@@ -118,7 +203,7 @@ export function ChatInput() {
       </div>
 
       <p className="chat-input-hint mt-1.5 text-[10px] text-[var(--text-soft)]">
-        Shift + Enter 换行
+        {isSending ? "助手正在回复..." : "Shift + Enter 换行"}
       </p>
     </div>
   );
