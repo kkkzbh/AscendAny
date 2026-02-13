@@ -110,6 +110,7 @@ class AuthConfig:
     enabled: bool = True
     signup_policy: str = "username_password_only"
     jwt_secret_env: str = "ASCENDANY_AUTH_JWT_SECRET"
+    jwt_secret: str = "ascendany-dev-insecure-secret"
     access_ttl_minutes: int = 15
     refresh_ttl_days: int = 30
     password_pepper_env: str = "ASCENDANY_AUTH_PASSWORD_PEPPER"
@@ -185,6 +186,7 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "enabled": settings.auth.enabled,
             "signup_policy": settings.auth.signup_policy,
             "jwt_secret_env": settings.auth.jwt_secret_env,
+            "jwt_secret": settings.auth.jwt_secret,
             "access_ttl_minutes": settings.auth.access_ttl_minutes,
             "refresh_ttl_days": settings.auth.refresh_ttl_days,
             "password_pepper_env": settings.auth.password_pepper_env,
@@ -294,6 +296,9 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             ).strip(),
             jwt_secret_env=str(
                 auth.get("jwt_secret_env", "ASCENDANY_AUTH_JWT_SECRET")
+            ).strip(),
+            jwt_secret=str(
+                auth.get("jwt_secret", "ascendany-dev-insecure-secret")
             ).strip(),
             access_ttl_minutes=max(1, int(auth.get("access_ttl_minutes", 15))),
             refresh_ttl_days=max(1, int(auth.get("refresh_ttl_days", 30))),

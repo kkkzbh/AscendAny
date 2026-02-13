@@ -411,6 +411,9 @@ class AuthService:
         secret = os.getenv(self._settings.auth.jwt_secret_env, "").strip()
         if secret:
             return secret
+        fallback = self._settings.auth.jwt_secret.strip()
+        if fallback:
+            return fallback
         raise AppError(
             status_code=503,
             code="AUTH_CONFIG_ERROR",
