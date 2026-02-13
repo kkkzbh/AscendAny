@@ -74,6 +74,18 @@ uv run --python .venv/bin/python -m preprocess.cli run --dry-run
 uv run --python .venv/bin/python pytest -q
 ```
 
+## FastAPI 后端（apps/api）
+
+后端目录：`apps/api/`，默认配置：`apps/api/config/default.yaml`。
+
+```bash
+# 安装后端依赖
+uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt
+
+# 启动后端
+uv run --python .venv/bin/python uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
 ## Linux 桌面端 GPU 兼容模式（Electron）
 
 在 Linux 下，桌面端默认使用 `ASCENDANY_LINUX_GPU_MODE=off`（关闭硬件加速）以规避
@@ -94,3 +106,31 @@ ASCENDANY_LINUX_GPU_MODE=swiftshader pnpm --filter @ascendany/desktop dev
 # 自动（不做降级处理）
 ASCENDANY_LINUX_GPU_MODE=auto pnpm --filter @ascendany/desktop dev
 ```
+
+## Linux Wayland 输入法（fcitx5）
+
+桌面端在 Wayland 会话下默认启用 IME 兼容开关（`ASCENDANY_LINUX_IME_MODE=auto`），
+会自动追加 Chromium 的 `enable-wayland-ime`。
+
+可按需配置：
+
+```bash
+# 默认：仅在 Wayland 会话启用 IME 开关
+ASCENDANY_LINUX_IME_MODE=auto pnpm --filter @ascendany/desktop dev
+
+# 强制开启（用于排查）
+ASCENDANY_LINUX_IME_MODE=on pnpm --filter @ascendany/desktop dev
+
+# 关闭（用于回归对比）
+ASCENDANY_LINUX_IME_MODE=off pnpm --filter @ascendany/desktop dev
+```
+
+若系统会话里没有设置输入法模块变量，可额外指定：
+
+```bash
+ASCENDANY_LINUX_IM_MODULE=fcitx ASCENDANY_LINUX_IME_MODE=on pnpm --filter @ascendany/desktop dev
+```
+
+说明：
+- `ASCENDANY_LINUX_GPU_MODE=x11` 会强制 XWayland 路径，并跳过 Wayland IME 开关。
+- 若你只关心稳定输入法，建议优先使用 `ASCENDANY_LINUX_IME_MODE=on` 在 Wayland 下验证。
