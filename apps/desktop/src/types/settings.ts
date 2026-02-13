@@ -32,10 +32,6 @@ export interface AppSettings {
   serverDefaultTargetLabel: string;
   /** Model name configured on backend for current server default target */
   serverDefaultModel: string;
-  /** Student ID to display metrics for (empty = not configured) */
-  studentId: string;
-  /** PTA account nickname for data matching */
-  ptaNickname: string;
 }
 
 export const DEFAULT_PROVIDERS: Record<ProviderType, ModelProvider> = {

@@ -1,5 +1,11 @@
 import type { Role } from "@/types/chat";
 import type { StudentDashboardData } from "@/types/metrics";
+import type {
+  AuthAccount,
+  AuthPolicy,
+  AuthProfile,
+  AuthTokens,
+} from "@/types/auth";
 import type { ProviderType } from "@/types/settings";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
@@ -107,16 +113,22 @@ function extractError(payload: unknown): { code?: string; message?: string } {
 async function requestJson<T>(
   path: string,
   options?: {
-    method?: "GET" | "POST";
+    method?: "GET" | "POST" | "PUT";
     query?: Record<string, QueryValue>;
     body?: unknown;
+    authToken?: string;
   },
 ): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (options?.authToken?.trim()) {
+    headers.Authorization = `Bearer ${options.authToken.trim()}`;
+  }
+
   const response = await fetch(buildUrl(path, options?.query), {
     method: options?.method ?? "GET",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
 
@@ -151,26 +163,180 @@ async function requestJson<T>(
 export async function fetchStudentDashboard(params: {
   studentId?: string;
   ptaNickname?: string;
+  authToken?: string;
 }): Promise<StudentDashboardData> {
   return requestJson<StudentDashboardData>("/api/v1/students/dashboard", {
     query: {
       studentId: params.studentId,
       ptaNickname: params.ptaNickname,
     },
+    authToken: params.authToken,
   });
 }
 
 export async function postChatReply(
   payload: ChatReplyRequestPayload,
+  authToken?: string,
 ): Promise<ChatReplyResponsePayload> {
   return requestJson<ChatReplyResponsePayload>("/api/v1/chat/reply", {
     method: "POST",
     body: payload,
+    authToken,
   });
 }
 
 export async function fetchModelProviders(): Promise<ModelProvidersResponsePayload> {
   return requestJson<ModelProvidersResponsePayload>("/api/v1/model/providers");
+}
+
+export type SignupPolicy =
+  | "username_password_only"
+  | "require_phone_or_email"
+  | "require_phone_and_email";
+
+export interface AuthPolicyPayload {
+  signupPolicy: SignupPolicy;
+  requirePhone: boolean;
+  requireEmail: boolean;
+}
+
+export interface RegisterPayload {
+  username: string;
+  password: string;
+  phone?: string;
+  email?: string;
+  deviceId?: string;
+}
+
+export interface LoginPayload {
+  username: string;
+  password: string;
+  deviceId?: string;
+}
+
+export interface RefreshPayload {
+  refreshToken: string;
+  deviceId?: string;
+}
+
+export interface LogoutPayload {
+  refreshToken?: string;
+}
+
+interface AuthAccountPayload {
+  accountId: string;
+  username: string;
+  studentId?: string | null;
+  ptaNickname?: string | null;
+}
+
+interface AuthTokensPayload {
+  accessToken: string;
+  accessTokenExpiresAt: string;
+  refreshToken: string;
+  refreshTokenExpiresAt: string;
+  account: AuthAccountPayload;
+}
+
+interface AuthMePayload {
+  account: AuthAccountPayload;
+}
+
+interface AuthProfilePayload {
+  studentId?: string | null;
+  ptaNickname?: string | null;
+}
+
+function normalizeAccount(payload: AuthAccountPayload): AuthAccount {
+  return {
+    accountId: payload.accountId,
+    username: payload.username,
+    studentId: payload.studentId ?? null,
+    ptaNickname: payload.ptaNickname ?? null,
+  };
+}
+
+function normalizeTokens(payload: AuthTokensPayload): AuthTokens {
+  return {
+    accessToken: payload.accessToken,
+    accessTokenExpiresAt: payload.accessTokenExpiresAt,
+    refreshToken: payload.refreshToken,
+    refreshTokenExpiresAt: payload.refreshTokenExpiresAt,
+    account: normalizeAccount(payload.account),
+  };
+}
+
+function normalizeProfile(payload: AuthProfilePayload): AuthProfile {
+  return {
+    studentId: payload.studentId ?? null,
+    ptaNickname: payload.ptaNickname ?? null,
+  };
+}
+
+export async function fetchAuthPolicy(): Promise<AuthPolicy> {
+  const payload = await requestJson<AuthPolicyPayload>("/api/v1/auth/policy");
+  return {
+    signupPolicy: payload.signupPolicy,
+    requirePhone: payload.requirePhone,
+    requireEmail: payload.requireEmail,
+  };
+}
+
+export async function postRegister(payload: RegisterPayload): Promise<AuthTokens> {
+  const response = await requestJson<AuthTokensPayload>("/api/v1/auth/register", {
+    method: "POST",
+    body: payload,
+  });
+  return normalizeTokens(response);
+}
+
+export async function postLogin(payload: LoginPayload): Promise<AuthTokens> {
+  const response = await requestJson<AuthTokensPayload>("/api/v1/auth/login", {
+    method: "POST",
+    body: payload,
+  });
+  return normalizeTokens(response);
+}
+
+export async function postRefresh(payload: RefreshPayload): Promise<AuthTokens> {
+  const response = await requestJson<AuthTokensPayload>("/api/v1/auth/refresh", {
+    method: "POST",
+    body: payload,
+  });
+  return normalizeTokens(response);
+}
+
+export async function postLogout(
+  payload: LogoutPayload,
+  authToken: string,
+): Promise<void> {
+  await requestJson<{ ok: boolean }>("/api/v1/auth/logout", {
+    method: "POST",
+    body: payload,
+    authToken,
+  });
+}
+
+export async function fetchAuthMe(authToken: string): Promise<AuthAccount> {
+  const response = await requestJson<AuthMePayload>("/api/v1/auth/me", {
+    authToken,
+  });
+  return normalizeAccount(response.account);
+}
+
+export async function putAuthProfile(
+  payload: AuthProfile,
+  authToken: string,
+): Promise<AuthProfile> {
+  const response = await requestJson<AuthProfilePayload>("/api/v1/auth/profile", {
+    method: "PUT",
+    body: {
+      studentId: payload.studentId ?? null,
+      ptaNickname: payload.ptaNickname ?? null,
+    },
+    authToken,
+  });
+  return normalizeProfile(response);
 }
 
 export function getApiErrorMessage(error: unknown, fallback: string): string {

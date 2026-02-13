@@ -1,12 +1,16 @@
 import { useEffect } from "react";
+import { AuthScreen } from "@/components/auth/AuthScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { fetchModelProviders } from "@/lib/api";
+import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export default function App() {
   const theme = useSettingsStore((s) => s.theme);
   const syncProviderOptions = useSettingsStore((s) => s.syncProviderOptions);
+  const authStatus = useAuthStore((s) => s.status);
+  const bootstrap = useAuthStore((s) => s.bootstrap);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -15,6 +19,14 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    void bootstrap();
+  }, [bootstrap]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      return;
+    }
+
     let cancelled = false;
 
     async function loadProviderOptions() {
@@ -33,7 +45,19 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [syncProviderOptions]);
+  }, [authStatus, syncProviderOptions]);
+
+  if (authStatus === "booting") {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center text-sm text-[var(--text-soft)]">
+        启动中...
+      </div>
+    );
+  }
+
+  if (authStatus !== "authenticated") {
+    return <AuthScreen />;
+  }
 
   return (
     <>

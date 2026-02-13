@@ -61,7 +61,7 @@ export const useChatStore = create<ChatState>()(
         })),
     }),
     {
-      name: "ascendany_chat",
+      name: "ascendany_chat_guest",
     },
   ),
 );

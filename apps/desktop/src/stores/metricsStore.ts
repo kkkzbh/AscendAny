@@ -12,6 +12,7 @@ import type {
 interface DashboardQuery {
   studentId?: string;
   ptaNickname?: string;
+  authToken?: string;
 }
 
 function roundMetric(value: number): number {
@@ -53,17 +54,6 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
     const studentId = normalize(query.studentId);
     const ptaNickname = normalize(query.ptaNickname);
 
-    if (!studentId && !ptaNickname) {
-      set({
-        metrics: null,
-        rating: null,
-        identity: null,
-        loading: false,
-        error: "请先在设置中填写学号或 PTA 昵称。",
-      });
-      return;
-    }
-
     set((state) => ({
       ...state,
       loading: true,
@@ -71,7 +61,11 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
     }));
 
     try {
-      const response = await fetchStudentDashboard({ studentId, ptaNickname });
+      const response = await fetchStudentDashboard({
+        studentId,
+        ptaNickname,
+        authToken: query.authToken,
+      });
       set({
         metrics: normalizeMetrics(response.metrics),
         rating: response.rating,

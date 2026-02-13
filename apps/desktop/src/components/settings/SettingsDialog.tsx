@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   PROVIDER_ORDER,
 } from "@/types/settings";
+import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 type SettingsPage = "general" | "model";
@@ -61,10 +62,33 @@ export function SettingsSidebar({
 }
 
 function GeneralSettingsPage() {
-  const studentId = useSettingsStore((s) => s.studentId);
-  const ptaNickname = useSettingsStore((s) => s.ptaNickname);
-  const setStudentId = useSettingsStore((s) => s.setStudentId);
-  const setPtaNickname = useSettingsStore((s) => s.setPtaNickname);
+  const account = useAuthStore((s) => s.account);
+  const updateProfile = useAuthStore((s) => s.updateProfile);
+  const profileSaving = useAuthStore((s) => s.profileSaving);
+  const [studentId, setStudentId] = useState(account?.studentId ?? "");
+  const [ptaNickname, setPtaNickname] = useState(account?.ptaNickname ?? "");
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setStudentId(account?.studentId ?? "");
+    setPtaNickname(account?.ptaNickname ?? "");
+  }, [account?.studentId, account?.ptaNickname]);
+
+  async function onSaveProfile() {
+    setSaveError(null);
+    try {
+      await updateProfile({
+        studentId: studentId.trim() || null,
+        ptaNickname: ptaNickname.trim() || null,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : "保存失败，请稍后重试。";
+      setSaveError(message);
+    }
+  }
 
   return (
     <div className="settings-page animate-fade-in">
@@ -95,6 +119,25 @@ function GeneralSettingsPage() {
             placeholder="输入你的 PTA 昵称"
             className="settings-input"
           />
+        </div>
+
+        <div className="settings-field">
+          <button
+            type="button"
+            onClick={() => {
+              void onSaveProfile();
+            }}
+            disabled={profileSaving}
+            className="auth-submit w-[128px] disabled:opacity-50"
+          >
+            {profileSaving ? "保存中..." : "保存资料"}
+          </button>
+          <p className="text-[11px] text-[var(--text-soft)]">
+            学号和 PTA 昵称保存在账号云端，登录后自动同步。
+          </p>
+          {saveError && (
+            <p className="text-[11px] text-[var(--rating-negative)]">{saveError}</p>
+          )}
         </div>
 
       </div>

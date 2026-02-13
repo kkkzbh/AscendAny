@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import fs from "node:fs";
 import path from "path";
 
 process.env.DIST = path.join(__dirname, "../dist");
@@ -10,6 +11,7 @@ let mainWindow: BrowserWindow | null = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
+const CREDENTIAL_FILE_NAME = "secure-credentials.json";
 
 type LinuxGpuMode = "auto" | "off" | "x11" | "swiftshader";
 type LinuxImeMode = "auto" | "on" | "off";
@@ -144,6 +146,94 @@ function createWindow() {
     mainWindow.loadFile(path.join(process.env.DIST!, "index.html"));
   }
 }
+
+function credentialFilePath(): string {
+  return path.join(app.getPath("userData"), CREDENTIAL_FILE_NAME);
+}
+
+function loadCredentialStore(): Record<string, string> {
+  try {
+    const filePath = credentialFilePath();
+    if (!fs.existsSync(filePath)) {
+      return {};
+    }
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string") {
+        result[key] = value;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveCredentialStore(next: Record<string, string>): boolean {
+  try {
+    const filePath = credentialFilePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(next), { encoding: "utf-8" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCredentialKey(username: unknown): string {
+  return typeof username === "string" ? username.trim() : "";
+}
+
+ipcMain.handle("credential-available", () => {
+  return safeStorage.isEncryptionAvailable();
+});
+
+ipcMain.handle("credential-save", (_event, username: unknown, password: unknown) => {
+  const key = normalizeCredentialKey(username);
+  const secret = typeof password === "string" ? password : "";
+  if (!key || !secret || !safeStorage.isEncryptionAvailable()) {
+    return false;
+  }
+  const encrypted = safeStorage.encryptString(secret).toString("base64");
+  const next = loadCredentialStore();
+  next[key] = encrypted;
+  return saveCredentialStore(next);
+});
+
+ipcMain.handle("credential-read", (_event, username: unknown) => {
+  const key = normalizeCredentialKey(username);
+  if (!key || !safeStorage.isEncryptionAvailable()) {
+    return null;
+  }
+  const store = loadCredentialStore();
+  const encoded = store[key];
+  if (!encoded) {
+    return null;
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, "base64"));
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle("credential-delete", (_event, username: unknown) => {
+  const key = normalizeCredentialKey(username);
+  if (!key) {
+    return false;
+  }
+  const next = loadCredentialStore();
+  if (!(key in next)) {
+    return true;
+  }
+  delete next[key];
+  return saveCredentialStore(next);
+});
 
 // Window control IPC handlers
 ipcMain.on("window-minimize", () => {

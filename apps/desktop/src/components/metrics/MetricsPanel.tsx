@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
+import { useAuthStore } from "@/stores/authStore";
 import { useMetricsStore } from "@/stores/metricsStore";
-import { useSettingsStore } from "@/stores/settingsStore";
 import { RadarChart } from "./RadarChart";
 import { RatingDisplay } from "./RatingDisplay";
 import { MetricCard } from "./MetricCard";
@@ -16,19 +16,21 @@ const METRIC_ORDER: MetricName[] = [
 
 export function MetricsPanel() {
   const { metrics, rating, loading, error, loadDashboard } = useMetricsStore();
-  const studentId = useSettingsStore((s) => s.studentId);
-  const ptaNickname = useSettingsStore((s) => s.ptaNickname);
+  const account = useAuthStore((s) => s.account);
+  const accessToken = useAuthStore((s) => s.accessToken);
   const [historyOpen, setHistoryOpen] = useState(true);
+  const studentId = account?.studentId ?? undefined;
+  const ptaNickname = account?.ptaNickname ?? undefined;
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void loadDashboard({ studentId, ptaNickname });
+      void loadDashboard({ studentId, ptaNickname, authToken: accessToken ?? undefined });
     }, 280);
 
     return () => {
       window.clearTimeout(timer);
     };
-  }, [studentId, ptaNickname, loadDashboard]);
+  }, [studentId, ptaNickname, accessToken, loadDashboard]);
 
   if (loading && !metrics && !rating) {
     return (

@@ -17,13 +17,12 @@ interface SettingsState extends AppSettings {
   isOpen: boolean;
   openSettings: () => void;
   closeSettings: () => void;
+  resetForAccount: () => void;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
   setActiveProvider: (p: ProviderType) => void;
   updateProvider: (type: ProviderType, patch: Partial<ModelProvider>) => void;
   syncProviderOptions: (payload: ModelProvidersResponsePayload) => void;
-  setStudentId: (id: string) => void;
-  setPtaNickname: (nickname: string) => void;
 }
 
 function isThemeMode(value: unknown): value is ThemeMode {
@@ -90,12 +89,20 @@ export const useSettingsStore = create<SettingsState>()(
       serverDefaultTarget: "openai",
       serverDefaultTargetLabel: "OpenAI",
       serverDefaultModel: "",
-      studentId: "",
-      ptaNickname: "",
       isOpen: false,
 
       openSettings: () => set({ isOpen: true }),
       closeSettings: () => set({ isOpen: false }),
+      resetForAccount: () =>
+        set({
+          theme: "light",
+          activeProvider: "server_default",
+          providers: cloneDefaultProviders(),
+          serverDefaultTarget: "openai",
+          serverDefaultTargetLabel: "OpenAI",
+          serverDefaultModel: "",
+          isOpen: false,
+        }),
       setTheme: (theme) => set({ theme }),
       toggleTheme: () =>
         set((state) => ({
@@ -173,11 +180,9 @@ export const useSettingsStore = create<SettingsState>()(
           };
         }),
 
-      setStudentId: (id) => set({ studentId: id }),
-      setPtaNickname: (nickname) => set({ ptaNickname: nickname }),
     }),
     {
-      name: "ascendany_settings",
+      name: "ascendany_settings_guest",
       partialize: (state) => ({
         theme: state.theme,
         activeProvider: state.activeProvider,
@@ -185,8 +190,6 @@ export const useSettingsStore = create<SettingsState>()(
         serverDefaultTarget: state.serverDefaultTarget,
         serverDefaultTargetLabel: state.serverDefaultTargetLabel,
         serverDefaultModel: state.serverDefaultModel,
-        studentId: state.studentId,
-        ptaNickname: state.ptaNickname,
       }),
       merge: (persistedState, currentState) => {
         const persisted = (persistedState ?? {}) as Partial<SettingsState>;
@@ -220,14 +223,6 @@ export const useSettingsStore = create<SettingsState>()(
             typeof persisted.serverDefaultModel === "string"
               ? persisted.serverDefaultModel
               : currentState.serverDefaultModel,
-          studentId:
-            typeof persisted.studentId === "string"
-              ? persisted.studentId
-              : currentState.studentId,
-          ptaNickname:
-            typeof persisted.ptaNickname === "string"
-              ? persisted.ptaNickname
-              : currentState.ptaNickname,
         };
       },
     },

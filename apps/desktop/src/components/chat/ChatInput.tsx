@@ -5,6 +5,7 @@ import {
   type ChatMessagePayload,
   type ClientProviderConfigPayload,
 } from "@/lib/api";
+import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { ProviderType } from "@/types/settings";
@@ -29,8 +30,8 @@ export function ChatInput() {
   const clearContext = useChatStore((s) => s.clearContext);
   const setSummary = useChatStore((s) => s.setSummary);
 
-  const studentId = useSettingsStore((s) => s.studentId);
-  const ptaNickname = useSettingsStore((s) => s.ptaNickname);
+  const account = useAuthStore((s) => s.account);
+  const accessToken = useAuthStore((s) => s.accessToken);
   const activeProvider = useSettingsStore((s) => s.activeProvider);
   const providers = useSettingsStore((s) => s.providers);
 
@@ -91,13 +92,13 @@ export function ChatInput() {
         .filter((message) => message.content.length > 0);
 
       const response = await postChatReply({
-        studentId: normalizeIdentifier(studentId),
-        ptaNickname: normalizeIdentifier(ptaNickname),
+        studentId: normalizeIdentifier(account?.studentId ?? ""),
+        ptaNickname: normalizeIdentifier(account?.ptaNickname ?? ""),
         messages,
         summary: latestSession.summary,
         providerType: activeProvider,
         providerConfig,
-      });
+      }, accessToken ?? undefined);
 
       addMessage("assistant", response.reply);
       if (response.summary !== latestSession.summary) {
@@ -117,8 +118,9 @@ export function ChatInput() {
     providers,
     activeProvider,
     addMessage,
-    studentId,
-    ptaNickname,
+    account?.studentId,
+    account?.ptaNickname,
+    accessToken,
     setSummary,
   ]);
 

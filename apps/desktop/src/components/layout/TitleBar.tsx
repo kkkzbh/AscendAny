@@ -1,9 +1,12 @@
+import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export function TitleBar() {
   const openSettings = useSettingsStore((s) => s.openSettings);
   const theme = useSettingsStore((s) => s.theme);
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
+  const account = useAuthStore((s) => s.account);
+  const logout = useAuthStore((s) => s.logout);
   const api = window.electronAPI;
   const isMac = api?.platform === "darwin";
   const nextThemeLabel = theme === "light" ? "切换到暗色主题" : "切换到亮色主题";
@@ -32,6 +35,11 @@ export function TitleBar() {
           isMac ? "ml-auto" : "absolute right-2 top-0"
         }`}
       >
+        {account && (
+          <div className="mr-2 hidden items-center rounded-md px-2 py-1 text-[11px] text-[var(--text-soft)] sm:flex">
+            @{account.username}
+          </div>
+        )}
         <button
           onClick={toggleTheme}
           className="ui-icon-button"
@@ -85,6 +93,30 @@ export function TitleBar() {
           >
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+
+        <button
+          onClick={() => {
+            void logout();
+          }}
+          className="ui-icon-button"
+          title="退出登录"
+          aria-label="退出登录"
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
           </svg>
         </button>
 
