@@ -9,6 +9,7 @@ interface MetricCardProps {
 export function MetricCard({ name, value }: MetricCardProps) {
   const label = METRIC_LABELS[name];
   const color = METRIC_COLORS[name];
+  const roundedValue = Math.round(value);
 
   return (
     <div className="metric-row flex items-center gap-3 rounded-lg transition-colors duration-150 hover:bg-[var(--surface-soft)]">
@@ -18,13 +19,13 @@ export function MetricCard({ name, value }: MetricCardProps) {
       />
       <span className="w-8 text-xs text-[var(--text-muted)]">{label}</span>
       <span className="w-7 text-right text-xs font-bold tabular-nums text-[var(--text-strong)]">
-        {value}
+        {roundedValue}
       </span>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--surface-soft)]">
         <div
           className="h-full rounded-full transition-all duration-500"
           style={{
-            width: `${value}%`,
+            width: `${roundedValue}%`,
             backgroundColor: color,
           }}
         />

@@ -1,28 +1,95 @@
 import { create } from "zustand";
-import type { StudentMetrics, RatingInfo } from "@/types/metrics";
-import { MOCK_METRICS, MOCK_RATING } from "@/lib/mock";
+import {
+  fetchStudentDashboard,
+  getApiErrorMessage,
+} from "@/lib/api";
+import type {
+  StudentIdentity,
+  StudentMetrics,
+  RatingInfo,
+} from "@/types/metrics";
+
+interface DashboardQuery {
+  studentId?: string;
+  ptaNickname?: string;
+}
+
+function roundMetric(value: number): number {
+  return Math.round(value);
+}
+
+function normalizeMetrics(metrics: StudentMetrics): StudentMetrics {
+  return {
+    knowledge: roundMetric(metrics.knowledge),
+    accuracy: roundMetric(metrics.accuracy),
+    quality: roundMetric(metrics.quality),
+    flexibility: roundMetric(metrics.flexibility),
+    proficiency: roundMetric(metrics.proficiency),
+  };
+}
+
+function normalize(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 interface MetricsState {
   metrics: StudentMetrics | null;
   rating: RatingInfo | null;
+  identity: StudentIdentity | null;
   loading: boolean;
-  loadMockData: () => void;
-  setMetrics: (m: StudentMetrics) => void;
-  setRating: (r: RatingInfo) => void;
+  error: string | null;
+  loadDashboard: (query: DashboardQuery) => Promise<void>;
 }
 
 export const useMetricsStore = create<MetricsState>()((set) => ({
   metrics: null,
   rating: null,
+  identity: null,
   loading: false,
+  error: null,
 
-  loadMockData: () =>
-    set({
-      metrics: MOCK_METRICS,
-      rating: MOCK_RATING,
-      loading: false,
-    }),
+  loadDashboard: async (query) => {
+    const studentId = normalize(query.studentId);
+    const ptaNickname = normalize(query.ptaNickname);
 
-  setMetrics: (m) => set({ metrics: m }),
-  setRating: (r) => set({ rating: r }),
+    if (!studentId && !ptaNickname) {
+      set({
+        metrics: null,
+        rating: null,
+        identity: null,
+        loading: false,
+        error: "请先在设置中填写学号或 PTA 昵称。",
+      });
+      return;
+    }
+
+    set((state) => ({
+      ...state,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const response = await fetchStudentDashboard({ studentId, ptaNickname });
+      set({
+        metrics: normalizeMetrics(response.metrics),
+        rating: response.rating,
+        identity: response.identity,
+        loading: false,
+        error: null,
+      });
+    } catch (error) {
+      set({
+        metrics: null,
+        rating: null,
+        identity: null,
+        loading: false,
+        error: getApiErrorMessage(
+          error,
+          "加载失败，请检查后端服务是否可用。",
+        ),
+      });
+    }
+  },
 }));

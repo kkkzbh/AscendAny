@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMetricsStore } from "@/stores/metricsStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { RadarChart } from "./RadarChart";
 import { RatingDisplay } from "./RatingDisplay";
 import { MetricCard } from "./MetricCard";
@@ -14,17 +15,41 @@ const METRIC_ORDER: MetricName[] = [
 ];
 
 export function MetricsPanel() {
-  const { metrics, rating, loadMockData } = useMetricsStore();
+  const { metrics, rating, loading, error, loadDashboard } = useMetricsStore();
+  const studentId = useSettingsStore((s) => s.studentId);
+  const ptaNickname = useSettingsStore((s) => s.ptaNickname);
   const [historyOpen, setHistoryOpen] = useState(true);
 
   useEffect(() => {
-    loadMockData();
-  }, [loadMockData]);
+    const timer = window.setTimeout(() => {
+      void loadDashboard({ studentId, ptaNickname });
+    }, 280);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [studentId, ptaNickname, loadDashboard]);
+
+  if (loading && !metrics && !rating) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-[var(--text-soft)]">
+        加载中...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--rating-negative)]">
+        {error}
+      </div>
+    );
+  }
 
   if (!metrics || !rating) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--text-soft)]">
-        加载中...
+        暂无数据
       </div>
     );
   }

@@ -24,7 +24,7 @@ const METRIC_KEYS: MetricName[] = [
 export function RadarChart({ metrics }: RadarChartProps) {
   const data = METRIC_KEYS.map((key) => ({
     metric: METRIC_LABELS[key],
-    value: metrics[key],
+    value: Math.round(metrics[key]),
     fullMark: 100,
   }));
 

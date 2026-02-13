@@ -43,3 +43,15 @@ export interface RatingPoint {
   delta: number;
   newRating: number;
 }
+
+export interface StudentIdentity {
+  studentId: string;
+  ptaNickname: string | null;
+  noSubmissionRecords: boolean;
+}
+
+export interface StudentDashboardData {
+  metrics: StudentMetrics;
+  rating: RatingInfo;
+  identity: StudentIdentity;
+}
