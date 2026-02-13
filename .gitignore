@@ -1,8 +1,53 @@
-node_modules/
-.env
-.env.local
-*.log
-__pycache__/
-.pytest_cache/
-.venv/
+# System files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
 .idea/
+.vscode/
+*.iml
+
+# Environment / local config
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Node.js / Frontend
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+.turbo/
+.next/
+.nuxt/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# uv local lockfile
+uv.lock
