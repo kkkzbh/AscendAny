@@ -12,14 +12,14 @@ export function MessageList() {
 
   if (messages.length === 0) {
     return (
-      <div className="animate-fade-in flex h-full flex-col items-center justify-center gap-3 px-8 text-[var(--text-muted)]">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--accent-soft)]">
+      <div className="message-list-shell animate-fade-in flex h-full flex-col items-center justify-center gap-4 text-[var(--text-muted)]">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--surface-soft)] ring-1 ring-[var(--border-subtle)]">
           <svg
-            width="22"
-            height="22"
+            width="24"
+            height="24"
             viewBox="0 0 24 24"
             fill="none"
-            stroke="var(--accent)"
+            stroke="var(--accent-600)"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -27,12 +27,12 @@ export function MessageList() {
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
         </div>
-        <div className="space-y-0.5 text-center">
-          <p className="text-sm font-medium text-[var(--text-secondary)]">
+        <div className="space-y-1 text-center">
+          <p className="text-sm font-semibold text-[var(--text-strong)]">
             开始对话
           </p>
-          <p className="text-xs text-[var(--text-muted)]">
-            探索你的学习数据，获取能力分析
+          <p className="text-xs text-[var(--text-soft)]">
+            问我考试表现、能力变化和下次训练重点
           </p>
         </div>
       </div>
@@ -40,10 +40,12 @@ export function MessageList() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-3">
-      {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
-      ))}
+    <div className="message-list-shell flex-1 overflow-y-auto">
+      <div className="space-y-1">
+        {messages.map((msg) => (
+          <MessageBubble key={msg.id} message={msg} />
+        ))}
+      </div>
       <div ref={bottomRef} />
     </div>
   );

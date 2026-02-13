@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 interface SplitPanelProps {
   left: React.ReactNode;
@@ -14,59 +14,116 @@ export function SplitPanel({
   minRatio = 0.3,
 }: SplitPanelProps) {
   const [ratio, setRatio] = useState(defaultRatio);
+  const [isStacked, setIsStacked] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth < 960 : false,
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 959px)");
+    const sync = () => setIsStacked(media.matches);
+    sync();
+
+    media.addEventListener("change", sync);
+    return () => {
+      media.removeEventListener("change", sync);
+    };
+  }, []);
+
+  const updateRatio = useCallback(
+    (clientX: number) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      let newRatio = (clientX - rect.left) / rect.width;
+      newRatio = Math.max(minRatio, Math.min(1 - minRatio, newRatio));
+      setRatio(newRatio);
+    },
+    [minRatio],
+  );
+
+  useEffect(() => {
+    if (isStacked) {
+      dragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+  }, [isStacked]);
+
   const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (isStacked) return;
       e.preventDefault();
       dragging.current = true;
 
-      const onMouseMove = (ev: MouseEvent) => {
-        if (!dragging.current || !containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
-        let newRatio = (ev.clientX - rect.left) / rect.width;
-        newRatio = Math.max(minRatio, Math.min(1 - minRatio, newRatio));
-        setRatio(newRatio);
+      const onPointerMove = (ev: PointerEvent) => {
+        if (!dragging.current) return;
+        updateRatio(ev.clientX);
       };
 
-      const onMouseUp = () => {
+      const onPointerUp = () => {
         dragging.current = false;
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
       };
 
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
     },
-    [minRatio],
+    [isStacked, updateRatio],
+  );
+
+  const onHandleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (isStacked) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const step = event.shiftKey ? 0.05 : 0.02;
+      const delta = event.key === "ArrowLeft" ? -step : step;
+      setRatio((current) =>
+        Math.max(minRatio, Math.min(1 - minRatio, current + delta)),
+      );
+    },
+    [isStacked, minRatio],
   );
 
   return (
-    <div ref={containerRef} className="flex h-full w-full gap-2 overflow-hidden">
-      {/* Left panel */}
+    <div
+      ref={containerRef}
+      className="split-panel flex h-full w-full gap-3 overflow-hidden max-[959px]:flex-col"
+    >
       <div
-        className="flex h-full overflow-hidden rounded-2xl bg-white/60 shadow-sm ring-1 ring-black/[0.04]"
-        style={{ width: `calc(${ratio * 100}% - 5px)` }}
+        className="panel-shell panel-chat flex h-full min-w-0 overflow-hidden"
+        style={
+          isStacked
+            ? undefined
+            : {
+                flexBasis: `${ratio * 100}%`,
+                flexGrow: 0,
+                flexShrink: 0,
+              }
+        }
       >
         {left}
       </div>
 
-      {/* Drag handle */}
       <div
-        className="relative flex h-full w-1 shrink-0 cursor-col-resize items-center justify-center"
-        onMouseDown={onMouseDown}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整面板宽度"
+        tabIndex={isStacked ? -1 : 0}
+        className="split-handle relative flex h-full w-3 shrink-0 cursor-col-resize items-center justify-center max-[959px]:hidden"
+        onPointerDown={onMouseDown}
+        onKeyDown={onHandleKeyDown}
       >
-        <div className="h-6 w-0.5 rounded-full bg-[var(--text-muted)]/20 transition-all duration-150 hover:h-10 hover:bg-[var(--text-muted)]/40" />
-        <div className="absolute inset-y-0 -left-2 -right-2" />
+        <div className="split-handle-bar h-10 w-1 rounded-full" />
       </div>
 
-      {/* Right panel */}
-      <div className="flex h-full flex-1 overflow-hidden rounded-2xl bg-white/60 shadow-sm ring-1 ring-black/[0.04]">
+      <div className="panel-shell panel-metrics flex h-full min-w-0 flex-1 overflow-hidden">
         {right}
       </div>
     </div>

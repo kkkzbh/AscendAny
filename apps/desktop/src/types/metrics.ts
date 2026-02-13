@@ -14,11 +14,11 @@ export const METRIC_LABELS: Record<MetricName, string> = {
 };
 
 export const METRIC_COLORS: Record<MetricName, string> = {
-  knowledge: "#6366f1",
-  accuracy: "#22d3ee",
-  quality: "#a78bfa",
-  flexibility: "#f472b6",
-  proficiency: "#34d399",
+  knowledge: "#0284c7",
+  accuracy: "#0f766e",
+  quality: "#ea580c",
+  flexibility: "#d97706",
+  proficiency: "#65a30d",
 };
 
 export interface StudentMetrics {

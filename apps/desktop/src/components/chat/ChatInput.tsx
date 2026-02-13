@@ -1,11 +1,19 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useChatStore } from "@/stores/chatStore";
 
 export function ChatInput() {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const timerRef = useRef<number[]>([]);
   const addMessage = useChatStore((s) => s.addMessage);
   const clearContext = useChatStore((s) => s.clearContext);
+
+  useEffect(() => {
+    return () => {
+      timerRef.current.forEach((timer) => window.clearTimeout(timer));
+      timerRef.current = [];
+    };
+  }, []);
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
@@ -14,19 +22,26 @@ export function ChatInput() {
     addMessage("user", trimmed);
     setText("");
 
-    // Mock assistant reply after short delay
-    setTimeout(() => {
+    const timer = window.setTimeout(() => {
       addMessage(
         "assistant",
         "这是一条模拟回复。后端 API 接入后，这里将显示 AI 助手的真实回答。",
       );
+      timerRef.current = timerRef.current.filter((id) => id !== timer);
     }, 600);
+    timerRef.current.push(timer);
 
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
   }, [text, addMessage]);
+
+  const handleClear = useCallback(() => {
+    timerRef.current.forEach((timer) => window.clearTimeout(timer));
+    timerRef.current = [];
+    clearContext();
+  }, [clearContext]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -43,8 +58,10 @@ export function ChatInput() {
   };
 
   return (
-    <div className="shrink-0 border-t border-[var(--border)] px-4 pb-3 pt-2">
-      <div className="flex items-end gap-1.5 rounded-xl bg-white/50 px-2 py-1.5 shadow-sm ring-1 ring-black/[0.04] focus-within:ring-[var(--accent)]/20">
+    <div className="chat-input-wrap shrink-0">
+      <div className="mb-3 h-px bg-gradient-to-r from-transparent via-[var(--border)] to-transparent" />
+
+      <div className="input-shell chat-input-shell flex items-end gap-2 rounded-[18px]">
         <textarea
           ref={textareaRef}
           value={text}
@@ -53,23 +70,23 @@ export function ChatInput() {
             handleInput();
           }}
           onKeyDown={handleKeyDown}
-          placeholder="输入消息..."
+          placeholder="输入消息，按 Enter 发送..."
           rows={1}
-          className="max-h-[120px] min-h-[32px] flex-1 resize-none bg-transparent px-1.5 py-1 text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+          className="chat-textarea max-h-[120px] min-h-[40px] flex-1 resize-none bg-transparent text-[13px] leading-relaxed text-[var(--text-strong)] outline-none placeholder:text-[var(--text-soft)]"
         />
-        <div className="flex shrink-0 items-center gap-0.5 pb-0.5">
+        <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
           <button
-            onClick={clearContext}
-            className="transition-all-smooth flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            onClick={handleClear}
+            className="ui-icon-button"
             title="清空上下文"
           >
             <svg
-              width="14"
-              height="14"
+              width="15"
+              height="15"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
+              strokeWidth="1.8"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
@@ -80,12 +97,12 @@ export function ChatInput() {
           <button
             onClick={handleSend}
             disabled={!text.trim()}
-            className="transition-all-smooth flex h-7 w-7 items-center justify-center rounded-md bg-[var(--accent)] text-white hover:bg-[var(--accent-light)] disabled:opacity-25 disabled:hover:bg-[var(--accent)]"
+            className="send-button flex h-8 w-8 items-center justify-center rounded-lg text-white disabled:opacity-30 disabled:shadow-none"
             title="发送"
           >
             <svg
-              width="14"
-              height="14"
+              width="15"
+              height="15"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -99,6 +116,10 @@ export function ChatInput() {
           </button>
         </div>
       </div>
+
+      <p className="chat-input-hint mt-1.5 text-[10px] text-[var(--text-soft)]">
+        Shift + Enter 换行
+      </p>
     </div>
   );
 }

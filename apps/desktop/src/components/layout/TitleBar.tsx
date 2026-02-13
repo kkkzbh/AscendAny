@@ -6,22 +6,32 @@ export function TitleBar() {
   const isMac = api?.platform === "darwin";
 
   return (
-    <header className="drag-region flex h-11 shrink-0 items-center justify-between pr-4 pl-6">
-      <div className="flex items-center gap-2">
-        <span
-          className={`text-sm font-semibold tracking-wide text-[var(--text-primary)] ${isMac ? "pl-16" : ""}`}
-        >
-          AscendAny
-        </span>
-        <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--accent)]">
-          Beta
-        </span>
+    <header
+      className="drag-region titlebar titlebar-pad relative flex h-12 w-full shrink-0 items-center"
+    >
+      <div
+        className={`titlebar-brand flex items-center gap-3 ${isMac ? "pl-20" : "pr-28"}`}
+      >
+        <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--accent-600)] to-[var(--accent-400)] shadow-[0_8px_20px_rgba(3,105,161,0.28)]">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 14l5-5 4 4 7-7" />
+            <path d="M16 6h4v4" />
+          </svg>
+        </div>
+        <div className="flex flex-col leading-none">
+          <span className="text-[13px] font-semibold tracking-[0.02em] text-[var(--text-strong)]">AscendAny</span>
+          <span className="text-[10px] text-[var(--text-muted)]">Student Insight Studio</span>
+        </div>
       </div>
 
-      <div className="no-drag flex items-center gap-0.5">
+      <div
+        className={`titlebar-actions no-drag flex h-full items-center gap-0.5 ${
+          isMac ? "ml-auto" : "absolute right-2 top-0"
+        }`}
+      >
         <button
           onClick={openSettings}
-          className="transition-all-smooth flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+          className="ui-icon-button"
           title="设置"
         >
           <svg
@@ -40,10 +50,10 @@ export function TitleBar() {
         </button>
 
         {!isMac && (
-          <div className="ml-2 flex items-center">
+          <div className="ml-1.5 flex h-full items-center">
             <button
               onClick={() => api?.minimize()}
-              className="transition-all-smooth flex h-7 w-8 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              className="ui-window-button"
               title="最小化"
             >
               <svg width="10" height="10" viewBox="0 0 12 12">
@@ -52,7 +62,7 @@ export function TitleBar() {
             </button>
             <button
               onClick={() => api?.maximize()}
-              className="transition-all-smooth flex h-7 w-8 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              className="ui-window-button"
               title="最大化"
             >
               <svg width="10" height="10" viewBox="0 0 12 12">
@@ -61,7 +71,7 @@ export function TitleBar() {
             </button>
             <button
               onClick={() => api?.close()}
-              className="transition-all-smooth flex h-7 w-8 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[#f43f5e]/10 hover:text-[#f43f5e]"
+              className="ui-window-button hover:bg-[#ef4444]/10 hover:text-[#ef4444]"
               title="关闭"
             >
               <svg width="10" height="10" viewBox="0 0 12 12">

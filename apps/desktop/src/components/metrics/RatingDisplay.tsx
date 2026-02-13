@@ -5,10 +5,10 @@ interface RatingDisplayProps {
 }
 
 function getRatingColor(rating: number): string {
-  if (rating >= 1200) return "#ef4444";
-  if (rating >= 1000) return "#f59e0b";
-  if (rating >= 800) return "#22c55e";
-  return "#6b7280";
+  if (rating >= 1200) return "#d97706";
+  if (rating >= 1000) return "#0f766e";
+  if (rating >= 800) return "#0369a1";
+  return "#64748b";
 }
 
 function getRatingLabel(rating: number): string {
@@ -24,26 +24,26 @@ export function RatingDisplay({ rating }: RatingDisplayProps) {
   const delta = rating.lastDelta;
 
   return (
-    <div className="relative overflow-hidden rounded-xl bg-white/40 px-5 py-4 shadow-sm ring-1 ring-black/[0.04]">
+    <div className="relative rounded-xl bg-[var(--surface-raised)] px-5 py-4 ring-1 ring-[var(--border-subtle)]">
       <div
-        className="absolute inset-0 opacity-[0.05]"
+        className="absolute inset-0 rounded-xl opacity-[0.08]"
         style={{
           background: `radial-gradient(circle at 50% 30%, ${color}, transparent 70%)`,
         }}
       />
       <div className="relative flex flex-col items-center gap-1">
-        <span className="text-[10px] font-semibold tracking-widest text-[var(--text-muted)] uppercase">
+        <span className="text-[10px] font-semibold tracking-[0.12em] text-[var(--text-soft)] uppercase">
           综合 Rating
         </span>
         <span
           className="text-4xl font-bold tabular-nums tracking-tight"
-          style={{ color }}
+          style={{ color, lineHeight: 1.08 }}
         >
           {rating.current}
         </span>
         <div className="flex items-center gap-1.5">
           <span
-            className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+              className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
             style={{ color, backgroundColor: `${color}12` }}
           >
             {label}

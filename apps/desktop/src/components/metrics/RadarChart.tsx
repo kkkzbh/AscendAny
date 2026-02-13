@@ -35,21 +35,21 @@ export function RadarChart({ metrics }: RadarChartProps) {
           <PolarGrid
             stroke="var(--border)"
             strokeDasharray="3 3"
-            strokeOpacity={0.5}
+            strokeOpacity={0.7}
           />
           <PolarAngleAxis
             dataKey="metric"
-            tick={{ fill: "var(--text-secondary)", fontSize: 11, fontWeight: 500 }}
+            tick={{ fill: "var(--text-muted)", fontSize: 11, fontWeight: 500 }}
           />
           <Tooltip
             contentStyle={{
-              background: "rgba(255,255,255,0.92)",
+              background: "rgba(255,255,255,0.96)",
               backdropFilter: "blur(12px)",
               WebkitBackdropFilter: "blur(12px)",
-              border: "1px solid rgba(0,0,0,0.06)",
+              border: "1px solid rgba(148,163,184,0.25)",
               borderRadius: "8px",
               fontSize: "12px",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+              boxShadow: "0 8px 20px rgba(15,23,42,0.08)",
               padding: "6px 10px",
             }}
             formatter={(value: number) => [`${value}`, "得分"]}
@@ -57,10 +57,10 @@ export function RadarChart({ metrics }: RadarChartProps) {
           <Radar
             name="能力"
             dataKey="value"
-            stroke="var(--accent)"
-            fill="var(--accent)"
-            fillOpacity={0.12}
-            strokeWidth={1.5}
+            stroke="var(--accent-600)"
+            fill="var(--accent-500)"
+            fillOpacity={0.16}
+            strokeWidth={1.8}
           />
         </RechartsRadar>
       </ResponsiveContainer>
