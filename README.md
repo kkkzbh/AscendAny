@@ -3,7 +3,7 @@
 本仓库当前包含：
 - `doc/`：设计与开发文档（从真实数据样例抽象出的规范）
 - `db/schema/`：PostgreSQL DDL（每张表一个 SQL 文件）
-- `preprocess/`：预处理与增量导入代码（预留）
+- `preprocess/`：预处理与增量导入代码（已实现，含 `link-actors` 后处理映射）
 
 更多入口见：`doc/文档索引.md`。
 
@@ -56,6 +56,22 @@ port=6432
 dbname=AscendAny
 user=AscendAny
 # password: from ~/.pgpass
+```
+
+## Python 运行环境（uv + .venv）
+
+预处理相关命令统一使用仓库内 `.venv`（`uv` 管理），避免污染用户/系统 Python 环境。
+
+```bash
+# 首次初始化（若 .venv 不存在）
+uv venv .venv
+
+# 安装预处理依赖到项目 .venv
+uv pip install --python .venv/bin/python -r preprocess/requirements-dev.txt
+
+# 示例：运行预处理与测试
+uv run --python .venv/bin/python -m preprocess.cli run --dry-run
+uv run --python .venv/bin/python pytest -q
 ```
 
 ## Linux 桌面端 GPU 兼容模式（Electron）
