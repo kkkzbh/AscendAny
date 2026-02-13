@@ -9,6 +9,11 @@ from psycopg.rows import dict_row
 from ..models import ExamMeta, ParticipantRow, ProblemInfo, SourceFile, SubmissionRow
 
 
+def _to_sql_like_pattern(pattern: str) -> str:
+    escaped = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return escaped.replace("*", "%")
+
+
 class Repository:
     def __init__(self, conn: psycopg.Connection[Any]) -> None:
         self.conn = conn
@@ -505,3 +510,199 @@ class Repository:
                 """,
                 (ingest_run_id, exam_id, fingerprint, status, error_message),
             )
+
+    def list_exams_with_unlinked_submissions(
+        self,
+        exam_types: list[str] | None,
+        actor_sources: list[str],
+        limit: int | None,
+    ) -> list[dict[str, Any]]:
+        source_conditions = " OR ".join(["s.actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources]) or "TRUE"
+        params: list[Any] = [_to_sql_like_pattern(item) for item in actor_sources]
+        query = f"""
+            SELECT DISTINCT e.exam_id, e.exam_type, e.source_path
+            FROM ascendany.exams AS e
+            JOIN ascendany.submissions AS s
+              ON s.exam_id = e.exam_id
+            WHERE s.student_id IS NULL
+              AND ({source_conditions})
+        """
+        if exam_types:
+            query += " AND e.exam_type = ANY(%s)"
+            params.append(exam_types)
+        query += " ORDER BY e.exam_type ASC, e.source_path ASC"
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(limit)
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def fetch_exam_link_candidates(self, exam_id: int) -> list[dict[str, Any]]:
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    ep.student_id,
+                    s.canonical_name,
+                    si.source AS identity_source,
+                    si.external_id,
+                    si.external_name
+                FROM ascendany.exam_participants AS ep
+                JOIN ascendany.students AS s
+                  ON s.student_id = ep.student_id
+                LEFT JOIN ascendany.student_identities AS si
+                  ON si.student_id = ep.student_id
+                WHERE ep.exam_id = %s
+                ORDER BY ep.student_id ASC, si.identity_id ASC
+                """,
+                (exam_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def fetch_exam_unlinked_submissions(self, exam_id: int, actor_sources: list[str]) -> list[dict[str, Any]]:
+        source_conditions = " OR ".join(["actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources]) or "TRUE"
+        params: list[Any] = [exam_id, *[_to_sql_like_pattern(item) for item in actor_sources]]
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                    submission_id,
+                    student_id,
+                    actor_source,
+                    actor_external_id,
+                    actor_name,
+                    raw
+                FROM ascendany.submissions
+                WHERE exam_id = %s
+                  AND student_id IS NULL
+                  AND ({source_conditions})
+                ORDER BY submission_id ASC
+                """,
+                params,
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_submission_linking(
+        self,
+        submission_id: int,
+        student_id: int | None,
+        linking_payload: dict[str, Any],
+    ) -> bool:
+        payload = json.dumps(linking_payload, ensure_ascii=False)
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE ascendany.submissions
+                SET student_id = %s,
+                    raw = jsonb_set(
+                        COALESCE(raw, '{}'::jsonb),
+                        '{linking}',
+                        %s::jsonb,
+                        true
+                    )
+                WHERE submission_id = %s
+                  AND (
+                    student_id IS DISTINCT FROM %s
+                    OR COALESCE(raw -> 'linking', 'null'::jsonb) IS DISTINCT FROM %s::jsonb
+                  )
+                """,
+                (
+                    student_id,
+                    payload,
+                    submission_id,
+                    student_id,
+                    payload,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def fetch_exam_metric_rows(self, exam_id: int) -> list[dict[str, Any]]:
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                SELECT student_id, flexibility, details
+                FROM ascendany.exam_student_metrics
+                WHERE exam_id = %s
+                ORDER BY student_id ASC
+                """,
+                (exam_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def fetch_exam_submission_timeline(self, exam_id: int) -> dict[int, list[dict[str, Any]]]:
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    student_id,
+                    submitted_at,
+                    problem_code,
+                    verdict,
+                    score
+                FROM ascendany.submissions
+                WHERE exam_id = %s
+                  AND student_id IS NOT NULL
+                  AND submitted_at IS NOT NULL
+                ORDER BY student_id ASC, submitted_at ASC, submission_id ASC
+                """,
+                (exam_id,),
+            )
+            rows = cursor.fetchall()
+        timeline: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            student_id = int(row["student_id"])
+            timeline.setdefault(student_id, []).append(dict(row))
+        return timeline
+
+    def update_exam_metric_flexibility(
+        self,
+        exam_id: int,
+        student_id: int,
+        flexibility: int | None,
+        details: dict[str, Any],
+    ) -> bool:
+        payload = json.dumps(details, ensure_ascii=False)
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE ascendany.exam_student_metrics
+                SET flexibility = %s,
+                    details = %s::jsonb,
+                    computed_at = now()
+                WHERE exam_id = %s
+                  AND student_id = %s
+                  AND (
+                    flexibility IS DISTINCT FROM %s
+                    OR details IS DISTINCT FROM %s::jsonb
+                  )
+                """,
+                (
+                    flexibility,
+                    payload,
+                    exam_id,
+                    student_id,
+                    flexibility,
+                    payload,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def count_unlinked_submissions(self, exam_types: list[str] | None, actor_sources: list[str]) -> int:
+        source_conditions = " OR ".join(["s.actor_source LIKE %s ESCAPE '\\'" for _ in actor_sources]) or "TRUE"
+        params: list[Any] = [_to_sql_like_pattern(item) for item in actor_sources]
+        query = f"""
+            SELECT COUNT(1)
+            FROM ascendany.submissions AS s
+            JOIN ascendany.exams AS e
+              ON e.exam_id = s.exam_id
+            WHERE s.student_id IS NULL
+              AND ({source_conditions})
+        """
+        if exam_types:
+            query += " AND e.exam_type = ANY(%s)"
+            params.append(exam_types)
+        with self.conn.cursor() as cursor:
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0

@@ -24,6 +24,15 @@ metrics:
   winsor_high: 0.95
   flexibility_mode_default: approx
 
+mapping:
+  primary_keys:
+    - student_no
+    - name
+  actor_sources:
+    - datastructure_nickname
+    - pta_*_account
+  strict_mode: true
+
 fusion:
   half_life_days:
     knowledge: 45

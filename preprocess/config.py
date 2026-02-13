@@ -49,6 +49,18 @@ class MetricsConfig:
 
 
 @dataclass(slots=True)
+class MappingConfig:
+    primary_keys: list[str] = field(default_factory=lambda: ["student_no", "name"])
+    actor_sources: list[str] = field(
+        default_factory=lambda: [
+            "datastructure_nickname",
+            "pta_*_account",
+        ]
+    )
+    strict_mode: bool = True
+
+
+@dataclass(slots=True)
 class FusionHalfLife:
     knowledge: float = 45.0
     accuracy: float = 21.0
@@ -76,6 +88,7 @@ class Settings:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     ingest: IngestConfig = field(default_factory=IngestConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
+    mapping: MappingConfig = field(default_factory=MappingConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
     rating: RatingConfig = field(default_factory=RatingConfig)
 
@@ -111,6 +124,11 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "winsor_high": settings.metrics.winsor_high,
             "flexibility_mode_default": settings.metrics.flexibility_mode_default,
         },
+        "mapping": {
+            "primary_keys": settings.mapping.primary_keys,
+            "actor_sources": settings.mapping.actor_sources,
+            "strict_mode": settings.mapping.strict_mode,
+        },
         "fusion": {
             "half_life_days": {
                 "knowledge": settings.fusion.half_life_days.knowledge,
@@ -133,6 +151,7 @@ def _from_dict(data: dict[str, Any]) -> Settings:
     db = data.get("db", {})
     ingest = data.get("ingest", {})
     metrics = data.get("metrics", {})
+    mapping = data.get("mapping", {})
     fusion = data.get("fusion", {})
     rating = data.get("rating", {})
     half_life = fusion.get("half_life_days", {})
@@ -158,6 +177,11 @@ def _from_dict(data: dict[str, Any]) -> Settings:
             winsor_low=float(metrics.get("winsor_low", 0.05)),
             winsor_high=float(metrics.get("winsor_high", 0.95)),
             flexibility_mode_default=metrics.get("flexibility_mode_default", "approx"),
+        ),
+        mapping=MappingConfig(
+            primary_keys=list(mapping.get("primary_keys", ["student_no", "name"])),
+            actor_sources=list(mapping.get("actor_sources", ["datastructure_nickname", "pta_*_account"])),
+            strict_mode=bool(mapping.get("strict_mode", True)),
         ),
         fusion=FusionConfig(
             half_life_days=FusionHalfLife(
