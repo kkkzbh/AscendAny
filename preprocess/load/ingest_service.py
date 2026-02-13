@@ -118,12 +118,14 @@ class IngestService:
                     for submission in bundle.submissions:
                         self.repo.insert_submission(exam_id, submission)
 
+                    timeline_by_student = self._build_submission_timeline(bundle.submissions)
                     metric_results = compute_exam_metrics(
                         participants=participants,
                         total_points=bundle.exam_meta.total_points,
                         winsor_low=self.settings.metrics.winsor_low,
                         winsor_high=self.settings.metrics.winsor_high,
                         flexibility_mode=self.settings.metrics.flexibility_mode_default,
+                        timeline_by_student=timeline_by_student,
                     )
                     for metric in metric_results:
                         self.repo.upsert_exam_student_metric(
@@ -234,3 +236,19 @@ class IngestService:
             metrics = compute_current_metrics(history_rows=history, half_life_days=half_life)
             rating = self.repo.fetch_latest_rating(student_id, default_rating=self.settings.rating.initial_rating)
             self.repo.upsert_student_current_metrics(student_id=student_id, metrics=metrics, rating=rating)
+
+    @staticmethod
+    def _build_submission_timeline(submissions: list[Any]) -> dict[int, list[dict[str, Any]]]:
+        timeline: dict[int, list[dict[str, Any]]] = {}
+        for row in submissions:
+            if row.student_id is None:
+                continue
+            timeline.setdefault(row.student_id, []).append(
+                {
+                    "submitted_at": row.submitted_at,
+                    "problem_code": row.problem_code,
+                    "verdict": row.verdict,
+                    "score": row.score,
+                }
+            )
+        return timeline

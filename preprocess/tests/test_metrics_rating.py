@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from preprocess.config import RatingConfig
 from preprocess.derive.metrics import compute_exam_metrics
 from preprocess.derive.rating import compute_exam_rating
@@ -62,3 +65,51 @@ def test_compute_exam_rating_direction() -> None:
     by_id = {item.student_id: item for item in results}
     assert by_id[1].delta >= by_id[2].delta
     assert by_id[2].delta >= by_id[3].delta
+
+
+def test_compute_exam_metrics_prefers_timeline_flexibility() -> None:
+    participants = [
+        _participant(1, rank=1, score=100.0, time_used=120, attempts=2),
+        _participant(2, rank=2, score=80.0, time_used=240, attempts=2),
+    ]
+    baseline = compute_exam_metrics(
+        participants=participants,
+        total_points=100.0,
+        winsor_low=0.05,
+        winsor_high=0.95,
+        flexibility_mode="approx",
+    )
+    baseline_by_id = {item.student_id: item for item in baseline}
+    assert baseline_by_id[1].details["flexibility_mode"] == "approx"
+
+    timezone = ZoneInfo("Asia/Shanghai")
+    timeline = {
+        1: [
+            {
+                "submitted_at": datetime(2025, 3, 1, 10, 0, tzinfo=timezone),
+                "problem_code": "P1",
+                "verdict": "答案错误",
+            },
+            {
+                "submitted_at": datetime(2025, 3, 1, 10, 3, tzinfo=timezone),
+                "problem_code": "P2",
+                "verdict": "答案正确",
+            },
+            {
+                "submitted_at": datetime(2025, 3, 1, 10, 8, tzinfo=timezone),
+                "problem_code": "P1",
+                "verdict": "答案正确",
+            },
+        ]
+    }
+    with_timeline = compute_exam_metrics(
+        participants=participants,
+        total_points=100.0,
+        winsor_low=0.05,
+        winsor_high=0.95,
+        flexibility_mode="approx",
+        timeline_by_student=timeline,
+    )
+    by_id = {item.student_id: item for item in with_timeline}
+    assert by_id[1].details["flexibility_mode"] == "timeline"
+    assert by_id[1].details["ac_count"] == 2
