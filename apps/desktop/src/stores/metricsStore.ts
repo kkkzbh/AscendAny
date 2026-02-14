@@ -4,6 +4,7 @@ import {
   getApiErrorMessage,
 } from "@/lib/api";
 import type {
+  MetricDeltaInfo,
   StudentIdentity,
   StudentMetrics,
   RatingInfo,
@@ -37,6 +38,7 @@ function normalize(value?: string): string | undefined {
 interface MetricsState {
   metrics: StudentMetrics | null;
   rating: RatingInfo | null;
+  metricDelta: MetricDeltaInfo | null;
   identity: StudentIdentity | null;
   loading: boolean;
   error: string | null;
@@ -46,6 +48,7 @@ interface MetricsState {
 export const useMetricsStore = create<MetricsState>()((set) => ({
   metrics: null,
   rating: null,
+  metricDelta: null,
   identity: null,
   loading: false,
   error: null,
@@ -69,6 +72,7 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
       set({
         metrics: normalizeMetrics(response.metrics),
         rating: response.rating,
+        metricDelta: response.metricDelta,
         identity: response.identity,
         loading: false,
         error: null,
@@ -77,6 +81,7 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
       set({
         metrics: null,
         rating: null,
+        metricDelta: null,
         identity: null,
         loading: false,
         error: getApiErrorMessage(

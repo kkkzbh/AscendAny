@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from apps.api.db.repository import StudentNoMatch
+from apps.api.db.repository import StudentIdentityMatch, StudentNoMatch
 from apps.api.main import create_app
 from apps.api.schemas.chat import ChatReplyResponse
 from apps.api.schemas.model import ModelProvidersResponse, ProviderOptionResponse
@@ -21,6 +21,14 @@ class FakeRepo:
         ]
 
     async def find_students_by_student_no(self, student_no: str):
+        if student_no == "20230001":
+            return [
+                StudentIdentityMatch(
+                    student_id=1,
+                    student_no="20230001",
+                    student_name="Alice",
+                )
+            ]
         return []
 
     async def exists_pta_submission_by_actor_name(self, actor_name: str):
@@ -30,6 +38,9 @@ class FakeRepo:
         return None
 
     async def fetch_rating_history(self, student_id: int, limit: int = 50):
+        return []
+
+    async def fetch_exam_metric_history(self, student_id: int, limit: int = 50):
         return []
 
 
@@ -94,3 +105,18 @@ def test_students_dashboard_ambiguous_pta_nickname_returns_409() -> None:
     assert response.status_code == 409
     payload = response.json()
     assert payload["error"]["code"] == "MULTIPLE_STUDENT_IDS_FOR_NICKNAME"
+
+
+def test_students_dashboard_response_contains_metric_delta() -> None:
+    app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/students/dashboard", params={"studentId": "20230001"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity"]["studentId"] == "20230001"
+    assert payload["metricDelta"]["baseline"] == "zero"
+    assert payload["metricDelta"]["latestExamId"] is None
+    assert payload["metricDelta"]["values"]["knowledge"] == 0

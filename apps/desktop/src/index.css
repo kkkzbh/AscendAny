@@ -49,6 +49,8 @@ body,
   --rating-negative: #dc2626;
   --rating-positive-soft: rgba(16, 185, 129, 0.08);
   --rating-negative-soft: rgba(244, 63, 94, 0.08);
+  --metric-delta-neutral-bg: rgba(148, 163, 184, 0.2);
+  --metric-delta-neutral-text: #475569;
 
   --body-background:
     radial-gradient(circle at 20% 12%, rgba(56, 189, 248, 0.24), transparent 40%),
@@ -94,6 +96,8 @@ body,
   --rating-negative: #fb7185;
   --rating-positive-soft: rgba(16, 185, 129, 0.18);
   --rating-negative-soft: rgba(244, 63, 94, 0.18);
+  --metric-delta-neutral-bg: rgba(148, 163, 184, 0.28);
+  --metric-delta-neutral-text: #cbd5e1;
 
   --body-background:
     radial-gradient(circle at 18% 10%, rgba(14, 116, 144, 0.35), transparent 42%),
@@ -196,6 +200,10 @@ body {
 
 .metric-row {
   padding: 9px 12px !important;
+}
+
+.metric-delta-chip {
+  border: 1px solid transparent;
 }
 
 .rating-history-list {

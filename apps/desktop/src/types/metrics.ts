@@ -29,6 +29,22 @@ export interface StudentMetrics {
   proficiency: number;
 }
 
+export interface MetricDeltaValues {
+  knowledge: number;
+  accuracy: number;
+  quality: number;
+  flexibility: number;
+  proficiency: number;
+}
+
+export interface MetricDeltaInfo {
+  latestExamId: string | null;
+  latestExamName: string | null;
+  latestExamDate: string | null;
+  baseline: "zero" | "previous_exam";
+  values: MetricDeltaValues;
+}
+
 export interface RatingInfo {
   current: number;
   lastDelta: number | null;
@@ -53,5 +69,6 @@ export interface StudentIdentity {
 export interface StudentDashboardData {
   metrics: StudentMetrics;
   rating: RatingInfo;
+  metricDelta: MetricDeltaInfo;
   identity: StudentIdentity;
 }

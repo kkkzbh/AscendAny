@@ -15,7 +15,7 @@ const METRIC_ORDER: MetricName[] = [
 ];
 
 export function MetricsPanel() {
-  const { metrics, rating, loading, error, loadDashboard } = useMetricsStore();
+  const { metrics, rating, metricDelta, loading, error, loadDashboard } = useMetricsStore();
   const account = useAuthStore((s) => s.account);
   const accessToken = useAuthStore((s) => s.accessToken);
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -71,7 +71,12 @@ export function MetricsPanel() {
 
         <div className="metric-section metric-bars shrink-0 rounded-xl">
           {METRIC_ORDER.map((name) => (
-            <MetricCard key={name} name={name} value={metrics[name]} />
+            <MetricCard
+              key={name}
+              name={name}
+              value={metrics[name]}
+              delta={metricDelta?.values[name] ?? 0}
+            />
           ))}
         </div>
 

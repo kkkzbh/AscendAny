@@ -4,7 +4,11 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from apps.api.db.repository import DashboardMetricsRow, RatingHistoryRow
+from apps.api.db.repository import (
+    DashboardMetricsRow,
+    ExamMetricHistoryRow,
+    RatingHistoryRow,
+)
 from apps.api.services.dashboard import DashboardService
 from apps.api.services.identity import ResolvedIdentity
 
@@ -13,8 +17,10 @@ class FakeDashboardRepo:
     def __init__(self) -> None:
         self.metrics: DashboardMetricsRow | None = None
         self.history: list[RatingHistoryRow] = []
+        self.exam_metric_history: list[ExamMetricHistoryRow] = []
         self.metrics_by_student: dict[int, DashboardMetricsRow | None] = {}
         self.history_by_student: dict[int, list[RatingHistoryRow]] = {}
+        self.exam_metric_history_by_student: dict[int, list[ExamMetricHistoryRow]] = {}
 
     async def fetch_current_metrics(
         self, student_id: int
@@ -29,6 +35,13 @@ class FakeDashboardRepo:
         if student_id in self.history_by_student:
             return self.history_by_student[student_id][:limit]
         return self.history[:limit]
+
+    async def fetch_exam_metric_history(
+        self, student_id: int, limit: int = 50
+    ) -> list[ExamMetricHistoryRow]:
+        if student_id in self.exam_metric_history_by_student:
+            return self.exam_metric_history_by_student[student_id][:limit]
+        return self.exam_metric_history[:limit]
 
 
 def test_dashboard_returns_defaults_for_no_submission_records() -> None:
@@ -54,6 +67,9 @@ def test_dashboard_returns_defaults_for_no_submission_records() -> None:
     assert result.rating.lastDelta is None
     assert result.rating.history == []
     assert result.metrics.knowledge == 0
+    assert result.metricDelta.latestExamId is None
+    assert result.metricDelta.baseline == "zero"
+    assert result.metricDelta.values.knowledge == 0
 
 
 def test_dashboard_uses_metrics_and_rating_history() -> None:
@@ -75,6 +91,30 @@ def test_dashboard_uses_metrics_and_rating_history() -> None:
             delta=8,
             new_rating=888,
         )
+    ]
+    repo.exam_metric_history = [
+        ExamMetricHistoryRow(
+            exam_id=9,
+            exam_name="Contest 9",
+            exam_time=datetime(2026, 2, 12, tzinfo=timezone.utc),
+            knowledge=72,
+            accuracy=68,
+            quality=62,
+            flexibility=55,
+            proficiency=80,
+            computed_at=datetime(2026, 2, 12, 10, 0, tzinfo=timezone.utc),
+        ),
+        ExamMetricHistoryRow(
+            exam_id=8,
+            exam_name="Contest 8",
+            exam_time=datetime(2026, 2, 10, tzinfo=timezone.utc),
+            knowledge=69,
+            accuracy=70,
+            quality=60,
+            flexibility=57,
+            proficiency=78,
+            computed_at=datetime(2026, 2, 10, 10, 0, tzinfo=timezone.utc),
+        ),
     ]
 
     service = DashboardService(
@@ -99,6 +139,13 @@ def test_dashboard_uses_metrics_and_rating_history() -> None:
     assert result.rating.history[0].examId == "9"
     assert result.rating.history[0].date == "2026-02-12"
     assert result.metrics.knowledge == 71.2
+    assert result.metricDelta.latestExamId == "9"
+    assert result.metricDelta.baseline == "previous_exam"
+    assert result.metricDelta.values.knowledge == 3
+    assert result.metricDelta.values.accuracy == -2
+    assert result.metricDelta.values.quality == 2
+    assert result.metricDelta.values.flexibility == -2
+    assert result.metricDelta.values.proficiency == 2
 
 
 def test_dashboard_merges_duplicate_student_entities() -> None:
@@ -141,6 +188,43 @@ def test_dashboard_merges_duplicate_student_entities() -> None:
             new_rating=912,
         )
     ]
+    repo.exam_metric_history_by_student[101] = [
+        ExamMetricHistoryRow(
+            exam_id=3,
+            exam_name="C-old",
+            exam_time=datetime(2026, 2, 11, tzinfo=timezone.utc),
+            knowledge=64,
+            accuracy=20,
+            quality=None,
+            flexibility=None,
+            proficiency=None,
+            computed_at=datetime(2026, 2, 11, 9, 0, tzinfo=timezone.utc),
+        )
+    ]
+    repo.exam_metric_history_by_student[202] = [
+        ExamMetricHistoryRow(
+            exam_id=3,
+            exam_name="C-new",
+            exam_time=datetime(2026, 2, 11, tzinfo=timezone.utc),
+            knowledge=66,
+            accuracy=None,
+            quality=55,
+            flexibility=44,
+            proficiency=33,
+            computed_at=datetime(2026, 2, 11, 10, 0, tzinfo=timezone.utc),
+        ),
+        ExamMetricHistoryRow(
+            exam_id=2,
+            exam_name="B",
+            exam_time=datetime(2026, 2, 10, tzinfo=timezone.utc),
+            knowledge=62,
+            accuracy=18,
+            quality=50,
+            flexibility=40,
+            proficiency=30,
+            computed_at=datetime(2026, 2, 10, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
 
     service = DashboardService(
         repository=repo,
@@ -164,3 +248,51 @@ def test_dashboard_merges_duplicate_student_entities() -> None:
     assert result.rating.current == 912
     assert result.rating.history[0].examId == "2"
     assert result.rating.history[1].examId == "1"
+    assert result.metricDelta.latestExamId == "3"
+    assert result.metricDelta.latestExamName == "C-new"
+    assert result.metricDelta.values.knowledge == 4
+    assert result.metricDelta.values.accuracy == 2
+    assert result.metricDelta.values.quality == 5
+    assert result.metricDelta.values.flexibility == 4
+    assert result.metricDelta.values.proficiency == 3
+
+
+def test_dashboard_metric_delta_uses_zero_baseline_for_first_exam() -> None:
+    repo = FakeDashboardRepo()
+    repo.exam_metric_history = [
+        ExamMetricHistoryRow(
+            exam_id=11,
+            exam_name="Contest 11",
+            exam_time=datetime(2026, 2, 13, tzinfo=timezone.utc),
+            knowledge=55,
+            accuracy=48,
+            quality=36,
+            flexibility=22,
+            proficiency=61,
+            computed_at=datetime(2026, 2, 13, 10, 0, tzinfo=timezone.utc),
+        )
+    ]
+
+    service = DashboardService(
+        repository=repo,
+        default_rating=800,
+        default_metric=0,
+        rating_history_limit=50,
+    )
+    identity = ResolvedIdentity(
+        student_entity_id=1,
+        student_id="20230001",
+        pta_nickname="Alice",
+        no_submission_records=False,
+        matched_by="student_id",
+    )
+
+    result = asyncio.run(service.build(identity))
+
+    assert result.metricDelta.latestExamId == "11"
+    assert result.metricDelta.baseline == "zero"
+    assert result.metricDelta.values.knowledge == 55
+    assert result.metricDelta.values.accuracy == 48
+    assert result.metricDelta.values.quality == 36
+    assert result.metricDelta.values.flexibility == 22
+    assert result.metricDelta.values.proficiency == 61

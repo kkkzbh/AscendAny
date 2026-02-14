@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -26,6 +28,22 @@ class RatingInfoResponse(BaseModel):
     history: list[RatingPointResponse]
 
 
+class MetricDeltaItemResponse(BaseModel):
+    knowledge: int
+    accuracy: int
+    quality: int
+    flexibility: int
+    proficiency: int
+
+
+class MetricDeltaInfoResponse(BaseModel):
+    latestExamId: str | None
+    latestExamName: str | None
+    latestExamDate: str | None
+    baseline: Literal["zero", "previous_exam"]
+    values: MetricDeltaItemResponse
+
+
 class ResolvedIdentityResponse(BaseModel):
     studentId: str
     ptaNickname: str | None = None
@@ -35,4 +53,5 @@ class ResolvedIdentityResponse(BaseModel):
 class StudentDashboardResponse(BaseModel):
     metrics: StudentMetricsResponse
     rating: RatingInfoResponse
+    metricDelta: MetricDeltaInfoResponse
     identity: ResolvedIdentityResponse

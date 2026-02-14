@@ -44,6 +44,19 @@ class RatingHistoryRow:
 
 
 @dataclass(slots=True)
+class ExamMetricHistoryRow:
+    exam_id: int
+    exam_name: str
+    exam_time: datetime
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+    computed_at: datetime | None
+
+
+@dataclass(slots=True)
 class AccountRow:
     account_id: int
     username: str
@@ -497,6 +510,58 @@ class ApiRepository:
                     old_rating=int(row["old_rating"]),
                     delta=int(row["delta"]),
                     new_rating=int(row["new_rating"]),
+                )
+            )
+        return history
+
+    async def fetch_exam_metric_history(
+        self, student_id: int, limit: int = 50
+    ) -> list[ExamMetricHistoryRow]:
+        query = """
+            SELECT
+                esm.exam_id,
+                COALESCE(NULLIF(e.title, ''), e.source_path) AS exam_name,
+                COALESCE(e.starts_at, esm.computed_at) AS exam_time,
+                esm.knowledge,
+                esm.accuracy,
+                esm.quality,
+                esm.flexibility,
+                esm.proficiency,
+                esm.computed_at
+            FROM ascendany.exam_student_metrics AS esm
+            JOIN ascendany.exams AS e
+              ON e.exam_id = esm.exam_id
+            WHERE esm.student_id = %s
+            ORDER BY
+                COALESCE(e.starts_at, esm.computed_at) DESC,
+                esm.exam_id DESC,
+                esm.computed_at DESC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (student_id, limit))
+                rows = await cursor.fetchall()
+
+        history: list[ExamMetricHistoryRow] = []
+        for row in rows:
+            exam_time = row.get("exam_time")
+            if not isinstance(exam_time, datetime):
+                continue
+            computed_at = row.get("computed_at")
+            history.append(
+                ExamMetricHistoryRow(
+                    exam_id=int(row["exam_id"]),
+                    exam_name=str(row["exam_name"]),
+                    exam_time=exam_time,
+                    knowledge=row.get("knowledge"),
+                    accuracy=row.get("accuracy"),
+                    quality=row.get("quality"),
+                    flexibility=row.get("flexibility"),
+                    proficiency=row.get("proficiency"),
+                    computed_at=computed_at
+                    if isinstance(computed_at, datetime)
+                    else None,
                 )
             )
         return history
