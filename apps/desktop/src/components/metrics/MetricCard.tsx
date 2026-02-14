@@ -5,6 +5,7 @@ interface MetricCardProps {
   name: MetricName;
   value: number;
   delta: number;
+  isMissing?: boolean;
 }
 
 function clampPercent(value: number): number {
@@ -22,7 +23,7 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-export function MetricCard({ name, value, delta }: MetricCardProps) {
+export function MetricCard({ name, value, delta, isMissing = false }: MetricCardProps) {
   const label = METRIC_LABELS[name];
   const color = METRIC_COLORS[name];
   const roundedValue = clampPercent(Math.round(value));
@@ -33,9 +34,19 @@ export function MetricCard({ name, value, delta }: MetricCardProps) {
     roundedDelta > 0 ? Math.max(0, roundedValue - previousValue) : 0;
   const negativeSegmentWidth =
     roundedDelta < 0 ? Math.max(0, previousValue - roundedValue) : 0;
-  const deltaText = roundedDelta > 0 ? `+${roundedDelta}` : `${roundedDelta}`;
+  const deltaText = isMissing
+    ? "缺失"
+    : roundedDelta > 0
+      ? `+${roundedDelta}`
+      : `${roundedDelta}`;
   const deltaStyle =
-    roundedDelta > 0
+    isMissing
+      ? {
+          color: "var(--text-soft)",
+          borderColor: "transparent",
+          backgroundColor: "var(--surface-soft)",
+        }
+      : roundedDelta > 0
       ? {
           color: "var(--rating-positive)",
           borderColor: "transparent",
@@ -61,10 +72,10 @@ export function MetricCard({ name, value, delta }: MetricCardProps) {
       />
       <span className="w-8 text-xs text-[var(--text-muted)]">{label}</span>
       <span className="w-7 text-right text-xs font-bold tabular-nums text-[var(--text-strong)]">
-        {roundedValue}
+        {isMissing ? "N/A" : roundedValue}
       </span>
       <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--surface-soft)]">
-        {solidWidth > 0 && (
+        {!isMissing && solidWidth > 0 && (
           <div
             className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
             style={{
@@ -73,7 +84,7 @@ export function MetricCard({ name, value, delta }: MetricCardProps) {
             }}
           />
         )}
-        {positiveSegmentWidth > 0 && (
+        {!isMissing && positiveSegmentWidth > 0 && (
           <div
             className="absolute inset-y-0 rounded-full transition-all duration-500"
             style={{
@@ -83,7 +94,7 @@ export function MetricCard({ name, value, delta }: MetricCardProps) {
             }}
           />
         )}
-        {negativeSegmentWidth > 0 && (
+        {!isMissing && negativeSegmentWidth > 0 && (
           <div
             className="absolute inset-y-0 rounded-full border transition-all duration-500"
             style={{

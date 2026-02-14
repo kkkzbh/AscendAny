@@ -67,6 +67,7 @@ def test_dashboard_returns_defaults_for_no_submission_records() -> None:
     assert result.rating.lastDelta is None
     assert result.rating.history == []
     assert result.metrics.knowledge == 0
+    assert result.metricMissing.knowledge is True
     assert result.metricDelta.latestExamId is None
     assert result.metricDelta.baseline == "zero"
     assert result.metricDelta.values.knowledge == 0
@@ -245,6 +246,8 @@ def test_dashboard_merges_duplicate_student_entities() -> None:
 
     assert result.metrics.accuracy == 31.0
     assert result.metrics.quality == 0
+    assert result.metricMissing.accuracy is False
+    assert result.metricMissing.quality is True
     assert result.rating.current == 912
     assert result.rating.history[0].examId == "2"
     assert result.rating.history[1].examId == "1"

@@ -67,7 +67,10 @@ class StudentIdentityService:
             dict.fromkeys(match.student_id for match in matches)
         )
         effective_nickname = pta_nickname or _clean(primary_match.student_name) or None
-        no_submission_records = await self._is_no_submission_records(effective_nickname)
+        no_submission_records = await self._is_no_submission_records(
+            student_entity_ids=merged_student_entity_ids,
+            pta_nickname=effective_nickname,
+        )
 
         return ResolvedIdentity(
             student_entity_id=primary_match.student_id,
@@ -101,7 +104,19 @@ class StudentIdentityService:
             matched_by="pta_nickname",
         )
 
-    async def _is_no_submission_records(self, pta_nickname: str | None) -> bool:
+    async def _is_no_submission_records(
+        self,
+        student_entity_ids: tuple[int, ...],
+        pta_nickname: str | None,
+    ) -> bool:
+        records_checker = getattr(
+            self._repository, "exists_learning_records_for_student_ids", None
+        )
+        if callable(records_checker):
+            has_records = await records_checker(list(student_entity_ids))
+            return not has_records
+
+        # Backward-compatible fallback for simplified test repositories.
         if not pta_nickname:
             return True
         has_submission = await self._repository.exists_pta_submission_by_actor_name(

@@ -13,6 +13,14 @@ class StudentMetricsResponse(BaseModel):
     proficiency: float
 
 
+class MetricMissingItemResponse(BaseModel):
+    knowledge: bool
+    accuracy: bool
+    quality: bool
+    flexibility: bool
+    proficiency: bool
+
+
 class RatingPointResponse(BaseModel):
     examId: str
     examName: str
@@ -52,6 +60,7 @@ class ResolvedIdentityResponse(BaseModel):
 
 class StudentDashboardResponse(BaseModel):
     metrics: StudentMetricsResponse
+    metricMissing: MetricMissingItemResponse
     rating: RatingInfoResponse
     metricDelta: MetricDeltaInfoResponse
     identity: ResolvedIdentityResponse

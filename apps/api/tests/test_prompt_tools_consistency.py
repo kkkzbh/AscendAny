@@ -254,4 +254,6 @@ def test_tool_executor_student_ability_scores_returns_rank_gap() -> None:
     assert payload["me"]["rank"] == 7
     assert payload["previous_ranker"]["rank"] == 6
     assert payload["gap_vs_previous"]["score_gap"] == 10.0
+    assert payload["rank_basis"]["source"] == "exam_participants.rank"
     assert payload["metric_diff_vs_previous"]["knowledge"]["delta_vs_previous"] == 6
+    assert payload["metric_diff_vs_previous"]["knowledge"]["mine_is_missing"] is False

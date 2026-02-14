@@ -70,7 +70,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_student_ability_scores",
-            "description": "获取该学生在指定考试中的名次、总分、解题数，以及与上一名同学在五大能力指标上的差异。",
+            "description": "获取该学生在指定考试中的名次、总分、解题数，以及与“紧邻前一名（rank 严格更小）”同学在五大能力指标上的差异。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -326,7 +326,7 @@ class ToolExecutor:
         def _metric_payload(
             mine: Any | None,
             previous: Any | None,
-        ) -> dict[str, int | None]:
+        ) -> dict[str, int | bool | None]:
             mine_int = self._safe_int(mine)
             previous_int = self._safe_int(previous)
             if mine_int is None or previous_int is None:
@@ -337,6 +337,8 @@ class ToolExecutor:
                 "mine": mine_int,
                 "previous": previous_int,
                 "delta_vs_previous": delta,
+                "mine_is_missing": mine_int is None,
+                "previous_is_missing": previous_int is None,
             }
 
         metric_diff: dict[str, dict[str, int | None]] = {}
@@ -362,6 +364,11 @@ class ToolExecutor:
         return {
             "exam_id": exam_id,
             "student_id": self._identity.student_id,
+            "rank_basis": {
+                "source": "exam_participants.rank",
+                "absent_filtered": True,
+                "previous_ranker_rule": "choose nearest participant with rank < my_rank",
+            },
             "me": {
                 "rank": my_row.rank,
                 "student_name": my_row.student_name,

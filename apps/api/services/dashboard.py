@@ -11,6 +11,7 @@ from ..db.repository import (
 from ..schemas.students import (
     MetricDeltaInfoResponse,
     MetricDeltaItemResponse,
+    MetricMissingItemResponse,
     RatingInfoResponse,
     RatingPointResponse,
     ResolvedIdentityResponse,
@@ -88,6 +89,7 @@ class DashboardService:
         metric_delta = self._build_metric_delta(merged_exam_metric_rows)
         return StudentDashboardResponse(
             metrics=metrics,
+            metricMissing=self._build_metric_missing(metrics_rows),
             rating=rating,
             metricDelta=metric_delta,
             identity=ResolvedIdentityResponse(
@@ -112,6 +114,13 @@ class DashboardService:
         )
         return StudentDashboardResponse(
             metrics=metrics,
+            metricMissing=MetricMissingItemResponse(
+                knowledge=True,
+                accuracy=True,
+                quality=True,
+                flexibility=True,
+                proficiency=True,
+            ),
             rating=rating,
             metricDelta=self._empty_metric_delta(),
             identity=ResolvedIdentityResponse(
@@ -151,6 +160,25 @@ class DashboardService:
             quality=self._metric_from_rows(rows, "quality"),
             flexibility=self._metric_from_rows(rows, "flexibility"),
             proficiency=self._metric_from_rows(rows, "proficiency"),
+        )
+
+    def _build_metric_missing(
+        self, rows: list[DashboardMetricsRow]
+    ) -> MetricMissingItemResponse:
+        if not rows:
+            return MetricMissingItemResponse(
+                knowledge=True,
+                accuracy=True,
+                quality=True,
+                flexibility=True,
+                proficiency=True,
+            )
+        return MetricMissingItemResponse(
+            knowledge=metric_from_rows(rows, "knowledge") is None,
+            accuracy=metric_from_rows(rows, "accuracy") is None,
+            quality=metric_from_rows(rows, "quality") is None,
+            flexibility=metric_from_rows(rows, "flexibility") is None,
+            proficiency=metric_from_rows(rows, "proficiency") is None,
         )
 
     def _build_rating(

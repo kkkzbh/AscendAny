@@ -5,6 +5,7 @@ import {
 } from "@/lib/api";
 import type {
   MetricDeltaInfo,
+  MetricMissingValues,
   StudentIdentity,
   StudentMetrics,
   RatingInfo,
@@ -37,6 +38,7 @@ function normalize(value?: string): string | undefined {
 
 interface MetricsState {
   metrics: StudentMetrics | null;
+  metricMissing: MetricMissingValues | null;
   rating: RatingInfo | null;
   metricDelta: MetricDeltaInfo | null;
   identity: StudentIdentity | null;
@@ -47,6 +49,7 @@ interface MetricsState {
 
 export const useMetricsStore = create<MetricsState>()((set) => ({
   metrics: null,
+  metricMissing: null,
   rating: null,
   metricDelta: null,
   identity: null,
@@ -71,6 +74,7 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
       });
       set({
         metrics: normalizeMetrics(response.metrics),
+        metricMissing: response.metricMissing,
         rating: response.rating,
         metricDelta: response.metricDelta,
         identity: response.identity,
@@ -80,6 +84,7 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
     } catch (error) {
       set({
         metrics: null,
+        metricMissing: null,
         rating: null,
         metricDelta: null,
         identity: null,

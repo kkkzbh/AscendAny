@@ -868,6 +868,41 @@ class ApiRepository:
             return False
         return bool(row["has_match"])
 
+    async def exists_learning_records_for_student_ids(
+        self, student_ids: list[int]
+    ) -> bool:
+        if not student_ids:
+            return False
+        query = """
+            SELECT (
+                EXISTS (
+                    SELECT 1
+                    FROM ascendany.rating_history AS rh
+                    WHERE rh.student_id = ANY(%s::bigint[])
+                    LIMIT 1
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM ascendany.exam_student_metrics AS esm
+                    WHERE esm.student_id = ANY(%s::bigint[])
+                    LIMIT 1
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM ascendany.submissions AS s
+                    WHERE s.student_id = ANY(%s::bigint[])
+                    LIMIT 1
+                )
+            ) AS has_records
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (student_ids, student_ids, student_ids))
+                row = await cursor.fetchone()
+        if not row:
+            return False
+        return bool(row["has_records"])
+
     async def fetch_current_metrics(
         self, student_id: int
     ) -> DashboardMetricsRow | None:

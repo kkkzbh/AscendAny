@@ -29,6 +29,14 @@ export interface StudentMetrics {
   proficiency: number;
 }
 
+export interface MetricMissingValues {
+  knowledge: boolean;
+  accuracy: boolean;
+  quality: boolean;
+  flexibility: boolean;
+  proficiency: boolean;
+}
+
 export interface MetricDeltaValues {
   knowledge: number;
   accuracy: number;
@@ -68,6 +76,7 @@ export interface StudentIdentity {
 
 export interface StudentDashboardData {
   metrics: StudentMetrics;
+  metricMissing: MetricMissingValues;
   rating: RatingInfo;
   metricDelta: MetricDeltaInfo;
   identity: StudentIdentity;

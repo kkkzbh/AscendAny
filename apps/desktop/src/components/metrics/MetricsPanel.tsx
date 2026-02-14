@@ -15,7 +15,8 @@ const METRIC_ORDER: MetricName[] = [
 ];
 
 export function MetricsPanel() {
-  const { metrics, rating, metricDelta, loading, error, loadDashboard } = useMetricsStore();
+  const { metrics, metricMissing, rating, metricDelta, loading, error, loadDashboard } =
+    useMetricsStore();
   const account = useAuthStore((s) => s.account);
   const accessToken = useAuthStore((s) => s.accessToken);
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -76,6 +77,7 @@ export function MetricsPanel() {
               name={name}
               value={metrics[name]}
               delta={metricDelta?.values[name] ?? 0}
+              isMissing={metricMissing?.[name] ?? false}
             />
           ))}
         </div>
