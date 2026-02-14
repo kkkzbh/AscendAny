@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
-from typing import Any
+from typing import Any, Callable
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -57,6 +57,7 @@ class IngestService:
         limit: int | None = None,
         dry_run: bool = False,
         force: bool = False,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> RunSummary:
         discovered = discover_exam_units(
             practice_root=self.settings.practice_root,
@@ -80,6 +81,9 @@ class IngestService:
             changed = changed[:limit]
 
         if dry_run:
+            if on_progress:
+                on_progress("log", {"level": "info", "message": f"Dry run: {len(changed)} exam(s) would be processed out of {len(discovered)} discovered."})
+                on_progress("done", {"ingestRunId": None, "scanned": len(discovered), "skipped": len(discovered) - len(changed), "succeeded": 0, "failed": 0, "errors": []})
             return RunSummary(
                 ingest_run_id=None,
                 scanned=len(discovered),
@@ -109,6 +113,16 @@ class IngestService:
 
         for unit in changed:
             exam_id = None
+            if on_progress:
+                idx = changed.index(unit) + 1
+                on_progress("progress", {
+                    "current": idx,
+                    "total": len(changed),
+                    "examType": unit.exam_type,
+                    "sourcePath": unit.source_path,
+                    "phase": "processing",
+                })
+                on_progress("log", {"level": "info", "message": f"[{idx}/{len(changed)}] Processing {unit.exam_type}/{unit.source_path} ..."})
             exam_meta_for_failure = ExamMeta(
                 title=unit.source_path.split("/")[-1],
                 starts_at=None,
@@ -232,10 +246,14 @@ class IngestService:
                     )
                 succeeded += 1
                 successful_exam_ids.append(exam_id)
+                if on_progress:
+                    on_progress("log", {"level": "success", "message": f"✓ {unit.exam_type}/{unit.source_path} imported successfully."})
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 message = f"{unit.source_path}: {exc}"
                 errors.append(message)
+                if on_progress:
+                    on_progress("log", {"level": "error", "message": f"✗ {unit.source_path}: {exc}"})
                 with self.repo.conn.transaction():
                     exam_id = self.repo.upsert_exam(
                         unit.exam_type,
@@ -279,7 +297,7 @@ class IngestService:
 
         self._trigger_auto_analysis_prewarm(successful_exam_ids, errors)
 
-        return RunSummary(
+        summary = RunSummary(
             ingest_run_id=ingest_run_id,
             scanned=len(discovered),
             skipped=len(discovered) - len(changed),
@@ -287,6 +305,16 @@ class IngestService:
             failed=failed,
             errors=errors,
         )
+        if on_progress:
+            on_progress("done", {
+                "ingestRunId": ingest_run_id,
+                "scanned": summary.scanned,
+                "skipped": summary.skipped,
+                "succeeded": summary.succeeded,
+                "failed": summary.failed,
+                "errors": summary.errors,
+            })
+        return summary
 
     def _materialize_participants(
         self, participants: list[ParticipantRow]

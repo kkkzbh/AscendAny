@@ -107,6 +107,7 @@ class AccountRow:
     username: str
     password_hash: str
     is_active: bool
+    is_admin: bool = False
 
 
 @dataclass(slots=True)
@@ -157,7 +158,7 @@ class ApiRepository:
             INSERT INTO ascendany.user_accounts (username, password_hash)
             VALUES (%s, %s)
             ON CONFLICT (username_normalized) DO NOTHING
-            RETURNING account_id, username, password_hash, is_active
+            RETURNING account_id, username, password_hash, is_active, is_admin
         """
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
@@ -170,6 +171,7 @@ class ApiRepository:
             username=str(row["username"]),
             password_hash=str(row["password_hash"]),
             is_active=bool(row["is_active"]),
+            is_admin=bool(row.get("is_admin", False)),
         )
 
     async def add_account_contact(
@@ -189,7 +191,7 @@ class ApiRepository:
 
     async def fetch_account_by_username(self, username: str) -> AccountRow | None:
         query = """
-            SELECT account_id, username, password_hash, is_active
+            SELECT account_id, username, password_hash, is_active, is_admin
             FROM ascendany.user_accounts
             WHERE username_normalized = lower(BTRIM(%s))
             LIMIT 1
@@ -205,11 +207,12 @@ class ApiRepository:
             username=str(row["username"]),
             password_hash=str(row["password_hash"]),
             is_active=bool(row["is_active"]),
+            is_admin=bool(row.get("is_admin", False)),
         )
 
     async def fetch_account_by_id(self, account_id: int) -> AccountRow | None:
         query = """
-            SELECT account_id, username, password_hash, is_active
+            SELECT account_id, username, password_hash, is_active, is_admin
             FROM ascendany.user_accounts
             WHERE account_id = %s
             LIMIT 1
@@ -225,6 +228,7 @@ class ApiRepository:
             username=str(row["username"]),
             password_hash=str(row["password_hash"]),
             is_active=bool(row["is_active"]),
+            is_admin=bool(row.get("is_admin", False)),
         )
 
     async def touch_account_login(self, account_id: int) -> None:

@@ -55,6 +55,7 @@ class AuthPolicyResponse(BaseModel):
 class AuthAccountResponse(BaseModel):
     accountId: str
     username: str
+    isAdmin: bool = False
     studentId: str | None = None
     ptaNickname: str | None = None
 

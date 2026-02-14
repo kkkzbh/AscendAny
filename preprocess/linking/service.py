@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from ..config import Settings
 from ..derive import compute_current_metrics
@@ -31,6 +31,7 @@ class LinkActorsService:
         exam_types: list[str] | None = None,
         limit: int | None = None,
         dry_run: bool = False,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> LinkActorsSummary:
         exams = self.repo.list_exams_with_unlinked_submissions(
             exam_types=exam_types,
@@ -47,6 +48,14 @@ class LinkActorsService:
 
         for exam in exams:
             exam_id = int(exam["exam_id"])
+            if on_progress:
+                idx = exams.index(exam) + 1
+                on_progress("progress", {
+                    "current": idx,
+                    "total": scanned_exams,
+                    "phase": "linking",
+                })
+                on_progress("log", {"level": "info", "message": f"[{idx}/{scanned_exams}] Linking actors for exam {exam_id} ..."})
             candidate_rows = [
                 CandidateIdentity(
                     student_id=int(row["student_id"]),
@@ -109,7 +118,7 @@ class LinkActorsService:
             exam_types=exam_types,
             actor_sources=self.settings.mapping.actor_sources,
         )
-        return LinkActorsSummary(
+        summary = LinkActorsSummary(
             scanned_exams=scanned_exams,
             processed_exams=processed_exams,
             matched=matched,
@@ -119,6 +128,18 @@ class LinkActorsService:
             metrics_updated=metrics_updated,
             remaining_unmatched=remaining_unmatched,
         )
+        if on_progress:
+            on_progress("done", {
+                "scannedExams": summary.scanned_exams,
+                "processedExams": summary.processed_exams,
+                "matched": summary.matched,
+                "ambiguous": summary.ambiguous,
+                "unmatched": summary.unmatched,
+                "updated": summary.updated,
+                "metricsUpdated": summary.metrics_updated,
+                "remainingUnmatched": summary.remaining_unmatched,
+            })
+        return summary
 
     def _refresh_exam_flexibility(self, exam_id: int) -> set[int]:
         rows = self.repo.fetch_exam_metric_rows(exam_id=exam_id)

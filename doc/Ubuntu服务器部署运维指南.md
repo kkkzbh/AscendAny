@@ -29,7 +29,24 @@
 - API systemd：`/etc/systemd/system/ascendany-api.service`
 - Nginx 站点：`/etc/nginx/sites-available/ascendany-api.conf`
 
-## 4. 服务状态检查
+## 4. SSH 登录服务器
+
+首次或长期运维前，先用私钥登录（已知登录用户：`xyz`，服务器 IP：`52.147.120.86`）。
+
+为避免私钥权限过宽导致 `Permission denied (publickey)`，建议先复制并收紧权限：
+
+```bash
+install -m 600 /home/kkkzbh/data/下载/Ascend_key.pem /tmp/ascend_key.pem
+ssh -o StrictHostKeyChecking=accept-new -i /tmp/ascend_key.pem xyz@52.147.120.86
+```
+
+可直接执行单条远程命令检查连通性：
+
+```bash
+ssh -i /tmp/ascend_key.pem xyz@52.147.120.86 'whoami && hostnamectl --static'
+```
+
+## 5. 服务状态检查
 
 ```bash
 sudo systemctl status ascendany-api --no-pager
@@ -39,7 +56,7 @@ sudo docker ps
 curl -fsS https://ascendany.kkkzbh.cn/api/v1/healthz
 ```
 
-## 5. 数据库维护
+## 6. 数据库维护
 
 ```bash
 cd /opt/ascendany/infra
@@ -58,7 +75,7 @@ for f in /opt/ascendany/api/current/db/schema/*.sql; do
 done
 ```
 
-## 6. API 发布/更新
+## 7. API 发布/更新
 
 ```bash
 cd /opt/ascendany/api/current
@@ -73,7 +90,7 @@ sudo systemctl restart ascendany-api
 journalctl -u ascendany-api -f
 ```
 
-## 7. 桌面端 Release 对接线上 API
+## 8. 桌面端 Release 对接线上 API
 
 - 工作流：`.github/workflows/release-desktop.yml`
 - 构建时环境变量：`VITE_API_BASE_URL`
@@ -84,7 +101,7 @@ journalctl -u ascendany-api -f
 - Release 打包会注入线上 API 地址。
 - 本地 `pnpm --filter @ascendany/desktop dev` 仍默认使用 `http://127.0.0.1:8000`，便于本地调试。
 
-## 8. 预处理导入（后续图形化触发）
+## 9. 预处理导入（后续图形化触发）
 
 当前线上仅部署 API，不做定时导入。后续图形化导入 App 完成后，建议在导入成功后触发一次：
 

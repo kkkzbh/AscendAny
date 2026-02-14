@@ -4,7 +4,9 @@
     "dev": "pnpm --filter @ascendany/desktop dev",
     "build": "pnpm --filter @ascendany/desktop build",
     "dev:web": "pnpm --filter @ascendany/web dev",
-    "build:web": "pnpm --filter @ascendany/web build"
+    "build:web": "pnpm --filter @ascendany/web build",
+    "dev:import": "pnpm --filter @ascendany/import-console dev",
+    "build:import": "pnpm --filter @ascendany/import-console build"
   },
   "engines": {
     "node": ">=18"

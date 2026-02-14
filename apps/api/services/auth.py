@@ -39,6 +39,7 @@ _PHONE_RE = re.compile(r"^[0-9+][0-9\-\s]{5,31}$")
 class AuthenticatedAccount:
     account_id: int
     username: str
+    is_admin: bool = False
 
 
 class AuthService:
@@ -298,7 +299,7 @@ class AuthService:
                 message="Access token is invalid.",
             )
 
-        return AuthenticatedAccount(account_id=int(sub), username=username)
+        return AuthenticatedAccount(account_id=int(sub), username=username, is_admin=bool(payload.get("adm", False)))
 
     async def _issue_tokens(
         self,
@@ -312,6 +313,7 @@ class AuthService:
                 "sub": str(account.account_id),
                 "username": account.username,
                 "typ": "access",
+                "adm": bool(getattr(account, "is_admin", False)),
             },
             secret=secret,
             expires_in_seconds=self._settings.auth.access_ttl_minutes * 60,
@@ -348,6 +350,7 @@ class AuthService:
         return AuthAccountResponse(
             accountId=str(account.account_id),
             username=account.username,
+            isAdmin=bool(getattr(account, "is_admin", False)),
             studentId=student_id,
             ptaNickname=pta_nickname,
         )

@@ -53,3 +53,15 @@ def get_current_account(
             message="Authentication is required.",
         )
     return current
+
+
+def get_admin_account(
+    current: AuthenticatedAccount = Depends(get_current_account),
+) -> AuthenticatedAccount:
+    if not current.is_admin:
+        raise AppError(
+            status_code=403,
+            code="AUTH_FORBIDDEN",
+            message="Administrator privileges are required.",
+        )
+    return current

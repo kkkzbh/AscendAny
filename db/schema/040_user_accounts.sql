@@ -4,10 +4,22 @@ CREATE TABLE IF NOT EXISTS ascendany.user_accounts (
     username_normalized TEXT GENERATED ALWAYS AS (lower(BTRIM(username))) STORED,
     password_hash TEXT NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login_at TIMESTAMPTZ
 );
+
+-- Migration helper (idempotent): add is_admin column if upgrading from older schema
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'ascendany' AND table_name = 'user_accounts' AND column_name = 'is_admin'
+    ) THEN
+        ALTER TABLE ascendany.user_accounts ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+    END IF;
+END $$;
 
 ALTER TABLE ascendany.user_accounts
     DROP CONSTRAINT IF EXISTS user_accounts_username_not_blank;
