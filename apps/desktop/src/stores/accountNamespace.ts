@@ -40,9 +40,16 @@ export async function switchAccountNamespace(accountId: string | null): Promise<
 
   await settingsStore.persist.rehydrate();
 
+  const chatStorageKey = resolveStoreKey(CHAT_BASE_KEY, accountId);
+  const hasPersistedChat = localStorage.getItem(chatStorageKey) !== null;
+
   chatStore.persist.setOptions({
-    name: resolveStoreKey(CHAT_BASE_KEY, accountId),
+    name: chatStorageKey,
   });
-  chatStore.getState().clearContext();
+
+  if (!hasPersistedChat) {
+    chatStore.getState().clearContext();
+  }
+
   await chatStore.persist.rehydrate();
 }

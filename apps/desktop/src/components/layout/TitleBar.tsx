@@ -150,7 +150,7 @@ export function TitleBar() {
             </button>
             <button
               onClick={() => api?.close()}
-              className="ui-window-button hover:bg-[#ef4444]/10 hover:text-[#ef4444]"
+              className="ui-window-button ui-window-close"
               title="关闭"
             >
               <svg width="10" height="10" viewBox="0 0 12 12">

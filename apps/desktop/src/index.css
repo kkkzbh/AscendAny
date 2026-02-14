@@ -272,6 +272,11 @@ body {
   background: var(--surface-soft);
 }
 
+.ui-window-close:hover {
+  color: #ffffff;
+  background: #e81123;
+}
+
 .input-shell {
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
