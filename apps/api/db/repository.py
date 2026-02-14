@@ -57,6 +57,40 @@ class ExamMetricHistoryRow:
 
 
 @dataclass(slots=True)
+class ExamInfoRow:
+    exam_id: int
+    exam_type: str
+    source_path: str
+    title: str | None
+    starts_at: datetime | None
+    ends_at: datetime | None
+    duration_seconds: int | None
+    problem_count: int
+    participant_count: int
+
+
+@dataclass(slots=True)
+class ExamSubmissionRow:
+    submission_id: int
+    problem_code: str | None
+    submitted_at: datetime | None
+    verdict: str | None
+    score: Decimal | float | int | None
+    language: str | None
+    time_ms: int | None
+    memory_kb: int | None
+
+
+@dataclass(slots=True)
+class ExamParticipantRow:
+    student_id: int
+    student_name: str | None
+    rank: int | None
+    total_score: Decimal | float | int | None
+    solved_count: int | None
+
+
+@dataclass(slots=True)
 class AccountRow:
     account_id: int
     username: str
@@ -344,6 +378,141 @@ class ApiRepository:
             return None
         latest = row.get("latest_exam_imported_at")
         return latest if isinstance(latest, datetime) else None
+
+    async def fetch_exam_info(self, exam_id: int) -> ExamInfoRow | None:
+        query = """
+            SELECT
+                e.exam_id,
+                e.exam_type,
+                e.source_path,
+                e.title,
+                e.starts_at,
+                e.ends_at,
+                e.duration_seconds,
+                (
+                    SELECT COUNT(*)
+                    FROM ascendany.exam_problems ep
+                    WHERE ep.exam_id = e.exam_id
+                ) AS problem_count,
+                (
+                    SELECT COUNT(*)
+                    FROM ascendany.exam_participants ep2
+                    WHERE ep2.exam_id = e.exam_id
+                ) AS participant_count
+            FROM ascendany.exams AS e
+            WHERE e.exam_id = %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        starts_at = row.get("starts_at")
+        ends_at = row.get("ends_at")
+        return ExamInfoRow(
+            exam_id=int(row["exam_id"]),
+            exam_type=str(row["exam_type"]),
+            source_path=str(row["source_path"]),
+            title=str(row["title"]) if row.get("title") else None,
+            starts_at=starts_at if isinstance(starts_at, datetime) else None,
+            ends_at=ends_at if isinstance(ends_at, datetime) else None,
+            duration_seconds=int(row["duration_seconds"])
+            if row.get("duration_seconds") is not None
+            else None,
+            problem_count=int(row.get("problem_count", 0)),
+            participant_count=int(row.get("participant_count", 0)),
+        )
+
+    async def fetch_exam_submissions_for_student(
+        self, exam_id: int, student_id: int, limit: int = 100
+    ) -> list[ExamSubmissionRow]:
+        query = """
+            SELECT
+                s.submission_id,
+                s.problem_code,
+                s.submitted_at,
+                s.verdict,
+                s.score,
+                s.language,
+                s.time_ms,
+                s.memory_kb
+            FROM ascendany.submissions AS s
+            WHERE s.exam_id = %s AND s.student_id = %s
+            ORDER BY s.submitted_at ASC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, student_id, limit))
+                rows = await cursor.fetchall()
+
+        return [
+            ExamSubmissionRow(
+                submission_id=int(row["submission_id"]),
+                problem_code=str(row["problem_code"])
+                if row.get("problem_code")
+                else None,
+                submitted_at=row.get("submitted_at")
+                if isinstance(row.get("submitted_at"), datetime)
+                else None,
+                verdict=str(row["verdict"]) if row.get("verdict") else None,
+                score=row.get("score"),
+                language=str(row["language"]) if row.get("language") else None,
+                time_ms=int(row["time_ms"]) if row.get("time_ms") is not None else None,
+                memory_kb=int(row["memory_kb"])
+                if row.get("memory_kb") is not None
+                else None,
+            )
+            for row in rows
+        ]
+
+    async def fetch_exam_participants_ranked(
+        self, exam_id: int, limit: int = 200
+    ) -> list[ExamParticipantRow]:
+        query = """
+            SELECT
+                ep.student_id,
+                COALESCE(NULLIF(BTRIM(s.canonical_name), ''), si_name.external_name) AS student_name,
+                ep.rank,
+                ep.total_score,
+                ep.solved_count
+            FROM ascendany.exam_participants AS ep
+            JOIN ascendany.students AS s
+              ON s.student_id = ep.student_id
+            LEFT JOIN LATERAL (
+                SELECT si.external_name
+                FROM ascendany.student_identities si
+                WHERE si.student_id = ep.student_id
+                  AND si.external_name IS NOT NULL
+                  AND BTRIM(si.external_name) <> ''
+                ORDER BY si.identity_id DESC
+                LIMIT 1
+            ) si_name ON TRUE
+            WHERE ep.exam_id = %s
+              AND ep.absent = FALSE
+            ORDER BY ep.rank ASC NULLS LAST, ep.total_score DESC NULLS LAST
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, limit))
+                rows = await cursor.fetchall()
+
+        return [
+            ExamParticipantRow(
+                student_id=int(row["student_id"]),
+                student_name=str(row["student_name"])
+                if row.get("student_name")
+                else None,
+                rank=int(row["rank"]) if row.get("rank") is not None else None,
+                total_score=row.get("total_score"),
+                solved_count=int(row["solved_count"])
+                if row.get("solved_count") is not None
+                else None,
+            )
+            for row in rows
+        ]
 
     async def find_students_by_student_no(
         self, student_no: str
