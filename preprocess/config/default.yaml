@@ -23,6 +23,13 @@ metrics:
   winsor_low: 0.05
   winsor_high: 0.95
   flexibility_mode_default: approx
+  included_problem_kinds:
+    - 函数题
+    - 编程题
+  random_exam_missing_drawn_set_policy: max_passed_fill_unanswered
+  random_exam_slot_source_priority:
+    - html_pool_choose_k
+    - max_passed_count
 
 mapping:
   primary_keys:

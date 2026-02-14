@@ -70,6 +70,161 @@ def _problem_runtime_medians(participants: list[ParticipantRow]) -> dict[str, fl
     return medians
 
 
+def _normalize_kind(value: Any) -> str:
+    return clean_text(value)
+
+
+def _resolve_problem_kind(
+    problem_code: str,
+    stats: dict[str, Any],
+    problem_kind_by_code: dict[str, str],
+) -> str | None:
+    kind = _normalize_kind(stats.get("problem_kind"))
+    if not kind:
+        kind = _normalize_kind(problem_kind_by_code.get(problem_code))
+    return kind or None
+
+
+def _timeline_problem_codes_by_student(
+    timeline_by_student: dict[int, list[dict[str, Any]]] | None,
+) -> dict[int, set[str]]:
+    if not timeline_by_student:
+        return {}
+    result: dict[int, set[str]] = {}
+    for student_id, events in timeline_by_student.items():
+        codes: set[str] = set()
+        for event in events:
+            code = clean_text(event.get("problem_code"))
+            if code:
+                codes.add(code)
+        if codes:
+            result[int(student_id)] = codes
+    return result
+
+
+def _infer_slot_count_by_kind(
+    participants: list[ParticipantRow],
+    included_problem_kinds: set[str],
+    problem_kind_by_code: dict[str, str],
+    random_exam_slots_by_kind: dict[str, int],
+) -> tuple[dict[str, int], dict[str, str]]:
+    slots: dict[str, int] = {}
+    source_by_kind: dict[str, str] = {}
+
+    for kind in included_problem_kinds:
+        value = int(random_exam_slots_by_kind.get(kind, 0))
+        if value > 0:
+            slots[kind] = value
+            source_by_kind[kind] = "html_pool_choose_k"
+
+    max_solved_by_kind: dict[str, int] = {kind: 0 for kind in included_problem_kinds}
+    for participant in participants:
+        solved_counter: dict[str, int] = {kind: 0 for kind in included_problem_kinds}
+        for problem_code, stats in participant.problem_stats.items():
+            kind = _resolve_problem_kind(
+                problem_code=problem_code,
+                stats=stats,
+                problem_kind_by_code=problem_kind_by_code,
+            )
+            if not kind or kind not in included_problem_kinds:
+                continue
+            if stats.get("solved"):
+                solved_counter[kind] += 1
+        for kind in included_problem_kinds:
+            max_solved_by_kind[kind] = max(max_solved_by_kind[kind], solved_counter[kind])
+
+    for kind in included_problem_kinds:
+        if slots.get(kind, 0) > 0:
+            continue
+        fallback = max_solved_by_kind.get(kind, 0)
+        if fallback > 0:
+            slots[kind] = fallback
+            source_by_kind[kind] = "max_passed_count"
+
+    return slots, source_by_kind
+
+
+def _random_exam_knowledge_signal(
+    participant: ParticipantRow,
+    included_problem_kinds: set[str],
+    problem_kind_by_code: dict[str, str],
+    slot_count_by_kind: dict[str, int],
+    slot_source_by_kind: dict[str, str],
+    submission_problem_codes: set[str],
+) -> tuple[float | None, dict[str, Any]]:
+    solved_count_by_kind: dict[str, int] = {kind: 0 for kind in included_problem_kinds}
+    visible_codes_by_kind: dict[str, set[str]] = {
+        kind: set() for kind in included_problem_kinds
+    }
+
+    for problem_code, stats in participant.problem_stats.items():
+        kind = _resolve_problem_kind(
+            problem_code=problem_code,
+            stats=stats,
+            problem_kind_by_code=problem_kind_by_code,
+        )
+        if not kind or kind not in included_problem_kinds:
+            continue
+        if stats.get("solved"):
+            solved_count_by_kind[kind] += 1
+        raw_text = clean_text(stats.get("raw"))
+        if raw_text and raw_text != "-":
+            visible_codes_by_kind[kind].add(problem_code)
+
+    for problem_code in submission_problem_codes:
+        kind = _normalize_kind(problem_kind_by_code.get(problem_code))
+        if kind and kind in included_problem_kinds:
+            visible_codes_by_kind[kind].add(problem_code)
+
+    visible_count_by_kind = {
+        kind: len(visible_codes_by_kind.get(kind, set())) for kind in included_problem_kinds
+    }
+    filled_unanswered_count_by_kind = {
+        kind: max(0, int(slot_count_by_kind.get(kind, 0)) - visible_count_by_kind.get(kind, 0))
+        for kind in included_problem_kinds
+    }
+
+    total_slot_count = sum(max(0, int(slot_count_by_kind.get(kind, 0))) for kind in included_problem_kinds)
+    if total_slot_count <= 0:
+        return None, {
+            "random_exam_mode": True,
+            "knowledge_mode": "fallback_default",
+            "slot_count_by_kind": {
+                kind: int(slot_count_by_kind.get(kind, 0)) for kind in included_problem_kinds
+            },
+            "slot_source_by_kind": {
+                kind: slot_source_by_kind.get(kind, "unknown")
+                for kind in included_problem_kinds
+            },
+        }
+
+    solved_total = sum(solved_count_by_kind.values())
+    confidence = "high"
+    if any(value > 0 for value in filled_unanswered_count_by_kind.values()):
+        confidence = "degraded_missing_drawn_set"
+    if any(
+        slot_source_by_kind.get(kind) == "max_passed_count"
+        for kind in included_problem_kinds
+    ):
+        confidence = "degraded_missing_drawn_set"
+
+    return (solved_total / total_slot_count), {
+        "random_exam_mode": True,
+        "knowledge_mode": "max_passed_fill_unanswered",
+        "slot_count_by_kind": {
+            kind: int(slot_count_by_kind.get(kind, 0)) for kind in included_problem_kinds
+        },
+        "slot_source_by_kind": {
+            kind: slot_source_by_kind.get(kind, "unknown")
+            for kind in included_problem_kinds
+        },
+        "solved_count_by_kind": solved_count_by_kind,
+        "visible_count_by_kind": visible_count_by_kind,
+        "filled_unanswered_count_by_kind": filled_unanswered_count_by_kind,
+        "confidence": confidence,
+    }
+
+
 def _verdict_text(value: Any) -> str:
     return clean_text(value).casefold()
 
@@ -261,8 +416,35 @@ def compute_exam_metrics(
     winsor_high: float,
     flexibility_mode: str,
     timeline_by_student: dict[int, list[dict[str, Any]]] | None = None,
+    included_problem_kinds: list[str] | None = None,
+    random_exam_mode: bool = False,
+    random_exam_slots_by_kind: dict[str, int] | None = None,
+    random_exam_missing_drawn_set_policy: str = "max_passed_fill_unanswered",
+    problem_kind_by_code: dict[str, str] | None = None,
 ) -> list[StudentMetricResult]:
     runtime_medians = _problem_runtime_medians(participants)
+    included_kind_set = {
+        clean_text(item) for item in (included_problem_kinds or []) if clean_text(item)
+    }
+    normalized_problem_kind_by_code = {
+        clean_text(code): clean_text(kind)
+        for code, kind in (problem_kind_by_code or {}).items()
+        if clean_text(code) and clean_text(kind)
+    }
+    timeline_problem_codes = _timeline_problem_codes_by_student(timeline_by_student)
+    slot_count_by_kind: dict[str, int] = {}
+    slot_source_by_kind: dict[str, str] = {}
+    if (
+        random_exam_mode
+        and included_kind_set
+        and random_exam_missing_drawn_set_policy == "max_passed_fill_unanswered"
+    ):
+        slot_count_by_kind, slot_source_by_kind = _infer_slot_count_by_kind(
+            participants=participants,
+            included_problem_kinds=included_kind_set,
+            problem_kind_by_code=normalized_problem_kind_by_code,
+            random_exam_slots_by_kind=random_exam_slots_by_kind or {},
+        )
 
     raw_knowledge: dict[int, float] = {}
     raw_accuracy: dict[int, float] = {}
@@ -275,7 +457,13 @@ def compute_exam_metrics(
         if participant.student_id is None:
             continue
         if participant.absent:
-            raw_details[participant.student_id] = {"absent": True}
+            raw_details[participant.student_id] = {
+                "absent": True,
+                "metric_scope": "function_programming_only"
+                if included_kind_set
+                else "all_problem_kinds",
+                "random_exam_mode": random_exam_mode,
+            }
             continue
 
         solved_count = participant.solved_count
@@ -296,12 +484,28 @@ def compute_exam_metrics(
                     has_score = True
             total_score = sum_score if has_score else None
 
-        problem_count = max(1, len(participant.problem_stats))
         knowledge_signal = None
-        if total_points and total_points > 0 and total_score is not None:
-            knowledge_signal = total_score / total_points
-        elif problem_count > 0:
-            knowledge_signal = solved_count / problem_count
+        knowledge_details: dict[str, Any] = {}
+        if (
+            random_exam_mode
+            and included_kind_set
+            and random_exam_missing_drawn_set_policy == "max_passed_fill_unanswered"
+        ):
+            knowledge_signal, knowledge_details = _random_exam_knowledge_signal(
+                participant=participant,
+                included_problem_kinds=included_kind_set,
+                problem_kind_by_code=normalized_problem_kind_by_code,
+                slot_count_by_kind=slot_count_by_kind,
+                slot_source_by_kind=slot_source_by_kind,
+                submission_problem_codes=timeline_problem_codes.get(participant.student_id, set()),
+            )
+
+        if knowledge_signal is None:
+            problem_count = max(1, len(participant.problem_stats))
+            if total_points and total_points > 0 and total_score is not None:
+                knowledge_signal = total_score / total_points
+            elif problem_count > 0:
+                knowledge_signal = solved_count / problem_count
 
         attempts = [
             int(stats["attempts"])
@@ -380,6 +584,11 @@ def compute_exam_metrics(
             "solved_count": solved_count,
             "total_score": total_score,
             "time_used_seconds": time_used_seconds,
+            "metric_scope": "function_programming_only"
+            if included_kind_set
+            else "all_problem_kinds",
+            "random_exam_mode": random_exam_mode,
+            **knowledge_details,
         }
 
     knowledge_scores = _percentile_scores(

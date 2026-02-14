@@ -59,6 +59,7 @@ class IngestService:
             exam_types=exam_types,
             fingerprint_roles=set(self.settings.ingest.fingerprint_roles),
         )
+        included_problem_kinds = set(self.settings.metrics.included_problem_kinds)
         if force:
             changed = list(discovered)
         else:
@@ -90,6 +91,10 @@ class IngestService:
                     "practice_root": str(self.settings.practice_root),
                     "scanned": len(discovered),
                     "to_process": len(changed),
+                    "metric_scope": "function_programming_only"
+                    if included_problem_kinds
+                    else "all_problem_kinds",
+                    "metric_scope_version": "v2_function_programming_only",
                 }
             )
 
@@ -112,6 +117,7 @@ class IngestService:
                     unit=unit,
                     encodings=self.settings.ingest.encodings,
                     timezone_name=self.settings.ingest.timezone,
+                    included_problem_kinds=included_problem_kinds,
                 )
                 exam_meta_for_failure = bundle.exam_meta
 
@@ -133,6 +139,35 @@ class IngestService:
                     timeline_by_student = self._build_submission_timeline(
                         bundle.submissions
                     )
+                    exam_meta_data = (
+                        bundle.exam_meta.meta
+                        if isinstance(bundle.exam_meta.meta, dict)
+                        else {}
+                    )
+                    slot_count_by_kind_raw = exam_meta_data.get("slot_count_by_kind")
+                    slot_count_by_kind: dict[str, int] = {}
+                    if isinstance(slot_count_by_kind_raw, dict):
+                        for key, value in slot_count_by_kind_raw.items():
+                            try:
+                                normalized = int(value)
+                            except (TypeError, ValueError):
+                                continue
+                            if normalized > 0:
+                                slot_count_by_kind[str(key)] = normalized
+
+                    problem_kind_by_code_raw = exam_meta_data.get("problem_kind_by_code")
+                    problem_kind_by_code: dict[str, str] = {}
+                    if isinstance(problem_kind_by_code_raw, dict):
+                        for key, value in problem_kind_by_code_raw.items():
+                            if isinstance(value, str):
+                                kind = value
+                            elif isinstance(value, dict):
+                                kind = value.get("problem_kind")
+                            else:
+                                kind = None
+                            if kind is None:
+                                continue
+                            problem_kind_by_code[str(key)] = str(kind)
                     metric_results = compute_exam_metrics(
                         participants=participants,
                         total_points=bundle.exam_meta.total_points,
@@ -140,6 +175,11 @@ class IngestService:
                         winsor_high=self.settings.metrics.winsor_high,
                         flexibility_mode=self.settings.metrics.flexibility_mode_default,
                         timeline_by_student=timeline_by_student,
+                        included_problem_kinds=self.settings.metrics.included_problem_kinds,
+                        random_exam_mode=bool(exam_meta_data.get("is_random_exam")),
+                        random_exam_slots_by_kind=slot_count_by_kind,
+                        random_exam_missing_drawn_set_policy=self.settings.metrics.random_exam_missing_drawn_set_policy,
+                        problem_kind_by_code=problem_kind_by_code,
                     )
                     for metric in metric_results:
                         self.repo.upsert_exam_student_metric(

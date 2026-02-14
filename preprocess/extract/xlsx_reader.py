@@ -89,6 +89,60 @@ def _get_value(row: dict[str, Any], candidates: list[str]) -> str:
     return ""
 
 
+def _guess_datastructure_problem_kind(problem_code: str) -> str | None:
+    code = clean_text(problem_code)
+    if not code:
+        return None
+    first = code.split("-", 1)[0]
+    if not first.isdigit():
+        return None
+    number = int(first)
+    if number == 6:
+        return "函数题"
+    if number == 7:
+        return "编程题"
+    if number == 1:
+        return "判断题"
+    if number == 2:
+        return "单选题"
+    if number == 3:
+        return "多选题"
+    return None
+
+
+def _resolve_problem_metadata(
+    problem_code: str,
+    exam_type: str,
+    problem_metadata_by_code: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    resolved = dict(problem_metadata_by_code.get(problem_code, {}))
+    if not clean_text(resolved.get("problem_kind")) and exam_type == "datastructure":
+        guessed = _guess_datastructure_problem_kind(problem_code)
+        if guessed:
+            resolved["problem_kind"] = guessed
+    return resolved
+
+
+def _include_problem(
+    problem_code: str,
+    exam_type: str,
+    problem_metadata_by_code: dict[str, dict[str, Any]],
+    included_problem_kinds: set[str] | None,
+) -> tuple[bool, dict[str, Any]]:
+    metadata = _resolve_problem_metadata(
+        problem_code=problem_code,
+        exam_type=exam_type,
+        problem_metadata_by_code=problem_metadata_by_code,
+    )
+    if not included_problem_kinds:
+        return True, metadata
+    kind = clean_text(metadata.get("problem_kind"))
+    if kind:
+        return kind in included_problem_kinds, metadata
+    # For non-datastructure or unknown-kind rows, keep data to avoid accidental drops.
+    return True, metadata
+
+
 def _parse_problem_cell(value: Any, exam_type: str) -> dict[str, Any]:
     text = clean_text(value)
     if not text:
@@ -171,6 +225,8 @@ def _parse_sheet(
     sheet_name: str,
     exam_type: str,
     identity_source: str,
+    problem_metadata_by_code: dict[str, dict[str, Any]],
+    included_problem_kinds: set[str] | None,
 ) -> list[_ParsedSheetRow]:
     header_index = _find_header_row(df)
     if header_index is None:
@@ -212,6 +268,14 @@ def _parse_sheet(
         if not external_id and not display_name:
             points: dict[str, float] = {}
             for column_index, problem_code in problem_columns:
+                include_problem, _ = _include_problem(
+                    problem_code=problem_code,
+                    exam_type=exam_type,
+                    problem_metadata_by_code=problem_metadata_by_code,
+                    included_problem_kinds=included_problem_kinds,
+                )
+                if not include_problem:
+                    continue
                 raw_value = (
                     row_series[column_index] if column_index < len(row_series) else None
                 )
@@ -234,13 +298,43 @@ def _parse_sheet(
             identity = f"{identity_source}_name_fallback"
 
         problem_stats: dict[str, dict[str, Any]] = {}
+        problem_raw_cells: dict[str, str] = {}
+        filtered_problem_cells = 0
         for column_index, problem_code in problem_columns:
+            include_problem, metadata = _include_problem(
+                problem_code=problem_code,
+                exam_type=exam_type,
+                problem_metadata_by_code=problem_metadata_by_code,
+                included_problem_kinds=included_problem_kinds,
+            )
             raw_value = (
                 row_series[column_index] if column_index < len(row_series) else None
             )
+            raw_text = clean_text(raw_value)
+            if not include_problem:
+                if raw_text:
+                    filtered_problem_cells += 1
+                continue
             cell_data = _parse_problem_cell(raw_value, exam_type=exam_type)
             if cell_data.get("raw"):
+                problem_kind = clean_text(metadata.get("problem_kind"))
+                if problem_kind:
+                    cell_data["problem_kind"] = problem_kind
                 problem_stats[problem_code] = cell_data
+                problem_raw_cells[problem_code] = clean_text(cell_data.get("raw"))
+
+        solved_from_stats = sum(
+            1 for stats in problem_stats.values() if bool(stats.get("solved"))
+        )
+        score_values = [
+            float(stats.get("score"))
+            for stats in problem_stats.values()
+            if stats.get("score") is not None
+        ]
+        if score_values:
+            total_score = sum(score_values)
+        if solved_count is None or included_problem_kinds:
+            solved_count = solved_from_stats
 
         participant = ParticipantRow(
             identity_source=identity,
@@ -253,7 +347,17 @@ def _parse_sheet(
             solved_count=solved_count,
             absent=absent,
             problem_stats=problem_stats,
-            raw={"sheet_name": sheet_name, "total_score_raw": total_score_text},
+            raw={
+                "sheet_name": sheet_name,
+                "total_score_raw": total_score_text,
+                "problem_raw_cells": problem_raw_cells,
+                "filtering": {
+                    "included_problem_kinds": sorted(included_problem_kinds)
+                    if included_problem_kinds
+                    else None,
+                    "filtered_problem_cells": filtered_problem_cells,
+                },
+            },
         )
         results.append(
             _ParsedSheetRow(
@@ -264,13 +368,18 @@ def _parse_sheet(
 
 
 def parse_scoreboards(
-    files: list[SourceFile], exam_type: str
+    files: list[SourceFile],
+    exam_type: str,
+    problem_metadata_by_code: dict[str, dict[str, Any]] | None = None,
+    included_problem_kinds: set[str] | None = None,
 ) -> tuple[list[ParticipantRow], list[ProblemInfo], dict[str, Any]]:
     identity_source = f"{exam_type}_student_no"
     participants_by_key: dict[tuple[str, str], ParticipantRow] = {}
     problem_points: dict[str, float] = {}
     all_problem_codes: set[str] = set()
     workbook_title: str | None = None
+    metadata_by_code = problem_metadata_by_code or {}
+    filtered_cells_total = 0
 
     for source in sorted(files, key=lambda item: item.relative_path):
         workbook = pd.read_excel(source.absolute_path, sheet_name=None, dtype=object)
@@ -280,6 +389,8 @@ def parse_scoreboards(
                 sheet_name=sheet_name,
                 exam_type=exam_type,
                 identity_source=identity_source,
+                problem_metadata_by_code=metadata_by_code,
+                included_problem_kinds=included_problem_kinds,
             )
             for parsed in parsed_rows:
                 if parsed.title and workbook_title is None:
@@ -287,6 +398,11 @@ def parse_scoreboards(
                 problem_points.update(parsed.problem_points)
                 if parsed.participant is None:
                     continue
+                filtering = parsed.participant.raw.get("filtering")
+                if isinstance(filtering, dict):
+                    filtered_cells_total += int(
+                        filtering.get("filtered_problem_cells") or 0
+                    )
 
                 key = (
                     parsed.participant.identity_source,
@@ -304,11 +420,57 @@ def parse_scoreboards(
     for code in problem_points:
         all_problem_codes.add(code)
 
+    filtered_codes: list[str] = []
+    for code in sorted(all_problem_codes):
+        include_problem, _ = _include_problem(
+            problem_code=code,
+            exam_type=exam_type,
+            problem_metadata_by_code=metadata_by_code,
+            included_problem_kinds=included_problem_kinds,
+        )
+        if include_problem:
+            filtered_codes.append(code)
+
     problems = [
         ProblemInfo(
-            problem_code=code, points=problem_points.get(code), order_idx=index + 1
+            problem_code=code,
+            problem_kind=clean_text(
+                _resolve_problem_metadata(
+                    problem_code=code,
+                    exam_type=exam_type,
+                    problem_metadata_by_code=metadata_by_code,
+                ).get("problem_kind")
+            )
+            or None,
+            group_code=clean_text(
+                _resolve_problem_metadata(
+                    problem_code=code,
+                    exam_type=exam_type,
+                    problem_metadata_by_code=metadata_by_code,
+                ).get("pool_code")
+            )
+            or None,
+            group_name=clean_text(
+                _resolve_problem_metadata(
+                    problem_code=code,
+                    exam_type=exam_type,
+                    problem_metadata_by_code=metadata_by_code,
+                ).get("pool_name")
+            )
+            or None,
+            points=problem_points.get(code),
+            order_idx=index + 1,
+            meta={
+                key: value
+                for key, value in _resolve_problem_metadata(
+                    problem_code=code,
+                    exam_type=exam_type,
+                    problem_metadata_by_code=metadata_by_code,
+                ).items()
+                if key not in {"problem_kind", "pool_code", "pool_name"}
+            },
         )
-        for index, code in enumerate(sorted(all_problem_codes))
+        for index, code in enumerate(filtered_codes)
     ]
     participants = sorted(
         participants_by_key.values(),
@@ -319,4 +481,28 @@ def parse_scoreboards(
         ),
     )
 
-    return participants, problems, {"title": workbook_title}
+    filtered_total_points: float | None = None
+    points_values = [float(item.points) for item in problems if item.points is not None]
+    if points_values:
+        filtered_total_points = float(sum(points_values))
+
+    kinds = sorted(
+        {
+            clean_text(item.problem_kind)
+            for item in problems
+            if clean_text(item.problem_kind)
+        }
+    )
+
+    problem_kind_by_code = {
+        item.problem_code: item.problem_kind for item in problems if item.problem_kind
+    }
+
+    return participants, problems, {
+        "title": workbook_title,
+        "filtered_total_points": filtered_total_points,
+        "filtered_problem_count": len(problems),
+        "filtered_problem_kinds": kinds,
+        "filtered_problem_cells": filtered_cells_total,
+        "problem_kind_by_code": problem_kind_by_code,
+    }

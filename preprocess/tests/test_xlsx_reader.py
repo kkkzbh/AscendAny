@@ -203,3 +203,80 @@ def test_parse_scoreboards_reads_problem_codes_from_top_row(tmp_path: Path) -> N
 
     problem_codes = {item.problem_code for item in problems}
     assert {"7-1", "7-2", "7-3", "7-4", "7-5"}.issubset(problem_codes)
+
+
+def test_parse_scoreboards_filters_non_function_programming_kinds(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        [
+            "sheet-title",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ],
+        [
+            "题目标号",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "1-1-1",
+            "7-1-1",
+            "",
+        ],
+        [
+            "用户组",
+            "学号/邮箱、电话",
+            "姓名/昵称",
+            "MOOCID",
+            "总分(30.0)",
+            "排名",
+            "耗时(秒)",
+            "2.0",
+            "20.0",
+            "",
+        ],
+        [
+            "G1",
+            "20241202001",
+            "孟庆凯",
+            "",
+            "22",
+            "1",
+            "100",
+            "F(2.0)",
+            "20.0(2:20ms)",
+            "",
+        ],
+    ]
+    file_path = tmp_path / "mixed.xlsx"
+    pd.DataFrame(rows).to_excel(file_path, index=False, header=False)
+
+    participants, problems, meta = parse_scoreboards(
+        files=[_build_source_file(file_path)],
+        exam_type="datastructure",
+        problem_metadata_by_code={
+            "1-1-1": {"problem_kind": "判断题"},
+            "7-1-1": {"problem_kind": "编程题"},
+        },
+        included_problem_kinds={"函数题", "编程题"},
+    )
+
+    assert len(participants) == 1
+    first = participants[0]
+    assert "1-1-1" not in first.problem_stats
+    assert "7-1-1" in first.problem_stats
+    assert first.total_score == 20.0
+    assert first.solved_count == 1
+
+    assert [item.problem_code for item in problems] == ["7-1-1"]
+    assert meta["filtered_total_points"] is None

@@ -46,6 +46,13 @@ class MetricsConfig:
     winsor_low: float = 0.05
     winsor_high: float = 0.95
     flexibility_mode_default: str = "approx"
+    included_problem_kinds: list[str] = field(
+        default_factory=lambda: ["函数题", "编程题"]
+    )
+    random_exam_missing_drawn_set_policy: str = "max_passed_fill_unanswered"
+    random_exam_slot_source_priority: list[str] = field(
+        default_factory=lambda: ["html_pool_choose_k", "max_passed_count"]
+    )
 
 
 @dataclass(slots=True)
@@ -123,6 +130,9 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "winsor_low": settings.metrics.winsor_low,
             "winsor_high": settings.metrics.winsor_high,
             "flexibility_mode_default": settings.metrics.flexibility_mode_default,
+            "included_problem_kinds": settings.metrics.included_problem_kinds,
+            "random_exam_missing_drawn_set_policy": settings.metrics.random_exam_missing_drawn_set_policy,
+            "random_exam_slot_source_priority": settings.metrics.random_exam_slot_source_priority,
         },
         "mapping": {
             "primary_keys": settings.mapping.primary_keys,
@@ -177,6 +187,19 @@ def _from_dict(data: dict[str, Any]) -> Settings:
             winsor_low=float(metrics.get("winsor_low", 0.05)),
             winsor_high=float(metrics.get("winsor_high", 0.95)),
             flexibility_mode_default=metrics.get("flexibility_mode_default", "approx"),
+            included_problem_kinds=list(
+                metrics.get("included_problem_kinds", ["函数题", "编程题"])
+            ),
+            random_exam_missing_drawn_set_policy=metrics.get(
+                "random_exam_missing_drawn_set_policy",
+                "max_passed_fill_unanswered",
+            ),
+            random_exam_slot_source_priority=list(
+                metrics.get(
+                    "random_exam_slot_source_priority",
+                    ["html_pool_choose_k", "max_passed_count"],
+                )
+            ),
         ),
         mapping=MappingConfig(
             primary_keys=list(mapping.get("primary_keys", ["student_no", "name"])),

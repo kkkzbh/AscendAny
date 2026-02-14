@@ -113,6 +113,7 @@ def parse_submission_csv(
     exam_type: str,
     encodings: list[str],
     timezone_name: str,
+    allowed_problem_codes: set[str] | None = None,
 ) -> list[SubmissionRow]:
     text = decode_csv(file.absolute_path, encodings=encodings)
     reader = csv.reader(io.StringIO(text))
@@ -128,5 +129,10 @@ def parse_submission_csv(
                 cleaned, source=file, row_index=row_index, timezone_name=timezone_name, exam_type=exam_type
             )
         if parsed is not None:
+            problem_code = clean_text(parsed.problem_code)
+            if allowed_problem_codes is not None and (
+                not problem_code or problem_code not in allowed_problem_codes
+            ):
+                continue
             rows.append(parsed)
     return rows

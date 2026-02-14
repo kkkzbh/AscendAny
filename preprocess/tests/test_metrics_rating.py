@@ -154,3 +154,83 @@ def test_compute_exam_metrics_quality_ignores_unsolved_runtime() -> None:
     )
 
     assert results[0].quality is None
+
+
+def test_compute_exam_metrics_random_exam_fill_unanswered_slots() -> None:
+    first = ParticipantRow(
+        identity_source="test",
+        external_id="s1",
+        display_name="Student 1",
+        user_group="G1",
+        rank=1,
+        total_score=40.0,
+        time_used_seconds=120,
+        solved_count=2,
+        absent=False,
+        problem_stats={
+            "P1": {
+                "raw": "20.0(1:10ms)",
+                "solved": True,
+                "score": 20.0,
+                "attempts": 1,
+                "runtime_ms": 10,
+                "wrong_before_ac": 0,
+            },
+            "P2": {
+                "raw": "20.0(1:10ms)",
+                "solved": True,
+                "score": 20.0,
+                "attempts": 1,
+                "runtime_ms": 10,
+                "wrong_before_ac": 0,
+            },
+        },
+        student_id=1,
+    )
+    second = ParticipantRow(
+        identity_source="test",
+        external_id="s2",
+        display_name="Student 2",
+        user_group="G1",
+        rank=2,
+        total_score=20.0,
+        time_used_seconds=120,
+        solved_count=1,
+        absent=False,
+        problem_stats={
+            "P1": {
+                "raw": "20.0(1:10ms)",
+                "solved": True,
+                "score": 20.0,
+                "attempts": 1,
+                "runtime_ms": 10,
+                "wrong_before_ac": 0,
+            },
+        },
+        student_id=2,
+    )
+
+    results = compute_exam_metrics(
+        participants=[first, second],
+        total_points=None,
+        winsor_low=0.05,
+        winsor_high=0.95,
+        flexibility_mode="approx",
+        timeline_by_student={
+            1: [{"submitted_at": datetime(2025, 3, 1, 10, 0), "problem_code": "P1", "verdict": "答案正确"}],
+            2: [{"submitted_at": datetime(2025, 3, 1, 10, 0), "problem_code": "P1", "verdict": "答案正确"}],
+        },
+        included_problem_kinds=["函数题", "编程题"],
+        random_exam_mode=True,
+        random_exam_slots_by_kind={},
+        random_exam_missing_drawn_set_policy="max_passed_fill_unanswered",
+        problem_kind_by_code={"P1": "编程题", "P2": "编程题"},
+    )
+
+    by_id = {item.student_id: item for item in results}
+    assert by_id[1].details["slot_count_by_kind"]["编程题"] == 2
+    assert by_id[2].details["slot_count_by_kind"]["编程题"] == 2
+    assert by_id[1].details["knowledge_signal"] == 1.0
+    assert by_id[2].details["knowledge_signal"] == 0.5
+    assert by_id[2].details["filled_unanswered_count_by_kind"]["编程题"] == 1
+    assert by_id[2].details["confidence"] == "degraded_missing_drawn_set"
