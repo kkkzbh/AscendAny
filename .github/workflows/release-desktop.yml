@@ -35,6 +35,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build desktop package (Windows EXE x64)
+        env:
+          VITE_API_BASE_URL: ${{ vars.DESKTOP_API_BASE_URL || 'https://ascendany.kkkzbh.cn' }}
         run: pnpm --filter @ascendany/desktop dist:win:x64
 
       - name: Collect Windows artifacts
@@ -80,6 +82,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build desktop package (Linux RPM x64)
+        env:
+          VITE_API_BASE_URL: ${{ vars.DESKTOP_API_BASE_URL || 'https://ascendany.kkkzbh.cn' }}
         run: pnpm --filter @ascendany/desktop dist:linux:rpm:x64
 
       - name: Collect Linux artifacts

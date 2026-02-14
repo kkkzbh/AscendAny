@@ -173,6 +173,7 @@ VITE_RELEASE_REPO=AscendAny
 仓库已提供发布工作流：`.github/workflows/release-desktop.yml`。
 
 - 触发方式：推送标签 `v*`（如 `v0.2.0`）。
+- 打包 API 地址：工作流会注入 `VITE_API_BASE_URL`（优先读取仓库变量 `DESKTOP_API_BASE_URL`，未配置时回退 `https://ascendany.kkkzbh.cn`）。
 - 产物：
   - Windows：`exe`（x64）
   - Linux：`rpm`（x64）
