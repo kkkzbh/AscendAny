@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from ..db.repository import (
@@ -17,6 +16,12 @@ from ..schemas.students import (
     ResolvedIdentityResponse,
     StudentDashboardResponse,
     StudentMetricsResponse,
+)
+from .history_merge import (
+    latest_metrics_row,
+    merge_exam_metric_rows,
+    merge_rating_history_rows,
+    metric_from_rows,
 )
 from .identity import ResolvedIdentity
 
@@ -182,109 +187,23 @@ class DashboardService:
     def _latest_metrics_row(
         self, rows: list[DashboardMetricsRow]
     ) -> DashboardMetricsRow | None:
-        if not rows:
-            return None
-        return max(
-            rows,
-            key=lambda row: row.updated_at
-            if row.updated_at is not None
-            else datetime.min.replace(tzinfo=timezone.utc),
-        )
+        return latest_metrics_row(rows)
 
     def _metric_from_rows(self, rows: list[DashboardMetricsRow], key: str) -> float:
-        ordered = sorted(
-            rows,
-            key=lambda row: row.updated_at
-            if row.updated_at is not None
-            else datetime.min.replace(tzinfo=timezone.utc),
-            reverse=True,
-        )
-        for row in ordered:
-            value = getattr(row, key)
-            if value is not None:
-                return self._metric_value(value)
+        value = metric_from_rows(rows, key)
+        if value is not None:
+            return self._metric_value(value)
         return self._default_metric
 
     def _merge_history_rows(
         self, rows: list[RatingHistoryRow]
     ) -> list[RatingHistoryRow]:
-        if not rows:
-            return []
-        ordered = sorted(
-            rows,
-            key=lambda row: (row.exam_time, row.exam_id),
-            reverse=True,
-        )
-        deduplicated: list[RatingHistoryRow] = []
-        seen_exam_ids: set[int] = set()
-        for row in ordered:
-            if row.exam_id in seen_exam_ids:
-                continue
-            seen_exam_ids.add(row.exam_id)
-            deduplicated.append(row)
-            if len(deduplicated) >= self._rating_history_limit:
-                break
-        return deduplicated
+        return merge_rating_history_rows(rows, limit=self._rating_history_limit)
 
     def _merge_exam_metric_rows(
         self, rows: list[ExamMetricHistoryRow]
     ) -> list[ExamMetricHistoryRow]:
-        if not rows:
-            return []
-        ordered = sorted(
-            rows,
-            key=lambda row: (
-                row.exam_time,
-                row.exam_id,
-                row.computed_at
-                if row.computed_at is not None
-                else datetime.min.replace(tzinfo=timezone.utc),
-            ),
-            reverse=True,
-        )
-        grouped_by_exam: dict[int, list[ExamMetricHistoryRow]] = {}
-        for row in ordered:
-            grouped_by_exam.setdefault(row.exam_id, []).append(row)
-
-        merged: list[ExamMetricHistoryRow] = []
-        for exam_rows in grouped_by_exam.values():
-            rows_by_recency = sorted(
-                exam_rows,
-                key=lambda row: row.computed_at
-                if row.computed_at is not None
-                else datetime.min.replace(tzinfo=timezone.utc),
-                reverse=True,
-            )
-            head = rows_by_recency[0]
-            merged.append(
-                ExamMetricHistoryRow(
-                    exam_id=head.exam_id,
-                    exam_name=head.exam_name,
-                    exam_time=head.exam_time,
-                    knowledge=self._metric_from_exam_rows(rows_by_recency, "knowledge"),
-                    accuracy=self._metric_from_exam_rows(rows_by_recency, "accuracy"),
-                    quality=self._metric_from_exam_rows(rows_by_recency, "quality"),
-                    flexibility=self._metric_from_exam_rows(
-                        rows_by_recency, "flexibility"
-                    ),
-                    proficiency=self._metric_from_exam_rows(
-                        rows_by_recency, "proficiency"
-                    ),
-                    computed_at=head.computed_at,
-                )
-            )
-            if len(merged) >= self._rating_history_limit:
-                break
-        return merged
-
-    def _metric_from_exam_rows(
-        self, rows: list[ExamMetricHistoryRow], key: str
-    ) -> Decimal | float | int | None:
-        for row in rows:
-            value = getattr(row, key)
-            if value is not None:
-                return value
-        return None
+        return merge_exam_metric_rows(rows, limit=self._rating_history_limit)
 
     def _build_metric_delta(
         self, rows: list[ExamMetricHistoryRow]

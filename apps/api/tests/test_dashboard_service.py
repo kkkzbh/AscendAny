@@ -296,3 +296,66 @@ def test_dashboard_metric_delta_uses_zero_baseline_for_first_exam() -> None:
     assert result.metricDelta.values.quality == 36
     assert result.metricDelta.values.flexibility == 22
     assert result.metricDelta.values.proficiency == 61
+
+
+def test_dashboard_metric_delta_skips_all_none_exam_rows() -> None:
+    repo = FakeDashboardRepo()
+    repo.exam_metric_history = [
+        ExamMetricHistoryRow(
+            exam_id=29,
+            exam_name="精进3",
+            exam_time=datetime(2025, 2, 8, tzinfo=timezone.utc),
+            knowledge=None,
+            accuracy=None,
+            quality=None,
+            flexibility=None,
+            proficiency=None,
+            computed_at=datetime(2025, 2, 8, 10, 0, tzinfo=timezone.utc),
+        ),
+        ExamMetricHistoryRow(
+            exam_id=32,
+            exam_name="精进营第二次竞赛",
+            exam_time=datetime(2025, 2, 6, tzinfo=timezone.utc),
+            knowledge=6,
+            accuracy=31,
+            quality=None,
+            flexibility=96,
+            proficiency=69,
+            computed_at=datetime(2025, 2, 6, 10, 0, tzinfo=timezone.utc),
+        ),
+        ExamMetricHistoryRow(
+            exam_id=34,
+            exam_name="精进营开营测试",
+            exam_time=datetime(2025, 1, 12, tzinfo=timezone.utc),
+            knowledge=40,
+            accuracy=28,
+            quality=16,
+            flexibility=43,
+            proficiency=35,
+            computed_at=datetime(2025, 1, 12, 10, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    service = DashboardService(
+        repository=repo,
+        default_rating=800,
+        default_metric=0,
+        rating_history_limit=50,
+    )
+    identity = ResolvedIdentity(
+        student_entity_id=1,
+        student_id="20230001",
+        pta_nickname="Alice",
+        no_submission_records=False,
+        matched_by="student_id",
+    )
+
+    result = asyncio.run(service.build(identity))
+
+    assert result.metricDelta.latestExamId == "32"
+    assert result.metricDelta.latestExamName == "精进营第二次竞赛"
+    assert result.metricDelta.values.knowledge == -34
+    assert result.metricDelta.values.accuracy == 3
+    assert result.metricDelta.values.quality == -16
+    assert result.metricDelta.values.flexibility == 53
+    assert result.metricDelta.values.proficiency == 34

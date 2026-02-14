@@ -18,6 +18,7 @@ import logging
 from typing import Any
 
 from ..db.repository import ApiRepository
+from .history_merge import merge_exam_metric_rows, merge_rating_history_rows
 from .identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
@@ -163,20 +164,16 @@ class ToolExecutor:
         student_ids = self._identity.student_entity_ids or (
             self._identity.student_entity_id,
         )
+        per_student_limit = max(limit, limit * len(student_ids))
         all_rows = []
         for sid in student_ids:
             all_rows.extend(
-                await self._repository.fetch_rating_history(student_id=sid, limit=limit)
+                await self._repository.fetch_rating_history(
+                    student_id=sid,
+                    limit=per_student_limit,
+                )
             )
-        # Deduplicate by exam_id, keep newest
-        seen: set[int] = set()
-        deduplicated = []
-        for r in sorted(all_rows, key=lambda r: (r.exam_time, r.exam_id), reverse=True):
-            if r.exam_id not in seen:
-                seen.add(r.exam_id)
-                deduplicated.append(r)
-            if len(deduplicated) >= limit:
-                break
+        deduplicated = merge_rating_history_rows(all_rows, limit=limit)
         return [
             {
                 "exam_id": r.exam_id,
@@ -196,21 +193,16 @@ class ToolExecutor:
         student_ids = self._identity.student_entity_ids or (
             self._identity.student_entity_id,
         )
+        per_student_limit = max(limit, limit * len(student_ids))
         all_rows = []
         for sid in student_ids:
             all_rows.extend(
                 await self._repository.fetch_exam_metric_history(
-                    student_id=sid, limit=limit
+                    student_id=sid,
+                    limit=per_student_limit,
                 )
             )
-        seen: set[int] = set()
-        deduplicated = []
-        for r in sorted(all_rows, key=lambda r: (r.exam_time, r.exam_id), reverse=True):
-            if r.exam_id not in seen:
-                seen.add(r.exam_id)
-                deduplicated.append(r)
-            if len(deduplicated) >= limit:
-                break
+        deduplicated = merge_exam_metric_rows(all_rows, limit=limit)
         return [
             {
                 "exam_id": r.exam_id,

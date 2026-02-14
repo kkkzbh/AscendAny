@@ -15,6 +15,12 @@ from ..db.repository import (
     RatingHistoryRow,
     ExamMetricHistoryRow,
 )
+from .history_merge import (
+    latest_metrics_row,
+    merge_exam_metric_rows,
+    merge_rating_history_rows,
+    metric_from_rows,
+)
 from .identity import ResolvedIdentity
 
 # ---------------------------------------------------------------------------
@@ -243,33 +249,39 @@ class PromptService:
         )
 
         # Gather data across merged entities (same logic as DashboardService)
-        metrics_row: DashboardMetricsRow | None = None
+        metrics_rows: list[DashboardMetricsRow] = []
         rating_rows: list[RatingHistoryRow] = []
         exam_metric_rows: list[ExamMetricHistoryRow] = []
+        per_student_rating_limit = max(10, 10 * len(student_entity_ids))
+        per_student_exam_metric_limit = max(5, 5 * len(student_entity_ids))
 
         for sid in student_entity_ids:
             cm = await self._repository.fetch_current_metrics(sid)
-            if cm is not None and metrics_row is None:
-                metrics_row = cm
+            if cm is not None:
+                metrics_rows.append(cm)
             rating_rows.extend(
-                await self._repository.fetch_rating_history(student_id=sid, limit=10)
+                await self._repository.fetch_rating_history(
+                    student_id=sid,
+                    limit=per_student_rating_limit,
+                )
             )
             exam_metric_rows.extend(
                 await self._repository.fetch_exam_metric_history(
-                    student_id=sid, limit=5
+                    student_id=sid,
+                    limit=per_student_exam_metric_limit,
                 )
             )
 
-        # De-duplicate & sort
-        rating_rows = _dedup_rating(rating_rows)
-        exam_metric_rows = _dedup_exam_metrics(exam_metric_rows)
+        rating_rows = merge_rating_history_rows(rating_rows, limit=10)
+        exam_metric_rows = merge_exam_metric_rows(exam_metric_rows, limit=5)
 
-        rating = metrics_row.rating if metrics_row else 800
-        knowledge = _format_metric(metrics_row.knowledge if metrics_row else None)
-        accuracy = _format_metric(metrics_row.accuracy if metrics_row else None)
-        quality = _format_metric(metrics_row.quality if metrics_row else None)
-        flexibility = _format_metric(metrics_row.flexibility if metrics_row else None)
-        proficiency = _format_metric(metrics_row.proficiency if metrics_row else None)
+        latest_metrics = latest_metrics_row(metrics_rows)
+        rating = latest_metrics.rating if latest_metrics else 800
+        knowledge = _format_metric(metric_from_rows(metrics_rows, "knowledge"))
+        accuracy = _format_metric(metric_from_rows(metrics_rows, "accuracy"))
+        quality = _format_metric(metric_from_rows(metrics_rows, "quality"))
+        flexibility = _format_metric(metric_from_rows(metrics_rows, "flexibility"))
+        proficiency = _format_metric(metric_from_rows(metrics_rows, "proficiency"))
 
         return _LAYER_3_TEMPLATE.format(
             student_id=identity.student_id,
@@ -283,25 +295,3 @@ class PromptService:
             rating_history_text=_build_rating_history_text(rating_rows),
             metric_delta_text=_build_metric_delta_text(exam_metric_rows),
         )
-
-
-def _dedup_rating(rows: list[RatingHistoryRow]) -> list[RatingHistoryRow]:
-    seen: set[int] = set()
-    result: list[RatingHistoryRow] = []
-    ordered = sorted(rows, key=lambda r: (r.exam_time, r.exam_id), reverse=True)
-    for r in ordered:
-        if r.exam_id not in seen:
-            seen.add(r.exam_id)
-            result.append(r)
-    return result
-
-
-def _dedup_exam_metrics(rows: list[ExamMetricHistoryRow]) -> list[ExamMetricHistoryRow]:
-    seen: set[int] = set()
-    result: list[ExamMetricHistoryRow] = []
-    ordered = sorted(rows, key=lambda r: (r.exam_time, r.exam_id), reverse=True)
-    for r in ordered:
-        if r.exam_id not in seen:
-            seen.add(r.exam_id)
-            result.append(r)
-    return result
