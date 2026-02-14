@@ -1,5 +1,7 @@
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useAvatarStore } from "@/stores/avatarStore";
+import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 
 export function TitleBar() {
   const openSettings = useSettingsStore((s) => s.openSettings);
@@ -7,6 +9,7 @@ export function TitleBar() {
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
   const account = useAuthStore((s) => s.account);
   const logout = useAuthStore((s) => s.logout);
+  const avatarUrl = useAvatarStore((s) => s.avatarUrl);
   const api = window.electronAPI;
   const isMac = api?.platform === "darwin";
   const nextThemeLabel = theme === "light" ? "切换到暗色主题" : "切换到亮色主题";
@@ -36,7 +39,12 @@ export function TitleBar() {
         }`}
       >
         {account && (
-          <div className="mr-2 hidden items-center rounded-md px-2 py-1 text-[11px] text-[var(--text-soft)] sm:flex">
+          <div className="mr-2 hidden items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-[var(--text-soft)] sm:flex">
+            <AvatarDisplay
+              size={20}
+              avatarUrl={avatarUrl}
+              username={account.username}
+            />
             @{account.username}
           </div>
         )}

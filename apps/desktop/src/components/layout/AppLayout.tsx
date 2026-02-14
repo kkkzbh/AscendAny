@@ -2,8 +2,10 @@ import { TitleBar } from "./TitleBar";
 import { SplitPanel } from "./SplitPanel";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { MetricsPanel } from "@/components/metrics/MetricsPanel";
+import { useAvatarSync } from "@/hooks/useAvatar";
 
 export function AppLayout() {
+  useAvatarSync();
   return (
     <div className="app-shell flex h-screen w-screen flex-col overflow-hidden">
       <TitleBar />

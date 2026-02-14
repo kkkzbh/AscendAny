@@ -1,4 +1,7 @@
 import type { ChatMessage } from "@/types/chat";
+import { useAuthStore } from "@/stores/authStore";
+import { useAvatarStore } from "@/stores/avatarStore";
+import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -7,6 +10,8 @@ interface MessageBubbleProps {
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  const account = useAuthStore((s) => s.account);
+  const avatarUrl = useAvatarStore((s) => s.avatarUrl);
 
   const timeStr = new Date(message.timestamp).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
@@ -57,20 +62,13 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       </div>
 
       {isUser && (
-        <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-raised)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]">
-          <svg
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M20 21a8 8 0 0 0-16 0" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
+        <div className="mt-1">
+          <AvatarDisplay
+            size={28}
+            avatarUrl={avatarUrl}
+            username={account?.username ?? ""}
+            className="ring-1 ring-[var(--border-subtle)]"
+          />
         </div>
       )}
     </div>

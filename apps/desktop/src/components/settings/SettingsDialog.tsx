@@ -4,6 +4,9 @@ import {
 } from "@/types/settings";
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useAvatarStore } from "@/stores/avatarStore";
+import { AvatarDisplay } from "@/components/common/AvatarDisplay";
+import { AvatarCropper } from "@/components/settings/AvatarCropper";
 
 type SettingsPage = "general" | "model";
 
@@ -65,9 +68,13 @@ function GeneralSettingsPage() {
   const account = useAuthStore((s) => s.account);
   const updateProfile = useAuthStore((s) => s.updateProfile);
   const profileSaving = useAuthStore((s) => s.profileSaving);
+  const avatarUrl = useAvatarStore((s) => s.avatarUrl);
+  const saveAvatar = useAvatarStore((s) => s.saveAvatar);
+  const deleteAvatar = useAvatarStore((s) => s.deleteAvatar);
   const [studentId, setStudentId] = useState(account?.studentId ?? "");
   const [ptaNickname, setPtaNickname] = useState(account?.ptaNickname ?? "");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [showCropper, setShowCropper] = useState(false);
 
   useEffect(() => {
     setStudentId(account?.studentId ?? "");
@@ -90,9 +97,78 @@ function GeneralSettingsPage() {
     }
   }
 
+  async function onAvatarCropConfirm(dataUrl: string) {
+    if (account?.accountId) {
+      await saveAvatar(account.accountId, dataUrl);
+    }
+    setShowCropper(false);
+  }
+
+  async function onAvatarRemove() {
+    if (account?.accountId) {
+      await deleteAvatar(account.accountId);
+    }
+  }
+
   return (
     <div className="settings-page animate-fade-in">
       <h2 className="settings-page-title text-lg font-semibold text-[var(--text-strong)]">通用设置</h2>
+
+      {/* Avatar section */}
+      <div className="settings-group">
+        <div className="settings-field">
+          <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+            头像
+          </label>
+          <div className="flex items-center gap-4">
+            <div
+              className="avatar-edit-wrapper group relative cursor-pointer"
+              onClick={() => setShowCropper(true)}
+            >
+              <AvatarDisplay
+                size={72}
+                avatarUrl={avatarUrl}
+                username={account?.username ?? ""}
+              />
+              <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/0 transition-all duration-200 group-hover:bg-black/40">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="white"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                >
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+              </div>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <button
+                className="text-left text-[13px] font-medium text-[var(--accent-600)] hover:underline"
+                onClick={() => setShowCropper(true)}
+              >
+                更换头像
+              </button>
+              {avatarUrl && (
+                <button
+                  className="text-left text-[12px] text-[var(--text-soft)] hover:text-[var(--rating-negative)] hover:underline"
+                  onClick={() => void onAvatarRemove()}
+                >
+                  移除头像
+                </button>
+              )}
+              <p className="text-[11px] text-[var(--text-soft)]">
+                头像仅存储在本地，不会上传至服务器。
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="settings-group">
         <div className="settings-field">
@@ -141,6 +217,13 @@ function GeneralSettingsPage() {
         </div>
 
       </div>
+
+      {showCropper && (
+        <AvatarCropper
+          onConfirm={(dataUrl) => void onAvatarCropConfirm(dataUrl)}
+          onCancel={() => setShowCropper(false)}
+        />
+      )}
     </div>
   );
 }
