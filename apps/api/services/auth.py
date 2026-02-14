@@ -86,6 +86,8 @@ class AuthService:
         phone = self._normalize_phone(payload.phone)
         email = self._normalize_email(payload.email)
         self._enforce_signup_policy(phone=phone, email=email)
+        student_id = self._normalize_student_id(payload.studentId)
+        pta_nickname = self._normalize_pta_nickname(payload.ptaNickname)
 
         pepper = self._load_password_pepper()
         password_hash = hash_password(password, pepper=pepper)
@@ -129,7 +131,16 @@ class AuthService:
                     message="Email is already in use.",
                 )
 
-        profile = await self._repository.fetch_account_profile(account.account_id)
+        try:
+            profile = await self._repository.upsert_account_profile(
+                account_id=account.account_id,
+                student_id=student_id,
+                pta_nickname=pta_nickname,
+            )
+        except Exception:
+            await self._repository.delete_account(account.account_id)
+            raise
+
         return await self._issue_tokens(
             account=account,
             profile=profile,
@@ -244,25 +255,12 @@ class AuthService:
         current: AuthenticatedAccount,
         payload: AuthProfileUpdateRequest,
     ) -> AuthProfileResponse:
-        self._ensure_enabled()
-        account = await self._repository.fetch_account_by_id(current.account_id)
-        if account is None or not account.is_active:
-            raise AppError(
-                status_code=404,
-                code="AUTH_ACCOUNT_NOT_FOUND",
-                message="Account was not found.",
-            )
-
-        student_id = self._clean(payload.studentId)
-        pta_nickname = self._clean(payload.ptaNickname)
-        profile = await self._repository.upsert_account_profile(
-            account_id=current.account_id,
-            student_id=student_id,
-            pta_nickname=pta_nickname,
-        )
-        return AuthProfileResponse(
-            studentId=profile.student_id,
-            ptaNickname=profile.pta_nickname,
+        _ = current
+        _ = payload
+        raise AppError(
+            status_code=403,
+            code="AUTH_PROFILE_IMMUTABLE",
+            message="studentId and ptaNickname are immutable after registration.",
         )
 
     def authenticate_access_token(self, token: str) -> AuthenticatedAccount:
@@ -421,6 +419,26 @@ class AuthService:
                 message="Email format is invalid.",
             )
         return normalized
+
+    def _normalize_student_id(self, student_id: str | None) -> str:
+        value = self._clean(student_id)
+        if value is None:
+            raise AppError(
+                status_code=400,
+                code="AUTH_STUDENT_ID_REQUIRED",
+                message="studentId is required for registration.",
+            )
+        return value
+
+    def _normalize_pta_nickname(self, pta_nickname: str | None) -> str:
+        value = self._clean(pta_nickname)
+        if value is None:
+            raise AppError(
+                status_code=400,
+                code="AUTH_PTA_NICKNAME_REQUIRED",
+                message="ptaNickname is required for registration.",
+            )
+        return value
 
     def _load_jwt_secret(self) -> str:
         secret = os.getenv(self._settings.auth.jwt_secret_env, "").strip()

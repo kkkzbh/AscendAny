@@ -17,6 +17,17 @@ from apps.api.schemas.auth import (
 from apps.api.services.auth import AuthService
 
 
+def _build_register_request(**overrides) -> RegisterRequest:
+    payload = {
+        "username": "alice_01",
+        "password": "password_123",
+        "studentId": "20230001",
+        "ptaNickname": "Alice",
+    }
+    payload.update(overrides)
+    return RegisterRequest(**payload)
+
+
 class FakeAuthRepo:
     def __init__(self) -> None:
         self._next_account_id = 1
@@ -151,28 +162,20 @@ def test_auth_register_login_refresh_and_profile(monkeypatch) -> None:
 
     register_result = asyncio.run(
         service.register(
-            RegisterRequest(
-                username="alice_01",
-                password="password_123",
-                deviceId="desktop-1",
-            )
+            _build_register_request(deviceId="desktop-1")
         )
     )
 
     assert register_result.account.username == "alice_01"
+    assert register_result.account.studentId == "20230001"
+    assert register_result.account.ptaNickname == "Alice"
     assert register_result.refreshToken
 
     current = service.authenticate_access_token(register_result.accessToken)
     me_result = asyncio.run(service.me(current))
     assert me_result.account.username == "alice_01"
-
-    profile_result = asyncio.run(
-        service.update_profile(
-            current,
-            AuthProfileUpdateRequest(studentId="20230001", ptaNickname="Alice"),
-        )
-    )
-    assert profile_result.studentId == "20230001"
+    assert me_result.account.studentId == "20230001"
+    assert me_result.account.ptaNickname == "Alice"
 
     refresh_result = asyncio.run(
         service.refresh(
@@ -184,11 +187,33 @@ def test_auth_register_login_refresh_and_profile(monkeypatch) -> None:
     )
     assert refresh_result.refreshToken != register_result.refreshToken
     assert refresh_result.account.studentId == "20230001"
+    assert refresh_result.account.ptaNickname == "Alice"
 
     login_result = asyncio.run(
         service.login(LoginRequest(username="alice_01", password="password_123"))
     )
     assert login_result.account.accountId == register_result.account.accountId
+
+
+def test_auth_update_profile_is_forbidden(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    register_result = asyncio.run(service.register(_build_register_request()))
+    current = service.authenticate_access_token(register_result.accessToken)
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.update_profile(
+                current,
+                AuthProfileUpdateRequest(studentId="20239999", ptaNickname="Bob"),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "AUTH_PROFILE_IMMUTABLE"
 
 
 def test_auth_login_rejects_wrong_password(monkeypatch) -> None:
@@ -197,9 +222,7 @@ def test_auth_login_rejects_wrong_password(monkeypatch) -> None:
     repo = FakeAuthRepo()
     service = AuthService(settings=settings, repository=repo)
 
-    asyncio.run(
-        service.register(RegisterRequest(username="alice_01", password="password_123"))
-    )
+    asyncio.run(service.register(_build_register_request()))
 
     with pytest.raises(AppError) as exc_info:
         asyncio.run(
@@ -217,9 +240,7 @@ def test_auth_signup_policy_requires_contact(monkeypatch) -> None:
     service = AuthService(settings=settings, repository=FakeAuthRepo())
 
     with pytest.raises(AppError) as exc_info:
-        asyncio.run(
-            service.register(RegisterRequest(username="alice_01", password="password_123"))
-        )
+        asyncio.run(service.register(_build_register_request()))
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.code == "AUTH_SIGNUP_POLICY_VIOLATION"
@@ -244,9 +265,7 @@ def test_auth_refresh_rejects_expired_token(monkeypatch) -> None:
     repo = FakeAuthRepo()
     service = AuthService(settings=settings, repository=repo)
 
-    register_result = asyncio.run(
-        service.register(RegisterRequest(username="alice_01", password="password_123"))
-    )
+    register_result = asyncio.run(service.register(_build_register_request()))
 
     token_hash = next(iter(repo.refresh_by_hash.keys()))
     row = repo.refresh_by_hash[token_hash]
@@ -264,3 +283,33 @@ def test_auth_refresh_rejects_expired_token(monkeypatch) -> None:
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.code == "AUTH_TOKEN_EXPIRED"
+
+
+def test_auth_register_requires_student_id_and_pta_nickname(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    service = AuthService(settings=settings, repository=FakeAuthRepo())
+
+    with pytest.raises(AppError) as missing_student_exc:
+        asyncio.run(
+            service.register(
+                _build_register_request(
+                    username="alice_02",
+                    studentId="   ",
+                )
+            )
+        )
+    assert missing_student_exc.value.status_code == 400
+    assert missing_student_exc.value.code == "AUTH_STUDENT_ID_REQUIRED"
+
+    with pytest.raises(AppError) as missing_nickname_exc:
+        asyncio.run(
+            service.register(
+                _build_register_request(
+                    username="alice_03",
+                    ptaNickname="  ",
+                )
+            )
+        )
+    assert missing_nickname_exc.value.status_code == 400
+    assert missing_nickname_exc.value.code == "AUTH_PTA_NICKNAME_REQUIRED"

@@ -18,6 +18,8 @@ class RegisterRequest(BaseModel):
 
     username: str = Field(min_length=4, max_length=32)
     password: str = Field(min_length=8, max_length=128)
+    studentId: str = Field(min_length=1, max_length=64)
+    ptaNickname: str = Field(min_length=1, max_length=128)
     phone: str | None = Field(default=None, max_length=32)
     email: str | None = Field(default=None, max_length=320)
     deviceId: str | None = Field(default=None, max_length=128)
