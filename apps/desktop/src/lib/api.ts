@@ -221,6 +221,8 @@ export interface AuthPolicyPayload {
 export interface RegisterPayload {
   username: string;
   password: string;
+  studentId: string;
+  ptaNickname: string;
   phone?: string;
   email?: string;
   deviceId?: string;

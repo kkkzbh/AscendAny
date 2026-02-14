@@ -27,6 +27,8 @@ interface LoginInput {
 interface RegisterInput {
   username: string;
   password: string;
+  studentId: string;
+  ptaNickname: string;
   phone?: string;
   email?: string;
   autoLogin: boolean;
@@ -207,6 +209,8 @@ export const useAuthStore = create<AuthState>()(
           const tokens = await postRegister({
             username,
             password: input.password,
+            studentId: input.studentId.trim(),
+            ptaNickname: input.ptaNickname.trim(),
             phone: normalizeOptional(input.phone),
             email: normalizeOptional(input.email),
             deviceId: normalizeOptional(input.deviceId),

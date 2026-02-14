@@ -72,36 +72,10 @@ export function SettingsSidebar({
 
 function GeneralSettingsPage() {
   const account = useAuthStore((s) => s.account);
-  const updateProfile = useAuthStore((s) => s.updateProfile);
-  const profileSaving = useAuthStore((s) => s.profileSaving);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
   const saveAvatar = useAvatarStore((s) => s.saveAvatar);
   const deleteAvatar = useAvatarStore((s) => s.deleteAvatar);
-  const [studentId, setStudentId] = useState(account?.studentId ?? "");
-  const [ptaNickname, setPtaNickname] = useState(account?.ptaNickname ?? "");
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [showCropper, setShowCropper] = useState(false);
-
-  useEffect(() => {
-    setStudentId(account?.studentId ?? "");
-    setPtaNickname(account?.ptaNickname ?? "");
-  }, [account?.studentId, account?.ptaNickname]);
-
-  async function onSaveProfile() {
-    setSaveError(null);
-    try {
-      await updateProfile({
-        studentId: studentId.trim() || null,
-        ptaNickname: ptaNickname.trim() || null,
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim()
-          ? error.message
-          : "保存失败，请稍后重试。";
-      setSaveError(message);
-    }
-  }
 
   async function onAvatarCropConfirm(dataUrl: string) {
     if (account?.accountId) {
@@ -181,45 +155,24 @@ function GeneralSettingsPage() {
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             学号
           </label>
-          <input
-            type="text"
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
-            placeholder="输入你的学号"
-            className="settings-input"
-          />
+          <p className="rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)]">
+            {account?.studentId?.trim() || "未绑定"}
+          </p>
         </div>
 
         <div className="settings-field">
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             PTA 账号昵称
           </label>
-          <input
-            type="text"
-            value={ptaNickname}
-            onChange={(e) => setPtaNickname(e.target.value)}
-            placeholder="输入你的 PTA 昵称"
-            className="settings-input"
-          />
+          <p className="rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)]">
+            {account?.ptaNickname?.trim() || "未绑定"}
+          </p>
         </div>
 
         <div className="settings-field">
-          <button
-            type="button"
-            onClick={() => {
-              void onSaveProfile();
-            }}
-            disabled={profileSaving}
-            className="auth-submit w-[128px] disabled:opacity-50"
-          >
-            {profileSaving ? "保存中..." : "保存资料"}
-          </button>
           <p className="text-[11px] text-[var(--text-soft)]">
-            学号和 PTA 昵称保存在账号云端，登录后自动同步。
+            学号和 PTA 昵称在注册时绑定，当前账号下不可修改。
           </p>
-          {saveError && (
-            <p className="text-[11px] text-[var(--rating-negative)]">{saveError}</p>
-          )}
         </div>
 
       </div>

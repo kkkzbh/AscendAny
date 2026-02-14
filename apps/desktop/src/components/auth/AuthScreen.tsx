@@ -11,6 +11,8 @@ export function AuthScreen() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [studentId, setStudentId] = useState("");
+  const [ptaNickname, setPtaNickname] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [autoLogin, setAutoLogin] = useState(true);
@@ -106,12 +108,22 @@ export function AuthScreen() {
     }
 
     if (mode === "register") {
+      const nextStudentId = studentId.trim();
+      const nextPtaNickname = ptaNickname.trim();
       if (password !== confirmPassword) {
         setLocalError("两次输入的密码不一致。");
         return;
       }
       if (password.trim().length < 8) {
         setLocalError("密码长度至少为 8 位。");
+        return;
+      }
+      if (!nextStudentId) {
+        setLocalError("注册时必须填写学号。");
+        return;
+      }
+      if (!nextPtaNickname) {
+        setLocalError("注册时必须填写 PTA 账号昵称。");
         return;
       }
       if (isContactPhoneRequired && !phone.trim()) {
@@ -145,6 +157,8 @@ export function AuthScreen() {
         await register({
           username: nextUsername,
           password,
+          studentId: studentId.trim(),
+          ptaNickname: ptaNickname.trim(),
           phone: trimOrUndefined(phone),
           email: trimOrUndefined(email),
           autoLogin,
@@ -168,14 +182,14 @@ export function AuthScreen() {
             <span className="auth-intro-kicker">AscendAny</span>
             <h1 className="auth-intro-title">学生能力分析平台</h1>
             <p className="auth-intro-subtitle">
-              登录后可直接进入你的学习工作台。首次使用建议先完成资料绑定，再开始分析。
+              登录后可直接进入你的学习工作台。注册时请一次性完成学号与 PTA 昵称绑定。
             </p>
           </div>
 
           <div className="auth-highlight-grid">
             <article className="auth-highlight-card">
-              <p className="auth-highlight-title">1. 绑定学号与 PTA 昵称</p>
-              <p className="auth-highlight-desc">在设置中保存后，系统会自动匹配你的考试数据。</p>
+              <p className="auth-highlight-title">1. 注册即绑定学号与 PTA 昵称</p>
+              <p className="auth-highlight-desc">账号创建后资料固定，系统将自动匹配你的考试数据。</p>
             </article>
             <article className="auth-highlight-card">
               <p className="auth-highlight-title">2. 查看能力面板</p>
@@ -253,6 +267,36 @@ export function AuthScreen() {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     autoComplete="new-password"
+                  />
+                </div>
+
+                <div className="auth-field">
+                  <label className="auth-label">学号（必填）</label>
+                  <input
+                    className="auth-input"
+                    value={studentId}
+                    onChange={(e) => {
+                      setStudentId(e.target.value);
+                      clearError();
+                      setLocalError(null);
+                    }}
+                    placeholder="输入学号"
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div className="auth-field">
+                  <label className="auth-label">PTA 账号昵称（必填）</label>
+                  <input
+                    className="auth-input"
+                    value={ptaNickname}
+                    onChange={(e) => {
+                      setPtaNickname(e.target.value);
+                      clearError();
+                      setLocalError(null);
+                    }}
+                    placeholder="输入 PTA 昵称"
+                    autoComplete="off"
                   />
                 </div>
 
