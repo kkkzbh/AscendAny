@@ -4,6 +4,8 @@ import { useAuthStore } from "@/stores/authStore";
 import { useAvatarStore } from "@/stores/avatarStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -52,7 +54,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               : "bg-[var(--surface-raised)] text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)]"
           }`}
         >
-          <p className="whitespace-pre-wrap break-words leading-6">{message.content}</p>
+          <div
+            className={`chat-markdown break-words leading-6 ${
+              isUser ? "chat-markdown-user" : "chat-markdown-assistant"
+            }`}
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
         </div>
         <time
           className={`px-1 text-[10px] leading-none ${

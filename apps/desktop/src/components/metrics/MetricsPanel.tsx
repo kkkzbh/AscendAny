@@ -56,7 +56,7 @@ export function MetricsPanel() {
     );
   }
 
-  const historyItems = rating.history.slice().reverse();
+  const historyItems = rating.history;
 
   return (
     <section className="flex h-full w-full flex-col">

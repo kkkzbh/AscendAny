@@ -303,6 +303,106 @@ body {
   padding: 10px 14px !important;
 }
 
+.chat-markdown {
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.chat-markdown > * + * {
+  margin-top: 0.45rem;
+}
+
+.chat-markdown p {
+  white-space: pre-wrap;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  padding-left: 1.1rem;
+}
+
+.chat-markdown li + li {
+  margin-top: 0.2rem;
+}
+
+.chat-markdown blockquote {
+  border-left: 3px solid var(--border-subtle);
+  padding-left: 0.65rem;
+  opacity: 0.92;
+}
+
+.chat-markdown pre {
+  overflow-x: auto;
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  margin: 0.2rem 0;
+}
+
+.chat-markdown code {
+  border-radius: 6px;
+  font-family:
+    "JetBrains Mono",
+    "Fira Code",
+    "SFMono-Regular",
+    ui-monospace,
+    Menlo,
+    monospace;
+  font-size: 12px;
+  padding: 0.1rem 0.35rem;
+}
+
+.chat-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.chat-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid var(--border-subtle);
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.chat-markdown-user a {
+  color: rgba(255, 255, 255, 0.94);
+  text-decoration: underline;
+}
+
+.chat-markdown-assistant a {
+  color: var(--accent-700);
+  text-decoration: underline;
+}
+
+.chat-markdown-user code {
+  background: rgba(255, 255, 255, 0.18);
+  color: inherit;
+}
+
+.chat-markdown-user pre {
+  background: rgba(15, 23, 42, 0.24);
+}
+
+.chat-markdown-user th,
+.chat-markdown-user td {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.chat-markdown-assistant code {
+  background: var(--surface-soft);
+  color: inherit;
+}
+
+.chat-markdown-assistant pre {
+  background: rgba(148, 163, 184, 0.2);
+}
+
 .chat-input-wrap {
   padding: 6px 16px 12px !important;
 }
