@@ -235,6 +235,66 @@ ipcMain.handle("credential-delete", (_event, username: unknown) => {
   return saveCredentialStore(next);
 });
 
+// ---------------------------------------------------------------------------
+// Avatar local storage
+// ---------------------------------------------------------------------------
+
+function avatarDir(): string {
+  return path.join(app.getPath("userData"), "avatars");
+}
+
+function avatarFilePath(accountId: string): string {
+  // Sanitise accountId to prevent path traversal
+  const safe = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(avatarDir(), `${safe}.png`);
+}
+
+ipcMain.handle("avatar-save", (_event, accountId: unknown, base64Data: unknown) => {
+  const id = typeof accountId === "string" ? accountId.trim() : "";
+  const data = typeof base64Data === "string" ? base64Data : "";
+  if (!id || !data) return false;
+
+  try {
+    // Strip optional data-URL prefix (e.g. "data:image/png;base64,")
+    const raw = data.replace(/^data:image\/\w+;base64,/, "");
+    const dir = avatarDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(avatarFilePath(id), Buffer.from(raw, "base64"));
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle("avatar-read", (_event, accountId: unknown) => {
+  const id = typeof accountId === "string" ? accountId.trim() : "";
+  if (!id) return null;
+
+  try {
+    const filePath = avatarFilePath(id);
+    if (!fs.existsSync(filePath)) return null;
+    const buf = fs.readFileSync(filePath);
+    return `data:image/png;base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle("avatar-delete", (_event, accountId: unknown) => {
+  const id = typeof accountId === "string" ? accountId.trim() : "";
+  if (!id) return false;
+
+  try {
+    const filePath = avatarFilePath(id);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 // Window control IPC handlers
 ipcMain.on("window-minimize", () => {
   mainWindow?.minimize();

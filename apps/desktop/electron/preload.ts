@@ -12,4 +12,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("credential-read", username) as Promise<string | null>,
   credentialDelete: (username: string) =>
     ipcRenderer.invoke("credential-delete", username) as Promise<boolean>,
+  avatarSave: (accountId: string, base64Data: string) =>
+    ipcRenderer.invoke("avatar-save", accountId, base64Data) as Promise<boolean>,
+  avatarRead: (accountId: string) =>
+    ipcRenderer.invoke("avatar-read", accountId) as Promise<string | null>,
+  avatarDelete: (accountId: string) =>
+    ipcRenderer.invoke("avatar-delete", accountId) as Promise<boolean>,
 });
