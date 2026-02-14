@@ -44,6 +44,7 @@ class AutoAnalysisRequest(BaseModel):
 
     studentId: str | None = None
     ptaNickname: str | None = None
+    latestExamId: str | None = None
     providerType: ProviderType = "server_default"
     providerConfig: ClientProviderConfig | None = None
     roleId: str | None = None
@@ -52,3 +53,21 @@ class AutoAnalysisRequest(BaseModel):
 class AutoAnalysisResponse(BaseModel):
     reply: str
     provider: ProviderType
+
+
+class AutoAnalysisPrecomputeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    examId: int = Field(gt=0)
+    roleId: str | None = None
+    maxAccounts: int = Field(default=2000, ge=1, le=10000)
+
+
+class AutoAnalysisPrecomputeResponse(BaseModel):
+    examId: int
+    roleId: str
+    candidates: int
+    generated: int
+    skippedCached: int
+    skippedNotLatest: int
+    failed: int

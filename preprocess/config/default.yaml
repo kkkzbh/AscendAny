@@ -53,3 +53,10 @@ rating:
   max_binary_search_rating: 8000
   min_binary_search_rating: -2000
   binary_search_steps: 30
+
+warmup:
+  enabled: false
+  api_base_url: null
+  token_env: ASCENDANY_AUTO_ANALYSIS_PREWARM_TOKEN
+  timeout_seconds: 30
+  role_id: xiaoD

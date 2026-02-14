@@ -90,6 +90,15 @@ class RatingConfig:
 
 
 @dataclass(slots=True)
+class WarmupConfig:
+    enabled: bool = False
+    api_base_url: str | None = None
+    token_env: str = "ASCENDANY_AUTO_ANALYSIS_PREWARM_TOKEN"
+    timeout_seconds: float = 30.0
+    role_id: str = "xiaoD"
+
+
+@dataclass(slots=True)
 class Settings:
     practice_root: Path = Path("/home/kkkzbh/code/Ascend/data/practice")
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
@@ -98,6 +107,7 @@ class Settings:
     mapping: MappingConfig = field(default_factory=MappingConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
     rating: RatingConfig = field(default_factory=RatingConfig)
+    warmup: WarmupConfig = field(default_factory=WarmupConfig)
 
 
 def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -154,6 +164,13 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "min_binary_search_rating": settings.rating.min_binary_search_rating,
             "binary_search_steps": settings.rating.binary_search_steps,
         },
+        "warmup": {
+            "enabled": settings.warmup.enabled,
+            "api_base_url": settings.warmup.api_base_url,
+            "token_env": settings.warmup.token_env,
+            "timeout_seconds": settings.warmup.timeout_seconds,
+            "role_id": settings.warmup.role_id,
+        },
     }
 
 
@@ -164,6 +181,7 @@ def _from_dict(data: dict[str, Any]) -> Settings:
     mapping = data.get("mapping", {})
     fusion = data.get("fusion", {})
     rating = data.get("rating", {})
+    warmup = data.get("warmup", {})
     half_life = fusion.get("half_life_days", {})
 
     return Settings(
@@ -220,6 +238,18 @@ def _from_dict(data: dict[str, Any]) -> Settings:
             max_binary_search_rating=int(rating.get("max_binary_search_rating", 8000)),
             min_binary_search_rating=int(rating.get("min_binary_search_rating", -2000)),
             binary_search_steps=int(rating.get("binary_search_steps", 30)),
+        ),
+        warmup=WarmupConfig(
+            enabled=bool(warmup.get("enabled", False)),
+            api_base_url=warmup.get("api_base_url"),
+            token_env=str(
+                warmup.get(
+                    "token_env",
+                    "ASCENDANY_AUTO_ANALYSIS_PREWARM_TOKEN",
+                )
+            ),
+            timeout_seconds=float(warmup.get("timeout_seconds", 30.0)),
+            role_id=str(warmup.get("role_id", "xiaoD")),
         ),
     )
 

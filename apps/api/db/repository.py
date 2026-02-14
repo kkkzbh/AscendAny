@@ -106,6 +106,26 @@ class AccountProfileRow:
 
 
 @dataclass(slots=True)
+class AutoAnalysisCacheRow:
+    account_id: int
+    exam_id: int
+    role_id: str
+    provider_type: str | None
+    reply: str
+    source: str
+    generated_at: datetime | None
+    delivered_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(slots=True)
+class AutoAnalysisCandidateRow:
+    account_id: int
+    student_id: str | None
+    pta_nickname: str | None
+
+
+@dataclass(slots=True)
 class RefreshTokenRow:
     token_id: int
     account_id: int
@@ -266,6 +286,198 @@ class ApiRepository:
             if isinstance(row.get("updated_at"), datetime)
             else None,
         )
+
+    async def fetch_auto_analysis_cache(
+        self,
+        account_id: int,
+        exam_id: int,
+        role_id: str,
+    ) -> AutoAnalysisCacheRow | None:
+        query = """
+            SELECT
+                account_id,
+                exam_id,
+                role_id,
+                provider_type,
+                reply,
+                source,
+                generated_at,
+                delivered_at,
+                updated_at
+            FROM ascendany.user_auto_analysis_cache
+            WHERE account_id = %s
+              AND exam_id = %s
+              AND role_id = %s
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (account_id, exam_id, role_id))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return AutoAnalysisCacheRow(
+            account_id=int(row["account_id"]),
+            exam_id=int(row["exam_id"]),
+            role_id=str(row["role_id"]),
+            provider_type=str(row["provider_type"])
+            if row.get("provider_type")
+            else None,
+            reply=str(row["reply"]),
+            source=str(row["source"]) if row.get("source") else "online",
+            generated_at=row.get("generated_at")
+            if isinstance(row.get("generated_at"), datetime)
+            else None,
+            delivered_at=row.get("delivered_at")
+            if isinstance(row.get("delivered_at"), datetime)
+            else None,
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else None,
+        )
+
+    async def upsert_auto_analysis_cache(
+        self,
+        account_id: int,
+        exam_id: int,
+        role_id: str,
+        provider_type: str | None,
+        reply: str,
+        source: str,
+    ) -> AutoAnalysisCacheRow:
+        query = """
+            INSERT INTO ascendany.user_auto_analysis_cache (
+                account_id,
+                exam_id,
+                role_id,
+                provider_type,
+                reply,
+                source,
+                generated_at,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, now(), now())
+            ON CONFLICT (account_id, exam_id, role_id)
+            DO UPDATE SET
+                provider_type = EXCLUDED.provider_type,
+                reply = EXCLUDED.reply,
+                source = EXCLUDED.source,
+                generated_at = now(),
+                updated_at = now()
+            RETURNING
+                account_id,
+                exam_id,
+                role_id,
+                provider_type,
+                reply,
+                source,
+                generated_at,
+                delivered_at,
+                updated_at
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (account_id, exam_id, role_id, provider_type, reply, source),
+                )
+                row = await cursor.fetchone()
+        if not row:
+            raise RuntimeError("Failed to upsert auto-analysis cache row")
+        return AutoAnalysisCacheRow(
+            account_id=int(row["account_id"]),
+            exam_id=int(row["exam_id"]),
+            role_id=str(row["role_id"]),
+            provider_type=str(row["provider_type"])
+            if row.get("provider_type")
+            else None,
+            reply=str(row["reply"]),
+            source=str(row["source"]) if row.get("source") else "online",
+            generated_at=row.get("generated_at")
+            if isinstance(row.get("generated_at"), datetime)
+            else None,
+            delivered_at=row.get("delivered_at")
+            if isinstance(row.get("delivered_at"), datetime)
+            else None,
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else None,
+        )
+
+    async def mark_auto_analysis_delivered(
+        self,
+        account_id: int,
+        exam_id: int,
+        role_id: str,
+    ) -> None:
+        query = """
+            UPDATE ascendany.user_auto_analysis_cache
+            SET delivered_at = COALESCE(delivered_at, now()),
+                updated_at = now()
+            WHERE account_id = %s
+              AND exam_id = %s
+              AND role_id = %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(query, (account_id, exam_id, role_id))
+
+    async def fetch_auto_analysis_candidates_by_exam(
+        self,
+        exam_id: int,
+        limit: int = 2000,
+    ) -> list[AutoAnalysisCandidateRow]:
+        query = """
+            WITH target_students AS (
+                SELECT DISTINCT rh.student_id
+                FROM ascendany.rating_history AS rh
+                WHERE rh.exam_id = %s
+            )
+            SELECT DISTINCT
+                up.account_id,
+                NULLIF(BTRIM(up.student_id), '') AS student_id,
+                NULLIF(BTRIM(up.pta_nickname), '') AS pta_nickname
+            FROM ascendany.user_profiles AS up
+            WHERE
+                (
+                    NULLIF(BTRIM(up.student_id), '') IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1
+                        FROM ascendany.student_identities AS si
+                        JOIN target_students AS ts
+                          ON ts.student_id = si.student_id
+                        WHERE si.source LIKE %s
+                          AND si.external_id = NULLIF(BTRIM(up.student_id), '')
+                    )
+                )
+                OR (
+                    NULLIF(BTRIM(up.pta_nickname), '') IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1
+                        FROM ascendany.student_identities AS si
+                        JOIN target_students AS ts
+                          ON ts.student_id = si.student_id
+                        WHERE COALESCE(NULLIF(BTRIM(si.external_name), ''), '')
+                              = NULLIF(BTRIM(up.pta_nickname), '')
+                    )
+                )
+            ORDER BY up.account_id ASC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, "%student_no", limit))
+                rows = await cursor.fetchall()
+        return [
+            AutoAnalysisCandidateRow(
+                account_id=int(row["account_id"]),
+                student_id=str(row["student_id"]) if row.get("student_id") else None,
+                pta_nickname=str(row["pta_nickname"])
+                if row.get("pta_nickname")
+                else None,
+            )
+            for row in rows
+        ]
 
     async def insert_refresh_token(
         self,

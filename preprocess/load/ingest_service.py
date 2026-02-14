@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from ..config import Settings
 from ..derive import compute_current_metrics, compute_exam_metrics, compute_exam_rating
@@ -101,6 +105,7 @@ class IngestService:
         succeeded = 0
         failed = 0
         errors: list[str] = []
+        successful_exam_ids: list[int] = []
 
         for unit in changed:
             exam_id = None
@@ -226,6 +231,7 @@ class IngestService:
                         error_message=None,
                     )
                 succeeded += 1
+                successful_exam_ids.append(exam_id)
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 message = f"{unit.source_path}: {exc}"
@@ -270,6 +276,8 @@ class IngestService:
                     "cleanup": cleanup_stats,
                 },
             )
+
+        self._trigger_auto_analysis_prewarm(successful_exam_ids, errors)
 
         return RunSummary(
             ingest_run_id=ingest_run_id,
@@ -330,3 +338,55 @@ class IngestService:
                 }
             )
         return timeline
+
+    def _trigger_auto_analysis_prewarm(
+        self,
+        successful_exam_ids: list[int],
+        errors: list[str],
+    ) -> None:
+        warmup = self.settings.warmup
+        if not warmup.enabled:
+            return
+        base_url = (warmup.api_base_url or "").strip().rstrip("/")
+        if not base_url:
+            errors.append("warmup enabled but api_base_url is empty")
+            return
+        token = os.getenv(warmup.token_env, "").strip()
+        if not token:
+            errors.append(f"warmup enabled but env {warmup.token_env} is empty")
+            return
+
+        endpoint = f"{base_url}/api/v1/chat/auto-analysis/precompute-exam"
+        timeout = max(1.0, float(warmup.timeout_seconds))
+
+        for exam_id in successful_exam_ids:
+            payload = json.dumps(
+                {
+                    "examId": exam_id,
+                    "roleId": warmup.role_id,
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            req = urllib_request.Request(
+                endpoint,
+                data=payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-AscendAny-Prewarm-Token": token,
+                },
+            )
+            try:
+                with urllib_request.urlopen(req, timeout=timeout) as response:
+                    if response.status < 200 or response.status >= 300:
+                        errors.append(
+                            f"warmup exam_id={exam_id} failed with status={response.status}"
+                        )
+            except urllib_error.HTTPError as exc:
+                errors.append(
+                    f"warmup exam_id={exam_id} http_error={exc.code}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(
+                    f"warmup exam_id={exam_id} error={exc}"
+                )

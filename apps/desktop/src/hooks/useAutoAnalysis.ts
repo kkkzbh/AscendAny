@@ -1,57 +1,43 @@
 import { useEffect, useRef } from "react";
 import { useAuthStore } from "@/stores/authStore";
+import { useMetricsStore } from "@/stores/metricsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { storage } from "@/lib/storage";
 import {
-  fetchLatestExamImportedAt,
   postAutoAnalysis,
   type ClientProviderConfigPayload,
 } from "@/lib/api";
 
 /**
- * Hook that checks if new exams have been imported since the last
- * auto-analysis. If so, calls the auto-analysis endpoint and returns
- * the assistant reply via onTrigger.
- *
- * Runs at most once per calendar day per account.
+ * Hook that triggers auto-analysis once per latest exam (per account).
+ * If the latest rating exam changes, it calls the auto-analysis endpoint
+ * and forwards the assistant reply via onTrigger.
  */
 export function useAutoAnalysis(onTrigger: (reply: string) => void) {
-  const triggered = useRef(false);
+  const inFlightExamIdRef = useRef<string | null>(null);
 
   const account = useAuthStore((s) => s.account);
   const accessToken = useAuthStore((s) => s.accessToken);
   const status = useAuthStore((s) => s.status);
+  const rating = useMetricsStore((s) => s.rating);
   const activeProvider = useSettingsStore((s) => s.activeProvider);
   const providers = useSettingsStore((s) => s.providers);
   const activeRole = useSettingsStore((s) => s.activeRole);
 
   useEffect(() => {
-    if (triggered.current) return;
     if (status !== "authenticated" || !account || !accessToken) return;
+    const latestExamId = rating?.history?.[0]?.examId?.trim();
+    if (!latestExamId) return;
 
-    const dateStorageKey = `last_auto_analysis_date_${account.accountId}`;
-    const atStorageKey = `last_auto_analysis_at_${account.accountId}`;
-    const today = new Date().toISOString().slice(0, 10);
-    const lastAnalysisDate = storage.get<string>(dateStorageKey, "");
+    const examStorageKey = `last_auto_analysis_exam_${account.accountId}`;
+    const lastExamId = storage.get<string>(examStorageKey, "");
+    if (lastExamId === latestExamId) return;
+    if (inFlightExamIdRef.current === latestExamId) return;
 
-    if (lastAnalysisDate === today) return;
-
-    triggered.current = true;
+    inFlightExamIdRef.current = latestExamId;
 
     (async () => {
       try {
-        const meta = await fetchLatestExamImportedAt();
-        const latestImported = meta.latestExamImportedAt;
-
-        if (!latestImported) return;
-
-        const lastKnown = storage.get<string>(atStorageKey, "");
-        if (lastKnown && latestImported <= lastKnown) {
-          // No new exams since last analysis — still mark today as checked
-          storage.set(dateStorageKey, today);
-          return;
-        }
-
         // Build provider config for non-server-config providers
         const provider = providers[activeProvider];
         let providerConfig: ClientProviderConfigPayload | undefined;
@@ -60,8 +46,6 @@ export function useAutoAnalysis(onTrigger: (reply: string) => void) {
           const model = provider.model.trim();
           const apiKey = provider.apiKey.trim();
           if (!baseUrl || !model || !apiKey) {
-            // Provider not configured — skip auto-analysis silently
-            storage.set(dateStorageKey, today);
             return;
           }
           providerConfig = {
@@ -79,12 +63,12 @@ export function useAutoAnalysis(onTrigger: (reply: string) => void) {
             providerType: activeProvider,
             providerConfig,
             roleId: activeRole,
+            latestExamId,
           },
           accessToken,
         );
 
-        storage.set(dateStorageKey, today);
-        storage.set(atStorageKey, latestImported);
+        storage.set(examStorageKey, latestExamId);
 
         const reply = response.reply.trim();
         if (reply) {
@@ -92,14 +76,15 @@ export function useAutoAnalysis(onTrigger: (reply: string) => void) {
         }
       } catch {
         // Auto-analysis is best-effort; silently ignore errors.
-        // Still mark today so we don't retry every render.
-        storage.set(dateStorageKey, today);
+      } finally {
+        inFlightExamIdRef.current = null;
       }
     })();
   }, [
     status,
     account,
     accessToken,
+    rating,
     activeProvider,
     providers,
     activeRole,

@@ -50,6 +50,7 @@ export interface AutoAnalysisRequestPayload {
   providerType: ProviderType;
   providerConfig?: ClientProviderConfigPayload;
   roleId?: string;
+  latestExamId?: string;
 }
 
 export interface AutoAnalysisResponsePayload {
