@@ -2,11 +2,54 @@
   "name": "@ascendany/desktop",
   "version": "0.1.0",
   "private": true,
+  "description": "AscendAny desktop application",
+  "homepage": "https://github.com/kkkzbh/AscendAny",
+  "author": {
+    "name": "AscendAny Team",
+    "email": "opensource@ascendany.dev"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "dist:win:x64": "pnpm run build && electron-builder --win nsis --x64",
+    "dist:linux:rpm:x64": "pnpm run build && electron-builder --linux rpm --x64",
     "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.ascendany.desktop",
+    "productName": "AscendAny",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "maintainer": "AscendAny Team <opensource@ascendany.dev>",
+      "category": "Utility"
+    }
   },
   "dependencies": {
     "react": "^18.3.1",

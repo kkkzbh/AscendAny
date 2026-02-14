@@ -3,6 +3,10 @@ import logoImage from "../../../image/LOGO.png";
 import desktopScreenshot from "../../../image/主界面.png";
 import "./styles.css";
 
+const RELEASE_OWNER = (import.meta.env.VITE_RELEASE_OWNER ?? "kkkzbh").trim() || "kkkzbh";
+const RELEASE_REPO = (import.meta.env.VITE_RELEASE_REPO ?? "AscendAny").trim() || "AscendAny";
+const RELEASE_API_URL = `https://api.github.com/repos/${encodeURIComponent(RELEASE_OWNER)}/${encodeURIComponent(RELEASE_REPO)}/releases/latest`;
+
 /* ─── Theme Hook (localStorage) ─── */
 const STORAGE_KEY = "ascendany-theme";
 type Theme = "light" | "dark";
@@ -227,8 +231,10 @@ const workflow: WorkflowItem[] = [
   { title: "生成 AI 洞察", desc: "面向老师和学生提供可执行的学习建议。" },
 ];
 
-type DownloadStatus = "beta" | "soon";
+type DownloadStatus = "available" | "soon" | "later";
+type DownloadTarget = "macos" | "windows" | "linux" | "android" | "ios";
 type DownloadItem = {
+  target: DownloadTarget;
   platform: string;
   icon: keyof typeof icons;
   pkg: string;
@@ -238,15 +244,57 @@ type DownloadItem = {
   href?: string;
 };
 
-const downloads: DownloadItem[] = [
-  { platform: "macOS", icon: "apple", pkg: "DMG", arch: "Apple Silicon / Intel", status: "beta", action: "申请内测", href: "#notify" },
-  { platform: "Windows", icon: "windows", pkg: "EXE / MSI", arch: "x64", status: "soon", action: "即将上线" },
-  { platform: "Linux", icon: "linux", pkg: "AppImage / DEB / RPM", arch: "x64 / ARM64", status: "soon", action: "即将上线" },
-  { platform: "Android", icon: "android", pkg: "APK", arch: "Mobile", status: "soon", action: "即将上线" },
-  { platform: "iOS", icon: "ios", pkg: "TestFlight / App Store", arch: "Mobile", status: "soon", action: "即将上线" },
+type GithubReleaseAsset = {
+  name?: string;
+  browser_download_url?: string;
+};
+
+type GithubLatestRelease = {
+  assets?: GithubReleaseAsset[];
+};
+
+const defaultDownloads: DownloadItem[] = [
+  { target: "macos", platform: "macOS", icon: "apple", pkg: "DMG", arch: "Apple Silicon / Intel", status: "later", action: "敬请期待" },
+  { target: "windows", platform: "Windows", icon: "windows", pkg: "EXE", arch: "x64", status: "soon", action: "暂无资源" },
+  { target: "linux", platform: "Linux", icon: "linux", pkg: "RPM", arch: "x64", status: "soon", action: "暂无资源" },
+  { target: "android", platform: "Android", icon: "android", pkg: "APK", arch: "Mobile", status: "soon", action: "即将支持" },
+  { target: "ios", platform: "iOS", icon: "ios", pkg: "TestFlight / App Store", arch: "Mobile", status: "later", action: "敬请期待" },
 ];
 
-const statusLabel: Record<DownloadStatus, string> = { beta: "内测开放", soon: "即将上线" };
+const statusLabel: Record<DownloadStatus, string> = {
+  available: "已发布",
+  soon: "即将支持",
+  later: "敬请期待",
+};
+
+function getAssetLink(
+  assets: GithubReleaseAsset[],
+  predicate: (name: string) => boolean,
+): string | undefined {
+  const hit = assets.find((asset) => {
+    const name = asset.name?.toLowerCase();
+    return typeof name === "string" && predicate(name);
+  });
+  return hit?.browser_download_url;
+}
+
+function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
+  const windowsHref = getAssetLink(assets, (name) => name.endsWith(".exe"));
+  const linuxHref = getAssetLink(
+    assets,
+    (name) => name.endsWith(".rpm") && (name.includes("x64") || name.includes("amd64")),
+  );
+
+  return defaultDownloads.map((item) => {
+    if (item.target === "windows" && windowsHref) {
+      return { ...item, status: "available", action: "立即下载", href: windowsHref };
+    }
+    if (item.target === "linux" && linuxHref) {
+      return { ...item, status: "available", action: "立即下载", href: linuxHref };
+    }
+    return item;
+  });
+}
 
 /* ─── Small Components ─── */
 function Icon({ name, className }: { name: keyof typeof icons; className?: string }) {
@@ -271,6 +319,40 @@ function RevealGroup({ children }: { children: ReactNode }) {
 /* ─── App ─── */
 export default function App() {
   const { theme, toggle } = useTheme();
+  const [downloads, setDownloads] = useState<DownloadItem[]>(defaultDownloads);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadReleaseAssets() {
+      try {
+        const response = await fetch(RELEASE_API_URL, {
+          signal: controller.signal,
+          headers: {
+            Accept: "application/vnd.github+json",
+          },
+        });
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = (await response.json()) as GithubLatestRelease;
+        if (!Array.isArray(payload.assets)) {
+          return;
+        }
+        setDownloads(resolveDownloads(payload.assets));
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          console.warn("[AscendAny] Failed to load release assets.", error);
+        }
+      }
+    }
+
+    void loadReleaseAssets();
+    return () => {
+      controller.abort();
+    };
+  }, []);
 
   return (
     <div className="site-shell" id="top">
@@ -466,18 +548,23 @@ export default function App() {
                     <strong className="download-platform">{d.platform}</strong>
                     <span className="download-arch">{d.arch}</span>
                     <span className="download-pkg">{d.pkg}</span>
-                    {d.status === "soon" ? (
-                      <span className="download-btn download-btn--disabled">{d.action}</span>
-                    ) : (
-                      <a className="download-btn download-btn--active" href={d.href}>
+                    {d.status === "available" && d.href ? (
+                      <a
+                        className="download-btn download-btn--active"
+                        href={d.href}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         {d.action}
                       </a>
+                    ) : (
+                      <span className="download-btn download-btn--disabled">{d.action}</span>
                     )}
                   </article>
                 ))}
               </div>
               <p className="download-note" id="notify">
-                目前优先开放 macOS 内测，Windows、Linux、Android 与 iOS 将在后续版本发布时逐步开放下载。
+                Windows EXE 与 Linux RPM (x64) 会在 GitHub Releases 发布后自动开放下载；Android 即将支持，macOS 与 iOS 敬请期待。
               </p>
             </section>
           </RevealGroup>

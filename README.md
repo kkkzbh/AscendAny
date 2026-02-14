@@ -147,6 +147,19 @@ pnpm --filter @ascendany/web dev
 pnpm --filter @ascendany/web build
 ```
 
+### 下载中心 Release 源配置
+
+`apps/web` 下载区会读取 GitHub 最新正式版 Release（`/releases/latest`），自动匹配：
+- Windows：`.exe`
+- Linux：`.rpm`（文件名需包含 `x64` 或 `amd64`）
+
+可通过环境变量覆盖默认仓库（默认 `kkkzbh/AscendAny`）：
+
+```bash
+VITE_RELEASE_OWNER=kkkzbh
+VITE_RELEASE_REPO=AscendAny
+```
+
 ### GitHub Pages 自动发布
 
 仓库已提供 GitHub Actions 工作流：`.github/workflows/deploy-web-pages.yml`。
@@ -154,3 +167,23 @@ pnpm --filter @ascendany/web build
 - 发布触发：`main` 分支有前端相关变更时自动触发（也支持手动 `workflow_dispatch`）。
 - 发布地址：`https://<GitHub 用户名>.github.io/AscendAny/`（仓库级 Pages）。
 - 仓库设置：`Settings -> Pages -> Source` 选择 `GitHub Actions`。
+
+## 桌面端 Release（Windows EXE + Linux RPM x64）
+
+仓库已提供发布工作流：`.github/workflows/release-desktop.yml`。
+
+- 触发方式：推送标签 `v*`（如 `v0.2.0`）。
+- 产物：
+  - Windows：`exe`（x64）
+  - Linux：`rpm`（x64）
+- 产物会自动上传到对应的 GitHub Release。
+
+本地手动打包命令：
+
+```bash
+# Windows EXE x64
+pnpm --filter @ascendany/desktop dist:win:x64
+
+# Linux RPM x64
+pnpm --filter @ascendany/desktop dist:linux:rpm:x64
+```

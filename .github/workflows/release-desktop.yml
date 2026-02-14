@@ -1,0 +1,127 @@
+name: Release Desktop Packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    name: Build Windows EXE x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop package (Windows EXE x64)
+        run: pnpm --filter @ascendany/desktop dist:win:x64
+
+      - name: Collect Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          Get-ChildItem -Path apps/desktop/release -Filter *.exe -Recurse | Copy-Item -Destination release-assets -Force
+          if (-not (Get-ChildItem -Path release-assets -Filter *.exe)) {
+            throw "No .exe artifact found in apps/desktop/release"
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-win-exe
+          path: release-assets/*.exe
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux RPM x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install rpm tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libcrypt1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop package (Linux RPM x64)
+        run: pnpm --filter @ascendany/desktop dist:linux:rpm:x64
+
+      - name: Collect Linux artifacts
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find apps/desktop/release -type f -name "*.rpm" -exec cp {} release-assets/ \;
+          shopt -s nullglob
+          files=(release-assets/*.rpm)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No .rpm artifact found in apps/desktop/release" >&2
+            exit 1
+          fi
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-rpm
+          path: release-assets/*.rpm
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-windows
+      - build-linux
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Verify downloaded artifacts
+        run: ls -la release-assets
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/*.exe
+            release-assets/*.rpm
