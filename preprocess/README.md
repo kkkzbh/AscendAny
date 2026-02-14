@@ -93,6 +93,11 @@ uv run --python .venv/bin/python -m preprocess.cli link-actors --dry-run
 
 - 解析编码按顺序尝试：`utf-8` → `utf-8-sig` → `gb18030`。
 - CSV/XLSX 字段统一 `strip()`，去除尾部 `\t`。
+- 默认指标口径仅保留 `函数题` 与 `编程题`（可通过 `metrics.included_problem_kinds` 配置）。
+- 对 `datastructure` 随机组卷，若无法获得“每个学生抽中的题目集合”，知识分采用 `max_passed_fill_unanswered`：
+  - 每个题型槽位数优先取 HTML 题池 `(n选k)`；
+  - 缺失时回退到该题型“本场最大过题数”；
+  - 学生可见题不足槽位的部分补为未作答，并在指标 `details` 标注降级置信度。
 - 提交记录默认保留 actor 信息（`actor_source/actor_external_id/actor_name`），不强制绑定 `students`。
 - 每场考试导入以事务为边界；失败回滚并写入 `ingest_exam_runs`。
 - 每次导入结束会自动清理“无身份映射的学生”残留数据（历史错误映射遗留）。
