@@ -30,9 +30,25 @@ class ChatReplyRequest(BaseModel):
     summary: str = ""
     providerType: ProviderType = "server_default"
     providerConfig: ClientProviderConfig | None = None
+    roleId: str | None = None
 
 
 class ChatReplyResponse(BaseModel):
     reply: str
     summary: str
+    provider: ProviderType
+
+
+class AutoAnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    studentId: str | None = None
+    ptaNickname: str | None = None
+    providerType: ProviderType = "server_default"
+    providerConfig: ClientProviderConfig | None = None
+    roleId: str | None = None
+
+
+class AutoAnalysisResponse(BaseModel):
+    reply: str
     provider: ProviderType
