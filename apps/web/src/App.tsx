@@ -279,17 +279,20 @@ function getAssetLink(
 }
 
 function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
+  const hasX64Alias = (name: string) =>
+    name.includes("x64") || name.includes("amd64") || name.includes("x86_64");
+
   const windowsHref = getAssetLink(
     assets,
     (name) =>
       name.endsWith(".exe")
       && (name.includes("win") || name.includes("windows"))
-      && (name.includes("x64") || name.includes("amd64"))
+      && hasX64Alias(name)
       && !name.includes("elevate"),
   );
   const linuxHref = getAssetLink(
     assets,
-    (name) => name.endsWith(".rpm") && (name.includes("x64") || name.includes("amd64")),
+    (name) => name.endsWith(".rpm") && hasX64Alias(name),
   );
 
   return defaultDownloads.map((item) => {
