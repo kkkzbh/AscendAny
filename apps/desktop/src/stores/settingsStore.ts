@@ -12,6 +12,7 @@ import {
   PROVIDER_ORDER,
   isProviderType,
 } from "@/types/settings";
+import { DEFAULT_ROLE_ID, BUILT_IN_ROLES } from "@/types/role";
 
 interface SettingsState extends AppSettings {
   isOpen: boolean;
@@ -23,6 +24,7 @@ interface SettingsState extends AppSettings {
   setActiveProvider: (p: ProviderType) => void;
   updateProvider: (type: ProviderType, patch: Partial<ModelProvider>) => void;
   syncProviderOptions: (payload: ModelProvidersResponsePayload) => void;
+  setActiveRole: (roleId: string) => void;
 }
 
 function isThemeMode(value: unknown): value is ThemeMode {
@@ -89,6 +91,7 @@ export const useSettingsStore = create<SettingsState>()(
       serverDefaultTarget: "openai",
       serverDefaultTargetLabel: "OpenAI",
       serverDefaultModel: "",
+      activeRole: DEFAULT_ROLE_ID,
       isOpen: false,
 
       openSettings: () => set({ isOpen: true }),
@@ -101,6 +104,7 @@ export const useSettingsStore = create<SettingsState>()(
           serverDefaultTarget: "openai",
           serverDefaultTargetLabel: "OpenAI",
           serverDefaultModel: "",
+          activeRole: DEFAULT_ROLE_ID,
           isOpen: false,
         }),
       setTheme: (theme) => set({ theme }),
@@ -180,6 +184,12 @@ export const useSettingsStore = create<SettingsState>()(
           };
         }),
 
+      setActiveRole: (roleId) =>
+        set(() => {
+          const valid = BUILT_IN_ROLES.some((r) => r.id === roleId);
+          return { activeRole: valid ? roleId : DEFAULT_ROLE_ID };
+        }),
+
     }),
     {
       name: "ascendany_settings_guest",
@@ -190,6 +200,7 @@ export const useSettingsStore = create<SettingsState>()(
         serverDefaultTarget: state.serverDefaultTarget,
         serverDefaultTargetLabel: state.serverDefaultTargetLabel,
         serverDefaultModel: state.serverDefaultModel,
+        activeRole: state.activeRole,
       }),
       merge: (persistedState, currentState) => {
         const persisted = (persistedState ?? {}) as Partial<SettingsState>;
@@ -223,6 +234,11 @@ export const useSettingsStore = create<SettingsState>()(
             typeof persisted.serverDefaultModel === "string"
               ? persisted.serverDefaultModel
               : currentState.serverDefaultModel,
+          activeRole:
+            typeof persisted.activeRole === "string" &&
+            BUILT_IN_ROLES.some((r) => r.id === persisted.activeRole)
+              ? persisted.activeRole
+              : currentState.activeRole,
         };
       },
     },

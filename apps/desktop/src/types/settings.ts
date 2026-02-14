@@ -32,6 +32,8 @@ export interface AppSettings {
   serverDefaultTargetLabel: string;
   /** Model name configured on backend for current server default target */
   serverDefaultModel: string;
+  /** Currently selected role id */
+  activeRole: string;
 }
 
 export const DEFAULT_PROVIDERS: Record<ProviderType, ModelProvider> = {
