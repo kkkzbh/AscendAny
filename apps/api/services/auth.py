@@ -46,6 +46,21 @@ class AuthService:
         self._settings = settings
         self._repository = repository
 
+    async def _fetch_account_by_username(self, username: str) -> AccountRow | None:
+        fetcher = getattr(self._repository, "fetch_account_by_username", None)
+        if callable(fetcher):
+            return await fetcher(username)
+
+        pool = getattr(self._repository, "_pool", None)
+        if pool is not None:
+            return await ApiRepository(pool).fetch_account_by_username(username)
+
+        raise AppError(
+            status_code=500,
+            code="AUTH_REPOSITORY_INCOMPATIBLE",
+            message="Auth repository does not support username lookup.",
+        )
+
     def get_policy(self) -> AuthPolicyResponse:
         policy = self._resolve_signup_policy()
         require_phone = policy == "require_phone_and_email"
@@ -125,7 +140,7 @@ class AuthService:
         self._ensure_enabled()
 
         username = self._normalize_username(payload.username)
-        account = await self._repository.fetch_account_by_username(username)
+        account = await self._fetch_account_by_username(username)
         if account is None:
             raise AppError(
                 status_code=401,
