@@ -3,6 +3,7 @@ name: Deploy Web to GitHub Pages
 on:
   push:
     branches:
+      - master
       - main
     paths:
       - "apps/web/**"

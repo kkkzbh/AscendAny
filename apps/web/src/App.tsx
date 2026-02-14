@@ -254,11 +254,11 @@ type GithubLatestRelease = {
 };
 
 const defaultDownloads: DownloadItem[] = [
-  { target: "macos", platform: "macOS", icon: "apple", pkg: "DMG", arch: "Apple Silicon / Intel", status: "later", action: "敬请期待" },
-  { target: "windows", platform: "Windows", icon: "windows", pkg: "EXE", arch: "x64", status: "soon", action: "暂无资源" },
   { target: "linux", platform: "Linux", icon: "linux", pkg: "RPM", arch: "x64", status: "soon", action: "暂无资源" },
+  { target: "windows", platform: "Windows", icon: "windows", pkg: "EXE", arch: "x64", status: "soon", action: "暂无资源" },
   { target: "android", platform: "Android", icon: "android", pkg: "APK", arch: "Mobile", status: "soon", action: "即将支持" },
   { target: "ios", platform: "iOS", icon: "ios", pkg: "TestFlight / App Store", arch: "Mobile", status: "later", action: "敬请期待" },
+  { target: "macos", platform: "macOS", icon: "apple", pkg: "DMG", arch: "Apple Silicon / Intel", status: "later", action: "敬请期待" },
 ];
 
 const statusLabel: Record<DownloadStatus, string> = {
@@ -279,7 +279,14 @@ function getAssetLink(
 }
 
 function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
-  const windowsHref = getAssetLink(assets, (name) => name.endsWith(".exe"));
+  const windowsHref = getAssetLink(
+    assets,
+    (name) =>
+      name.endsWith(".exe")
+      && (name.includes("win") || name.includes("windows"))
+      && (name.includes("x64") || name.includes("amd64"))
+      && !name.includes("elevate"),
+  );
   const linuxHref = getAssetLink(
     assets,
     (name) => name.endsWith(".rpm") && (name.includes("x64") || name.includes("amd64")),
