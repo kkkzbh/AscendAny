@@ -2,30 +2,24 @@
  * Import-specific API functions.
  */
 
-import { apiFetch } from "./client";
+import { apiFetch, getStoredToken, apiUrl } from "./client";
 
 // ── Types ────────────────────────────────────────────────
 
-export interface DiscoverFileItem {
-  fileRole: string;
-  relativePath: string;
-  sha256: string;
-}
+export const EXAM_TYPES = [
+  { value: "datastructure", label: "数据结构" },
+  { value: "pta_icpc", label: "PTA ICPC" },
+  { value: "pta_ioi", label: "PTA IOI" },
+] as const;
 
-export interface DiscoverExamItem {
+export type ExamTypeValue = (typeof EXAM_TYPES)[number]["value"];
+
+export interface UploadResponse {
   examType: string;
+  examName: string;
   sourcePath: string;
-  fingerprint: string;
   fileCount: number;
-  hasChanged: boolean;
-  files: DiscoverFileItem[];
-}
-
-export interface DiscoverResponse {
-  examTypes: string[];
-  exams: DiscoverExamItem[];
-  totalCount: number;
-  changedCount: number;
+  message: string;
 }
 
 export interface ImportRunRequest {
@@ -70,13 +64,56 @@ export interface IngestHistoryResponse {
 
 // ── API calls ────────────────────────────────────────────
 
-export function discoverExams(examTypes?: string[]): Promise<DiscoverResponse> {
-  const params = new URLSearchParams();
-  if (examTypes?.length) {
-    for (const t of examTypes) params.append("examType", t);
-  }
-  const qs = params.toString();
-  return apiFetch(`/api/v1/import/discover${qs ? `?${qs}` : ""}`);
+/**
+ * Upload a .zip file with the given exam type.
+ * Uses raw fetch (FormData) since apiFetch auto-sets Content-Type.
+ */
+export async function uploadExamZip(
+  file: File,
+  examType: string,
+  onProgress?: (pct: number) => void,
+): Promise<UploadResponse> {
+  const token = getStoredToken();
+  const url = apiUrl("/api/v1/import/upload");
+
+  return new Promise<UploadResponse>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    });
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new Error("无法解析响应"));
+        }
+      } else {
+        let msg = `HTTP ${xhr.status}`;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          msg = body?.detail ?? body?.error?.message ?? msg;
+        } catch {
+          // ignore
+        }
+        reject(new Error(msg));
+      }
+    });
+
+    xhr.addEventListener("error", () => reject(new Error("网络错误")));
+    xhr.addEventListener("abort", () => reject(new Error("上传已取消")));
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("examType", examType);
+    xhr.send(form);
+  });
 }
 
 export function startImportRun(req: ImportRunRequest): Promise<ImportRunResponse> {

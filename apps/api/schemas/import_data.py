@@ -6,28 +6,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-# ── Discover ──────────────────────────────────────────────
+# ── Upload ─────────────────────────────────────────────────
 
-class DiscoverFileItem(BaseModel):
-    fileRole: str
-    relativePath: str
-    sha256: str
-
-
-class DiscoverExamItem(BaseModel):
+class UploadResponse(BaseModel):
     examType: str
+    examName: str
     sourcePath: str
-    fingerprint: str
     fileCount: int
-    hasChanged: bool
-    files: list[DiscoverFileItem] = Field(default_factory=list)
-
-
-class DiscoverResponse(BaseModel):
-    examTypes: list[str]
-    exams: list[DiscoverExamItem]
-    totalCount: int
-    changedCount: int
+    message: str
 
 
 # ── Import Run ────────────────────────────────────────────

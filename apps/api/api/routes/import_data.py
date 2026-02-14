@@ -1,6 +1,13 @@
 """Import / preprocess management API routes.
 
 All endpoints require admin authentication.
+
+Flow:
+  1. POST /import/upload  — Upload .zip, select examType → extract to practice_root
+  2. POST /import/run     — Run incremental import (SSE progress)
+  3. POST /import/link-actors — Link actors (SSE progress)
+  4. GET  /import/history  — Ingest run history
+  5. GET  /import/tasks    — In-memory tasks (debug)
 """
 
 from __future__ import annotations
@@ -8,30 +15,31 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
 import sys
+import tempfile
 import threading
+import zipfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 
-from ..deps import get_admin_account, get_repository, get_settings
-from ...core.config import Settings
+from ..deps import get_admin_account, get_repository
 from ...schemas.import_data import (
-    DiscoverExamItem,
-    DiscoverFileItem,
-    DiscoverResponse,
     ImportRunRequest,
     ImportRunResponse,
     IngestHistoryItem,
     IngestHistoryResponse,
     LinkActorsRequest,
     LinkActorsResponse,
+    UploadResponse,
 )
 from ...services.auth import AuthenticatedAccount
-from ...services.import_task import ImportTaskManager, TaskEvent, get_task_manager
+from ...services.import_task import TaskEvent, get_task_manager
 
 logger = logging.getLogger(__name__)
 
@@ -39,95 +47,101 @@ router = APIRouter(tags=["import"], prefix="/import")
 
 # ── helpers ───────────────────────────────────────────────
 
-# Add the project root to sys.path so we can import the preprocess package
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+VALID_EXAM_TYPES = {"datastructure", "pta_icpc", "pta_ioi"}
+
 
 def _load_preprocess_settings() -> Any:
-    """Load preprocess.config.Settings using the preprocess config."""
     from preprocess.config import load_settings as pp_load_settings
-
     return pp_load_settings()
 
 
 def _create_preprocess_connection(pp_settings: Any) -> Any:
-    """Create a synchronous psycopg connection for the preprocess module."""
     from preprocess.db import connect as pp_connect
-
     return pp_connect(pp_settings)
 
 
-# ── GET /import/discover ──────────────────────────────────
+def _get_practice_root() -> Path:
+    env_root = os.getenv("PRACTICE_DATA_ROOT")
+    if env_root:
+        return Path(env_root)
+    pp_settings = _load_preprocess_settings()
+    return pp_settings.practice_root
 
 
-@router.get("/discover", response_model=DiscoverResponse)
-async def discover_exams(
-    exam_type: list[str] | None = Query(default=None, alias="examType"),
+# ── POST /import/upload ───────────────────────────────────
+
+
+@router.post("/upload", response_model=UploadResponse)
+async def upload_exam_zip(
+    file: UploadFile = File(...),
+    examType: str = Form(...),
     _admin: AuthenticatedAccount = Depends(get_admin_account),
-) -> DiscoverResponse:
-    """Scan the practice directory and return all exam units with change status."""
+) -> UploadResponse:
+    """Upload a .zip containing exam data.
 
-    def _run() -> DiscoverResponse:
-        from preprocess.discover import discover_exam_units
-
-        pp_settings = _load_preprocess_settings()
-        fingerprint_roles = set(pp_settings.ingest.fingerprint_roles)
-        discovered = discover_exam_units(
-            practice_root=pp_settings.practice_root,
-            exam_types=exam_type,
-            fingerprint_roles=fingerprint_roles,
+    Extracts to ``practice_root/{examType}/{zip_stem}/``.
+    """
+    if examType not in VALID_EXAM_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的考试类型 '{examType}'，可选: {', '.join(sorted(VALID_EXAM_TYPES))}",
         )
 
-        # Compare with DB to determine change status
-        conn = _create_preprocess_connection(pp_settings)
-        try:
-            from preprocess.load import Repository
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="只支持 .zip 文件")
 
-            repo = Repository(conn)
-            exam_types_set: set[str] = set()
-            items: list[DiscoverExamItem] = []
-            changed_count = 0
+    exam_name = Path(file.filename).stem
+    practice_root = await asyncio.to_thread(_get_practice_root)
+    target_dir = practice_root / examType / exam_name
 
-            for unit in discovered:
-                exam_types_set.add(unit.exam_type)
-                previous_fp = repo.get_latest_success_fingerprint(
-                    unit.exam_type, unit.source_path
-                )
-                has_changed = previous_fp != unit.fingerprint
-                if has_changed:
-                    changed_count += 1
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            content = await file.read()
+            tmp.write(content)
 
-                files = [
-                    DiscoverFileItem(
-                        fileRole=f.file_role,
-                        relativePath=f.relative_path,
-                        sha256=f.sha256,
-                    )
-                    for f in unit.files
-                ]
-                items.append(
-                    DiscoverExamItem(
-                        examType=unit.exam_type,
-                        sourcePath=unit.source_path,
-                        fingerprint=unit.fingerprint,
-                        fileCount=len(unit.files),
-                        hasChanged=has_changed,
-                        files=files,
-                    )
-                )
-        finally:
-            conn.close()
+        if not zipfile.is_zipfile(tmp_path):
+            raise HTTPException(status_code=400, detail="上传的文件不是有效的 ZIP 文件")
 
-        return DiscoverResponse(
-            examTypes=sorted(exam_types_set),
-            exams=items,
-            totalCount=len(items),
-            changedCount=changed_count,
-        )
+        def _extract() -> tuple[str, int]:
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
 
-    return await asyncio.to_thread(_run)
+            with zipfile.ZipFile(tmp_path, "r") as zf:
+                for member in zf.namelist():
+                    member_path = (target_dir / member).resolve()
+                    if not str(member_path).startswith(str(target_dir.resolve())):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"ZIP 中包含不安全的路径: {member}",
+                        )
+                zf.extractall(target_dir)
+                file_count = len([n for n in zf.namelist() if not n.endswith("/")])
+
+            return str(target_dir.relative_to(practice_root)), file_count
+
+        source_path, file_count = await asyncio.to_thread(_extract)
+
+    finally:
+        if tmp_path:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    return UploadResponse(
+        examType=examType,
+        examName=exam_name,
+        sourcePath=source_path,
+        fileCount=file_count,
+        message=f"已上传并解压到 {source_path}，共 {file_count} 个文件",
+    )
 
 
 # ── POST /import/run ──────────────────────────────────────
@@ -138,14 +152,13 @@ async def start_import_run(
     body: ImportRunRequest,
     _admin: AuthenticatedAccount = Depends(get_admin_account),
 ) -> ImportRunResponse:
-    """Start an incremental import task. Returns a run_id for SSE streaming."""
     tm = get_task_manager()
     run_id = tm.create_task("import")
 
     def _worker() -> None:
         try:
             tm.mark_running(run_id)
-            tm.emit_log(run_id, "info", "Starting incremental import ...")
+            tm.emit_log(run_id, "info", "正在启动增量导入 ...")
 
             pp_settings = _load_preprocess_settings()
             conn = _create_preprocess_connection(pp_settings)
@@ -159,7 +172,11 @@ async def start_import_run(
                     if event_type == "done":
                         tm.emit_done(run_id, data)
                     elif event_type == "log":
-                        tm.emit_log(run_id, data.get("level", "info"), data.get("message", ""))
+                        tm.emit_log(
+                            run_id,
+                            data.get("level", "info"),
+                            data.get("message", ""),
+                        )
                     elif event_type == "progress":
                         tm.emit_progress(
                             run_id,
@@ -193,7 +210,7 @@ async def start_import_run(
 
     return ImportRunResponse(
         runId=run_id,
-        message="Import task started. Use SSE endpoint to monitor progress.",
+        message="导入任务已启动",
     )
 
 
@@ -205,7 +222,6 @@ async def stream_import_run(
     run_id: str,
     _admin: AuthenticatedAccount = Depends(get_admin_account),
 ) -> StreamingResponse:
-    """SSE stream for an import task."""
     tm = get_task_manager()
     return StreamingResponse(
         tm.event_stream(run_id),
@@ -226,14 +242,13 @@ async def start_link_actors(
     body: LinkActorsRequest,
     _admin: AuthenticatedAccount = Depends(get_admin_account),
 ) -> LinkActorsResponse:
-    """Start an actor-linking task. Returns a run_id for SSE streaming."""
     tm = get_task_manager()
     run_id = tm.create_task("link-actors")
 
     def _worker() -> None:
         try:
             tm.mark_running(run_id)
-            tm.emit_log(run_id, "info", "Starting actor linking ...")
+            tm.emit_log(run_id, "info", "正在启动 Actor 关联 ...")
 
             pp_settings = _load_preprocess_settings()
             conn = _create_preprocess_connection(pp_settings)
@@ -248,7 +263,11 @@ async def start_link_actors(
                     if event_type == "done":
                         tm.emit_done(run_id, data)
                     elif event_type == "log":
-                        tm.emit_log(run_id, data.get("level", "info"), data.get("message", ""))
+                        tm.emit_log(
+                            run_id,
+                            data.get("level", "info"),
+                            data.get("message", ""),
+                        )
                     elif event_type == "progress":
                         tm.emit_progress(
                             run_id,
@@ -277,7 +296,7 @@ async def start_link_actors(
 
     return LinkActorsResponse(
         runId=run_id,
-        message="Actor linking task started. Use SSE endpoint to monitor progress.",
+        message="Actor 关联任务已启动",
     )
 
 
@@ -289,7 +308,6 @@ async def stream_link_actors(
     run_id: str,
     _admin: AuthenticatedAccount = Depends(get_admin_account),
 ) -> StreamingResponse:
-    """SSE stream for a link-actors task."""
     tm = get_task_manager()
     return StreamingResponse(
         tm.event_stream(run_id),
@@ -311,7 +329,6 @@ async def get_ingest_history(
     _admin: AuthenticatedAccount = Depends(get_admin_account),
     repository=Depends(get_repository),
 ) -> IngestHistoryResponse:
-    """Return recent ingest run history."""
     query = """
         SELECT ingest_run_id, status, started_at, finished_at, meta
         FROM ascendany.ingest_runs
@@ -361,6 +378,5 @@ async def get_ingest_history(
 async def list_active_tasks(
     _admin: AuthenticatedAccount = Depends(get_admin_account),
 ) -> list[dict[str, Any]]:
-    """List recent in-memory tasks (for debugging/monitoring)."""
     tm = get_task_manager()
     return tm.list_tasks()

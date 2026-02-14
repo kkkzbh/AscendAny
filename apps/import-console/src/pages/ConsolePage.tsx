@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import type { AccountInfo } from "../hooks/useAuth";
 import { useSSEStream, type LogEntry } from "../hooks/useSSEStream";
 import {
-  discoverExams,
+  EXAM_TYPES,
+  uploadExamZip,
   startImportRun,
   startLinkActors,
   getIngestHistory,
-  type DiscoverExamItem,
-  type DiscoverResponse,
+  type UploadResponse,
   type IngestHistoryItem,
 } from "../api/import";
 import { HelpDrawer } from "../components/HelpDrawer";
@@ -24,10 +24,6 @@ function examLabel(type: string): string {
   return EXAM_TYPE_LABELS[type]?.label ?? type;
 }
 
-function examIcon(type: string): string {
-  return EXAM_TYPE_LABELS[type]?.icon ?? "📄";
-}
-
 /* ── Props ────────────────────────────────────────────── */
 
 interface Props {
@@ -39,15 +35,27 @@ interface Props {
 
 type Tab = "console" | "history";
 
+/* ── Upload state ─────────────────────────────────────── */
+
+interface UploadedExam {
+  examType: string;
+  examName: string;
+  sourcePath: string;
+  fileCount: number;
+}
+
 /* ── Main Component ───────────────────────────────────── */
 
 export function ConsolePage({ account, onLogout }: Props) {
-  // ── State ──
-  const [discover, setDiscover] = useState<DiscoverResponse | null>(null);
-  const [discoverLoading, setDiscoverLoading] = useState(false);
-  const [discoverError, setDiscoverError] = useState<string | null>(null);
-  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
+  // ── Upload state ──
+  const [selectedType, setSelectedType] = useState<string>(EXAM_TYPES[0].value);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedExams, setUploadedExams] = useState<UploadedExam[]>([]);
+
+  // ── Task state ──
   const [dryRun, setDryRun] = useState(false);
   const [force, setForce] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("console");
@@ -60,6 +68,7 @@ export function ConsolePage({ account, onLogout }: Props) {
 
   const stream = useSSEStream();
   const logEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-scroll log
   useEffect(() => {
@@ -73,59 +82,111 @@ export function ConsolePage({ account, onLogout }: Props) {
     }
   }, [helpOpen]);
 
-  // ── Discover ──
-  const handleDiscover = useCallback(async () => {
-    setDiscoverLoading(true);
-    setDiscoverError(null);
-    try {
-      const res = await discoverExams();
-      setDiscover(res);
-      // Auto-expand all types
-      setExpandedTypes(new Set(res.examTypes));
-      // Auto-select types with changed exams
-      const changedTypes = new Set(
-        res.exams.filter((e) => e.hasChanged).map((e) => e.examType),
-      );
-      setSelectedTypes(changedTypes);
-    } catch (err) {
-      setDiscoverError(err instanceof Error ? err.message : "扫描失败");
-    } finally {
-      setDiscoverLoading(false);
-    }
+  // ── Drag & Drop handlers ──
+  const handleDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
   }, []);
 
-  // Auto-discover on mount
-  useEffect(() => { handleDiscover(); }, [handleDiscover]);
+  const handleDragLeave = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback(async (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) => f.name.toLowerCase().endsWith(".zip"),
+    );
+    if (files.length === 0) {
+      setUploadError("请拖入 .zip 文件");
+      return;
+    }
+
+    await doUpload(files);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedType]);
+
+  const handleFileSelect = useCallback(async () => {
+    const files = fileInputRef.current?.files;
+    if (!files || files.length === 0) return;
+    await doUpload(Array.from(files));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedType]);
+
+  const doUpload = async (files: File[]) => {
+    setUploadError(null);
+    setUploading(true);
+    setUploadPct(0);
+
+    const results: UploadedExam[] = [];
+    try {
+      for (const file of files) {
+        setUploadPct(0);
+        const res: UploadResponse = await uploadExamZip(file, selectedType, (pct) => setUploadPct(pct));
+        results.push({
+          examType: res.examType,
+          examName: res.examName,
+          sourcePath: res.sourcePath,
+          fileCount: res.fileCount,
+        });
+      }
+      setUploadedExams((prev) => [...prev, ...results]);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "上传失败");
+    } finally {
+      setUploading(false);
+      setUploadPct(0);
+    }
+  };
+
+  // ── Remove uploaded exam from list ──
+  const removeUploaded = (idx: number) => {
+    setUploadedExams((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const clearUploaded = () => setUploadedExams([]);
 
   // ── Import ──
   const handleImport = useCallback(async () => {
     setTaskBusy(true);
     stream.clearLogs();
     try {
-      const examTypes = selectedTypes.size > 0 ? Array.from(selectedTypes) : null;
-      const res = await startImportRun({ examTypes, dryRun, force });
+      // Use types from uploaded exams if any, or selected type
+      const types = uploadedExams.length > 0
+        ? [...new Set(uploadedExams.map((e) => e.examType))]
+        : [selectedType];
+      const res = await startImportRun({ examTypes: types, dryRun, force });
       stream.connect(res.runId, "/api/v1/import/run/{run_id}/stream");
     } catch (err) {
       stream.clearLogs();
       setTaskBusy(false);
       alert(err instanceof Error ? err.message : "启动导入失败");
     }
-  }, [selectedTypes, dryRun, force, stream]);
+  }, [uploadedExams, selectedType, dryRun, force, stream]);
 
   // ── Link Actors ──
   const handleLinkActors = useCallback(async () => {
     setTaskBusy(true);
     stream.clearLogs();
     try {
-      const examTypes = selectedTypes.size > 0 ? Array.from(selectedTypes) : null;
-      const res = await startLinkActors({ examTypes, dryRun });
+      const types = uploadedExams.length > 0
+        ? [...new Set(uploadedExams.map((e) => e.examType))]
+        : [selectedType];
+      const res = await startLinkActors({ examTypes: types, dryRun });
       stream.connect(res.runId, "/api/v1/import/link-actors/{run_id}/stream");
     } catch (err) {
       stream.clearLogs();
       setTaskBusy(false);
       alert(err instanceof Error ? err.message : "启动关联失败");
     }
-  }, [selectedTypes, dryRun, stream]);
+  }, [uploadedExams, selectedType, dryRun, stream]);
 
   // Reset busy when stream done/error
   useEffect(() => {
@@ -151,31 +212,6 @@ export function ConsolePage({ account, onLogout }: Props) {
     if (activeTab === "history") loadHistory();
   }, [activeTab, loadHistory]);
 
-  // ── Toggle helpers ──
-  const toggleType = (type: string) => {
-    setSelectedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type); else next.add(type);
-      return next;
-    });
-  };
-
-  const toggleExpand = (type: string) => {
-    setExpandedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type); else next.add(type);
-      return next;
-    });
-  };
-
-  // Group exams by type
-  const examsByType: Record<string, DiscoverExamItem[]> = {};
-  if (discover) {
-    for (const exam of discover.exams) {
-      (examsByType[exam.examType] ??= []).push(exam);
-    }
-  }
-
   const isStreaming = stream.status === "connecting" || stream.status === "streaming";
 
   return (
@@ -196,87 +232,94 @@ export function ConsolePage({ account, onLogout }: Props) {
       </header>
 
       <div className="console-body">
-        {/* ── Left Panel: Discover ── */}
-        <aside className="panel-discover">
+        {/* ── Left Panel: Upload ── */}
+        <aside className="panel-upload">
           <div className="panel-header">
-            <h2>📂 考试发现</h2>
-            <button
-              className="btn btn-sm btn-primary"
-              onClick={handleDiscover}
-              disabled={discoverLoading}
-            >
-              {discoverLoading ? "扫描中..." : "🔄 刷新扫描"}
-            </button>
+            <h2>📤 上传考试数据</h2>
           </div>
 
-          {discoverError && (
-            <div className="alert alert-error">{discoverError}</div>
-          )}
+          {/* Exam type selector */}
+          <div className="upload-type-selector">
+            <label className="upload-label">考试类型</label>
+            <select
+              className="upload-select"
+              value={selectedType}
+              onChange={(e) => setSelectedType(e.target.value)}
+              disabled={uploading}
+            >
+              {EXAM_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </div>
 
-          {discover && (
-            <div className="discover-summary">
-              共 <strong>{discover.totalCount}</strong> 场考试，
-              <strong className="text-changed">{discover.changedCount}</strong> 场有变更
+          {/* Drop zone */}
+          <div
+            className={`drop-zone ${dragOver ? "drop-zone-active" : ""} ${uploading ? "drop-zone-uploading" : ""}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => !uploading && fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip"
+              multiple
+              style={{ display: "none" }}
+              onChange={handleFileSelect}
+            />
+            {uploading ? (
+              <div className="drop-zone-uploading-content">
+                <div className="upload-spinner" />
+                <span>上传中 {uploadPct}%</span>
+                <div className="upload-progress-bar">
+                  <div className="upload-progress-fill" style={{ width: `${uploadPct}%` }} />
+                </div>
+              </div>
+            ) : (
+              <>
+                <span className="drop-zone-icon">📁</span>
+                <span className="drop-zone-text">拖入 .zip 文件</span>
+                <span className="drop-zone-hint">或点击选择文件</span>
+              </>
+            )}
+          </div>
+
+          {uploadError && (
+            <div className="alert alert-error" style={{ margin: "0 16px" }}>
+              {uploadError}
             </div>
           )}
 
-          <div className="exam-type-list">
-            {(discover?.examTypes ?? []).map((type) => {
-              const exams = examsByType[type] ?? [];
-              const changedCount = exams.filter((e) => e.hasChanged).length;
-              const isExpanded = expandedTypes.has(type);
-              const isSelected = selectedTypes.has(type);
-
-              return (
-                <div key={type} className="exam-type-group">
-                  <div className="exam-type-header">
-                    <label className="exam-type-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => toggleType(type)}
-                      />
-                      <span className="exam-type-icon">{examIcon(type)}</span>
-                      <span className="exam-type-label">{examLabel(type)}</span>
-                    </label>
-                    <span className="exam-type-stats">
-                      {changedCount > 0 && (
-                        <span className="badge badge-changed">{changedCount} 变更</span>
-                      )}
-                      <span className="badge badge-total">{exams.length} 场</span>
+          {/* Uploaded exams list */}
+          {uploadedExams.length > 0 && (
+            <div className="uploaded-list">
+              <div className="uploaded-list-header">
+                <span>已上传 ({uploadedExams.length})</span>
+                <button className="btn btn-ghost btn-xs" onClick={clearUploaded}>清空</button>
+              </div>
+              {uploadedExams.map((exam, idx) => (
+                <div key={idx} className="uploaded-item">
+                  <span className="uploaded-item-icon">
+                    {EXAM_TYPE_LABELS[exam.examType]?.icon ?? "📄"}
+                  </span>
+                  <div className="uploaded-item-info">
+                    <span className="uploaded-item-name">{exam.examName}</span>
+                    <span className="uploaded-item-meta">
+                      {examLabel(exam.examType)} · {exam.fileCount} 文件
                     </span>
-                    <button
-                      className="btn btn-icon"
-                      onClick={() => toggleExpand(type)}
-                      title={isExpanded ? "折叠" : "展开"}
-                    >
-                      {isExpanded ? "▾" : "▸"}
-                    </button>
                   </div>
-
-                  {isExpanded && (
-                    <div className="exam-list">
-                      {exams.map((exam) => (
-                        <div
-                          key={exam.sourcePath}
-                          className={`exam-item ${exam.hasChanged ? "exam-changed" : "exam-synced"}`}
-                        >
-                          <span className="exam-status-dot">{exam.hasChanged ? "🟡" : "🟢"}</span>
-                          <span className="exam-path" title={exam.sourcePath}>
-                            {exam.sourcePath.split("/").pop()}
-                          </span>
-                          <span className="exam-file-count">{exam.fileCount} 文件</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <button
+                    className="btn btn-icon btn-xs"
+                    onClick={() => removeUploaded(idx)}
+                    title="移除"
+                  >
+                    ✕
+                  </button>
                 </div>
-              );
-            })}
-          </div>
-
-          {!discoverLoading && discover?.totalCount === 0 && (
-            <div className="empty-message">未发现任何考试数据</div>
+              ))}
+            </div>
           )}
         </aside>
 
@@ -418,7 +461,7 @@ export function ConsolePage({ account, onLogout }: Props) {
                 <div className="log-body">
                   {stream.logs.length === 0 && (
                     <div className="log-empty">
-                      点击「开始增量导入」或「关联 Actor」开始操作，日志将在此处实时显示...
+                      上传 .zip 后点击「开始增量导入」，日志将在此处实时显示...
                     </div>
                   )}
                   {stream.logs.map((log, i) => (
