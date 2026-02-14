@@ -393,6 +393,31 @@ body {
   gap: 6px;
 }
 
+/* ---- Avatar cropper dialog ---- */
+
+.avatar-cropper-dialog {
+  border: 1px solid var(--border-subtle);
+  background: var(--settings-dialog-background);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: var(--settings-dialog-shadow);
+}
+
+.avatar-crop-area {
+  max-height: 52vh;
+  background: var(--surface-soft);
+}
+
+/* Override react-image-crop default colours to match app theme */
+.avatar-crop-area .ReactCrop__crop-selection {
+  border-color: var(--accent-500);
+}
+
+.avatar-edit-wrapper {
+  border-radius: 50%;
+  overflow: hidden;
+}
+
 .auth-root {
   display: flex;
   align-items: center;
