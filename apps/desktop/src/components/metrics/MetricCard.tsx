@@ -7,6 +7,10 @@ interface MetricCardProps {
   delta: number;
 }
 
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   const normalized = hex.replace("#", "").trim();
   if (normalized.length !== 6) {
@@ -21,21 +25,27 @@ function hexToRgba(hex: string, alpha: number): string {
 export function MetricCard({ name, value, delta }: MetricCardProps) {
   const label = METRIC_LABELS[name];
   const color = METRIC_COLORS[name];
-  const roundedValue = Math.round(value);
+  const roundedValue = clampPercent(Math.round(value));
   const roundedDelta = Math.round(delta);
+  const previousValue = clampPercent(roundedValue - roundedDelta);
+  const solidWidth = roundedDelta < 0 ? roundedValue : previousValue;
+  const positiveSegmentWidth =
+    roundedDelta > 0 ? Math.max(0, roundedValue - previousValue) : 0;
+  const negativeSegmentWidth =
+    roundedDelta < 0 ? Math.max(0, previousValue - roundedValue) : 0;
   const deltaText = roundedDelta > 0 ? `+${roundedDelta}` : `${roundedDelta}`;
   const deltaStyle =
     roundedDelta > 0
       ? {
-          color,
+          color: "var(--rating-positive)",
           borderColor: "transparent",
-          backgroundColor: hexToRgba(color, 0.14),
+          backgroundColor: "var(--rating-positive-soft)",
         }
       : roundedDelta < 0
         ? {
-            color,
-            borderColor: color,
-            backgroundColor: "transparent",
+            color: "var(--rating-negative)",
+            borderColor: "transparent",
+            backgroundColor: "var(--rating-negative-soft)",
           }
         : {
             color: "var(--metric-delta-neutral-text)",
@@ -53,14 +63,37 @@ export function MetricCard({ name, value, delta }: MetricCardProps) {
       <span className="w-7 text-right text-xs font-bold tabular-nums text-[var(--text-strong)]">
         {roundedValue}
       </span>
-      <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--surface-soft)]">
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{
-            width: `${roundedValue}%`,
-            backgroundColor: color,
-          }}
-        />
+      <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--surface-soft)]">
+        {solidWidth > 0 && (
+          <div
+            className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
+            style={{
+              width: `${solidWidth}%`,
+              backgroundColor: color,
+            }}
+          />
+        )}
+        {positiveSegmentWidth > 0 && (
+          <div
+            className="absolute inset-y-0 rounded-full transition-all duration-500"
+            style={{
+              left: `${previousValue}%`,
+              width: `${positiveSegmentWidth}%`,
+              backgroundColor: hexToRgba(color, 0.26),
+            }}
+          />
+        )}
+        {negativeSegmentWidth > 0 && (
+          <div
+            className="absolute inset-y-0 rounded-full border transition-all duration-500"
+            style={{
+              left: `${roundedValue}%`,
+              width: `${negativeSegmentWidth}%`,
+              borderColor: hexToRgba(color, 0.42),
+              backgroundColor: "transparent",
+            }}
+          />
+        )}
       </div>
       <span
         className="metric-delta-chip min-w-[40px] shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums"
