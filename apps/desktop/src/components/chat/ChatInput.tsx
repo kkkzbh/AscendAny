@@ -34,6 +34,7 @@ export function ChatInput() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const activeProvider = useSettingsStore((s) => s.activeProvider);
   const providers = useSettingsStore((s) => s.providers);
+  const activeRole = useSettingsStore((s) => s.activeRole);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
@@ -98,6 +99,7 @@ export function ChatInput() {
         summary: latestSession.summary,
         providerType: activeProvider,
         providerConfig,
+        roleId: activeRole,
       }, accessToken ?? undefined);
 
       addMessage("assistant", response.reply);
@@ -117,6 +119,7 @@ export function ChatInput() {
     isSending,
     providers,
     activeProvider,
+    activeRole,
     addMessage,
     account?.studentId,
     account?.ptaNickname,

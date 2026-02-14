@@ -1,6 +1,8 @@
 import type { ChatMessage } from "@/types/chat";
+import { findRole } from "@/types/role";
 import { useAuthStore } from "@/stores/authStore";
 import { useAvatarStore } from "@/stores/avatarStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 
 interface MessageBubbleProps {
@@ -12,6 +14,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isSystem = message.role === "system";
   const account = useAuthStore((s) => s.account);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
+  const activeRole = useSettingsStore((s) => s.activeRole);
+  const role = findRole(activeRole);
 
   const timeStr = new Date(message.timestamp).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
@@ -33,13 +37,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       className={`message-row flex w-full items-start gap-2.5 py-1.5 ${isUser ? "justify-end" : "justify-start"}`}
     >
       {!isUser && (
-        <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[var(--accent-700)] to-[var(--accent-500)] shadow-[0_8px_20px_rgba(3,105,161,0.24)]">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            <path d="M2 17l10 5 10-5" />
-            <path d="M2 12l10 5 10-5" />
-          </svg>
-        </div>
+        <img
+          src={role.avatarUrl}
+          alt={role.name}
+          className="mt-1 h-7 w-7 shrink-0 rounded-full object-cover shadow-[0_8px_20px_rgba(3,105,161,0.24)]"
+        />
       )}
 
       <div className="flex max-w-[72%] flex-col gap-1">

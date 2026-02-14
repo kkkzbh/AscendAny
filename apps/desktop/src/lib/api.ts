@@ -41,6 +41,24 @@ export interface ChatReplyRequestPayload {
   summary: string;
   providerType: ProviderType;
   providerConfig?: ClientProviderConfigPayload;
+  roleId?: string;
+}
+
+export interface AutoAnalysisRequestPayload {
+  studentId?: string;
+  ptaNickname?: string;
+  providerType: ProviderType;
+  providerConfig?: ClientProviderConfigPayload;
+  roleId?: string;
+}
+
+export interface AutoAnalysisResponsePayload {
+  reply: string;
+  provider: ProviderType;
+}
+
+export interface LatestExamImportedAtPayload {
+  latestExamImportedAt: string | null;
 }
 
 export interface ChatReplyResponsePayload {
@@ -337,6 +355,23 @@ export async function putAuthProfile(
     authToken,
   });
   return normalizeProfile(response);
+}
+
+export async function postAutoAnalysis(
+  payload: AutoAnalysisRequestPayload,
+  authToken?: string,
+): Promise<AutoAnalysisResponsePayload> {
+  return requestJson<AutoAnalysisResponsePayload>("/api/v1/chat/auto-analysis", {
+    method: "POST",
+    body: payload,
+    authToken,
+  });
+}
+
+export async function fetchLatestExamImportedAt(): Promise<LatestExamImportedAtPayload> {
+  return requestJson<LatestExamImportedAtPayload>(
+    "/api/v1/meta/latest_exam_imported_at",
+  );
 }
 
 export function getApiErrorMessage(error: unknown, fallback: string): string {
