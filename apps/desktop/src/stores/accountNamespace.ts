@@ -27,10 +27,17 @@ export async function switchAccountNamespace(accountId: string | null): Promise<
   const settingsStore = useSettingsStore;
   const chatStore = useChatStore;
 
+  const settingsStorageKey = resolveStoreKey(SETTINGS_BASE_KEY, accountId);
+  const hasPersistedSettings = localStorage.getItem(settingsStorageKey) !== null;
+
   settingsStore.persist.setOptions({
-    name: resolveStoreKey(SETTINGS_BASE_KEY, accountId),
+    name: settingsStorageKey,
   });
-  settingsStore.getState().resetForAccount();
+
+  if (!hasPersistedSettings) {
+    settingsStore.getState().resetForAccount();
+  }
+
   await settingsStore.persist.rehydrate();
 
   chatStore.persist.setOptions({
