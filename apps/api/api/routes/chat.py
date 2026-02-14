@@ -139,6 +139,9 @@ async def chat_reply(
                 }
             )
 
+    role_id = payload.roleId or _DEFAULT_ROLE_ID
+    role_name = _ROLE_NAMES.get(role_id, _ROLE_NAMES[_DEFAULT_ROLE_ID])
+
     # ── 2. Resolve student identity for prompt context ──
     identity = None
     if student_id or pta_nickname:
@@ -153,8 +156,6 @@ async def chat_reply(
             )
 
     # ── 3. Build system prompt ──
-    role_id = payload.roleId or _DEFAULT_ROLE_ID
-    role_name = _ROLE_NAMES.get(role_id, _ROLE_NAMES[_DEFAULT_ROLE_ID])
     prompt_service = PromptService(repository)
     system_prompt = await prompt_service.build_system_prompt(
         identity=identity,
@@ -227,7 +228,7 @@ async def chat_auto_analysis(
             provider=payload.providerType,
         )
 
-    # ── 2. Build system prompt (layers 1-4) ──
+    # ── 2. Build dedicated proactive-analysis prompt ──
     role_id = payload.roleId or _DEFAULT_ROLE_ID
     role_name = _ROLE_NAMES.get(role_id, _ROLE_NAMES[_DEFAULT_ROLE_ID])
 
@@ -262,7 +263,7 @@ async def chat_auto_analysis(
         )
 
     prompt_service = PromptService(repository)
-    system_prompt = await prompt_service.build_system_prompt(
+    system_prompt = await prompt_service.build_proactive_analysis_system_prompt(
         identity=identity,
         role_id=role_id,
         role_name=role_name,
@@ -389,7 +390,7 @@ async def chat_auto_analysis_precompute_exam(
             continue
 
         try:
-            system_prompt = await prompt_service.build_system_prompt(
+            system_prompt = await prompt_service.build_proactive_analysis_system_prompt(
                 identity=identity,
                 role_id=role_id,
                 role_name=role_name,

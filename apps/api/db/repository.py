@@ -91,6 +91,17 @@ class ExamParticipantRow:
 
 
 @dataclass(slots=True)
+class ExamStudentMetricRow:
+    exam_id: int
+    student_id: int
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+
+
+@dataclass(slots=True)
 class AccountRow:
     account_id: int
     username: str
@@ -722,6 +733,41 @@ class ApiRepository:
                 solved_count=int(row["solved_count"])
                 if row.get("solved_count") is not None
                 else None,
+            )
+            for row in rows
+        ]
+
+    async def fetch_exam_student_metrics_for_students(
+        self, exam_id: int, student_ids: list[int]
+    ) -> list[ExamStudentMetricRow]:
+        if not student_ids:
+            return []
+        query = """
+            SELECT
+                exam_id,
+                student_id,
+                knowledge,
+                accuracy,
+                quality,
+                flexibility,
+                proficiency
+            FROM ascendany.exam_student_metrics
+            WHERE exam_id = %s
+              AND student_id = ANY(%s::bigint[])
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, student_ids))
+                rows = await cursor.fetchall()
+        return [
+            ExamStudentMetricRow(
+                exam_id=int(row["exam_id"]),
+                student_id=int(row["student_id"]),
+                knowledge=row.get("knowledge"),
+                accuracy=row.get("accuracy"),
+                quality=row.get("quality"),
+                flexibility=row.get("flexibility"),
+                proficiency=row.get("proficiency"),
             )
             for row in rows
         ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,12 @@ class RuntimeProvider:
     model: str
     api_key: str
     uses_server_config: bool
+
+
+@dataclass(slots=True)
+class ParsedTextToolCall:
+    tool_name: str
+    arguments: dict[str, Any]
 
 
 class LLMService:
@@ -203,38 +210,64 @@ class LLMService:
                 )
 
             tool_calls = message.get("tool_calls")
-
-            # If no tool calls or no executor, return text
-            if not tool_calls or tool_executor is None:
+            if tool_executor is None:
                 return self._extract_text(message.get("content"))
 
-            # Process tool calls
-            # Append the assistant message (with tool_calls) to conversation
-            messages.append(message)
+            # Standard OpenAI-style tool calls
+            if isinstance(tool_calls, list) and tool_calls:
+                messages.append(message)
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = str(tc.get("id", ""))
+                    func = tc.get("function", {})
+                    tool_name = ""
+                    arguments: dict[str, Any] = {}
+                    if isinstance(func, dict):
+                        tool_name = str(func.get("name", ""))
+                        arguments = self._parse_tool_arguments(func.get("arguments"))
 
-            for tc in tool_calls:
-                if not isinstance(tc, dict):
-                    continue
-                tc_id = tc.get("id", "")
-                func = tc.get("function", {})
-                tool_name = func.get("name", "")
-                try:
-                    arguments = json.loads(func.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    arguments = {}
+                    logger.info("Tool call: %s(%s)", tool_name, arguments)
+                    result = await tool_executor.execute(tool_name, arguments)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": result,
+                        }
+                    )
+                continue
 
-                logger.info("Tool call: %s(%s)", tool_name, arguments)
-                result = await tool_executor.execute(tool_name, arguments)
-
+            # Fallback: some models emit XML/DSML-like textual function calls.
+            # Parse and execute them server-side, then ask the model for final
+            # natural-language answer.
+            content_text = self._extract_text(message.get("content"))
+            parsed_text_tool_calls = self._extract_text_tool_calls(content_text)
+            if parsed_text_tool_calls:
+                messages.append({"role": "assistant", "content": content_text})
+                tool_result_lines: list[str] = []
+                for idx, call in enumerate(parsed_text_tool_calls, start=1):
+                    logger.info(
+                        "Text tool call: %s(%s)", call.tool_name, call.arguments
+                    )
+                    result = await tool_executor.execute(call.tool_name, call.arguments)
+                    args_json = json.dumps(call.arguments, ensure_ascii=False)
+                    tool_result_lines.append(
+                        f"{idx}. {call.tool_name}({args_json}) => {result}"
+                    )
                 messages.append(
                     {
-                        "role": "tool",
-                        "tool_call_id": tc_id,
-                        "content": result,
+                        "role": "user",
+                        "content": (
+                            "以下是你请求的工具结果（JSON）。"
+                            "请直接回答用户，不要输出任何函数/工具调用标记。\n"
+                            + "\n".join(tool_result_lines)
+                        ),
                     }
                 )
+                continue
 
-            # Loop continues — LLM will process tool results
+            return content_text
 
         # Exhausted rounds; do one final call without tools
         payload = {
@@ -550,3 +583,85 @@ class LLMService:
                     chunks.append(text)
             return "\n".join(chunks).strip()
         return ""
+
+    @staticmethod
+    def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if not isinstance(raw, str):
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+
+    def _extract_text_tool_calls(self, content: str) -> list[ParsedTextToolCall]:
+        text = content.strip()
+        if not text:
+            return []
+
+        tag_prefix = r"(?:[|｜]DSML[|｜])?"
+        invoke_pattern = re.compile(
+            rf"<{tag_prefix}invoke\s+name=\"(?P<name>[A-Za-z0-9_.-]+)\"[^>]*>"
+            rf"(?P<body>.*?)</{tag_prefix}invoke>",
+            re.DOTALL,
+        )
+        parameter_pattern = re.compile(
+            rf"<{tag_prefix}parameter\s+name=\"(?P<name>[^\"]+)\""
+            rf"(?P<attrs>[^>]*)>(?P<value>.*?)</{tag_prefix}parameter>",
+            re.DOTALL,
+        )
+
+        calls: list[ParsedTextToolCall] = []
+        for invoke_match in invoke_pattern.finditer(text):
+            tool_name = (invoke_match.group("name") or "").strip()
+            if not tool_name:
+                continue
+            body = invoke_match.group("body") or ""
+            arguments: dict[str, Any] = {}
+            for param_match in parameter_pattern.finditer(body):
+                key = (param_match.group("name") or "").strip()
+                if not key:
+                    continue
+                value = (param_match.group("value") or "").strip()
+                attrs = param_match.group("attrs") or ""
+                arguments[key] = self._coerce_text_tool_parameter(value, attrs)
+            calls.append(ParsedTextToolCall(tool_name=tool_name, arguments=arguments))
+        return calls
+
+    @staticmethod
+    def _coerce_text_tool_parameter(value: str, attrs: str) -> Any:
+        attrs_lower = attrs.lower()
+        if 'string="true"' in attrs_lower:
+            return value
+
+        if value == "":
+            return ""
+
+        if value.startswith("{") or value.startswith("["):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        lowered = value.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if re.fullmatch(r"[+-]?\d+", value):
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        if re.fullmatch(r"[+-]?\d+\.\d+", value):
+            try:
+                return float(value)
+            except ValueError:
+                return value
+        return value

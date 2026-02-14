@@ -1,11 +1,4 @@
-"""System prompt assembly for the chat Agent.
-
-Four-layer architecture:
-  Layer 1 – Base instructions (language, persona, output style)
-  Layer 2 – Algorithm knowledge (metric & rating definitions)
-  Layer 3 – Dynamic student context (current values from DB)
-  Layer 4 – Role style (extra persona prompt from role config)
-"""
+"""System prompt assembly for chat and proactive-analysis modes."""
 
 from __future__ import annotations
 
@@ -47,19 +40,48 @@ ROLE_STYLE_PROMPTS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Layer 1 – Base instructions
+# System prompt templates
 # ---------------------------------------------------------------------------
 
-LAYER_1_BASE = """\
+_NORMAL_SYSTEM_PROMPT_TEMPLATE = """\
 你是一位专业的编程学习分析助手，名叫「{role_name}」。
 
-## 核心规则
-- 始终使用**简体中文**回复。
-- 你的任务是帮助学生理解自己在编程练习中的表现，提供鼓励和有针对性的建议。
-- 回复简洁清晰，适合大学生阅读。使用适当的 Markdown 格式（加粗、列表等）提升可读性。
-- 在分析中保持客观，用数据支撑观点。既要肯定进步，也要直面不足。
-- 不要编造数据。如果缺少某项信息，明确说明。
-- 你可以调用工具来查询学生的历史数据、考试详情和提交记录。需要时主动使用这些工具。\
+## 任务目标
+- 始终使用简体中文，直接回答用户当前问题。
+- 围绕编程学习与考试表现提供帮助：解释、对比、诊断、建议。
+- 回复清晰、简洁，避免空泛套话。
+
+## 工具使用规则
+- 你可以调用工具查询学生历史数据、考试详情、提交记录与排名。
+- 需要数据时优先调用工具，禁止编造具体分数、排名或历史记录。
+- 工具调用是后台行为，不向用户暴露函数调用过程或任何调用标记。
+
+## 输出约束
+- 先给结论，再给必要说明。
+- 如果数据不足，明确说明缺什么数据，以及下一步将查询什么。\
+"""
+
+_PROACTIVE_ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """\
+你是一位专业的编程学习分析助手，名叫「{role_name}」。
+
+## 主动分析模式
+当前任务是“系统主动分析最新考试表现”，不是普通闲聊。请主动完成完整分析。
+
+## 分析流程（必须执行）
+1. 获取并确认最近一场考试及上一场可比考试的数据（含 Rating 与五大指标）。
+2. 输出最近一场的 Rating 变化（涨跌方向、变化幅度）。
+3. 对比五大能力指标的变化，指出进步项与退步项。
+4. 给出 2-3 条可执行、可落地的改进建议（优先针对退步项）。
+5. 最后提出 1 个简短追问，帮助学生进入下一步训练。
+
+## 工具使用规则
+- 需要的数据通过工具获取，禁止编造。
+- 工具调用是后台行为，不向用户暴露函数调用过程或任何调用标记。
+
+## 输出约束
+- 始终使用简体中文。
+- 结构化输出，内容聚焦“结论 + 依据 + 行动”。
+- 语气专业友好，但避免冗长。\
 """
 
 # ---------------------------------------------------------------------------
@@ -183,7 +205,7 @@ def _build_metric_delta_text(
 
 
 class PromptService:
-    """Assembles the multi-layer system prompt for LLM requests."""
+    """Builds system prompts for normal chat and proactive analysis."""
 
     def __init__(self, repository: ApiRepository) -> None:
         self._repository = repository
@@ -194,54 +216,53 @@ class PromptService:
         role_id: str = "xiaoD",
         role_name: str = "小D",
     ) -> str:
-        """Build the full system prompt.
+        """Build minimal system prompt for normal chat mode."""
+        return await self._build_prompt_by_mode(
+            base_prompt=_NORMAL_SYSTEM_PROMPT_TEMPLATE.format(role_name=role_name),
+            identity=identity,
+            role_id=role_id,
+        )
 
-        Parameters
-        ----------
-        identity
-            Resolved student identity. ``None`` if the user is anonymous or
-            hasn't linked a student profile yet.
-        role_id
-            Role identifier (used to look up extra style prompt).
-        role_name
-            Display name injected into layer-1 persona.
-        """
-        layers: list[str] = []
-
-        # Layer 1
-        layers.append(LAYER_1_BASE.format(role_name=role_name))
-
-        # Layer 2
-        layers.append(LAYER_2_ALGORITHM)
-
-        # Layer 3 – dynamic student context
-        if identity is not None and not identity.no_submission_records:
-            layer3 = await self._build_student_context(identity)
-        else:
-            layer3 = _NO_STUDENT_CONTEXT
-        layers.append(layer3)
-
-        # Layer 4 – role style
-        style = ROLE_STYLE_PROMPTS.get(role_id, "")
-        if style:
-            layers.append(style)
-
-        return "\n\n".join(layers)
+    async def build_proactive_analysis_system_prompt(
+        self,
+        identity: ResolvedIdentity | None,
+        role_id: str = "xiaoD",
+        role_name: str = "小D",
+    ) -> str:
+        """Build dedicated system prompt for proactive analysis mode."""
+        base_prompt = "\n\n".join(
+            [
+                _PROACTIVE_ANALYSIS_SYSTEM_PROMPT_TEMPLATE.format(
+                    role_name=role_name
+                ),
+                LAYER_2_ALGORITHM,
+            ]
+        )
+        return await self._build_prompt_by_mode(
+            base_prompt=base_prompt,
+            identity=identity,
+            role_id=role_id,
+        )
 
     def build_auto_analysis_user_message(self) -> str:
-        """Build the hidden user message that triggers auto-analysis.
+        """Hidden trigger for proactive analysis requests."""
+        return "请按系统提示执行主动分析任务，并直接输出最终分析结论。"
 
-        The frontend hides this message; only the assistant response is shown,
-        making it look like the assistant initiated the conversation.
-        """
-        return (
-            "系统检测到有新的考试数据导入。请你主动分析我最近一场考试的表现，包括：\n"
-            "1. Rating 变化（是涨了还是跌了，幅度如何）\n"
-            "2. 五大能力指标相比上一场的变化，哪些进步了、哪些退步了\n"
-            "3. 对进步的方面给予肯定\n"
-            "4. 对退步或薄弱的方面给出简短但具体的改进建议\n\n"
-            "请用简洁友好的语气回复，像是主动和我打招呼一样。"
-        )
+    async def _build_prompt_by_mode(
+        self,
+        base_prompt: str,
+        identity: ResolvedIdentity | None,
+        role_id: str,
+    ) -> str:
+        sections: list[str] = [base_prompt]
+        if identity is not None and not identity.no_submission_records:
+            sections.append(await self._build_student_context(identity))
+        else:
+            sections.append(_NO_STUDENT_CONTEXT)
+        style = ROLE_STYLE_PROMPTS.get(role_id, "")
+        if style:
+            sections.append(style)
+        return "\n\n".join(sections)
 
     async def _build_student_context(self, identity: ResolvedIdentity) -> str:
         student_entity_ids = identity.student_entity_ids or (

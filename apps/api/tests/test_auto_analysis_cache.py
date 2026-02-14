@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from apps.api.api.deps import get_current_account
 from apps.api.db.repository import (
+    AutoAnalysisCandidateRow,
     AutoAnalysisCacheRow,
     RatingHistoryRow,
     StudentIdentityMatch,
@@ -100,16 +101,31 @@ class FakeRepo:
             updated_at=now,
         )
 
+    async def fetch_auto_analysis_candidates_by_exam(
+        self, exam_id: int, limit: int = 2000
+    ):
+        if exam_id != 9:
+            return []
+        return [
+            AutoAnalysisCandidateRow(
+                account_id=1,
+                student_id="20231202047",
+                pta_nickname="王浩然",
+            )
+        ][:limit]
+
 
 class FakeLLM:
     def __init__(self) -> None:
         self.calls = 0
+        self.system_prompts: list[str] = []
 
     def list_provider_options(self):
         return None
 
     async def generate_reply(self, payload, system_prompt=None, tool_executor=None):
         self.calls += 1
+        self.system_prompts.append(system_prompt or "")
         return ChatReplyResponse(
             reply="这是一条自动分析缓存。",
             summary="",
@@ -178,3 +194,47 @@ def test_auto_analysis_uses_cached_reply_before_llm() -> None:
     assert response.status_code == 200
     assert response.json()["reply"] == "预热缓存命中"
     assert llm.calls == 0
+
+
+def test_auto_analysis_uses_proactive_prompt_mode() -> None:
+    repo = FakeRepo()
+    llm = FakeLLM()
+    with _build_client(repo, llm) as client:
+        response = client.post(
+            "/api/v1/chat/auto-analysis",
+            json={
+                "studentId": "20231202047",
+                "ptaNickname": "王浩然",
+                "providerType": "server_default",
+                "roleId": "xiaoD",
+                "latestExamId": "9",
+            },
+        )
+
+    assert response.status_code == 200
+    assert llm.calls == 1
+    assert any("## 主动分析模式" in prompt for prompt in llm.system_prompts)
+
+
+def test_auto_analysis_precompute_uses_same_proactive_prompt_mode(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTO_ANALYSIS_PREWARM_TOKEN", "prewarm-secret")
+    repo = FakeRepo()
+    llm = FakeLLM()
+    app = create_app(repository=repo, llm_service=llm)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat/auto-analysis/precompute-exam",
+            headers={"X-AscendAny-Prewarm-Token": "prewarm-secret"},
+            json={
+                "examId": 9,
+                "roleId": "xiaoD",
+                "maxAccounts": 10,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["generated"] == 1
+    assert llm.calls == 1
+    assert any("## 主动分析模式" in prompt for prompt in llm.system_prompts)

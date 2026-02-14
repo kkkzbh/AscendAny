@@ -45,6 +45,9 @@ class FakeRepo:
 
 
 class FakeLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def list_provider_options(self) -> ModelProvidersResponse:
         return ModelProvidersResponse(
             defaultProvider="server_default",
@@ -59,7 +62,8 @@ class FakeLLM:
             ],
         )
 
-    async def generate_reply(self, payload) -> ChatReplyResponse:
+    async def generate_reply(self, payload, system_prompt=None, tool_executor=None) -> ChatReplyResponse:
+        self.calls += 1
         return ChatReplyResponse(
             reply="ok",
             summary=payload.summary,
@@ -120,3 +124,24 @@ def test_students_dashboard_response_contains_metric_delta() -> None:
     assert payload["metricDelta"]["baseline"] == "zero"
     assert payload["metricDelta"]["latestExamId"] is None
     assert payload["metricDelta"]["values"]["knowledge"] == 0
+
+
+def test_chat_reply_hello_still_goes_to_llm() -> None:
+    repo = FakeRepo()
+    llm = FakeLLM()
+    app = create_app(repository=repo, llm_service=llm)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat/reply",
+            json={
+                "studentId": "20230001",
+                "messages": [{"role": "user", "content": "你好"}],
+                "summary": "",
+                "providerType": "server_default",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reply"] == "ok"
+    assert llm.calls == 1
