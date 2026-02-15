@@ -35,6 +35,7 @@ jobs:
       DEPLOY_APP_DIR: ${{ vars.ASCENDANY_SERVER_APP_DIR || '/opt/ascendany/api/current' }}
       DEPLOY_API_VENV: ${{ vars.ASCENDANY_API_VENV || '/opt/ascendany/api/.venv' }}
       DEPLOY_API_SERVICE: ${{ vars.ASCENDANY_API_SERVICE || 'ascendany-api' }}
+      DEPLOY_INTERNAL_HEALTHZ_URL: ${{ vars.ASCENDANY_API_INTERNAL_HEALTHZ || 'http://127.0.0.1:8000/api/v1/healthz' }}
       DEPLOY_HEALTHZ_URL: ${{ vars.ASCENDANY_API_HEALTHZ || 'https://ascendany.kkkzbh.cn/api/v1/healthz' }}
       DEPLOY_REF: ${{ github.event.inputs.deploy_ref || github.ref_name }}
       DEPLOY_SHA: ${{ github.sha }}
@@ -82,6 +83,7 @@ jobs:
           APP_DIR="${DEPLOY_APP_DIR}"
           API_VENV="${DEPLOY_API_VENV}"
           API_SERVICE="${DEPLOY_API_SERVICE}"
+          INTERNAL_HEALTHZ_URL="${DEPLOY_INTERNAL_HEALTHZ_URL}"
           DEPLOY_REF="${DEPLOY_REF}"
           EXPECTED_SHA="${DEPLOY_SHA}"
 
@@ -116,9 +118,34 @@ jobs:
 
           sudo systemctl restart "\${API_SERVICE}"
           sudo systemctl is-active --quiet "\${API_SERVICE}"
+
+          # Wait until the local API endpoint is ready after restart.
+          for attempt in \$(seq 1 20); do
+            if curl -fsS "\${INTERNAL_HEALTHZ_URL}" >/dev/null; then
+              echo "Local health check passed on attempt \${attempt}"
+              break
+            fi
+            if [ "\${attempt}" -eq 20 ]; then
+              echo "Local health check failed: \${INTERNAL_HEALTHZ_URL}" >&2
+              sudo systemctl status "\${API_SERVICE}" --no-pager || true
+              sudo journalctl -u "\${API_SERVICE}" -n 120 --no-pager || true
+              exit 1
+            fi
+            sleep 2
+          done
           EOF
 
       - name: Verify health endpoint
         run: |
           set -euo pipefail
-          curl -fsS "${DEPLOY_HEALTHZ_URL}"
+          for attempt in $(seq 1 12); do
+            if curl -fsS "${DEPLOY_HEALTHZ_URL}" >/dev/null; then
+              echo "External health check passed on attempt ${attempt}"
+              exit 0
+            fi
+            if [ "${attempt}" -eq 12 ]; then
+              echo "External health check failed after retries: ${DEPLOY_HEALTHZ_URL}" >&2
+              exit 1
+            fi
+            sleep 5
+          done
