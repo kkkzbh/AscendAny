@@ -1,4 +1,4 @@
-practice_root: /home/kkkzbh/code/Ascend/data/practice
+practice_root: practice
 
 db:
   host: 127.0.0.1

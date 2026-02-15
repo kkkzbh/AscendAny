@@ -90,6 +90,21 @@ sudo systemctl restart ascendany-api
 journalctl -u ascendany-api -f
 ```
 
+导入控制台依赖的关键环境变量（建议写入 `/etc/ascendany/api.env`）：
+
+```bash
+PRACTICE_DATA_ROOT=/opt/ascendany/data/practice
+# 可选：覆盖预处理配置文件路径（默认会自动使用仓库内 preprocess/config/default.yaml）
+# ASCENDANY_PREPROCESS_CONFIG=/opt/ascendany/api/current/preprocess/config/default.yaml
+```
+
+应用变量并重启：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ascendany-api
+```
+
 ## 8. 桌面端 Release 对接线上 API
 
 - 工作流：`.github/workflows/release-desktop.yml`
@@ -126,3 +141,44 @@ cd /opt/ascendany/api/current
 - `PRACTICE_DATA_ROOT` 指向服务器上的数据目录；
 - `preprocess` 依赖已安装到对应虚拟环境；
 - DB 连接参数仍指向本机 `127.0.0.1:6432`。
+
+## 10. CI/CD 自动部署（push 后自动同步）
+
+仓库已提供工作流：`.github/workflows/deploy-api-server.yml`  
+触发条件：
+- push 到 `main/master` 且命中后端相关路径（`apps/api/**`、`preprocess/**`、`db/schema/**`）；
+- 手动触发 `workflow_dispatch`。
+
+### 10.1 GitHub Secrets（必需）
+
+- `ASCENDANY_SERVER_HOST`：服务器地址（如 `52.147.120.86`）
+- `ASCENDANY_SERVER_USER`：SSH 用户（如 `xyz`）
+- `ASCENDANY_SSH_PRIVATE_KEY`：部署私钥（PEM 全内容）
+
+可选：
+- `ASCENDANY_SSH_KNOWN_HOSTS`：固定 `known_hosts`（推荐配置，避免首次 `ssh-keyscan`）
+
+配置状态（当前仓库）：
+- 已配置上述 Secrets/Variables（具体值不写入仓库文档）。
+
+### 10.2 GitHub Variables（可选，均有默认值）
+
+- `ASCENDANY_SERVER_PORT`（默认 `22`）
+- `ASCENDANY_SERVER_APP_DIR`（默认 `/opt/ascendany/api/current`）
+- `ASCENDANY_API_VENV`（默认 `/opt/ascendany/api/.venv`）
+- `ASCENDANY_API_SERVICE`（默认 `ascendany-api`）
+- `ASCENDANY_API_HEALTHZ`（默认 `https://ascendany.kkkzbh.cn/api/v1/healthz`）
+
+### 10.3 服务器前置条件
+
+- 目标目录是一个可 `git pull --ff-only` 的仓库工作副本；
+- API 运行用户对仓库目录与虚拟环境有读写权限；
+- `sudo systemctl restart ascendany-api` 不需要交互密码（或部署用户具备对应权限）。
+
+### 10.4 部署行为
+
+每次触发会在服务器执行：
+1. 切到部署分支并 `git pull --ff-only`；
+2. 安装/同步 Python 依赖（`apps/api/requirements.txt` + `preprocess/requirements.txt`）；
+3. 重启 `ascendany-api`；
+4. 校验 `is-active` 与 `healthz`。

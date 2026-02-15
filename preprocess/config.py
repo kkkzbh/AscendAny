@@ -100,7 +100,7 @@ class WarmupConfig:
 
 @dataclass(slots=True)
 class Settings:
-    practice_root: Path = Path("/home/kkkzbh/code/Ascend/data/practice")
+    practice_root: Path = Path("practice")
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     ingest: IngestConfig = field(default_factory=IngestConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -257,7 +257,9 @@ def _from_dict(data: dict[str, Any]) -> Settings:
 def load_settings(config_path: Path | None = None) -> Settings:
     defaults = _as_dict(Settings())
     if config_path is None:
-        config_path = Path("preprocess/config/default.yaml")
+        config_path = Path(__file__).resolve().parent / "config/default.yaml"
+    else:
+        config_path = Path(config_path).expanduser()
 
     loaded: dict[str, Any] = {}
     if config_path.exists():

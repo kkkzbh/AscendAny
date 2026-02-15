@@ -52,11 +52,22 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 VALID_EXAM_TYPES = {"datastructure", "pta_icpc", "pta_ioi"}
+PREPROCESS_CONFIG_ENV = "ASCENDANY_PREPROCESS_CONFIG"
+
+
+def _resolve_preprocess_config_path() -> Path:
+    env_path = os.getenv(PREPROCESS_CONFIG_ENV)
+    if env_path:
+        candidate = Path(env_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (_PROJECT_ROOT / candidate).resolve()
+        return candidate
+    return _PROJECT_ROOT / "preprocess/config/default.yaml"
 
 
 def _load_preprocess_settings() -> Any:
     from preprocess.config import load_settings as pp_load_settings
-    return pp_load_settings()
+    return pp_load_settings(config_path=_resolve_preprocess_config_path())
 
 
 def _create_preprocess_connection(pp_settings: Any) -> Any:
@@ -67,9 +78,30 @@ def _create_preprocess_connection(pp_settings: Any) -> Any:
 def _get_practice_root() -> Path:
     env_root = os.getenv("PRACTICE_DATA_ROOT")
     if env_root:
-        return Path(env_root)
+        root = Path(env_root).expanduser()
+        if not root.is_absolute():
+            root = (_PROJECT_ROOT / root).resolve()
+        return root
     pp_settings = _load_preprocess_settings()
-    return pp_settings.practice_root
+    root = Path(pp_settings.practice_root).expanduser()
+    if not root.is_absolute():
+        root = (_PROJECT_ROOT / root).resolve()
+    return root
+
+
+def _ensure_practice_root_writable(practice_root: Path) -> None:
+    try:
+        practice_root.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"practice 目录不可写：{practice_root}",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"无法创建 practice 目录：{practice_root} ({exc})",
+        ) from exc
 
 
 # ── POST /import/upload ───────────────────────────────────
@@ -96,22 +128,32 @@ async def upload_exam_zip(
 
     exam_name = Path(file.filename).stem
     practice_root = await asyncio.to_thread(_get_practice_root)
+    await asyncio.to_thread(_ensure_practice_root_writable, practice_root)
     target_dir = practice_root / examType / exam_name
 
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
             tmp_path = Path(tmp.name)
-            content = await file.read()
-            tmp.write(content)
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                tmp.write(chunk)
 
         if not zipfile.is_zipfile(tmp_path):
             raise HTTPException(status_code=400, detail="上传的文件不是有效的 ZIP 文件")
 
         def _extract() -> tuple[str, int]:
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-            target_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except PermissionError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"上传目录不可写：{target_dir}",
+                ) from exc
 
             with zipfile.ZipFile(tmp_path, "r") as zf:
                 for member in zf.namelist():

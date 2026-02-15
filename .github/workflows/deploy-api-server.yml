@@ -1,0 +1,121 @@
+name: Deploy API Server
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "apps/api/**"
+      - "preprocess/**"
+      - "db/schema/**"
+      - ".github/workflows/deploy-api-server.yml"
+  workflow_dispatch:
+    inputs:
+      deploy_ref:
+        description: "Deploy branch/ref (default: current branch)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-api-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Production Server
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.ASCENDANY_SERVER_HOST }}
+      DEPLOY_USER: ${{ secrets.ASCENDANY_SERVER_USER }}
+      DEPLOY_PORT: ${{ vars.ASCENDANY_SERVER_PORT || '22' }}
+      DEPLOY_APP_DIR: ${{ vars.ASCENDANY_SERVER_APP_DIR || '/opt/ascendany/api/current' }}
+      DEPLOY_API_VENV: ${{ vars.ASCENDANY_API_VENV || '/opt/ascendany/api/.venv' }}
+      DEPLOY_API_SERVICE: ${{ vars.ASCENDANY_API_SERVICE || 'ascendany-api' }}
+      DEPLOY_HEALTHZ_URL: ${{ vars.ASCENDANY_API_HEALTHZ || 'https://ascendany.kkkzbh.cn/api/v1/healthz' }}
+      DEPLOY_REF: ${{ github.event.inputs.deploy_ref || github.ref_name }}
+      DEPLOY_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HOST}" ]; then
+            echo "Missing required secret: ASCENDANY_SERVER_HOST" >&2
+            exit 1
+          fi
+          if [ -z "${DEPLOY_USER}" ]; then
+            echo "Missing required secret: ASCENDANY_SERVER_USER" >&2
+            exit 1
+          fi
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.ASCENDANY_SSH_PRIVATE_KEY }}
+
+      - name: Setup known_hosts
+        env:
+          SSH_KNOWN_HOSTS: ${{ secrets.ASCENDANY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          if [ -n "${SSH_KNOWN_HOSTS}" ]; then
+            printf "%s\n" "${SSH_KNOWN_HOSTS}" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "${DEPLOY_PORT}" "${DEPLOY_HOST}" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy on server
+        run: |
+          set -euo pipefail
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
+          set -euo pipefail
+
+          APP_DIR="${DEPLOY_APP_DIR}"
+          API_VENV="${DEPLOY_API_VENV}"
+          API_SERVICE="${DEPLOY_API_SERVICE}"
+          DEPLOY_REF="${DEPLOY_REF}"
+          EXPECTED_SHA="${DEPLOY_SHA}"
+
+          cd "\${APP_DIR}"
+          git fetch --prune origin
+
+          if git show-ref --verify --quiet "refs/heads/\${DEPLOY_REF}"; then
+            git checkout "\${DEPLOY_REF}"
+          else
+            git checkout -b "\${DEPLOY_REF}" "origin/\${DEPLOY_REF}"
+          fi
+
+          git pull --ff-only origin "\${DEPLOY_REF}"
+
+          ACTUAL_SHA="\$(git rev-parse HEAD)"
+          if [ "\${ACTUAL_SHA}" != "\${EXPECTED_SHA}" ]; then
+            echo "Expected SHA \${EXPECTED_SHA}, but deployed \${ACTUAL_SHA}" >&2
+            exit 1
+          fi
+
+          PIP_BIN="\${API_VENV}/bin/pip"
+          if [ ! -x "\${PIP_BIN}" ]; then
+            echo "pip not found: \${PIP_BIN}" >&2
+            exit 1
+          fi
+
+          "\${PIP_BIN}" install -r apps/api/requirements.txt
+          "\${PIP_BIN}" install -r preprocess/requirements.txt
+
+          sudo systemctl restart "\${API_SERVICE}"
+          sudo systemctl is-active --quiet "\${API_SERVICE}"
+          EOF
+
+      - name: Verify health endpoint
+        run: |
+          set -euo pipefail
+          curl -fsS "${DEPLOY_HEALTHZ_URL}"
