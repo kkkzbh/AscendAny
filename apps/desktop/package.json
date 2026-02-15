@@ -49,6 +49,7 @@
     },
     "linux": {
       "icon": "resources/icons",
+      "executableName": "ascendany",
       "target": [
         {
           "target": "rpm",
@@ -61,8 +62,8 @@
       "category": "Utility",
       "desktop": {
         "Name": "AscendAny",
-        "StartupWMClass": "@ascendanydesktop",
-        "X-GNOME-WMClass": "@ascendanydesktop"
+        "StartupWMClass": "ascendany",
+        "X-GNOME-WMClass": "ascendany"
       }
     }
   },

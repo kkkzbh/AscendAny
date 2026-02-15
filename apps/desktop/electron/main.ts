@@ -12,7 +12,7 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 const CREDENTIAL_FILE_NAME = "secure-credentials.json";
-const LINUX_DESKTOP_FILE = "@ascendanydesktop.desktop";
+const LINUX_DESKTOP_FILE = "ascendany.desktop";
 
 function resolveWindowIconPath(): string | undefined {
   if (!isLinux) {
