@@ -126,6 +126,26 @@ def test_students_dashboard_response_contains_metric_delta() -> None:
     assert payload["metricDelta"]["values"]["knowledge"] == 0
 
 
+def test_students_dashboard_returns_fallback_when_student_id_not_found() -> None:
+    app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/students/dashboard", params={"studentId": "20999999"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity"]["studentId"] == "20999999"
+    assert payload["identity"]["noSubmissionRecords"] is True
+    assert payload["rating"]["current"] == 800
+    assert payload["rating"]["history"] == []
+    assert payload["metrics"]["knowledge"] == 50
+    assert payload["metrics"]["accuracy"] == 50
+    assert payload["metrics"]["quality"] == 50
+    assert payload["metrics"]["flexibility"] == 50
+    assert payload["metrics"]["proficiency"] == 50
+
+
 def test_chat_reply_hello_still_goes_to_llm() -> None:
     repo = FakeRepo()
     llm = FakeLLM()

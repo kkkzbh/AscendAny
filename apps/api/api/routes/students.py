@@ -3,11 +3,61 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from ..deps import get_current_account_optional, get_repository, get_settings
-from ...schemas.students import StudentDashboardResponse
+from ...core.errors import AppError
+from ...schemas.students import (
+    MetricDeltaInfoResponse,
+    MetricDeltaItemResponse,
+    MetricMissingItemResponse,
+    RatingInfoResponse,
+    ResolvedIdentityResponse,
+    StudentDashboardResponse,
+    StudentMetricsResponse,
+)
 from ...services.dashboard import DashboardService
 from ...services.identity import StudentIdentityService
 
 router = APIRouter(tags=["students"])
+
+
+def _build_not_found_fallback_dashboard(
+    student_id: str | None,
+    pta_nickname: str | None,
+) -> StudentDashboardResponse:
+    return StudentDashboardResponse(
+        metrics=StudentMetricsResponse(
+            knowledge=50,
+            accuracy=50,
+            quality=50,
+            flexibility=50,
+            proficiency=50,
+        ),
+        metricMissing=MetricMissingItemResponse(
+            knowledge=True,
+            accuracy=True,
+            quality=True,
+            flexibility=True,
+            proficiency=True,
+        ),
+        rating=RatingInfoResponse(current=800, lastDelta=None, history=[]),
+        metricDelta=MetricDeltaInfoResponse(
+            latestExamId=None,
+            latestExamName=None,
+            latestExamDate=None,
+            baseline="zero",
+            values=MetricDeltaItemResponse(
+                knowledge=0,
+                accuracy=0,
+                quality=0,
+                flexibility=0,
+                proficiency=0,
+            ),
+        ),
+        identity=ResolvedIdentityResponse(
+            studentId=(student_id or "").strip(),
+            ptaNickname=(pta_nickname or "").strip() or None,
+            noSubmissionRecords=True,
+        ),
+    )
 
 
 @router.get("/students/dashboard", response_model=StudentDashboardResponse)
@@ -28,9 +78,14 @@ async def students_dashboard(
                 pta_nickname = profile.pta_nickname
 
     identity_service = StudentIdentityService(repository=repository)
-    identity = await identity_service.resolve(
-        student_id=student_id, pta_nickname=pta_nickname
-    )
+    try:
+        identity = await identity_service.resolve(
+            student_id=student_id, pta_nickname=pta_nickname
+        )
+    except AppError as exc:
+        if exc.code == "STUDENT_NOT_FOUND":
+            return _build_not_found_fallback_dashboard(student_id, pta_nickname)
+        raise
 
     dashboard_service = DashboardService(
         repository=repository,
