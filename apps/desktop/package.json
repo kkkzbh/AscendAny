@@ -21,7 +21,8 @@
     "productName": "AscendAny",
     "artifactName": "AscendAny-${os}-${arch}-${version}.${ext}",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "resources"
     },
     "files": [
       "dist/**",
@@ -30,6 +31,7 @@
     ],
     "asar": true,
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -40,6 +42,7 @@
       ]
     },
     "linux": {
+      "icon": "resources/icons",
       "target": [
         {
           "target": "rpm",
