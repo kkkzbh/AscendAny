@@ -20,6 +20,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve desktop version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_TAG="${GITHUB_REF_NAME#v}"
+          DESKTOP_VERSION="$(RAW_TAG="$RAW_TAG" node - <<'NODE'
+          const raw = process.env.RAW_TAG ?? "";
+          if (!raw) {
+            process.exit(2);
+          }
+          const m = raw.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?$/);
+          if (!m) {
+            process.exit(3);
+          }
+          const major = Number.parseInt(m[1], 10);
+          const minor = Number.parseInt(m[2] ?? "0", 10);
+          const patch = Number.parseInt(m[3] ?? "0", 10);
+          process.stdout.write(`${major}.${minor}.${patch}`);
+          NODE
+          )"
+          echo "DESKTOP_VERSION=${DESKTOP_VERSION}" >> "$GITHUB_ENV"
+          echo "Desktop version resolved to ${DESKTOP_VERSION} from tag ${GITHUB_REF_NAME}"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -33,6 +56,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Sync desktop package version
+        run: npm pkg set version="${{ env.DESKTOP_VERSION }}" --prefix apps/desktop
 
       - name: Build desktop package (Windows EXE x64)
         env:
@@ -62,6 +88,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve desktop version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_TAG="${GITHUB_REF_NAME#v}"
+          DESKTOP_VERSION="$(RAW_TAG="$RAW_TAG" node - <<'NODE'
+          const raw = process.env.RAW_TAG ?? "";
+          if (!raw) {
+            process.exit(2);
+          }
+          const m = raw.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?$/);
+          if (!m) {
+            process.exit(3);
+          }
+          const major = Number.parseInt(m[1], 10);
+          const minor = Number.parseInt(m[2] ?? "0", 10);
+          const patch = Number.parseInt(m[3] ?? "0", 10);
+          process.stdout.write(`${major}.${minor}.${patch}`);
+          NODE
+          )"
+          echo "DESKTOP_VERSION=${DESKTOP_VERSION}" >> "$GITHUB_ENV"
+          echo "Desktop version resolved to ${DESKTOP_VERSION} from tag ${GITHUB_REF_NAME}"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -80,6 +129,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Sync desktop package version
+        run: npm pkg set version="${{ env.DESKTOP_VERSION }}" --prefix apps/desktop
 
       - name: Build desktop package (Linux RPM x64)
         env:

@@ -12,6 +12,9 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/deploy-web-pages.yml"
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
@@ -47,6 +50,32 @@ jobs:
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+
+      - name: Generate latest release asset manifest
+        env:
+          RELEASE_OWNER: ${{ github.repository_owner }}
+          RELEASE_REPO: ${{ github.event.repository.name }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p apps/web/public
+
+          tmp="$(mktemp)"
+          status="$(curl -sS -o "$tmp" -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest")"
+
+          if [ "$status" = "200" ]; then
+            jq '{
+              generated_at: (now | todateiso8601),
+              tag_name,
+              assets: [(.assets // [])[] | {name, browser_download_url}]
+            }' "$tmp" > apps/web/public/release-assets.json
+          else
+            echo '{"generated_at":null,"tag_name":null,"assets":[]}' > apps/web/public/release-assets.json
+            echo "No latest release manifest available (HTTP ${status})."
+          fi
 
       - name: Build web app for Pages
         env:

@@ -6,6 +6,7 @@ import "./styles.css";
 const RELEASE_OWNER = (import.meta.env.VITE_RELEASE_OWNER ?? "kkkzbh").trim() || "kkkzbh";
 const RELEASE_REPO = (import.meta.env.VITE_RELEASE_REPO ?? "AscendAny").trim() || "AscendAny";
 const RELEASE_API_URL = `https://api.github.com/repos/${encodeURIComponent(RELEASE_OWNER)}/${encodeURIComponent(RELEASE_REPO)}/releases/latest`;
+const RELEASE_MANIFEST_URL = `${import.meta.env.BASE_URL}release-assets.json`;
 
 /* ─── Theme Hook (localStorage) ─── */
 const STORAGE_KEY = "ascendany-theme";
@@ -253,6 +254,11 @@ type GithubLatestRelease = {
   assets?: GithubReleaseAsset[];
 };
 
+type ReleaseFetchResult = {
+  status: number;
+  assets: GithubReleaseAsset[];
+};
+
 const defaultDownloads: DownloadItem[] = [
   { target: "linux", platform: "Linux", icon: "linux", pkg: "RPM", arch: "x64", status: "soon", action: "暂无资源" },
   { target: "windows", platform: "Windows", icon: "windows", pkg: "EXE", arch: "x64", status: "soon", action: "暂无资源" },
@@ -306,6 +312,26 @@ function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
   });
 }
 
+async function fetchReleaseAssets(
+  url: string,
+  signal: AbortSignal,
+  init?: Omit<RequestInit, "signal">,
+): Promise<ReleaseFetchResult> {
+  const response = await fetch(url, {
+    ...init,
+    signal,
+  });
+  if (!response.ok) {
+    return { status: response.status, assets: [] };
+  }
+
+  const payload = (await response.json()) as GithubLatestRelease;
+  if (!Array.isArray(payload.assets)) {
+    return { status: response.status, assets: [] };
+  }
+  return { status: response.status, assets: payload.assets };
+}
+
 /* ─── Small Components ─── */
 function Icon({ name, className }: { name: keyof typeof icons; className?: string }) {
   return <span className={className}>{icons[name]}</span>;
@@ -336,21 +362,27 @@ export default function App() {
 
     async function loadReleaseAssets() {
       try {
-        const response = await fetch(RELEASE_API_URL, {
-          signal: controller.signal,
+        const manifest = await fetchReleaseAssets(RELEASE_MANIFEST_URL, controller.signal, {
+          cache: "no-store",
+        });
+        if (manifest.assets.length > 0) {
+          setDownloads(resolveDownloads(manifest.assets));
+          return;
+        }
+
+        const api = await fetchReleaseAssets(RELEASE_API_URL, controller.signal, {
           headers: {
             Accept: "application/vnd.github+json",
           },
         });
-        if (!response.ok) {
+        if (api.assets.length > 0) {
+          setDownloads(resolveDownloads(api.assets));
           return;
         }
 
-        const payload = (await response.json()) as GithubLatestRelease;
-        if (!Array.isArray(payload.assets)) {
-          return;
+        if (api.status === 403) {
+          console.warn("[AscendAny] GitHub API rate limited; release assets are temporarily unavailable.");
         }
-        setDownloads(resolveDownloads(payload.assets));
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           console.warn("[AscendAny] Failed to load release assets.", error);

@@ -149,9 +149,11 @@ pnpm --filter @ascendany/web build
 
 ### 下载中心 Release 源配置
 
-`apps/web` 下载区会读取 GitHub 最新正式版 Release（`/releases/latest`），自动匹配：
+`apps/web` 下载区会优先读取站点内置的 `release-assets.json`（由 Pages 工作流在构建时根据 GitHub 最新正式版 Release 生成），自动匹配：
 - Windows：`.exe`
-- Linux：`.rpm`（文件名需包含 `x64` 或 `amd64`）
+- Linux：`.rpm`（文件名需包含 `x64`、`amd64` 或 `x86_64`）
+
+当本地清单不可用时，会回退到 GitHub API（`/releases/latest`）。
 
 可通过环境变量覆盖默认仓库（默认 `kkkzbh/AscendAny`）：
 
@@ -165,6 +167,7 @@ VITE_RELEASE_REPO=AscendAny
 仓库已提供 GitHub Actions 工作流：`.github/workflows/deploy-web-pages.yml`。
 
 - 发布触发：`main` 分支有前端相关变更时自动触发（也支持手动 `workflow_dispatch`）。
+- 发布同步：当 GitHub Release `published` 时也会自动触发一次，刷新下载资源清单。
 - 发布地址：`https://<GitHub 用户名>.github.io/AscendAny/`（仓库级 Pages）。
 - 仓库设置：`Settings -> Pages -> Source` 选择 `GitHub Actions`。
 
@@ -173,6 +176,7 @@ VITE_RELEASE_REPO=AscendAny
 仓库已提供发布工作流：`.github/workflows/release-desktop.yml`。
 
 - 触发方式：推送标签 `v*`（如 `v0.2.0`）。
+- 版本规则：安装包版本由标签自动解析（去掉前缀 `v`，并补齐为 `major.minor.patch`；例如 `v0.02` 会映射为 `0.2.0`）。
 - 打包 API 地址：工作流会注入 `VITE_API_BASE_URL`（优先读取仓库变量 `DESKTOP_API_BASE_URL`，未配置时回退 `https://ascendany.kkkzbh.cn`）。
 - 产物：
   - Windows：`exe`（x64）
