@@ -29,7 +29,7 @@ export interface UseSSEStreamReturn {
 }
 
 /**
- * Custom hook to consume SSE event streams from import/link-actors tasks.
+ * Custom hook to consume SSE event streams from import tasks.
  *
  * Uses fetch + ReadableStream instead of EventSource to support
  * the Authorization header.

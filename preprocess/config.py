@@ -65,6 +65,8 @@ class MappingConfig:
         ]
     )
     strict_mode: bool = True
+    auto_bind_on_ingest: bool = True
+    claim_identity_source: str = "pta_nickname"
 
 
 @dataclass(slots=True)
@@ -148,6 +150,8 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "primary_keys": settings.mapping.primary_keys,
             "actor_sources": settings.mapping.actor_sources,
             "strict_mode": settings.mapping.strict_mode,
+            "auto_bind_on_ingest": settings.mapping.auto_bind_on_ingest,
+            "claim_identity_source": settings.mapping.claim_identity_source,
         },
         "fusion": {
             "half_life_days": {
@@ -223,6 +227,8 @@ def _from_dict(data: dict[str, Any]) -> Settings:
             primary_keys=list(mapping.get("primary_keys", ["student_no", "name"])),
             actor_sources=list(mapping.get("actor_sources", ["datastructure_nickname", "pta_*_account"])),
             strict_mode=bool(mapping.get("strict_mode", True)),
+            auto_bind_on_ingest=bool(mapping.get("auto_bind_on_ingest", True)),
+            claim_identity_source=str(mapping.get("claim_identity_source", "pta_nickname")),
         ),
         fusion=FusionConfig(
             half_life_days=FusionHalfLife(

@@ -32,11 +32,16 @@ class FakeAuthRepo:
     def __init__(self) -> None:
         self._next_account_id = 1
         self._next_token_id = 1
+        self._next_student_entity_id = 1
         self.accounts_by_id: dict[int, AccountRow] = {}
         self.account_by_username_norm: dict[str, int] = {}
         self.profiles: dict[int, AccountProfileRow] = {}
         self.refresh_by_hash: dict[str, RefreshTokenRow] = {}
         self.contacts: set[tuple[str, str]] = set()
+        self.student_entity_by_no: dict[str, int] = {}
+        self.active_claims: dict[str, int] = {}
+        self.student_identities: dict[tuple[str, str], int] = {}
+        self.reassigned_calls: list[tuple[int, tuple[str, ...], str]] = []
 
     async def create_account(self, username: str, password_hash: str) -> AccountRow | None:
         username_norm = username.strip().lower()
@@ -73,6 +78,13 @@ class FakeAuthRepo:
     async def touch_account_login(self, account_id: int) -> None:
         _ = account_id
 
+    async def delete_account(self, account_id: int) -> None:
+        row = self.accounts_by_id.pop(account_id, None)
+        if row is None:
+            return
+        self.account_by_username_norm.pop(row.username.lower(), None)
+        self.profiles.pop(account_id, None)
+
     async def fetch_account_profile(self, account_id: int) -> AccountProfileRow | None:
         return self.profiles.get(account_id)
 
@@ -86,6 +98,61 @@ class FakeAuthRepo:
         )
         self.profiles[account_id] = row
         return row
+
+    async def ensure_student_by_student_no(
+        self,
+        student_no: str,
+        student_name: str | None,
+        identity_source: str = "user_profile_student_no",
+    ) -> int:
+        _ = student_name
+        _ = identity_source
+        normalized = student_no.strip()
+        student_id = self.student_entity_by_no.get(normalized)
+        if student_id is not None:
+            return student_id
+        student_id = self._next_student_entity_id
+        self._next_student_entity_id += 1
+        self.student_entity_by_no[normalized] = student_id
+        return student_id
+
+    async def claim_student_nickname(
+        self,
+        student_id: int,
+        nickname: str,
+        account_id: int | None = None,
+    ) -> bool:
+        _ = account_id
+        normalized = nickname.strip().casefold()
+        current = self.active_claims.get(normalized)
+        if current is not None and current != student_id:
+            return False
+        # one active nickname per student
+        for existing_nickname, existing_student_id in list(self.active_claims.items()):
+            if existing_student_id == student_id and existing_nickname != normalized:
+                del self.active_claims[existing_nickname]
+        self.active_claims[normalized] = student_id
+        return True
+
+    async def upsert_student_identity(
+        self,
+        student_id: int,
+        source: str,
+        external_id: str,
+        external_name: str | None,
+    ) -> None:
+        _ = external_name
+        self.student_identities[(source, external_id.strip())] = student_id
+
+    async def reassign_submissions_by_nicknames(
+        self,
+        student_id: int,
+        nicknames: list[str],
+        reason: str = "claim_backfill",
+    ) -> int:
+        normalized = tuple(sorted({item.strip().casefold() for item in nicknames if item.strip()}))
+        self.reassigned_calls.append((student_id, normalized, reason))
+        return 0
 
     async def insert_refresh_token(
         self,
@@ -195,7 +262,49 @@ def test_auth_register_login_refresh_and_profile(monkeypatch) -> None:
     assert login_result.account.accountId == register_result.account.accountId
 
 
-def test_auth_update_profile_is_forbidden(monkeypatch) -> None:
+def test_auth_register_rejects_claimed_nickname(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    repo.active_claims["alice"] = 999
+    service = AuthService(settings=settings, repository=repo)
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.register(
+                _build_register_request(
+                    username="alice_02",
+                    studentId="20230002",
+                    ptaNickname="Alice",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "AUTH_PTA_NICKNAME_TAKEN"
+
+
+def test_auth_update_profile_updates_nickname(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    register_result = asyncio.run(service.register(_build_register_request()))
+    current = service.authenticate_access_token(register_result.accessToken)
+
+    profile = asyncio.run(
+        service.update_profile(
+            current,
+            AuthProfileUpdateRequest(ptaNickname="Bob"),
+        )
+    )
+
+    assert profile.studentId == "20230001"
+    assert profile.ptaNickname == "Bob"
+
+
+def test_auth_update_profile_rejects_student_id_change(monkeypatch) -> None:
     monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
     settings = Settings()
     repo = FakeAuthRepo()
@@ -213,7 +322,7 @@ def test_auth_update_profile_is_forbidden(monkeypatch) -> None:
         )
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.code == "AUTH_PROFILE_IMMUTABLE"
+    assert exc_info.value.code == "AUTH_STUDENT_ID_IMMUTABLE"
 
 
 def test_auth_login_rejects_wrong_password(monkeypatch) -> None:

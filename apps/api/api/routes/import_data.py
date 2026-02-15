@@ -5,9 +5,8 @@ All endpoints require admin authentication.
 Flow:
   1. POST /import/upload  — Upload .zip, select examType → extract to practice_root
   2. POST /import/run     — Run incremental import (SSE progress)
-  3. POST /import/link-actors — Link actors (SSE progress)
-  4. GET  /import/history  — Ingest run history
-  5. GET  /import/tasks    — In-memory tasks (debug)
+  3. GET  /import/history  — Ingest run history
+  4. GET  /import/tasks    — In-memory tasks (debug)
 """
 
 from __future__ import annotations
@@ -34,8 +33,6 @@ from ...schemas.import_data import (
     ImportRunResponse,
     IngestHistoryItem,
     IngestHistoryResponse,
-    LinkActorsRequest,
-    LinkActorsResponse,
     UploadResponse,
 )
 from ...services.auth import AuthenticatedAccount
@@ -261,92 +258,6 @@ async def start_import_run(
 
 @router.get("/run/{run_id}/stream")
 async def stream_import_run(
-    run_id: str,
-    _admin: AuthenticatedAccount = Depends(get_admin_account),
-) -> StreamingResponse:
-    tm = get_task_manager()
-    return StreamingResponse(
-        tm.event_stream(run_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-# ── POST /import/link-actors ─────────────────────────────
-
-
-@router.post("/link-actors", response_model=LinkActorsResponse)
-async def start_link_actors(
-    body: LinkActorsRequest,
-    _admin: AuthenticatedAccount = Depends(get_admin_account),
-) -> LinkActorsResponse:
-    tm = get_task_manager()
-    run_id = tm.create_task("link-actors")
-
-    def _worker() -> None:
-        try:
-            tm.mark_running(run_id)
-            tm.emit_log(run_id, "info", "正在启动 Actor 关联 ...")
-
-            pp_settings = _load_preprocess_settings()
-            conn = _create_preprocess_connection(pp_settings)
-            try:
-                from preprocess.linking import LinkActorsService
-                from preprocess.load import Repository
-
-                repo = Repository(conn)
-                service = LinkActorsService(repo=repo, settings=pp_settings)
-
-                def _on_progress(event_type: str, data: dict[str, Any]) -> None:
-                    if event_type == "done":
-                        tm.emit_done(run_id, data)
-                    elif event_type == "log":
-                        tm.emit_log(
-                            run_id,
-                            data.get("level", "info"),
-                            data.get("message", ""),
-                        )
-                    elif event_type == "progress":
-                        tm.emit_progress(
-                            run_id,
-                            data.get("current", 0),
-                            data.get("total", 0),
-                            phase=data.get("phase"),
-                        )
-
-                service.run(
-                    exam_types=body.examTypes,
-                    limit=body.limit,
-                    dry_run=body.dryRun,
-                    on_progress=_on_progress,
-                )
-            finally:
-                conn.close()
-        except Exception as exc:
-            logger.exception("Link-actors task %s failed", run_id)
-            tm.emit_error(run_id, str(exc))
-
-    thread = threading.Thread(target=_worker, daemon=True, name=f"link-{run_id}")
-    thread.start()
-    task = tm.get_task(run_id)
-    if task:
-        task.thread = thread
-
-    return LinkActorsResponse(
-        runId=run_id,
-        message="Actor 关联任务已启动",
-    )
-
-
-# ── GET /import/link-actors/{run_id}/stream ───────────────
-
-
-@router.get("/link-actors/{run_id}/stream")
-async def stream_link_actors(
     run_id: str,
     _admin: AuthenticatedAccount = Depends(get_admin_account),
 ) -> StreamingResponse:

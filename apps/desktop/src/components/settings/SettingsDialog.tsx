@@ -171,7 +171,7 @@ function GeneralSettingsPage() {
 
         <div className="settings-field">
           <p className="text-[11px] text-[var(--text-soft)]">
-            学号和 PTA 昵称在注册时绑定，当前账号下不可修改。
+            学号在注册后不可修改；PTA 昵称可由服务端按规则更新并回填历史提交。
           </p>
         </div>
 

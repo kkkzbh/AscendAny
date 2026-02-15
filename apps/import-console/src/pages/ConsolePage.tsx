@@ -5,7 +5,6 @@ import {
   EXAM_TYPES,
   uploadExamZip,
   startImportRun,
-  startLinkActors,
   getIngestHistory,
   type UploadResponse,
   type IngestHistoryItem,
@@ -171,23 +170,6 @@ export function ConsolePage({ account, onLogout }: Props) {
     }
   }, [uploadedExams, selectedType, dryRun, force, stream]);
 
-  // ── Link Actors ──
-  const handleLinkActors = useCallback(async () => {
-    setTaskBusy(true);
-    stream.clearLogs();
-    try {
-      const types = uploadedExams.length > 0
-        ? [...new Set(uploadedExams.map((e) => e.examType))]
-        : [selectedType];
-      const res = await startLinkActors({ examTypes: types, dryRun });
-      stream.connect(res.runId, "/api/v1/import/link-actors/{run_id}/stream");
-    } catch (err) {
-      stream.clearLogs();
-      setTaskBusy(false);
-      alert(err instanceof Error ? err.message : "启动关联失败");
-    }
-  }, [uploadedExams, selectedType, dryRun, stream]);
-
   // Reset busy when stream done/error
   useEffect(() => {
     if (stream.status === "done" || stream.status === "error") {
@@ -352,13 +334,6 @@ export function ConsolePage({ account, onLogout }: Props) {
                 >
                   {isStreaming ? "⏳ 导入中..." : "🚀 开始增量导入"}
                 </button>
-                <button
-                  className="btn btn-secondary"
-                  onClick={handleLinkActors}
-                  disabled={taskBusy || isStreaming}
-                >
-                  🔗 关联 Actor
-                </button>
                 <div className="action-options">
                   <label className="option-toggle" title="仅扫描不写入数据库，预览将要导入的内容">
                     <input
@@ -422,25 +397,23 @@ export function ConsolePage({ account, onLogout }: Props) {
                           <span className="result-label">失败</span>
                           <span className="result-value">{String(stream.result.failed)}</span>
                         </div>
-                      </>
-                    )}
-                    {"matched" in stream.result && (
-                      <>
                         <div className="result-item result-success">
-                          <span className="result-label">匹配</span>
-                          <span className="result-value">{String(stream.result.matched)}</span>
-                        </div>
-                        <div className="result-item">
-                          <span className="result-label">更新</span>
-                          <span className="result-value">{String(stream.result.updated)}</span>
+                          <span className="result-label">提交已绑定</span>
+                          <span className="result-value">
+                            {String(stream.result.submissionsBound ?? 0)}
+                          </span>
                         </div>
                         <div className="result-item result-warn">
-                          <span className="result-label">模糊</span>
-                          <span className="result-value">{String(stream.result.ambiguous)}</span>
+                          <span className="result-label">待认领提交</span>
+                          <span className="result-value">
+                            {String(stream.result.submissionsPendingClaim ?? 0)}
+                          </span>
                         </div>
                         <div className="result-item result-error">
-                          <span className="result-label">未匹配</span>
-                          <span className="result-value">{String(stream.result.remainingUnmatched)}</span>
+                          <span className="result-label">昵称冲突</span>
+                          <span className="result-value">
+                            {String(stream.result.nicknameConflicts ?? 0)}
+                          </span>
                         </div>
                       </>
                     )}

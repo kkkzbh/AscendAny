@@ -3,7 +3,7 @@
 本仓库当前包含：
 - `doc/`：设计与开发文档（从真实数据样例抽象出的规范）
 - `db/schema/`：PostgreSQL DDL（每张表一个 SQL 文件）
-- `preprocess/`：预处理与增量导入代码（已实现，含 `link-actors` 后处理映射）
+- `preprocess/`：预处理与增量导入代码（已实现，导入内自动提交绑定）
 
 更多入口见：`doc/文档索引.md`。
 

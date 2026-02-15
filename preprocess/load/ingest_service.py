@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 import json
 import os
 from typing import Any, Callable
@@ -12,6 +13,7 @@ from ..derive import compute_current_metrics, compute_exam_metrics, compute_exam
 from ..discover import discover_exam_units
 from ..extract import parse_exam_bundle
 from ..models import ExamMeta, ExamUnit, ParticipantRow
+from ..utils import clean_text
 from .repository import Repository
 
 
@@ -22,6 +24,9 @@ class RunSummary:
     skipped: int
     succeeded: int
     failed: int
+    submissions_bound: int
+    submissions_pending_claim: int
+    nickname_conflicts: int
     errors: list[str]
 
 
@@ -83,13 +88,29 @@ class IngestService:
         if dry_run:
             if on_progress:
                 on_progress("log", {"level": "info", "message": f"Dry run: {len(changed)} exam(s) would be processed out of {len(discovered)} discovered."})
-                on_progress("done", {"ingestRunId": None, "scanned": len(discovered), "skipped": len(discovered) - len(changed), "succeeded": 0, "failed": 0, "errors": []})
+                on_progress(
+                    "done",
+                    {
+                        "ingestRunId": None,
+                        "scanned": len(discovered),
+                        "skipped": len(discovered) - len(changed),
+                        "succeeded": 0,
+                        "failed": 0,
+                        "submissionsBound": 0,
+                        "submissionsPendingClaim": 0,
+                        "nicknameConflicts": 0,
+                        "errors": [],
+                    },
+                )
             return RunSummary(
                 ingest_run_id=None,
                 scanned=len(discovered),
                 skipped=len(discovered) - len(changed),
                 succeeded=0,
                 failed=0,
+                submissions_bound=0,
+                submissions_pending_claim=0,
+                nickname_conflicts=0,
                 errors=[],
             )
 
@@ -108,6 +129,9 @@ class IngestService:
 
         succeeded = 0
         failed = 0
+        submissions_bound = 0
+        submissions_pending_claim = 0
+        nickname_conflicts = 0
         errors: list[str] = []
         successful_exam_ids: list[int] = []
 
@@ -151,6 +175,13 @@ class IngestService:
                     participants = self._materialize_participants(bundle.participants)
                     for participant in participants:
                         self.repo.upsert_exam_participant(exam_id, participant)
+
+                    bound_count, pending_count, conflict_count = self._bind_submission_claims(
+                        bundle.submissions
+                    )
+                    submissions_bound += bound_count
+                    submissions_pending_claim += pending_count
+                    nickname_conflicts += conflict_count
 
                     for submission in bundle.submissions:
                         self.repo.insert_submission(exam_id, submission)
@@ -290,6 +321,9 @@ class IngestService:
                 meta={
                     "succeeded": succeeded,
                     "failed": failed,
+                    "submissions_bound": submissions_bound,
+                    "submissions_pending_claim": submissions_pending_claim,
+                    "nickname_conflicts": nickname_conflicts,
                     "errors": errors,
                     "cleanup": cleanup_stats,
                 },
@@ -303,6 +337,9 @@ class IngestService:
             skipped=len(discovered) - len(changed),
             succeeded=succeeded,
             failed=failed,
+            submissions_bound=submissions_bound,
+            submissions_pending_claim=submissions_pending_claim,
+            nickname_conflicts=nickname_conflicts,
             errors=errors,
         )
         if on_progress:
@@ -312,6 +349,9 @@ class IngestService:
                 "skipped": summary.skipped,
                 "succeeded": summary.succeeded,
                 "failed": summary.failed,
+                "submissionsBound": summary.submissions_bound,
+                "submissionsPendingClaim": summary.submissions_pending_claim,
+                "nicknameConflicts": summary.nickname_conflicts,
                 "errors": summary.errors,
             })
         return summary
@@ -366,6 +406,97 @@ class IngestService:
                 }
             )
         return timeline
+
+    def _bind_submission_claims(self, submissions: list[Any]) -> tuple[int, int, int]:
+        if not submissions:
+            return 0, 0, 0
+
+        actor_sources = self.settings.mapping.actor_sources
+        if not self.settings.mapping.auto_bind_on_ingest:
+            return 0, 0, 0
+
+        nickname_values = []
+        for row in submissions:
+            if not self._source_allowed(getattr(row, "actor_source", ""), actor_sources):
+                continue
+            nickname = self._resolve_submission_nickname(row)
+            if nickname:
+                nickname_values.append(nickname)
+
+        claims = self.repo.fetch_active_nickname_claims(nickname_values)
+        bound = 0
+        pending = 0
+
+        for row in submissions:
+            if not self._source_allowed(getattr(row, "actor_source", ""), actor_sources):
+                continue
+            nickname = self._resolve_submission_nickname(row)
+            if not nickname:
+                row.student_id = None
+                row.raw["linking"] = self._build_linking_payload(
+                    status="pending_claim",
+                    reason="missing_actor_nickname",
+                    row=row,
+                    student_id=None,
+                )
+                pending += 1
+                continue
+            student_id = claims.get(nickname.casefold())
+            if student_id is None:
+                row.student_id = None
+                row.raw["linking"] = self._build_linking_payload(
+                    status="pending_claim",
+                    reason="no_active_claim",
+                    row=row,
+                    student_id=None,
+                )
+                pending += 1
+                continue
+            row.student_id = student_id
+            row.raw["linking"] = self._build_linking_payload(
+                status="bound_by_claim",
+                reason="active_nickname_claim",
+                row=row,
+                student_id=student_id,
+            )
+            bound += 1
+
+        return bound, pending, 0
+
+    @staticmethod
+    def _source_allowed(actor_source: str, patterns: list[str]) -> bool:
+        source = clean_text(actor_source)
+        if not source:
+            return False
+        for pattern in patterns:
+            if fnmatchcase(source, clean_text(pattern)):
+                return True
+        return False
+
+    @staticmethod
+    def _resolve_submission_nickname(row: Any) -> str:
+        actor_name = clean_text(getattr(row, "actor_name", None))
+        if actor_name:
+            return actor_name
+        return clean_text(getattr(row, "actor_external_id", None))
+
+    @staticmethod
+    def _build_linking_payload(
+        status: str,
+        reason: str,
+        row: Any,
+        student_id: int | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status": status,
+            "reason": reason,
+            "actor_source": getattr(row, "actor_source", None),
+            "actor_external_id": getattr(row, "actor_external_id", None),
+            "actor_name": getattr(row, "actor_name", None),
+        }
+        if student_id is not None:
+            payload["student_id"] = student_id
+        return payload
 
     def _trigger_auto_analysis_prewarm(
         self,

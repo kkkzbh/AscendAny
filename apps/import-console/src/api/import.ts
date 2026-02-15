@@ -34,17 +34,6 @@ export interface ImportRunResponse {
   message: string;
 }
 
-export interface LinkActorsRequest {
-  examTypes?: string[] | null;
-  limit?: number | null;
-  dryRun?: boolean;
-}
-
-export interface LinkActorsResponse {
-  runId: string;
-  message: string;
-}
-
 export interface IngestHistoryItem {
   ingestRunId: number;
   status: string;
@@ -118,13 +107,6 @@ export async function uploadExamZip(
 
 export function startImportRun(req: ImportRunRequest): Promise<ImportRunResponse> {
   return apiFetch("/api/v1/import/run", {
-    method: "POST",
-    body: JSON.stringify(req),
-  });
-}
-
-export function startLinkActors(req: LinkActorsRequest): Promise<LinkActorsResponse> {
-  return apiFetch("/api/v1/import/link-actors", {
     method: "POST",
     body: JSON.stringify(req),
   });

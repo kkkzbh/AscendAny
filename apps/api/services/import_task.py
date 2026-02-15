@@ -1,4 +1,4 @@
-"""In-memory task manager for long-running import/link operations.
+"""In-memory task manager for long-running import operations.
 
 Each task runs synchronously in a thread and publishes events via a queue
 that can be consumed as an SSE stream.
@@ -37,7 +37,7 @@ class TaskEvent:
 @dataclass
 class ImportTask:
     run_id: str
-    task_type: str  # "import" | "link-actors"
+    task_type: str  # "import"
     status: TaskStatus = TaskStatus.PENDING
     queue: Queue[TaskEvent | None] = field(default_factory=Queue)
     thread: threading.Thread | None = None
@@ -46,7 +46,7 @@ class ImportTask:
 
 
 class ImportTaskManager:
-    """Manages in-memory import/link-actors tasks."""
+    """Manages in-memory import tasks."""
 
     def __init__(self) -> None:
         self._tasks: dict[str, ImportTask] = {}

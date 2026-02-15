@@ -39,6 +39,8 @@ mapping:
     - datastructure_nickname
     - pta_*_account
   strict_mode: true
+  auto_bind_on_ingest: true
+  claim_identity_source: pta_nickname
 
 fusion:
   half_life_days:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+import json
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -302,6 +303,236 @@ class ApiRepository:
             else None,
         )
 
+    async def ensure_student_by_student_no(
+        self,
+        student_no: str,
+        student_name: str | None,
+        identity_source: str = "user_profile_student_no",
+    ) -> int:
+        normalized_student_no = student_no.strip()
+        if not normalized_student_no:
+            raise RuntimeError("student_no is empty")
+        canonical_key = f"student_no:{normalized_student_no}"
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(
+                        """
+                        SELECT si.student_id
+                        FROM ascendany.student_identities AS si
+                        WHERE si.external_id = %s
+                          AND si.source LIKE %s
+                        ORDER BY si.identity_id ASC
+                        LIMIT 1
+                        """,
+                        (normalized_student_no, "%student_no"),
+                    )
+                    existing = await cursor.fetchone()
+                    if existing:
+                        student_id = int(existing["student_id"])
+                        await cursor.execute(
+                            """
+                            UPDATE ascendany.students
+                            SET canonical_name = COALESCE(%s, canonical_name),
+                                updated_at = now()
+                            WHERE student_id = %s
+                            """,
+                            (student_name, student_id),
+                        )
+                    else:
+                        await cursor.execute(
+                            """
+                            INSERT INTO ascendany.students (canonical_key, canonical_name)
+                            VALUES (%s, %s)
+                            ON CONFLICT (canonical_key)
+                            DO UPDATE SET
+                                canonical_name = COALESCE(EXCLUDED.canonical_name, ascendany.students.canonical_name),
+                                updated_at = now()
+                            RETURNING student_id
+                            """,
+                            (canonical_key, student_name),
+                        )
+                        row = await cursor.fetchone()
+                        if not row:
+                            raise RuntimeError("failed to upsert student")
+                        student_id = int(row["student_id"])
+
+                    await cursor.execute(
+                        """
+                        INSERT INTO ascendany.student_identities (
+                            student_id,
+                            source,
+                            external_id,
+                            external_name
+                        )
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (source, external_id)
+                        DO UPDATE SET
+                            student_id = EXCLUDED.student_id,
+                            external_name = COALESCE(EXCLUDED.external_name, ascendany.student_identities.external_name)
+                        """,
+                        (
+                            student_id,
+                            identity_source,
+                            normalized_student_no,
+                            student_name,
+                        ),
+                    )
+                    return student_id
+
+    async def upsert_student_identity(
+        self,
+        student_id: int,
+        source: str,
+        external_id: str,
+        external_name: str | None,
+    ) -> None:
+        normalized_external_id = external_id.strip()
+        if not normalized_external_id:
+            raise RuntimeError("external_id is empty")
+        query = """
+            INSERT INTO ascendany.student_identities (
+                student_id,
+                source,
+                external_id,
+                external_name
+            )
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (source, external_id)
+            DO UPDATE SET
+                student_id = EXCLUDED.student_id,
+                external_name = COALESCE(EXCLUDED.external_name, ascendany.student_identities.external_name)
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    query,
+                    (student_id, source, normalized_external_id, external_name),
+                )
+
+    async def claim_student_nickname(
+        self,
+        student_id: int,
+        nickname: str,
+        account_id: int | None = None,
+    ) -> bool:
+        normalized_nickname = nickname.strip()
+        if not normalized_nickname:
+            raise RuntimeError("nickname is empty")
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(
+                        """
+                        SELECT claim_id, student_id
+                        FROM ascendany.student_nickname_claims
+                        WHERE is_active = TRUE
+                          AND lower(BTRIM(nickname)) = lower(BTRIM(%s))
+                        FOR UPDATE
+                        """,
+                        (normalized_nickname,),
+                    )
+                    current = await cursor.fetchone()
+                    if current and int(current["student_id"]) != student_id:
+                        return False
+
+                    await cursor.execute(
+                        """
+                        UPDATE ascendany.student_nickname_claims
+                        SET is_active = FALSE,
+                            claimed_to = now()
+                        WHERE student_id = %s
+                          AND is_active = TRUE
+                          AND lower(BTRIM(nickname)) <> lower(BTRIM(%s))
+                        """,
+                        (student_id, normalized_nickname),
+                    )
+
+                    if current:
+                        await cursor.execute(
+                            """
+                            UPDATE ascendany.student_nickname_claims
+                            SET claimed_by_account_id = COALESCE(%s, claimed_by_account_id),
+                                meta = COALESCE(meta, '{}'::jsonb)
+                            WHERE claim_id = %s
+                            """,
+                            (account_id, int(current["claim_id"])),
+                        )
+                    else:
+                        await cursor.execute(
+                            """
+                            INSERT INTO ascendany.student_nickname_claims (
+                                student_id,
+                                nickname,
+                                is_active,
+                                claimed_by_account_id
+                            )
+                            VALUES (%s, %s, TRUE, %s)
+                            """,
+                            (student_id, normalized_nickname, account_id),
+                        )
+        return True
+
+    async def reassign_submissions_by_nicknames(
+        self,
+        student_id: int,
+        nicknames: list[str],
+        reason: str = "claim_backfill",
+    ) -> int:
+        normalized = sorted({item.strip().casefold() for item in nicknames if item.strip()})
+        if not normalized:
+            return 0
+        payload = json.dumps(
+            {
+                "status": "bound_by_claim",
+                "reason": reason,
+                "student_id": student_id,
+            },
+            ensure_ascii=False,
+        )
+        query = """
+            UPDATE ascendany.submissions AS s
+            SET student_id = %s,
+                raw = jsonb_set(
+                    COALESCE(s.raw, '{}'::jsonb),
+                    '{linking}',
+                    %s::jsonb,
+                    true
+                )
+            WHERE (
+                (
+                    s.actor_source = 'datastructure_nickname'
+                    AND (
+                        lower(BTRIM(COALESCE(s.actor_name, ''))) = ANY(%s)
+                        OR lower(BTRIM(COALESCE(s.actor_external_id, ''))) = ANY(%s)
+                    )
+                )
+                OR (
+                    s.actor_source ~ '^pta_.*_account$'
+                    AND lower(BTRIM(COALESCE(s.actor_name, ''))) = ANY(%s)
+                )
+            )
+              AND (
+                s.student_id IS DISTINCT FROM %s
+                OR COALESCE(s.raw -> 'linking', 'null'::jsonb) IS DISTINCT FROM %s::jsonb
+              )
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        student_id,
+                        payload,
+                        normalized,
+                        normalized,
+                        normalized,
+                        student_id,
+                        payload,
+                    ),
+                )
+                return cursor.rowcount
+
     async def fetch_auto_analysis_cache(
         self,
         account_id: int,
@@ -469,11 +700,12 @@ class ApiRepository:
                     NULLIF(BTRIM(up.pta_nickname), '') IS NOT NULL
                     AND EXISTS (
                         SELECT 1
-                        FROM ascendany.student_identities AS si
+                        FROM ascendany.student_nickname_claims AS snc
                         JOIN target_students AS ts
-                          ON ts.student_id = si.student_id
-                        WHERE COALESCE(NULLIF(BTRIM(si.external_name), ''), '')
-                              = NULLIF(BTRIM(up.pta_nickname), '')
+                          ON ts.student_id = snc.student_id
+                        WHERE snc.is_active = TRUE
+                          AND lower(BTRIM(snc.nickname))
+                              = lower(NULLIF(BTRIM(up.pta_nickname), ''))
                     )
                 )
             ORDER BY up.account_id ASC
@@ -812,35 +1044,28 @@ class ApiRepository:
 
     async def find_student_nos_by_name(self, student_name: str) -> list[StudentNoMatch]:
         query = """
-            WITH ranked AS (
-                SELECT
-                    s.student_id,
-                    si.external_id AS student_no,
-                    COALESCE(NULLIF(BTRIM(si.external_name), ''), NULLIF(BTRIM(s.canonical_name), '')) AS student_name,
-                    COALESCE(scm.updated_at, s.updated_at, s.created_at) AS sort_time,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY si.external_id
-                        ORDER BY COALESCE(scm.updated_at, s.updated_at, s.created_at) DESC, s.student_id ASC
-                    ) AS rank_no
-                FROM ascendany.student_identities AS si
-                JOIN ascendany.students AS s
-                  ON s.student_id = si.student_id
-                LEFT JOIN ascendany.student_current_metrics AS scm
-                  ON scm.student_id = s.student_id
-                WHERE si.source LIKE %s
-                  AND (
-                    COALESCE(NULLIF(BTRIM(si.external_name), ''), '') = %s
-                    OR COALESCE(NULLIF(BTRIM(s.canonical_name), ''), '') = %s
-                  )
-            )
-            SELECT student_id, student_no, student_name
-            FROM ranked
-            WHERE rank_no = 1
-            ORDER BY sort_time DESC, student_id ASC
+            SELECT
+                s.student_id,
+                si.external_id AS student_no,
+                COALESCE(NULLIF(BTRIM(si.external_name), ''), NULLIF(BTRIM(s.canonical_name), '')) AS student_name
+            FROM ascendany.student_nickname_claims AS snc
+            JOIN ascendany.students AS s
+              ON s.student_id = snc.student_id
+            JOIN LATERAL (
+                SELECT external_id, external_name
+                FROM ascendany.student_identities
+                WHERE student_id = s.student_id
+                  AND source LIKE %s
+                ORDER BY identity_id ASC
+                LIMIT 1
+            ) AS si ON TRUE
+            WHERE snc.is_active = TRUE
+              AND lower(BTRIM(snc.nickname)) = lower(BTRIM(%s))
+            ORDER BY s.student_id ASC
         """
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
-                await cursor.execute(query, ("%student_no", student_name, student_name))
+                await cursor.execute(query, ("%student_no", student_name))
                 rows = await cursor.fetchall()
 
         return [

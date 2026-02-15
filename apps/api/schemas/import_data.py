@@ -45,31 +45,6 @@ class ImportRunResponse(BaseModel):
     message: str
 
 
-# ── Link Actors ───────────────────────────────────────────
-
-class LinkActorsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    examTypes: list[str] | None = Field(
-        default=None,
-        description="Restrict to these exam types. null = all types.",
-    )
-    limit: int | None = Field(
-        default=None,
-        ge=1,
-        description="Max number of exams to process.",
-    )
-    dryRun: bool = Field(
-        default=False,
-        description="If true, only plan without writing to DB.",
-    )
-
-
-class LinkActorsResponse(BaseModel):
-    runId: str
-    message: str
-
-
 # ── SSE Events (documented here for reference) ───────────
 
 class SSELogEvent(BaseModel):
@@ -95,19 +70,10 @@ class SSEDoneEvent(BaseModel):
     skipped: int
     succeeded: int
     failed: int
+    submissionsBound: int = 0
+    submissionsPendingClaim: int = 0
+    nicknameConflicts: int = 0
     errors: list[str] = Field(default_factory=list)
-
-
-class SSELinkDoneEvent(BaseModel):
-    """Sent as SSE event type 'done' for link-actors."""
-    scannedExams: int
-    processedExams: int
-    matched: int
-    ambiguous: int
-    unmatched: int
-    updated: int
-    metricsUpdated: int
-    remainingUnmatched: int
 
 
 # ── History ───────────────────────────────────────────────

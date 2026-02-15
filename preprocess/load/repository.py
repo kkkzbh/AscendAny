@@ -14,6 +14,12 @@ def _to_sql_like_pattern(pattern: str) -> str:
     return escaped.replace("*", "%")
 
 
+def _normalize_nickname(value: str | None) -> str:
+    if value is None:
+        return ""
+    return value.strip().casefold()
+
+
 class Repository:
     def __init__(self, conn: psycopg.Connection[Any]) -> None:
         self.conn = conn
@@ -354,6 +360,27 @@ class Repository:
                     json.dumps(row.raw, ensure_ascii=False),
                 ),
             )
+
+    def fetch_active_nickname_claims(self, nicknames: list[str]) -> dict[str, int]:
+        keys = sorted({_normalize_nickname(item) for item in nicknames if _normalize_nickname(item)})
+        if not keys:
+            return {}
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                SELECT lower(BTRIM(nickname)) AS nickname_key, student_id
+                FROM ascendany.student_nickname_claims
+                WHERE is_active = TRUE
+                  AND lower(BTRIM(nickname)) = ANY(%s)
+                """,
+                (keys,),
+            )
+            rows = cursor.fetchall()
+        return {
+            str(row["nickname_key"]): int(row["student_id"])
+            for row in rows
+            if row.get("nickname_key") is not None
+        }
 
     def upsert_exam_student_metric(
         self,

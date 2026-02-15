@@ -61,7 +61,7 @@ export function HelpDrawer({ open, onClose }: Props) {
                   <li><code>提交记录/*.csv</code> — 提交数据 (UTF-8)</li>
                   <li><code>成绩单/*.xlsx</code> — 成绩汇总</li>
                 </ul>
-                <p className="help-note">提交者使用短昵称，需要后续通过「关联 Actor」映射到学生实体。</p>
+                <p className="help-note">提交者使用短昵称；系统会在导入时自动尝试按昵称认领绑定。</p>
               </div>
 
               <div className="help-card">
@@ -102,11 +102,10 @@ export function HelpDrawer({ open, onClose }: Props) {
                 适用于数据修复或算法更新后需要全量刷新的场景。
               </dd>
 
-              <dt>关联 Actor</dt>
+              <dt>提交自动绑定</dt>
               <dd>
-                将提交记录中的昵称/账号映射到学生实体。
-                主要用于数据结构月测（昵称→学生映射）。
-                导入完成后执行可补全学生关联，更新灵活性指标和当前画像。
+                导入时系统会自动将提交记录中的昵称绑定到已认领学生。
+                未认领昵称会保留为“待认领提交”，学生注册或改昵称后会自动回填。
               </dd>
             </dl>
           </section>

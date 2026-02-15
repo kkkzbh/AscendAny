@@ -7,7 +7,6 @@ from pathlib import Path
 from .config import load_settings
 from .db import connect
 from .discover import discover_exam_units
-from .linking import LinkActorsService
 from .load import IngestService, Repository
 
 
@@ -53,13 +52,6 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser = subparsers.add_parser("discover", help="list discovered exams")
     discover_parser.add_argument("--exam-type", action="append", default=None)
 
-    link_parser = subparsers.add_parser(
-        "link-actors", help="link submission actors to students"
-    )
-    link_parser.add_argument("--exam-type", action="append", default=None)
-    link_parser.add_argument("--limit", type=int)
-    link_parser.add_argument("--dry-run", action="store_true")
-
     return parser
 
 
@@ -88,29 +80,6 @@ def main() -> int:
 
     with connect(settings) as conn:
         repo = Repository(conn)
-        if args.command == "link-actors":
-            service = LinkActorsService(repo=repo, settings=settings)
-            summary = service.run(
-                exam_types=args.exam_type, limit=args.limit, dry_run=args.dry_run
-            )
-            print(
-                json.dumps(
-                    {
-                        "scanned_exams": summary.scanned_exams,
-                        "processed_exams": summary.processed_exams,
-                        "matched": summary.matched,
-                        "ambiguous": summary.ambiguous,
-                        "unmatched": summary.unmatched,
-                        "updated": summary.updated,
-                        "metrics_updated": summary.metrics_updated,
-                        "remaining_unmatched": summary.remaining_unmatched,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
-            return 0
-
         service = IngestService(repo=repo, settings=settings)
         summary = service.run(
             exam_types=args.exam_type,
@@ -126,6 +95,9 @@ def main() -> int:
                     "skipped": summary.skipped,
                     "succeeded": summary.succeeded,
                     "failed": summary.failed,
+                    "submissions_bound": summary.submissions_bound,
+                    "submissions_pending_claim": summary.submissions_pending_claim,
+                    "nickname_conflicts": summary.nickname_conflicts,
                     "errors": summary.errors,
                 },
                 ensure_ascii=False,

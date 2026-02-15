@@ -133,6 +133,32 @@ class AuthService:
                 )
 
         try:
+            student_entity_id = await self._repository.ensure_student_by_student_no(
+                student_no=student_id,
+                student_name=pta_nickname,
+            )
+            claimed = await self._repository.claim_student_nickname(
+                student_id=student_entity_id,
+                nickname=pta_nickname,
+                account_id=account.account_id,
+            )
+            if not claimed:
+                raise AppError(
+                    status_code=409,
+                    code="AUTH_PTA_NICKNAME_TAKEN",
+                    message="ptaNickname is already claimed by another student.",
+                )
+            await self._repository.upsert_student_identity(
+                student_id=student_entity_id,
+                source="pta_nickname",
+                external_id=pta_nickname,
+                external_name=pta_nickname,
+            )
+            await self._repository.reassign_submissions_by_nicknames(
+                student_id=student_entity_id,
+                nicknames=[pta_nickname],
+                reason="register_claim",
+            )
             profile = await self._repository.upsert_account_profile(
                 account_id=account.account_id,
                 student_id=student_id,
@@ -256,12 +282,83 @@ class AuthService:
         current: AuthenticatedAccount,
         payload: AuthProfileUpdateRequest,
     ) -> AuthProfileResponse:
-        _ = current
-        _ = payload
-        raise AppError(
-            status_code=403,
-            code="AUTH_PROFILE_IMMUTABLE",
-            message="studentId and ptaNickname are immutable after registration.",
+        self._ensure_enabled()
+        profile = await self._repository.fetch_account_profile(current.account_id)
+        if profile is None or not self._clean(profile.student_id):
+            raise AppError(
+                status_code=404,
+                code="AUTH_PROFILE_NOT_FOUND",
+                message="Account profile was not found.",
+            )
+        current_student_id = self._clean(profile.student_id)
+        if current_student_id is None:
+            raise AppError(
+                status_code=400,
+                code="AUTH_STUDENT_ID_REQUIRED",
+                message="studentId is required.",
+            )
+
+        requested_student_id = self._clean(payload.studentId)
+        if (
+            requested_student_id is not None
+            and requested_student_id != current_student_id
+        ):
+            raise AppError(
+                status_code=403,
+                code="AUTH_STUDENT_ID_IMMUTABLE",
+                message="studentId is immutable after registration.",
+            )
+
+        if payload.ptaNickname is None:
+            next_nickname = self._clean(profile.pta_nickname)
+            if next_nickname is None:
+                raise AppError(
+                    status_code=400,
+                    code="AUTH_PTA_NICKNAME_REQUIRED",
+                    message="ptaNickname is required.",
+                )
+        else:
+            next_nickname = self._normalize_pta_nickname(payload.ptaNickname)
+        previous_nickname = self._clean(profile.pta_nickname)
+
+        student_entity_id = await self._repository.ensure_student_by_student_no(
+            student_no=current_student_id,
+            student_name=next_nickname,
+        )
+        claimed = await self._repository.claim_student_nickname(
+            student_id=student_entity_id,
+            nickname=next_nickname,
+            account_id=current.account_id,
+        )
+        if not claimed:
+            raise AppError(
+                status_code=409,
+                code="AUTH_PTA_NICKNAME_TAKEN",
+                message="ptaNickname is already claimed by another student.",
+            )
+        await self._repository.upsert_student_identity(
+            student_id=student_entity_id,
+            source="pta_nickname",
+            external_id=next_nickname,
+            external_name=next_nickname,
+        )
+        reassigned_nicknames = [next_nickname]
+        if previous_nickname and previous_nickname != next_nickname:
+            reassigned_nicknames.append(previous_nickname)
+        await self._repository.reassign_submissions_by_nicknames(
+            student_id=student_entity_id,
+            nicknames=reassigned_nicknames,
+            reason="profile_nickname_update",
+        )
+
+        updated = await self._repository.upsert_account_profile(
+            account_id=current.account_id,
+            student_id=current_student_id,
+            pta_nickname=next_nickname,
+        )
+        return AuthProfileResponse(
+            studentId=updated.student_id,
+            ptaNickname=updated.pta_nickname,
         )
 
     def authenticate_access_token(self, token: str) -> AuthenticatedAccount:

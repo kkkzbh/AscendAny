@@ -105,8 +105,6 @@ VITE_API_BASE_URL=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/import-co
   ├── 发现考试 → GET /api/v1/import/discover
   ├── 启动导入 → POST /api/v1/import/run → 返回 runId
   ├── SSE 流   → GET /api/v1/import/run/{runId}/stream
-  ├── Actor关联 → POST /api/v1/import/link-actors → 返回 runId
-  ├── SSE 流   → GET /api/v1/import/link-actors/{runId}/stream
   └── 导入历史 → GET /api/v1/import/history
 
 FastAPI 后端 (ascendany.kkkzbh.cn)
