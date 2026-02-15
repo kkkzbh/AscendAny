@@ -60,6 +60,7 @@ export function ConsolePage({ account, onLogout }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("console");
   const [history, setHistory] = useState<IngestHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(() => {
     try { return !localStorage.getItem("ascendany-help-seen"); } catch { return true; }
   });
@@ -180,11 +181,12 @@ export function ConsolePage({ account, onLogout }: Props) {
   // ── History ──
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
+    setHistoryError(null);
     try {
       const res = await getIngestHistory(30);
       setHistory(res.items);
-    } catch {
-      // silent
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : "历史记录加载失败");
     } finally {
       setHistoryLoading(false);
     }
@@ -458,6 +460,11 @@ export function ConsolePage({ account, onLogout }: Props) {
                   {historyLoading ? "加载中..." : "刷新"}
                 </button>
               </div>
+              {historyError && (
+                <div className="alert alert-error" style={{ marginBottom: "12px" }}>
+                  历史记录加载失败：{historyError}
+                </div>
+              )}
               {history.length === 0 && !historyLoading && (
                 <div className="empty-message">暂无导入记录</div>
               )}
