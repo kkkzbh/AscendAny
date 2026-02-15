@@ -2,6 +2,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useAvatarStore } from "@/stores/avatarStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
+import appLogo from "@/assets/app-logo.png";
 
 export function TitleBar() {
   const openSettings = useSettingsStore((s) => s.openSettings);
@@ -21,12 +22,12 @@ export function TitleBar() {
       <div
         className={`titlebar-brand flex items-center gap-3 ${isMac ? "pl-20" : "pr-28"}`}
       >
-        <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--accent-600)] to-[var(--accent-400)] shadow-[0_8px_20px_rgba(3,105,161,0.28)]">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 14l5-5 4 4 7-7" />
-            <path d="M16 6h4v4" />
-          </svg>
-        </div>
+        <img
+          src={appLogo}
+          alt="AscendAny"
+          className="h-7 w-7 rounded-xl object-cover shadow-[0_8px_20px_rgba(3,105,161,0.2)]"
+          draggable={false}
+        />
         <div className="flex flex-col leading-none">
           <span className="text-[13px] font-semibold tracking-[0.02em] text-[var(--text-strong)]">AscendAny</span>
           <span className="text-[10px] text-[var(--text-muted)]">Student Insight Studio</span>

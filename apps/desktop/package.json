@@ -29,6 +29,12 @@
       "dist-electron/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      }
+    ],
     "asar": true,
     "win": {
       "icon": "resources/icon.ico",
@@ -52,7 +58,12 @@
         }
       ],
       "maintainer": "AscendAny Team <opensource@ascendany.dev>",
-      "category": "Utility"
+      "category": "Utility",
+      "desktop": {
+        "Name": "AscendAny",
+        "StartupWMClass": "@ascendanydesktop",
+        "X-GNOME-WMClass": "@ascendanydesktop"
+      }
     }
   },
   "dependencies": {

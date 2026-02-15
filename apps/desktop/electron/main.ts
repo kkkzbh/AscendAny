@@ -12,6 +12,20 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 const CREDENTIAL_FILE_NAME = "secure-credentials.json";
+const LINUX_DESKTOP_FILE = "@ascendanydesktop.desktop";
+
+function resolveWindowIconPath(): string | undefined {
+  if (!isLinux) {
+    return undefined;
+  }
+
+  const candidates = [
+    path.join(__dirname, "../resources/icon.png"),
+    path.join(process.resourcesPath, "icon.png"),
+  ];
+
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
 
 type LinuxGpuMode = "auto" | "off" | "x11" | "swiftshader";
 type LinuxImeMode = "auto" | "on" | "off";
@@ -113,6 +127,9 @@ function configureLinuxInputMethod(gpuMode: LinuxGpuMode) {
 }
 
 if (isLinux) {
+  const setDesktopName = (app as Electron.App & { setDesktopName?: (desktopName: string) => void })
+    .setDesktopName;
+  setDesktopName?.(LINUX_DESKTOP_FILE);
   const linuxGpuMode = resolveLinuxGpuMode();
   configureLinuxGraphics(linuxGpuMode);
   configureLinuxInputMethod(linuxGpuMode);
@@ -131,6 +148,7 @@ function createWindow() {
     vibrancy: isMac ? "under-window" : undefined,
     visualEffectState: isMac ? "active" : undefined,
     backgroundColor: isMac ? "#00000000" : "#f0f2f8",
+    icon: resolveWindowIconPath(),
     // On Linux, use rounded corners via CSS instead of OS-level transparency
     ...(isLinux && { backgroundMaterial: undefined }),
     webPreferences: {
