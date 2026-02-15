@@ -94,7 +94,10 @@ jobs:
             git checkout -b "\${DEPLOY_REF}" "origin/\${DEPLOY_REF}"
           fi
 
-          git pull --ff-only origin "\${DEPLOY_REF}"
+          # Force the working tree to match origin branch exactly.
+          # This avoids deployment failure when server has local tracked/untracked changes.
+          git reset --hard "origin/\${DEPLOY_REF}"
+          git clean -fd
 
           ACTUAL_SHA="\$(git rev-parse HEAD)"
           if [ "\${ACTUAL_SHA}" != "\${EXPECTED_SHA}" ]; then
