@@ -1,0 +1,128 @@
+name: Deploy Import Console
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "apps/import-console/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/deploy-import-console.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-import-console-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Import Console
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build import console
+        env:
+          VITE_API_BASE_URL: ${{ vars.IMPORT_CONSOLE_API_BASE_URL || 'https://ascendany.kkkzbh.cn' }}
+          VITE_BASE_PATH: /
+        run: pnpm --filter @ascendany/import-console build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: import-console-dist
+          path: apps/import-console/dist
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy to Import Server
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      DEPLOY_HOST: ${{ secrets.ASCENDANY_SERVER_HOST }}
+      DEPLOY_USER: ${{ secrets.ASCENDANY_SERVER_USER }}
+      DEPLOY_PORT: ${{ vars.ASCENDANY_SERVER_PORT || '22' }}
+      DEPLOY_IMPORT_DIR: ${{ vars.ASCENDANY_IMPORT_DIR || '/opt/ascendany/import-console' }}
+      DEPLOY_IMPORT_URL: ${{ vars.ASCENDANY_IMPORT_URL || 'https://import.kkkzbh.cn' }}
+    steps:
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HOST}" ]; then
+            echo "Missing required secret: ASCENDANY_SERVER_HOST" >&2
+            exit 1
+          fi
+          if [ -z "${DEPLOY_USER}" ]; then
+            echo "Missing required secret: ASCENDANY_SERVER_USER" >&2
+            exit 1
+          fi
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: import-console-dist
+          path: dist
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.ASCENDANY_SSH_PRIVATE_KEY }}
+
+      - name: Setup known_hosts
+        env:
+          SSH_KNOWN_HOSTS: ${{ secrets.ASCENDANY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          if [ -n "${SSH_KNOWN_HOSTS}" ]; then
+            printf "%s\n" "${SSH_KNOWN_HOSTS}" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "${DEPLOY_PORT}" "${DEPLOY_HOST}" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Sync static files
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_IMPORT_DIR}'"
+          rsync -az --delete -e "ssh -p ${DEPLOY_PORT}" dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_IMPORT_DIR}/"
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "test -f '${DEPLOY_IMPORT_DIR}/index.html'"
+
+      - name: Verify import console URL
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl -fsS "${DEPLOY_IMPORT_URL}" >/dev/null; then
+              echo "Import console health check passed on attempt ${attempt}"
+              exit 0
+            fi
+            if [ "${attempt}" -eq 12 ]; then
+              echo "Import console health check failed after retries: ${DEPLOY_IMPORT_URL}" >&2
+              exit 1
+            fi
+            sleep 5
+          done
