@@ -243,9 +243,6 @@ async def start_import_run(
 
     thread = threading.Thread(target=_worker, daemon=True, name=f"import-{run_id}")
     thread.start()
-    task = tm.get_task(run_id)
-    if task:
-        task.thread = thread
 
     return ImportRunResponse(
         runId=run_id,

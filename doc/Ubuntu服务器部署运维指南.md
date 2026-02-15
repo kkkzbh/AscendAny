@@ -31,18 +31,27 @@
 
 ## 4. SSH 登录服务器
 
-首次或长期运维前，先用私钥登录（已知登录用户：`xyz`，服务器 IP：`52.147.120.86`）。
+当前推荐直接使用本机 SSH 别名：
 
-为避免私钥权限过宽导致 `Permission denied (publickey)`，建议先复制并收紧权限：
+```bash
+ssh ascend
+```
+
+如需在新机器初始化，可在 `~/.ssh/config` 添加：
+
+```sshconfig
+Host ascend
+  HostName 52.147.120.86
+  User xyz
+  IdentityFile /home/kkkzbh/data/下载/Ascend_key.pem
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+```
+
+兼容方式（不依赖别名，临时私钥）：
 
 ```bash
 install -m 600 /home/kkkzbh/data/下载/Ascend_key.pem /tmp/ascend_key.pem
-ssh -o StrictHostKeyChecking=accept-new -i /tmp/ascend_key.pem xyz@52.147.120.86
-```
-
-可直接执行单条远程命令检查连通性：
-
-```bash
 ssh -i /tmp/ascend_key.pem xyz@52.147.120.86 'whoami && hostnamectl --static'
 ```
 
