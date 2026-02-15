@@ -259,6 +259,11 @@ type ReleaseFetchResult = {
   assets: GithubReleaseAsset[];
 };
 
+const EMPTY_RELEASE_FETCH_RESULT: ReleaseFetchResult = {
+  status: 0,
+  assets: [],
+};
+
 const defaultDownloads: DownloadItem[] = [
   { target: "linux", platform: "Linux", icon: "linux", pkg: "RPM", arch: "x64", status: "soon", action: "暂无资源" },
   { target: "windows", platform: "Windows", icon: "windows", pkg: "EXE", arch: "x64", status: "soon", action: "暂无资源" },
@@ -362,21 +367,31 @@ export default function App() {
 
     async function loadReleaseAssets() {
       try {
-        const manifest = await fetchReleaseAssets(RELEASE_MANIFEST_URL, controller.signal, {
-          cache: "no-store",
-        });
-        if (manifest.assets.length > 0) {
-          setDownloads(resolveDownloads(manifest.assets));
+        const [apiResult, manifestResult] = await Promise.allSettled([
+          fetchReleaseAssets(RELEASE_API_URL, controller.signal, {
+            headers: {
+              Accept: "application/vnd.github+json",
+            },
+          }),
+          fetchReleaseAssets(RELEASE_MANIFEST_URL, controller.signal, {
+            cache: "no-store",
+          }),
+        ]);
+
+        const api = apiResult.status === "fulfilled"
+          ? apiResult.value
+          : EMPTY_RELEASE_FETCH_RESULT;
+        const manifest = manifestResult.status === "fulfilled"
+          ? manifestResult.value
+          : EMPTY_RELEASE_FETCH_RESULT;
+
+        if (api.assets.length > 0) {
+          setDownloads(resolveDownloads(api.assets));
           return;
         }
 
-        const api = await fetchReleaseAssets(RELEASE_API_URL, controller.signal, {
-          headers: {
-            Accept: "application/vnd.github+json",
-          },
-        });
-        if (api.assets.length > 0) {
-          setDownloads(resolveDownloads(api.assets));
+        if (manifest.assets.length > 0) {
+          setDownloads(resolveDownloads(manifest.assets));
           return;
         }
 
