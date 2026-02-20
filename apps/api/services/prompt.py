@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from ..db.repository import (
     ApiRepository,
     DashboardMetricsRow,
@@ -15,6 +18,8 @@ from .history_merge import (
     metric_from_rows,
 )
 from .identity import ResolvedIdentity
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Metric / rating names (Chinese)
@@ -35,8 +40,26 @@ METRIC_KEYS = list(METRIC_NAMES.keys())
 # When new roles are added, register their style prompt here.
 # ---------------------------------------------------------------------------
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_SAKIKO_PROMPT_PATH = _PROJECT_ROOT / "image/role/Sakiko/prompt.md"
+
+
+def _load_role_prompt(path: Path) -> str:
+    try:
+        prompt = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        logger.warning("Failed to load role prompt: %s", path, exc_info=True)
+        return ""
+    if not prompt:
+        logger.warning("Role prompt is empty: %s", path)
+    return prompt
+
+
+_SAKIKO_STYLE_PROMPT = _load_role_prompt(_SAKIKO_PROMPT_PATH)
+
 ROLE_STYLE_PROMPTS: dict[str, str] = {
     "xiaoD": "",  # 默认角色，无额外风格
+    "sakiko": _SAKIKO_STYLE_PROMPT,
 }
 
 # ---------------------------------------------------------------------------

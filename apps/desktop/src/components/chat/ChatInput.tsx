@@ -42,6 +42,7 @@ export function ChatInput() {
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || isSending || isAiWorking) return;
+    const roleIdAtSend = activeRole;
 
     const provider = providers[activeProvider];
     if (!provider) {
@@ -103,10 +104,10 @@ export function ChatInput() {
         summary: latestSession.summary,
         providerType: activeProvider,
         providerConfig,
-        roleId: activeRole,
+        roleId: roleIdAtSend,
       }, accessToken ?? undefined);
 
-      addMessage("assistant", response.reply);
+      addMessage("assistant", response.reply, { roleId: roleIdAtSend });
       if (response.summary !== latestSession.summary) {
         setSummary(response.summary);
       }

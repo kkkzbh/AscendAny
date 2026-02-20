@@ -10,8 +10,8 @@ export function ChatPanel() {
   const finishAiWork = useChatStore((s) => s.finishAiWork);
 
   const handleAutoAnalysis = useCallback(
-    (reply: string) => {
-      addMessage("assistant", reply);
+    (reply: string, roleId: string) => {
+      addMessage("assistant", reply, { roleId });
     },
     [addMessage],
   );

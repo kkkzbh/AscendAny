@@ -1,8 +1,7 @@
 import type { ChatMessage } from "@/types/chat";
-import { findRole } from "@/types/role";
+import { DEFAULT_ROLE_ID, findRole } from "@/types/role";
 import { useAuthStore } from "@/stores/authStore";
 import { useAvatarStore } from "@/stores/avatarStore";
-import { useSettingsStore } from "@/stores/settingsStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -16,8 +15,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isSystem = message.role === "system";
   const account = useAuthStore((s) => s.account);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
-  const activeRole = useSettingsStore((s) => s.activeRole);
-  const role = findRole(activeRole);
+  const role = findRole(
+    message.role === "assistant" ? (message.roleId ?? DEFAULT_ROLE_ID) : DEFAULT_ROLE_ID,
+  );
 
   const timeStr = new Date(message.timestamp).toLocaleTimeString("zh-CN", {
     hour: "2-digit",

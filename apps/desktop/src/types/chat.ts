@@ -5,6 +5,8 @@ export interface ChatMessage {
   role: Role;
   content: string;
   timestamp: number;
+  /** Assistant role id snapshot when this message was generated. */
+  roleId?: string;
 }
 
 export interface ChatSession {

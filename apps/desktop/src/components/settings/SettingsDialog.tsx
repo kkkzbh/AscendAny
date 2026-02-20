@@ -316,7 +316,11 @@ function RoleSettingsPage() {
                       src={role.avatarUrl}
                       alt={role.name}
                       className="h-6 w-6"
-                      style={isActive ? { filter: "brightness(0) invert(1)" } : undefined}
+                      style={
+                        isActive && role.id === "xiaoD"
+                          ? { filter: "brightness(0) invert(1)" }
+                          : undefined
+                      }
                     />
                   ) : (
                     <span

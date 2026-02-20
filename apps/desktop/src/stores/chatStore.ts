@@ -6,7 +6,11 @@ interface ChatState {
   session: ChatSession;
   aiWorkTaskIds: string[];
   isAiWorking: boolean;
-  addMessage: (role: ChatMessage["role"], content: string) => void;
+  addMessage: (
+    role: ChatMessage["role"],
+    content: string,
+    options?: { roleId?: string },
+  ) => void;
   clearContext: () => void;
   setSummary: (summary: string) => void;
   startAiWork: (source: "manual" | "auto") => string;
@@ -41,7 +45,7 @@ export const useChatStore = create<ChatState>()(
       aiWorkTaskIds: [],
       isAiWorking: false,
 
-      addMessage: (role, content) =>
+      addMessage: (role, content, options) =>
         set((state) => ({
           session: {
             ...state.session,
@@ -52,6 +56,7 @@ export const useChatStore = create<ChatState>()(
                 role,
                 content,
                 timestamp: Date.now(),
+                roleId: role === "assistant" ? options?.roleId : undefined,
               },
             ],
             updatedAt: Date.now(),

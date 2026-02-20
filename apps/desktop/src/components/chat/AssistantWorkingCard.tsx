@@ -8,6 +8,7 @@ export function AssistantWorkingCard() {
   const activeRole = useSettingsStore((s) => s.activeRole);
   const role = findRole(activeRole);
   const workingCard = resolveRoleWorkingCard(activeRole);
+  const title = role.id === "sakiko" ? "丰川祥子正在输入" : `${role.name} 正在工作`;
 
   const stages = workingCard.stages.length > 0 ? workingCard.stages : ["正在处理请求"];
   const [stageIndex, setStageIndex] = useState(0);
@@ -43,7 +44,7 @@ export function AssistantWorkingCard() {
         className={`assistant-working-card assistant-working-card--${workingCard.variant} max-w-[72%] rounded-[18px]`}
       >
         <p className="assistant-working-title">
-          {role.name} 正在工作
+          {title}
         </p>
         <p className="assistant-working-stage">{stages[stageIndex]}</p>
         <div className="assistant-working-dots" aria-hidden="true">

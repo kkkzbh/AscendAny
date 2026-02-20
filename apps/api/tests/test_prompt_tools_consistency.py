@@ -190,6 +190,22 @@ def test_prompt_service_proactive_mode_contains_analysis_workflow() -> None:
     assert "## 指标体系说明" in prompt
 
 
+def test_prompt_service_sakiko_role_includes_style_prompt() -> None:
+    repo = _build_repo()
+    prompt_service = PromptService(repository=repo)
+
+    prompt = asyncio.run(
+        prompt_service.build_system_prompt(
+            identity=None,
+            role_id="sakiko",
+            role_name="丰川祥子（Sakiko）",
+        )
+    )
+
+    assert "你是一位专业的编程学习分析助手，名叫「丰川祥子（Sakiko）」" in prompt
+    assert "你的中文名：丰川祥子" in prompt
+
+
 def test_tool_executor_merges_exam_metric_rows() -> None:
     repo = _build_repo()
     executor = ToolExecutor(repository=repo, identity=_build_identity())

@@ -34,6 +34,7 @@ router = APIRouter(tags=["chat"])
 # Server-side role name mapping (mirrors frontend BUILT_IN_ROLES)
 _ROLE_NAMES: dict[str, str] = {
     "xiaoD": "小D",
+    "sakiko": "丰川祥子（Sakiko）",
 }
 
 _DEFAULT_ROLE_ID = "xiaoD"

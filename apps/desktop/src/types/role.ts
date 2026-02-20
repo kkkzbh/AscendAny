@@ -1,4 +1,5 @@
 import xiaoDAvatarUrl from "@/assets/role-xiaoD.svg";
+import sakikoAvatarUrl from "@/assets/role-sakiko.png";
 
 export type WorkingCardVariant = "ocean" | "amber" | "violet";
 
@@ -36,6 +37,17 @@ export const BUILT_IN_ROLES: RoleConfig[] = [
     workingCard: {
       variant: "ocean",
       stages: ["正在读取上下文", "正在分析学习数据", "正在组织回复"],
+    },
+  },
+  {
+    id: "sakiko",
+    name: "丰川祥子（Sakiko）",
+    description: "Ave Mujica键盘手兼队长，抽时间也打打算法竞赛",
+    avatarUrl: sakikoAvatarUrl,
+    systemPromptExtra: "",
+    workingCard: {
+      variant: "amber",
+      stages: ["正在整理思路", "正在对照考试数据", "正在给出行动建议"],
     },
   },
 ];

@@ -14,7 +14,7 @@ import {
  * and forwards the assistant reply via callbacks.
  */
 export function useAutoAnalysis(params: {
-  onReply: (reply: string) => void;
+  onReply: (reply: string, roleId: string) => void;
   onWorkStart?: () => string;
   onWorkEnd?: (taskId: string | undefined) => void;
 }) {
@@ -42,6 +42,7 @@ export function useAutoAnalysis(params: {
     inFlightExamIdRef.current = latestExamId;
 
     (async () => {
+      const roleIdAtRequest = activeRole;
       let taskId: string | undefined;
       try {
         // Build provider config for non-server-config providers
@@ -69,7 +70,7 @@ export function useAutoAnalysis(params: {
             ptaNickname: account.ptaNickname ?? undefined,
             providerType: activeProvider,
             providerConfig,
-            roleId: activeRole,
+            roleId: roleIdAtRequest,
             latestExamId,
           },
           accessToken,
@@ -79,7 +80,7 @@ export function useAutoAnalysis(params: {
 
         const reply = response.reply.trim();
         if (reply) {
-          onReply(reply);
+          onReply(reply, roleIdAtRequest);
         }
       } catch {
         // Auto-analysis is best-effort; silently ignore errors.
