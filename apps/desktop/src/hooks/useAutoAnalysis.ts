@@ -11,9 +11,14 @@ import {
 /**
  * Hook that triggers auto-analysis once per latest exam (per account).
  * If the latest rating exam changes, it calls the auto-analysis endpoint
- * and forwards the assistant reply via onTrigger.
+ * and forwards the assistant reply via callbacks.
  */
-export function useAutoAnalysis(onTrigger: (reply: string) => void) {
+export function useAutoAnalysis(params: {
+  onReply: (reply: string) => void;
+  onWorkStart?: () => string;
+  onWorkEnd?: (taskId: string | undefined) => void;
+}) {
+  const { onReply, onWorkStart, onWorkEnd } = params;
   const inFlightExamIdRef = useRef<string | null>(null);
 
   const account = useAuthStore((s) => s.account);
@@ -37,6 +42,7 @@ export function useAutoAnalysis(onTrigger: (reply: string) => void) {
     inFlightExamIdRef.current = latestExamId;
 
     (async () => {
+      let taskId: string | undefined;
       try {
         // Build provider config for non-server-config providers
         const provider = providers[activeProvider];
@@ -55,6 +61,7 @@ export function useAutoAnalysis(onTrigger: (reply: string) => void) {
             mode: activeProvider === "anthropic" ? "anthropic" : "openai_compatible",
           };
         }
+        taskId = onWorkStart?.();
 
         const response = await postAutoAnalysis(
           {
@@ -72,12 +79,13 @@ export function useAutoAnalysis(onTrigger: (reply: string) => void) {
 
         const reply = response.reply.trim();
         if (reply) {
-          onTrigger(reply);
+          onReply(reply);
         }
       } catch {
         // Auto-analysis is best-effort; silently ignore errors.
       } finally {
         inFlightExamIdRef.current = null;
+        onWorkEnd?.(taskId);
       }
     })();
   }, [
@@ -88,6 +96,8 @@ export function useAutoAnalysis(onTrigger: (reply: string) => void) {
     activeProvider,
     providers,
     activeRole,
-    onTrigger,
+    onReply,
+    onWorkStart,
+    onWorkEnd,
   ]);
 }

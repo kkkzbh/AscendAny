@@ -6,6 +6,8 @@ import { useAutoAnalysis } from "@/hooks/useAutoAnalysis";
 
 export function ChatPanel() {
   const addMessage = useChatStore((s) => s.addMessage);
+  const startAiWork = useChatStore((s) => s.startAiWork);
+  const finishAiWork = useChatStore((s) => s.finishAiWork);
 
   const handleAutoAnalysis = useCallback(
     (reply: string) => {
@@ -14,7 +16,24 @@ export function ChatPanel() {
     [addMessage],
   );
 
-  useAutoAnalysis(handleAutoAnalysis);
+  const handleAutoWorkStart = useCallback(
+    () => startAiWork("auto"),
+    [startAiWork],
+  );
+
+  const handleAutoWorkEnd = useCallback(
+    (taskId: string | undefined) => {
+      if (!taskId) return;
+      finishAiWork(taskId);
+    },
+    [finishAiWork],
+  );
+
+  useAutoAnalysis({
+    onReply: handleAutoAnalysis,
+    onWorkStart: handleAutoWorkStart,
+    onWorkEnd: handleAutoWorkEnd,
+  });
 
   return (
     <section className="flex h-full w-full flex-col">

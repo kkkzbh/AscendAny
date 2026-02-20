@@ -29,6 +29,9 @@ export function ChatInput() {
   const addMessage = useChatStore((s) => s.addMessage);
   const clearContext = useChatStore((s) => s.clearContext);
   const setSummary = useChatStore((s) => s.setSummary);
+  const isAiWorking = useChatStore((s) => s.isAiWorking);
+  const startAiWork = useChatStore((s) => s.startAiWork);
+  const finishAiWork = useChatStore((s) => s.finishAiWork);
 
   const account = useAuthStore((s) => s.account);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -38,7 +41,7 @@ export function ChatInput() {
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || isSending) return;
+    if (!trimmed || isSending || isAiWorking) return;
 
     const provider = providers[activeProvider];
     if (!provider) {
@@ -73,6 +76,7 @@ export function ChatInput() {
     }
 
     setIsSending(true);
+    const workTaskId = startAiWork("manual");
 
     addMessage("user", trimmed);
     setText("");
@@ -113,10 +117,12 @@ export function ChatInput() {
       );
     } finally {
       setIsSending(false);
+      finishAiWork(workTaskId);
     }
   }, [
     text,
     isSending,
+    isAiWorking,
     providers,
     activeProvider,
     activeRole,
@@ -125,12 +131,14 @@ export function ChatInput() {
     account?.ptaNickname,
     accessToken,
     setSummary,
+    startAiWork,
+    finishAiWork,
   ]);
 
   const handleClear = useCallback(() => {
-    if (isSending) return;
+    if (isSending || isAiWorking) return;
     clearContext();
-  }, [clearContext, isSending]);
+  }, [clearContext, isSending, isAiWorking]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -166,7 +174,7 @@ export function ChatInput() {
         <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
           <button
             onClick={handleClear}
-            disabled={isSending}
+            disabled={isSending || isAiWorking}
             className="ui-icon-button"
             title="清空上下文"
           >
@@ -186,9 +194,9 @@ export function ChatInput() {
           </button>
           <button
             onClick={handleSend}
-            disabled={!text.trim() || isSending}
+            disabled={!text.trim() || isSending || isAiWorking}
             className="send-button flex h-8 w-8 items-center justify-center rounded-lg text-white disabled:opacity-30 disabled:shadow-none"
-            title={isSending ? "发送中" : "发送"}
+            title={isAiWorking ? "助手处理中" : "发送"}
           >
             <svg
               width="15"
@@ -208,7 +216,7 @@ export function ChatInput() {
       </div>
 
       <p className="chat-input-hint mt-1.5 text-[10px] text-[var(--text-soft)]">
-        {isSending ? "助手正在回复..." : "Shift + Enter 换行"}
+        {isAiWorking ? "助手正在处理请求..." : "Shift + Enter 换行"}
       </p>
     </div>
   );

@@ -4,9 +4,13 @@ import type { ChatMessage, ChatSession } from "@/types/chat";
 
 interface ChatState {
   session: ChatSession;
+  aiWorkTaskIds: string[];
+  isAiWorking: boolean;
   addMessage: (role: ChatMessage["role"], content: string) => void;
   clearContext: () => void;
   setSummary: (summary: string) => void;
+  startAiWork: (source: "manual" | "auto") => string;
+  finishAiWork: (taskId: string) => void;
 }
 
 function createEmptySession(): ChatSession {
@@ -24,10 +28,18 @@ function generateId(): string {
   return `msg_${Date.now()}_${_msgCounter}`;
 }
 
+let _workCounter = 0;
+function generateWorkId(source: "manual" | "auto"): string {
+  _workCounter += 1;
+  return `work_${source}_${Date.now()}_${_workCounter}`;
+}
+
 export const useChatStore = create<ChatState>()(
   persist(
     (set) => ({
       session: createEmptySession(),
+      aiWorkTaskIds: [],
+      isAiWorking: false,
 
       addMessage: (role, content) =>
         set((state) => ({
@@ -49,6 +61,8 @@ export const useChatStore = create<ChatState>()(
       clearContext: () =>
         set(() => ({
           session: createEmptySession(),
+          aiWorkTaskIds: [],
+          isAiWorking: false,
         })),
 
       setSummary: (summary) =>
@@ -59,9 +73,30 @@ export const useChatStore = create<ChatState>()(
             updatedAt: Date.now(),
           },
         })),
+
+      startAiWork: (source) => {
+        const taskId = generateWorkId(source);
+        set((state) => ({
+          aiWorkTaskIds: [...state.aiWorkTaskIds, taskId],
+          isAiWorking: true,
+        }));
+        return taskId;
+      },
+
+      finishAiWork: (taskId) =>
+        set((state) => {
+          const nextTaskIds = state.aiWorkTaskIds.filter((id) => id !== taskId);
+          return {
+            aiWorkTaskIds: nextTaskIds,
+            isAiWorking: nextTaskIds.length > 0,
+          };
+        }),
     }),
     {
       name: "ascendany_chat_guest",
+      partialize: (state) => ({
+        session: state.session,
+      }),
     },
   ),
 );
