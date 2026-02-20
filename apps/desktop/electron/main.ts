@@ -127,9 +127,9 @@ function configureLinuxInputMethod(gpuMode: LinuxGpuMode) {
 }
 
 if (isLinux) {
-  const setDesktopName = (app as Electron.App & { setDesktopName?: (desktopName: string) => void })
-    .setDesktopName;
-  setDesktopName?.(LINUX_DESKTOP_FILE);
+  (app as Electron.App & { setDesktopName?: (desktopName: string) => void }).setDesktopName?.(
+    LINUX_DESKTOP_FILE,
+  );
   const linuxGpuMode = resolveLinuxGpuMode();
   configureLinuxGraphics(linuxGpuMode);
   configureLinuxInputMethod(linuxGpuMode);
