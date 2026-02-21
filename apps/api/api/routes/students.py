@@ -14,6 +14,7 @@ from ...schemas.students import (
     StudentMetricsResponse,
 )
 from ...services.dashboard import DashboardService
+from ...services.growth_insights import build_empty_growth_insights
 from ...services.identity import StudentIdentityService
 
 router = APIRouter(tags=["students"])
@@ -23,6 +24,7 @@ def _build_not_found_fallback_dashboard(
     student_id: str | None,
     pta_nickname: str | None,
 ) -> StudentDashboardResponse:
+    empty_growth = build_empty_growth_insights()
     return StudentDashboardResponse(
         metrics=StudentMetricsResponse(
             knowledge=50,
@@ -57,6 +59,10 @@ def _build_not_found_fallback_dashboard(
             ptaNickname=(pta_nickname or "").strip() or None,
             noSubmissionRecords=True,
         ),
+        progressExplanation=empty_growth.progress_explanation,
+        milestoneStreak=empty_growth.milestone_streak,
+        peerComparison=empty_growth.peer_comparison,
+        postExamSupport=empty_growth.post_exam_support,
     )
 
 

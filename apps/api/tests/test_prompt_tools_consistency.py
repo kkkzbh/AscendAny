@@ -7,8 +7,11 @@ from decimal import Decimal
 
 from apps.api.db.repository import (
     DashboardMetricsRow,
+    ExamBandMediansRow,
     ExamMetricHistoryRow,
+    ExamParticipantContextRow,
     ExamParticipantRow,
+    ExamPreviousRankerRow,
     ExamStudentMetricRow,
     RatingHistoryRow,
 )
@@ -26,6 +29,9 @@ class FakeMergedHistoryRepo:
         self.exam_metric_by_exam_student: dict[
             tuple[int, int], ExamStudentMetricRow
         ] = {}
+        self.participant_context_by_exam: dict[int, ExamParticipantContextRow] = {}
+        self.band_medians_by_exam: dict[int, ExamBandMediansRow] = {}
+        self.previous_ranker_by_exam: dict[int, ExamPreviousRankerRow] = {}
 
     async def fetch_current_metrics(
         self, student_id: int
@@ -56,6 +62,24 @@ class FakeMergedHistoryRepo:
             if row is not None:
                 rows.append(row)
         return rows
+
+    async def fetch_exam_participant_context(
+        self, exam_id: int, student_ids: list[int]
+    ) -> ExamParticipantContextRow | None:
+        del student_ids
+        return self.participant_context_by_exam.get(exam_id)
+
+    async def fetch_exam_band_medians(
+        self, exam_id: int, pos_start: int, pos_end: int
+    ) -> ExamBandMediansRow | None:
+        del pos_start, pos_end
+        return self.band_medians_by_exam.get(exam_id)
+
+    async def fetch_exam_previous_ranker(
+        self, exam_id: int, my_pos: int
+    ) -> ExamPreviousRankerRow | None:
+        del my_pos
+        return self.previous_ranker_by_exam.get(exam_id)
 
 
 def _build_identity() -> ResolvedIdentity:
@@ -273,3 +297,46 @@ def test_tool_executor_student_ability_scores_returns_rank_gap() -> None:
     assert payload["rank_basis"]["source"] == "exam_participants.rank"
     assert payload["metric_diff_vs_previous"]["knowledge"]["delta_vs_previous"] == 6
     assert payload["metric_diff_vs_previous"]["knowledge"]["mine_is_missing"] is False
+
+
+def test_tool_executor_growth_insights_returns_dashboard_shape() -> None:
+    repo = _build_repo()
+    repo.participant_context_by_exam[3] = ExamParticipantContextRow(
+        student_id=101,
+        position=7,
+        rank=7,
+        total_score=370,
+        solved_count=5,
+        total_participants=100,
+    )
+    repo.band_medians_by_exam[3] = ExamBandMediansRow(
+        sample_size=20,
+        total_score_median=365,
+        solved_count_median=5,
+        knowledge_median=70,
+        accuracy_median=20,
+        quality_median=60,
+        flexibility_median=35,
+        proficiency_median=50,
+    )
+    repo.previous_ranker_by_exam[3] = ExamPreviousRankerRow(
+        student_id=303,
+        position=6,
+        rank=6,
+        total_score=380,
+        solved_count=5,
+        knowledge=90,
+        accuracy=32,
+        quality=50,
+        flexibility=26,
+        proficiency=31,
+    )
+
+    executor = ToolExecutor(repository=repo, identity=_build_identity())
+    result = asyncio.run(executor.execute("get_student_growth_insights", {}))
+    payload = json.loads(result)
+
+    assert payload["progressExplanation"]["available"] is True
+    assert payload["milestoneStreak"]["available"] is True
+    assert payload["peerComparison"]["defaultMode"] == "percentile_band"
+    assert "postExamSupport" in payload

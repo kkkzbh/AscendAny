@@ -222,6 +222,157 @@ body {
   padding-left: 10px !important;
 }
 
+.growth-card {
+  display: grid;
+  gap: 8px;
+}
+
+.growth-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.growth-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+.growth-card-meta {
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
+.growth-card-summary {
+  font-size: 13px;
+  color: var(--text-strong);
+}
+
+.growth-card-copy {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.growth-card-empty {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.growth-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.growth-subtitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  margin-bottom: 4px;
+}
+
+.growth-list {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-left: 14px;
+}
+
+.growth-list-numbered {
+  list-style: decimal;
+}
+
+.streak-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.streak-value {
+  font-size: 22px;
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--accent-700);
+}
+
+.growth-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.growth-target-chip {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
+.growth-toggle-group {
+  display: inline-flex;
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--surface-soft);
+}
+
+.growth-toggle-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.growth-toggle-btn.active {
+  color: var(--text-strong);
+  background: var(--surface-raised);
+}
+
+.growth-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.growth-gap-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.growth-gap-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.growth-mode-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+}
+
+.growth-checkin {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+@media (max-width: 960px) {
+  .growth-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
 .split-handle {
   outline: none;
 }

@@ -58,9 +58,84 @@ class ResolvedIdentityResponse(BaseModel):
     noSubmissionRecords: bool
 
 
+class ProgressExplanationResponse(BaseModel):
+    available: bool
+    latestExamId: str | None
+    latestExamName: str | None
+    latestExamDate: str | None
+    ratingDelta: int | None
+    keyImprovements: list[str]
+    keySetbacks: list[str]
+    summary: str
+
+
+class MilestoneItemResponse(BaseModel):
+    code: str
+    label: str
+    detail: str
+    examId: str | None = None
+    examDate: str | None = None
+
+
+class MilestoneStreakResponse(BaseModel):
+    available: bool
+    currentPositiveStreak: int
+    bestPositiveStreak: int
+    newMilestones: list[MilestoneItemResponse]
+    recentMilestones: list[MilestoneItemResponse]
+    nextTargets: list[str]
+
+
+class PeerMetricGapResponse(BaseModel):
+    score: float | None
+    solved: int | None
+    knowledge: int | None
+    accuracy: int | None
+    quality: int | None
+    flexibility: int | None
+    proficiency: int | None
+
+
+class PercentileBandComparisonResponse(BaseModel):
+    totalParticipants: int
+    myRank: int | None
+    myPercentile: float | None
+    bandCode: str | None
+    bandLabel: str
+    gapVsBandMedian: PeerMetricGapResponse
+
+
+class PreviousRankerComparisonResponse(BaseModel):
+    available: bool
+    rankGap: int | None
+    scoreGap: float | None
+    solvedGap: int | None
+    metricGapVsPrevious: PeerMetricGapResponse
+
+
+class PeerComparisonResponse(BaseModel):
+    available: bool
+    defaultMode: Literal["percentile_band", "previous_ranker"]
+    percentileBand: PercentileBandComparisonResponse
+    previousRanker: PreviousRankerComparisonResponse
+
+
+class PostExamSupportResponse(BaseModel):
+    available: bool
+    mode: Literal["recovery", "steady", "reinforce"]
+    headline: str
+    message: str
+    actionPlan: list[str]
+    checkInQuestion: str
+
+
 class StudentDashboardResponse(BaseModel):
     metrics: StudentMetricsResponse
     metricMissing: MetricMissingItemResponse
     rating: RatingInfoResponse
     metricDelta: MetricDeltaInfoResponse
     identity: ResolvedIdentityResponse
+    progressExplanation: ProgressExplanationResponse
+    milestoneStreak: MilestoneStreakResponse
+    peerComparison: PeerComparisonResponse
+    postExamSupport: PostExamSupportResponse

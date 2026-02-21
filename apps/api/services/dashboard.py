@@ -24,6 +24,10 @@ from .history_merge import (
     merge_rating_history_rows,
     metric_from_rows,
 )
+from .growth_insights import (
+    GrowthInsightsService,
+    build_empty_growth_insights,
+)
 from .identity import ResolvedIdentity
 
 
@@ -39,6 +43,7 @@ class DashboardService:
         self._default_rating = default_rating
         self._default_metric = default_metric
         self._rating_history_limit = rating_history_limit
+        self._growth_insights = GrowthInsightsService(repository)
 
     async def build(self, identity: ResolvedIdentity) -> StudentDashboardResponse:
         if identity.no_submission_records:
@@ -87,6 +92,11 @@ class DashboardService:
         metrics = self._build_metrics(metrics_rows)
         rating = self._build_rating(metrics_rows, merged_history_rows)
         metric_delta = self._build_metric_delta(merged_exam_metric_rows)
+        growth_insights = await self._growth_insights.build(
+            identity=identity,
+            rating_rows=merged_history_rows,
+            exam_metric_rows=merged_exam_metric_rows,
+        )
         return StudentDashboardResponse(
             metrics=metrics,
             metricMissing=self._build_metric_missing(metrics_rows),
@@ -97,9 +107,14 @@ class DashboardService:
                 ptaNickname=identity.pta_nickname,
                 noSubmissionRecords=False,
             ),
+            progressExplanation=growth_insights.progress_explanation,
+            milestoneStreak=growth_insights.milestone_streak,
+            peerComparison=growth_insights.peer_comparison,
+            postExamSupport=growth_insights.post_exam_support,
         )
 
     def _build_empty(self, identity: ResolvedIdentity) -> StudentDashboardResponse:
+        empty_growth = build_empty_growth_insights()
         metrics = StudentMetricsResponse(
             knowledge=self._default_metric,
             accuracy=self._default_metric,
@@ -128,6 +143,10 @@ class DashboardService:
                 ptaNickname=identity.pta_nickname,
                 noSubmissionRecords=True,
             ),
+            progressExplanation=empty_growth.progress_explanation,
+            milestoneStreak=empty_growth.milestone_streak,
+            peerComparison=empty_growth.peer_comparison,
+            postExamSupport=empty_growth.post_exam_support,
         )
 
     def _empty_metric_delta(self) -> MetricDeltaInfoResponse:

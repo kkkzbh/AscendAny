@@ -3,9 +3,19 @@ import {
   fetchStudentDashboard,
   getApiErrorMessage,
 } from "@/lib/api";
+import {
+  createEmptyMilestoneStreak,
+  createEmptyPeerComparison,
+  createEmptyPostExamSupport,
+  createEmptyProgressExplanation,
+} from "@/types/metrics";
 import type {
+  MilestoneStreak,
   MetricDeltaInfo,
   MetricMissingValues,
+  PeerComparison,
+  PostExamSupport,
+  ProgressExplanation,
   StudentIdentity,
   StudentMetrics,
   RatingInfo,
@@ -41,6 +51,10 @@ interface MetricsState {
   metricMissing: MetricMissingValues | null;
   rating: RatingInfo | null;
   metricDelta: MetricDeltaInfo | null;
+  progressExplanation: ProgressExplanation | null;
+  milestoneStreak: MilestoneStreak | null;
+  peerComparison: PeerComparison | null;
+  postExamSupport: PostExamSupport | null;
   identity: StudentIdentity | null;
   loading: boolean;
   error: string | null;
@@ -52,6 +66,10 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
   metricMissing: null,
   rating: null,
   metricDelta: null,
+  progressExplanation: null,
+  milestoneStreak: null,
+  peerComparison: null,
+  postExamSupport: null,
   identity: null,
   loading: false,
   error: null,
@@ -77,6 +95,12 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
         metricMissing: response.metricMissing,
         rating: response.rating,
         metricDelta: response.metricDelta,
+        progressExplanation:
+          response.progressExplanation ?? createEmptyProgressExplanation(),
+        milestoneStreak:
+          response.milestoneStreak ?? createEmptyMilestoneStreak(),
+        peerComparison: response.peerComparison ?? createEmptyPeerComparison(),
+        postExamSupport: response.postExamSupport ?? createEmptyPostExamSupport(),
         identity: response.identity,
         loading: false,
         error: null,
@@ -87,6 +111,10 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
         metricMissing: null,
         rating: null,
         metricDelta: null,
+        progressExplanation: null,
+        milestoneStreak: null,
+        peerComparison: null,
+        postExamSupport: null,
         identity: null,
         loading: false,
         error: getApiErrorMessage(

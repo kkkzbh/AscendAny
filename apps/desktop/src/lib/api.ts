@@ -1,5 +1,20 @@
 import type { Role } from "@/types/chat";
-import type { StudentDashboardData } from "@/types/metrics";
+import {
+  createEmptyMilestoneStreak,
+  createEmptyPeerComparison,
+  createEmptyPostExamSupport,
+  createEmptyProgressExplanation,
+  type MetricDeltaInfo,
+  type MetricMissingValues,
+  type MilestoneStreak,
+  type PeerComparison,
+  type PostExamSupport,
+  type ProgressExplanation,
+  type RatingInfo,
+  type StudentDashboardData,
+  type StudentIdentity,
+  type StudentMetrics,
+} from "@/types/metrics";
 import type {
   AuthAccount,
   AuthPolicy,
@@ -21,6 +36,22 @@ interface ApiErrorEnvelope {
   };
   detail?: string;
 }
+
+type StudentDashboardPayload = Partial<StudentDashboardData> & {
+  metrics?: Partial<StudentMetrics>;
+  metricMissing?: Partial<MetricMissingValues>;
+  metricDelta?: Partial<MetricDeltaInfo> & {
+    values?: Partial<MetricDeltaInfo["values"]>;
+  };
+  rating?: Partial<RatingInfo> & {
+    history?: Array<Partial<RatingInfo["history"][number]>>;
+  };
+  identity?: Partial<StudentIdentity>;
+  progressExplanation?: Partial<ProgressExplanation>;
+  milestoneStreak?: Partial<MilestoneStreak>;
+  peerComparison?: Partial<PeerComparison>;
+  postExamSupport?: Partial<PostExamSupport>;
+};
 
 export interface ChatMessagePayload {
   role: Role;
@@ -179,18 +210,154 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
+export function normalizeDashboardData(
+  payload: StudentDashboardPayload,
+): StudentDashboardData {
+  const progress = {
+    ...createEmptyProgressExplanation(),
+    ...(payload.progressExplanation ?? {}),
+    keyImprovements: Array.isArray(payload.progressExplanation?.keyImprovements)
+      ? payload.progressExplanation.keyImprovements
+      : [],
+    keySetbacks: Array.isArray(payload.progressExplanation?.keySetbacks)
+      ? payload.progressExplanation.keySetbacks
+      : [],
+  };
+
+  const milestone = {
+    ...createEmptyMilestoneStreak(),
+    ...(payload.milestoneStreak ?? {}),
+    newMilestones: Array.isArray(payload.milestoneStreak?.newMilestones)
+      ? payload.milestoneStreak.newMilestones
+      : [],
+    recentMilestones: Array.isArray(payload.milestoneStreak?.recentMilestones)
+      ? payload.milestoneStreak.recentMilestones
+      : [],
+    nextTargets: Array.isArray(payload.milestoneStreak?.nextTargets)
+      ? payload.milestoneStreak.nextTargets
+      : [],
+  };
+
+  const peerFallback = createEmptyPeerComparison();
+  const peer = {
+    ...peerFallback,
+    ...(payload.peerComparison ?? {}),
+    percentileBand: {
+      ...peerFallback.percentileBand,
+      ...(payload.peerComparison?.percentileBand ?? {}),
+      gapVsBandMedian: {
+        ...peerFallback.percentileBand.gapVsBandMedian,
+        ...(payload.peerComparison?.percentileBand?.gapVsBandMedian ?? {}),
+      },
+    },
+    previousRanker: {
+      ...peerFallback.previousRanker,
+      ...(payload.peerComparison?.previousRanker ?? {}),
+      metricGapVsPrevious: {
+        ...peerFallback.previousRanker.metricGapVsPrevious,
+        ...(payload.peerComparison?.previousRanker?.metricGapVsPrevious ?? {}),
+      },
+    },
+  };
+
+  const support = {
+    ...createEmptyPostExamSupport(),
+    ...(payload.postExamSupport ?? {}),
+    actionPlan: Array.isArray(payload.postExamSupport?.actionPlan)
+      ? payload.postExamSupport.actionPlan
+      : [],
+  };
+
+  return {
+    metrics: {
+      knowledge: Number(payload.metrics?.knowledge ?? 0),
+      accuracy: Number(payload.metrics?.accuracy ?? 0),
+      quality: Number(payload.metrics?.quality ?? 0),
+      flexibility: Number(payload.metrics?.flexibility ?? 0),
+      proficiency: Number(payload.metrics?.proficiency ?? 0),
+    },
+    metricMissing: {
+      knowledge: Boolean(payload.metricMissing?.knowledge ?? false),
+      accuracy: Boolean(payload.metricMissing?.accuracy ?? false),
+      quality: Boolean(payload.metricMissing?.quality ?? false),
+      flexibility: Boolean(payload.metricMissing?.flexibility ?? false),
+      proficiency: Boolean(payload.metricMissing?.proficiency ?? false),
+    },
+    rating: {
+      current: Number(payload.rating?.current ?? 0),
+      lastDelta:
+        typeof payload.rating?.lastDelta === "number"
+          ? payload.rating.lastDelta
+          : null,
+      history: Array.isArray(payload.rating?.history)
+        ? payload.rating.history
+            .filter((item) => Boolean(item?.examId))
+            .map((item) => ({
+              examId: String(item.examId),
+              examName: String(item.examName ?? item.examId),
+              date: String(item.date ?? ""),
+              oldRating: Number(item.oldRating ?? 0),
+              delta: Number(item.delta ?? 0),
+              newRating: Number(item.newRating ?? 0),
+            }))
+        : [],
+    },
+    metricDelta: {
+      latestExamId:
+        typeof payload.metricDelta?.latestExamId === "string"
+          ? payload.metricDelta.latestExamId
+          : null,
+      latestExamName:
+        typeof payload.metricDelta?.latestExamName === "string"
+          ? payload.metricDelta.latestExamName
+          : null,
+      latestExamDate:
+        typeof payload.metricDelta?.latestExamDate === "string"
+          ? payload.metricDelta.latestExamDate
+          : null,
+      baseline:
+        payload.metricDelta?.baseline === "previous_exam"
+          ? "previous_exam"
+          : "zero",
+      values: {
+        knowledge: Number(payload.metricDelta?.values?.knowledge ?? 0),
+        accuracy: Number(payload.metricDelta?.values?.accuracy ?? 0),
+        quality: Number(payload.metricDelta?.values?.quality ?? 0),
+        flexibility: Number(payload.metricDelta?.values?.flexibility ?? 0),
+        proficiency: Number(payload.metricDelta?.values?.proficiency ?? 0),
+      },
+    },
+    identity: {
+      studentId: String(payload.identity?.studentId ?? ""),
+      ptaNickname:
+        typeof payload.identity?.ptaNickname === "string"
+          ? payload.identity.ptaNickname
+          : null,
+      noSubmissionRecords: Boolean(payload.identity?.noSubmissionRecords ?? false),
+    },
+    progressExplanation: progress,
+    milestoneStreak: milestone,
+    peerComparison: peer,
+    postExamSupport: support,
+  };
+}
+
 export async function fetchStudentDashboard(params: {
   studentId?: string;
   ptaNickname?: string;
   authToken?: string;
 }): Promise<StudentDashboardData> {
-  return requestJson<StudentDashboardData>("/api/v1/students/dashboard", {
-    query: {
-      studentId: params.studentId,
-      ptaNickname: params.ptaNickname,
+  const payload = await requestJson<StudentDashboardPayload>(
+    "/api/v1/students/dashboard",
+    {
+      query: {
+        studentId: params.studentId,
+        ptaNickname: params.ptaNickname,
+      },
+      authToken: params.authToken,
     },
-    authToken: params.authToken,
-  });
+  );
+  return normalizeDashboardData(payload);
 }
 
 export async function postChatReply(

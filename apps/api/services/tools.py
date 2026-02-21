@@ -6,6 +6,7 @@ tool call names to DB queries.
 Tools available:
   - get_student_rating_history   : Rating history for a student
   - get_student_metric_history   : Per-exam metric history for a student
+  - get_student_growth_insights  : Unified growth insights for dashboard and chat
   - get_student_ability_scores   : Student rank + ability-gap snapshot in an exam
   - get_exam_submissions         : Submission records for a student in an exam
   - get_exam_participants        : Ranked participant list for an exam
@@ -19,6 +20,7 @@ import logging
 from typing import Any
 
 from ..db.repository import ApiRepository
+from .growth_insights import GrowthInsightsService
 from .history_merge import merge_exam_metric_rows, merge_rating_history_rows
 from .identity import ResolvedIdentity
 
@@ -62,6 +64,18 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "description": "返回最近几场考试的记录，默认 10",
                     },
                 },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_student_growth_insights",
+            "description": "获取统一成长洞察，包含进步解释、里程碑连胜、同层对比、考后心理支持。返回结构与学生仪表盘一致。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": [],
             },
         },
@@ -160,6 +174,7 @@ class ToolExecutor:
     ) -> None:
         self._repository = repository
         self._identity = identity
+        self._growth_service = GrowthInsightsService(repository)
 
     async def execute(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool call and return a JSON string result."""
@@ -181,23 +196,48 @@ class ToolExecutor:
 
     # ---- Individual handlers ----
 
+    async def _load_merged_histories(
+        self,
+        rating_limit: int,
+        exam_metric_limit: int,
+    ) -> tuple[list[Any], list[Any]]:
+        if self._identity is None:
+            return [], []
+        student_ids = self._identity.student_entity_ids or (
+            self._identity.student_entity_id,
+        )
+        per_student_rating_limit = max(rating_limit, rating_limit * len(student_ids))
+        per_student_exam_metric_limit = max(
+            exam_metric_limit, exam_metric_limit * len(student_ids)
+        )
+        rating_rows = []
+        exam_metric_rows = []
+        for sid in student_ids:
+            rating_rows.extend(
+                await self._repository.fetch_rating_history(
+                    student_id=sid,
+                    limit=per_student_rating_limit,
+                )
+            )
+            exam_metric_rows.extend(
+                await self._repository.fetch_exam_metric_history(
+                    student_id=sid,
+                    limit=per_student_exam_metric_limit,
+                )
+            )
+        return (
+            merge_rating_history_rows(rating_rows, limit=rating_limit),
+            merge_exam_metric_rows(exam_metric_rows, limit=exam_metric_limit),
+        )
+
     async def _get_student_rating_history(self, args: dict[str, Any]) -> Any:
         if self._identity is None:
             return {"error": "当前未绑定学生身份，无法查询数据。"}
         limit = int(args.get("limit", 10))
-        student_ids = self._identity.student_entity_ids or (
-            self._identity.student_entity_id,
+        deduplicated, _ = await self._load_merged_histories(
+            rating_limit=limit,
+            exam_metric_limit=1,
         )
-        per_student_limit = max(limit, limit * len(student_ids))
-        all_rows = []
-        for sid in student_ids:
-            all_rows.extend(
-                await self._repository.fetch_rating_history(
-                    student_id=sid,
-                    limit=per_student_limit,
-                )
-            )
-        deduplicated = merge_rating_history_rows(all_rows, limit=limit)
         return [
             {
                 "exam_id": r.exam_id,
@@ -214,19 +254,10 @@ class ToolExecutor:
         if self._identity is None:
             return {"error": "当前未绑定学生身份，无法查询数据。"}
         limit = int(args.get("limit", 10))
-        student_ids = self._identity.student_entity_ids or (
-            self._identity.student_entity_id,
+        _, deduplicated = await self._load_merged_histories(
+            rating_limit=1,
+            exam_metric_limit=limit,
         )
-        per_student_limit = max(limit, limit * len(student_ids))
-        all_rows = []
-        for sid in student_ids:
-            all_rows.extend(
-                await self._repository.fetch_exam_metric_history(
-                    student_id=sid,
-                    limit=per_student_limit,
-                )
-            )
-        deduplicated = merge_exam_metric_rows(all_rows, limit=limit)
         return [
             {
                 "exam_id": r.exam_id,
@@ -240,6 +271,27 @@ class ToolExecutor:
             }
             for r in deduplicated
         ]
+
+    async def _get_student_growth_insights(self, args: dict[str, Any]) -> Any:
+        del args
+        if self._identity is None:
+            return {"error": "当前未绑定学生身份，无法查询数据。"}
+
+        rating_rows, exam_metric_rows = await self._load_merged_histories(
+            rating_limit=20,
+            exam_metric_limit=10,
+        )
+        payload = await self._growth_service.build(
+            identity=self._identity,
+            rating_rows=rating_rows,
+            exam_metric_rows=exam_metric_rows,
+        )
+        return {
+            "progressExplanation": payload.progress_explanation.model_dump(mode="json"),
+            "milestoneStreak": payload.milestone_streak.model_dump(mode="json"),
+            "peerComparison": payload.peer_comparison.model_dump(mode="json"),
+            "postExamSupport": payload.post_exam_support.model_dump(mode="json"),
+        }
 
     async def _get_exam_submissions(self, args: dict[str, Any]) -> Any:
         if self._identity is None:
@@ -442,6 +494,7 @@ class ToolExecutor:
 _HANDLERS: dict[str, Any] = {
     "get_student_rating_history": ToolExecutor._get_student_rating_history,
     "get_student_metric_history": ToolExecutor._get_student_metric_history,
+    "get_student_growth_insights": ToolExecutor._get_student_growth_insights,
     "get_student_ability_scores": ToolExecutor._get_student_ability_scores,
     "get_exam_submissions": ToolExecutor._get_exam_submissions,
     "get_exam_participants": ToolExecutor._get_exam_participants,

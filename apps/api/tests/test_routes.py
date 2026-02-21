@@ -124,6 +124,10 @@ def test_students_dashboard_response_contains_metric_delta() -> None:
     assert payload["metricDelta"]["baseline"] == "zero"
     assert payload["metricDelta"]["latestExamId"] is None
     assert payload["metricDelta"]["values"]["knowledge"] == 0
+    assert payload["progressExplanation"]["available"] is False
+    assert payload["milestoneStreak"]["newMilestones"] == []
+    assert payload["peerComparison"]["defaultMode"] == "percentile_band"
+    assert payload["postExamSupport"]["mode"] == "steady"
 
 
 def test_students_dashboard_returns_fallback_when_student_id_not_found() -> None:
@@ -144,6 +148,10 @@ def test_students_dashboard_returns_fallback_when_student_id_not_found() -> None
     assert payload["metrics"]["quality"] == 50
     assert payload["metrics"]["flexibility"] == 50
     assert payload["metrics"]["proficiency"] == 50
+    assert payload["progressExplanation"]["available"] is False
+    assert payload["milestoneStreak"]["available"] is False
+    assert payload["peerComparison"]["available"] is False
+    assert payload["postExamSupport"]["available"] is False
 
 
 def test_chat_reply_hello_still_goes_to_llm() -> None:

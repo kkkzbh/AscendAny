@@ -103,6 +103,42 @@ class ExamStudentMetricRow:
 
 
 @dataclass(slots=True)
+class ExamParticipantContextRow:
+    student_id: int
+    position: int
+    rank: int | None
+    total_score: Decimal | float | int | None
+    solved_count: int | None
+    total_participants: int
+
+
+@dataclass(slots=True)
+class ExamBandMediansRow:
+    sample_size: int
+    total_score_median: Decimal | float | int | None
+    solved_count_median: Decimal | float | int | None
+    knowledge_median: Decimal | float | int | None
+    accuracy_median: Decimal | float | int | None
+    quality_median: Decimal | float | int | None
+    flexibility_median: Decimal | float | int | None
+    proficiency_median: Decimal | float | int | None
+
+
+@dataclass(slots=True)
+class ExamPreviousRankerRow:
+    student_id: int
+    position: int
+    rank: int | None
+    total_score: Decimal | float | int | None
+    solved_count: int | None
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+
+
+@dataclass(slots=True)
 class AccountRow:
     account_id: int
     username: str
@@ -972,6 +1008,190 @@ class ApiRepository:
             )
             for row in rows
         ]
+
+    async def fetch_exam_participant_context(
+        self, exam_id: int, student_ids: list[int]
+    ) -> ExamParticipantContextRow | None:
+        if not student_ids:
+            return None
+
+        query = """
+            WITH ranked AS (
+                SELECT
+                    ep.student_id,
+                    ep.rank,
+                    ep.total_score,
+                    ep.solved_count,
+                    row_number() OVER (
+                        ORDER BY ep.rank ASC NULLS LAST, ep.total_score DESC NULLS LAST, ep.student_id ASC
+                    ) AS pos,
+                    count(*) OVER () AS total_participants
+                FROM ascendany.exam_participants AS ep
+                WHERE ep.exam_id = %s
+                  AND ep.absent = FALSE
+            )
+            SELECT
+                student_id,
+                rank,
+                total_score,
+                solved_count,
+                pos,
+                total_participants
+            FROM ranked
+            WHERE student_id = ANY(%s::bigint[])
+            ORDER BY pos ASC
+            LIMIT 1
+        """
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, student_ids))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return ExamParticipantContextRow(
+            student_id=int(row["student_id"]),
+            position=int(row["pos"]),
+            rank=int(row["rank"]) if row.get("rank") is not None else None,
+            total_score=row.get("total_score"),
+            solved_count=int(row["solved_count"])
+            if row.get("solved_count") is not None
+            else None,
+            total_participants=int(row.get("total_participants", 0)),
+        )
+
+    async def fetch_exam_band_medians(
+        self, exam_id: int, pos_start: int, pos_end: int
+    ) -> ExamBandMediansRow | None:
+        if pos_start <= 0 or pos_end <= 0 or pos_start > pos_end:
+            return None
+
+        query = """
+            WITH ranked AS (
+                SELECT
+                    ep.student_id,
+                    ep.total_score,
+                    ep.solved_count,
+                    row_number() OVER (
+                        ORDER BY ep.rank ASC NULLS LAST, ep.total_score DESC NULLS LAST, ep.student_id ASC
+                    ) AS pos
+                FROM ascendany.exam_participants AS ep
+                WHERE ep.exam_id = %s
+                  AND ep.absent = FALSE
+            ),
+            band AS (
+                SELECT
+                    r.student_id,
+                    r.total_score,
+                    r.solved_count,
+                    esm.knowledge,
+                    esm.accuracy,
+                    esm.quality,
+                    esm.flexibility,
+                    esm.proficiency
+                FROM ranked AS r
+                LEFT JOIN ascendany.exam_student_metrics AS esm
+                  ON esm.exam_id = %s
+                 AND esm.student_id = r.student_id
+                WHERE r.pos BETWEEN %s AND %s
+            )
+            SELECT
+                COUNT(*) AS sample_size,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY total_score)
+                    FILTER (WHERE total_score IS NOT NULL) AS total_score_median,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY solved_count)
+                    FILTER (WHERE solved_count IS NOT NULL) AS solved_count_median,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY knowledge)
+                    FILTER (WHERE knowledge IS NOT NULL) AS knowledge_median,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY accuracy)
+                    FILTER (WHERE accuracy IS NOT NULL) AS accuracy_median,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY quality)
+                    FILTER (WHERE quality IS NOT NULL) AS quality_median,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY flexibility)
+                    FILTER (WHERE flexibility IS NOT NULL) AS flexibility_median,
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY proficiency)
+                    FILTER (WHERE proficiency IS NOT NULL) AS proficiency_median
+            FROM band
+        """
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, exam_id, pos_start, pos_end))
+                row = await cursor.fetchone()
+        if not row or int(row.get("sample_size", 0)) <= 0:
+            return None
+
+        return ExamBandMediansRow(
+            sample_size=int(row["sample_size"]),
+            total_score_median=row.get("total_score_median"),
+            solved_count_median=row.get("solved_count_median"),
+            knowledge_median=row.get("knowledge_median"),
+            accuracy_median=row.get("accuracy_median"),
+            quality_median=row.get("quality_median"),
+            flexibility_median=row.get("flexibility_median"),
+            proficiency_median=row.get("proficiency_median"),
+        )
+
+    async def fetch_exam_previous_ranker(
+        self, exam_id: int, my_pos: int
+    ) -> ExamPreviousRankerRow | None:
+        if my_pos <= 1:
+            return None
+
+        query = """
+            WITH ranked AS (
+                SELECT
+                    ep.student_id,
+                    ep.rank,
+                    ep.total_score,
+                    ep.solved_count,
+                    row_number() OVER (
+                        ORDER BY ep.rank ASC NULLS LAST, ep.total_score DESC NULLS LAST, ep.student_id ASC
+                    ) AS pos
+                FROM ascendany.exam_participants AS ep
+                WHERE ep.exam_id = %s
+                  AND ep.absent = FALSE
+            )
+            SELECT
+                r.student_id,
+                r.rank,
+                r.total_score,
+                r.solved_count,
+                r.pos,
+                esm.knowledge,
+                esm.accuracy,
+                esm.quality,
+                esm.flexibility,
+                esm.proficiency
+            FROM ranked AS r
+            LEFT JOIN ascendany.exam_student_metrics AS esm
+              ON esm.exam_id = %s
+             AND esm.student_id = r.student_id
+            WHERE r.pos = %s
+            LIMIT 1
+        """
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, exam_id, my_pos - 1))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+
+        return ExamPreviousRankerRow(
+            student_id=int(row["student_id"]),
+            position=int(row["pos"]),
+            rank=int(row["rank"]) if row.get("rank") is not None else None,
+            total_score=row.get("total_score"),
+            solved_count=int(row["solved_count"])
+            if row.get("solved_count") is not None
+            else None,
+            knowledge=row.get("knowledge"),
+            accuracy=row.get("accuracy"),
+            quality=row.get("quality"),
+            flexibility=row.get("flexibility"),
+            proficiency=row.get("proficiency"),
+        )
 
     async def fetch_exam_student_metrics_for_students(
         self, exam_id: int, student_ids: list[int]

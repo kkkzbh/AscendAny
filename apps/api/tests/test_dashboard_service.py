@@ -71,6 +71,10 @@ def test_dashboard_returns_defaults_for_no_submission_records() -> None:
     assert result.metricDelta.latestExamId is None
     assert result.metricDelta.baseline == "zero"
     assert result.metricDelta.values.knowledge == 0
+    assert result.progressExplanation.available is False
+    assert result.milestoneStreak.currentPositiveStreak == 0
+    assert result.peerComparison.available is False
+    assert result.postExamSupport.available is False
 
 
 def test_dashboard_uses_metrics_and_rating_history() -> None:
@@ -147,6 +151,10 @@ def test_dashboard_uses_metrics_and_rating_history() -> None:
     assert result.metricDelta.values.quality == 2
     assert result.metricDelta.values.flexibility == -2
     assert result.metricDelta.values.proficiency == 2
+    assert result.progressExplanation.available is True
+    assert result.milestoneStreak.available is True
+    assert result.peerComparison.defaultMode == "percentile_band"
+    assert result.postExamSupport.mode in {"steady", "reinforce", "recovery"}
 
 
 def test_dashboard_merges_duplicate_student_entities() -> None:
@@ -258,6 +266,7 @@ def test_dashboard_merges_duplicate_student_entities() -> None:
     assert result.metricDelta.values.quality == 5
     assert result.metricDelta.values.flexibility == 4
     assert result.metricDelta.values.proficiency == 3
+    assert result.progressExplanation.available is True
 
 
 def test_dashboard_metric_delta_uses_zero_baseline_for_first_exam() -> None:
@@ -299,6 +308,7 @@ def test_dashboard_metric_delta_uses_zero_baseline_for_first_exam() -> None:
     assert result.metricDelta.values.quality == 36
     assert result.metricDelta.values.flexibility == 22
     assert result.metricDelta.values.proficiency == 61
+    assert result.progressExplanation.latestExamId == "11"
 
 
 def test_dashboard_metric_delta_skips_all_none_exam_rows() -> None:
@@ -358,6 +368,7 @@ def test_dashboard_metric_delta_skips_all_none_exam_rows() -> None:
     assert result.metricDelta.latestExamId == "32"
     assert result.metricDelta.latestExamName == "精进营第二次竞赛"
     assert result.metricDelta.values.knowledge == -34
+    assert result.progressExplanation.latestExamId == "32"
     assert result.metricDelta.values.accuracy == 3
     assert result.metricDelta.values.quality == -16
     assert result.metricDelta.values.flexibility == 53
