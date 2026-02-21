@@ -15,7 +15,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -127,6 +126,11 @@ async def upload_exam_zip(
     practice_root = await asyncio.to_thread(_get_practice_root)
     await asyncio.to_thread(_ensure_practice_root_writable, practice_root)
     target_dir = practice_root / examType / exam_name
+    if target_dir.exists():
+        raise HTTPException(
+            status_code=409,
+            detail="该zip名字已存在，请换一个",
+        )
 
     tmp_path: Path | None = None
     try:
@@ -143,9 +147,12 @@ async def upload_exam_zip(
 
         def _extract() -> tuple[str, int]:
             try:
-                if target_dir.exists():
-                    shutil.rmtree(target_dir)
-                target_dir.mkdir(parents=True, exist_ok=True)
+                target_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该zip名字已存在，请换一个",
+                ) from exc
             except PermissionError as exc:
                 raise HTTPException(
                     status_code=500,
