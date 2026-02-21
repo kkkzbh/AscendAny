@@ -5,7 +5,7 @@
 - 后端已落地：`apps/api/`（FastAPI，含认证、学生画像、导入任务与 Agent 相关接口）。
 - 桌面端已落地：`apps/desktop/`（Electron + Vite + React）。
 - 导入控制台已落地：`apps/import-console/`（管理员 Web 控制台，SSE 进度流）。
-- 官网已落地：`apps/web/`（产品介绍与下载入口）。
+- 官网已落地：`apps/site/`（产品介绍与下载入口）。
 - `packages/shared/` 目前未落地；新增共享类型前先评估是否真的需要拆包。
 
 ## 目标与约束
@@ -21,7 +21,7 @@
 - `apps/api/`：FastAPI 后端（DB API、认证、模型与对话接口、导入任务接口）。
 - `apps/desktop/`：Electron 客户端。
 - `apps/import-console/`：数据导入控制台。
-- `apps/web/`：产品官网与下载页。
+- `apps/site/`：产品官网与下载页。
 
 ## 数据源实践规范（必须遵守）
 - `practice` 根目录必须来自配置（如 `PRACTICE_DATA_ROOT`），不要依赖机器固定路径。

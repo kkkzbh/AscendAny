@@ -94,7 +94,7 @@ importers:
         specifier: ^6.1.0
         version: 6.4.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)
 
-  apps/web:
+  apps/site:
     dependencies:
       react:
         specifier: ^18.3.1

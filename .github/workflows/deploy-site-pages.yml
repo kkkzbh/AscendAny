@@ -1,4 +1,4 @@
-name: Deploy Web to GitHub Pages
+name: Deploy Site to GitHub Pages
 
 on:
   push:
@@ -6,12 +6,12 @@ on:
       - master
       - main
     paths:
-      - "apps/web/**"
+      - "apps/site/**"
       - "image/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
-      - ".github/workflows/deploy-web-pages.yml"
+      - ".github/workflows/deploy-site-pages.yml"
   release:
     types:
       - published
@@ -23,12 +23,12 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages-web
+  group: pages-site
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Web
+    name: Build Site
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,7 +58,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p apps/web/public
+          mkdir -p apps/site/public
 
           tmp="$(mktemp)"
           status="$(curl -sS -o "$tmp" -w "%{http_code}" \
@@ -71,21 +71,21 @@ jobs:
               generated_at: (now | todateiso8601),
               tag_name,
               assets: [(.assets // [])[] | {name, browser_download_url}]
-            }' "$tmp" > apps/web/public/release-assets.json
+            }' "$tmp" > apps/site/public/release-assets.json
           else
-            echo '{"generated_at":null,"tag_name":null,"assets":[]}' > apps/web/public/release-assets.json
+            echo '{"generated_at":null,"tag_name":null,"assets":[]}' > apps/site/public/release-assets.json
             echo "No latest release manifest available (HTTP ${status})."
           fi
 
-      - name: Build web app for Pages
+      - name: Build site app for Pages
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
-        run: pnpm --filter @ascendany/web build
+        run: pnpm --filter @ascendany/site build
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: apps/web/dist
+          path: apps/site/dist
 
   deploy:
     name: Deploy

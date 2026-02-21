@@ -135,21 +135,21 @@ ASCENDANY_LINUX_IM_MODULE=fcitx ASCENDANY_LINUX_IME_MODE=on pnpm --filter @ascen
 - `ASCENDANY_LINUX_GPU_MODE=x11` 会强制 XWayland 路径，并跳过 Wayland IME 开关。
 - 若你只关心稳定输入法，建议优先使用 `ASCENDANY_LINUX_IME_MODE=on` 在 Wayland 下验证。
 
-## 产品官网（apps/web）
+## 产品官网（apps/site）
 
-产品介绍网页已独立放在 `apps/web/`，与桌面端 `apps/desktop/` 隔离。
+产品介绍网页已独立放在 `apps/site/`，与桌面端 `apps/desktop/` 隔离。
 
 ```bash
 # 本地开发
-pnpm --filter @ascendany/web dev
+pnpm --filter @ascendany/site dev
 
 # 生产构建
-pnpm --filter @ascendany/web build
+pnpm --filter @ascendany/site build
 ```
 
 ### 下载中心 Release 源配置
 
-`apps/web` 下载区会优先读取站点内置的 `release-assets.json`（由 Pages 工作流在构建时根据 GitHub 最新正式版 Release 生成），自动匹配：
+`apps/site` 下载区会优先读取站点内置的 `release-assets.json`（由 Pages 工作流在构建时根据 GitHub 最新正式版 Release 生成），自动匹配：
 - Windows：`.exe`
 - Linux：`.rpm`（文件名需包含 `x64`、`amd64` 或 `x86_64`）
 
@@ -164,7 +164,7 @@ VITE_RELEASE_REPO=AscendAny
 
 ### GitHub Pages 自动发布
 
-仓库已提供 GitHub Actions 工作流：`.github/workflows/deploy-web-pages.yml`。
+仓库已提供 GitHub Actions 工作流：`.github/workflows/deploy-site-pages.yml`。
 
 - 发布触发：`main` 分支有前端相关变更时自动触发（也支持手动 `workflow_dispatch`）。
 - 发布同步：当 GitHub Release `published` 时也会自动触发一次，刷新下载资源清单。
