@@ -79,7 +79,8 @@ jobs:
 
       - name: Build site app for Pages
         env:
-          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+          # Use root path for custom domain (e.g. site.kkkzbh.cn) so assets resolve as /assets/*
+          VITE_BASE_PATH: /
         run: pnpm --filter @ascendany/site build
 
       - name: Upload artifact
