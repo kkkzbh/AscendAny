@@ -50,6 +50,7 @@
 
 ## 工程与测试
 - Python 统一使用仓库内 `.venv`（`uv` 管理），禁止安装到系统全局环境。
+- 运行测试时必须使用 `.venv` 解释器（如 `.venv/bin/pytest` 或 `uv run pytest`），不要直接用系统 `pytest`，避免出现 `ModuleNotFoundError`（如缺少 `fastapi`）等环境偏差问题。
 - 后端/预处理新增功能必须补 `pytest`，重点覆盖：增量幂等、编码解析、指标/rating、导入任务流程。
 - 前端使用 TypeScript 严格模式；关键交互（分栏拖拽、上下文清空、自动 compact）应有单测或 e2e 覆盖。
 
