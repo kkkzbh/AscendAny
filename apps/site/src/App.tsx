@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from "react";
 import logoImage from "../../../image/LOGO.png";
 import desktopScreenshot from "../../../image/主界面.png";
+import loginScreenshot from "../../../image/登录界面.png";
+import abilityPanelScreenshot from "../../../image/能力面板.png";
+import customRouteScreenshot from "../../../image/自定义路由模型.png";
+import roleSwitchScreenshot from "../../../image/角色切换.png";
 import "./styles.css";
 
 const RELEASE_OWNER = (import.meta.env.VITE_RELEASE_OWNER ?? "kkkzbh").trim() || "kkkzbh";
@@ -232,6 +236,46 @@ const workflow: WorkflowItem[] = [
   { title: "生成 AI 洞察", desc: "面向老师和学生提供可执行的学习建议。" },
 ];
 
+type ScreenPreviewItem = {
+  title: string;
+  desc: string;
+  image: string;
+  alt: string;
+};
+
+const screenPreviews: [ScreenPreviewItem, ...ScreenPreviewItem[]] = [
+  {
+    title: "主界面总览",
+    desc: "主界面主要展示用户个人能力信息，并可向 AI 助手询问自身与考试各项信息。",
+    image: desktopScreenshot,
+    alt: "AscendAny 主界面",
+  },
+  {
+    title: "登录界面",
+    desc: "先登个录，马上进场；流程够轻，开局够快。",
+    image: loginScreenshot,
+    alt: "AscendAny 登录界面",
+  },
+  {
+    title: "角色切换",
+    desc: "小祥请求出战，不满意？ 还可以自定义。",
+    image: roleSwitchScreenshot,
+    alt: "AscendAny 角色切换界面",
+  },
+  {
+    title: "能力面板",
+    desc: "这张面板像成绩解说员，强项直接夸，短板当场点名。",
+    image: abilityPanelScreenshot,
+    alt: "AscendAny 能力面板",
+  },
+  {
+    title: "自定义路由模型",
+    desc: "默认不够用？路由规则自己配，想怎么走就怎么走。",
+    image: customRouteScreenshot,
+    alt: "AscendAny 自定义路由模型配置界面",
+  },
+];
+
 type DownloadStatus = "available" | "soon" | "later";
 type DownloadTarget = "macos" | "windows" | "linux" | "android" | "ios";
 type DownloadItem = {
@@ -292,6 +336,8 @@ function getAssetLink(
 function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
   const hasX64Alias = (name: string) =>
     name.includes("x64") || name.includes("amd64") || name.includes("x86_64");
+  const hasArmAlias = (name: string) =>
+    name.includes("arm64") || name.includes("aarch64") || name.includes("armeabi") || name.includes("arm-v7a");
 
   const windowsHref = getAssetLink(
     assets,
@@ -305,6 +351,16 @@ function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
     assets,
     (name) => name.endsWith(".rpm") && hasX64Alias(name),
   );
+  const androidHref = getAssetLink(
+    assets,
+    (name) =>
+      name.endsWith(".apk")
+      && (
+        name.includes("android")
+        || name.includes("mobile")
+        || hasArmAlias(name)
+      ),
+  );
 
   return defaultDownloads.map((item) => {
     if (item.target === "windows" && windowsHref) {
@@ -312,6 +368,9 @@ function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
     }
     if (item.target === "linux" && linuxHref) {
       return { ...item, status: "available", action: "立即下载", href: linuxHref };
+    }
+    if (item.target === "android" && androidHref) {
+      return { ...item, status: "available", action: "立即下载", href: androidHref };
     }
     return item;
   });
@@ -361,6 +420,42 @@ function RevealGroup({ children }: { children: ReactNode }) {
 export default function App() {
   const { theme, toggle } = useTheme();
   const [downloads, setDownloads] = useState<DownloadItem[]>(defaultDownloads);
+  const [activeScreenIndex, setActiveScreenIndex] = useState(0);
+  const touchStartXRef = useRef<number | null>(null);
+  const screenCount = screenPreviews.length;
+  const activeScreen = screenPreviews[activeScreenIndex] ?? screenPreviews[0];
+
+  const gotoScreen = useCallback((index: number) => {
+    setActiveScreenIndex(index);
+  }, []);
+
+  const gotoNextScreen = useCallback(() => {
+    if (screenCount === 0) return;
+    setActiveScreenIndex((prev) => (prev + 1) % screenCount);
+  }, [screenCount]);
+
+  const gotoPrevScreen = useCallback(() => {
+    if (screenCount === 0) return;
+    setActiveScreenIndex((prev) => (prev - 1 + screenCount) % screenCount);
+  }, [screenCount]);
+
+  const onScreenTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    touchStartXRef.current = event.touches[0]?.clientX ?? null;
+  }, []);
+
+  const onScreenTouchEnd = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const startX = touchStartXRef.current;
+    const endX = event.changedTouches[0]?.clientX;
+    touchStartXRef.current = null;
+    if (typeof startX !== "number" || typeof endX !== "number") return;
+    const deltaX = endX - startX;
+    if (Math.abs(deltaX) < 50) return;
+    if (deltaX < 0) {
+      gotoNextScreen();
+      return;
+    }
+    gotoPrevScreen();
+  }, [gotoNextScreen, gotoPrevScreen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -432,6 +527,7 @@ export default function App() {
 
           <nav className="site-nav" aria-label="导航">
             <a href="#features">能力亮点</a>
+            <a href="#screens">界面预览</a>
             <a href="#workflow">工作流</a>
             <a href="#download">下载</a>
           </nav>
@@ -539,6 +635,87 @@ export default function App() {
             </section>
           </RevealGroup>
 
+          {/* ── Screenshots ── */}
+          <RevealGroup>
+            <section className="panel reveal" id="screens">
+              <SectionHeader
+                label="界面预览"
+                title="核心功能界面一览"
+                desc="覆盖登录、主界面、角色切换、能力分析与自定义路由等关键页面。"
+              />
+              <div className="screen-carousel">
+                <div className="screen-current-info">
+                  <span className="screen-stage-index">
+                    {String(activeScreenIndex + 1).padStart(2, "0")} / {String(screenCount).padStart(2, "0")}
+                  </span>
+                  <h3 className="screen-current-title">{activeScreen.title}</h3>
+                  <p className="screen-current-desc">{activeScreen.desc}</p>
+                </div>
+
+                <article className="screen-stage">
+                  <div
+                    className="screen-stage-image-wrap"
+                    onTouchStart={onScreenTouchStart}
+                    onTouchEnd={onScreenTouchEnd}
+                    onTouchCancel={() => {
+                      touchStartXRef.current = null;
+                    }}
+                  >
+                    <div
+                      className="screen-stage-slider"
+                      style={{ transform: `translateX(-${activeScreenIndex * 100}%)` }}
+                    >
+                      {screenPreviews.map((item) => (
+                        <div className="screen-stage-slide" key={item.title}>
+                          <img
+                            className="screen-stage-image"
+                            src={item.image}
+                            alt={item.alt}
+                            loading="lazy"
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="screen-arrow screen-arrow--prev"
+                      onClick={gotoPrevScreen}
+                      aria-label="上一张界面"
+                    >
+                      <Icon name="arrowRight" />
+                    </button>
+                    <button
+                      type="button"
+                      className="screen-arrow screen-arrow--next"
+                      onClick={gotoNextScreen}
+                      aria-label="下一张界面"
+                    >
+                      <Icon name="arrowRight" />
+                    </button>
+                  </div>
+                </article>
+
+                <div className="screen-track" role="tablist" aria-label="界面轮播导航">
+                  {screenPreviews.map((item, index) => (
+                    <button
+                      key={item.title}
+                      type="button"
+                      className={`screen-thumb ${activeScreenIndex === index ? "is-active" : ""}`}
+                      onClick={() => gotoScreen(index)}
+                      aria-label={`查看${item.title}`}
+                      aria-pressed={activeScreenIndex === index}
+                    >
+                      <img src={item.image} alt="" aria-hidden="true" />
+                      <span>{item.title}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="screen-tip">左右滑动图片，或点击下方缩略图与左右按钮切换。</p>
+              </div>
+            </section>
+          </RevealGroup>
+
           {/* ── Ability Model ── */}
           <RevealGroup>
             <section className="panel reveal">
@@ -621,7 +798,7 @@ export default function App() {
                 ))}
               </div>
               <p className="download-note" id="notify">
-                Windows EXE 与 Linux RPM (x64) 会在 GitHub Releases 发布后自动开放下载；Android 即将支持，macOS 与 iOS 敬请期待。
+                Windows EXE、Linux RPM (x64) 与 Android APK (ARM) 会在 GitHub Releases 发布后自动开放下载；macOS 与 iOS 敬请期待。
               </p>
             </section>
           </RevealGroup>
@@ -636,6 +813,7 @@ export default function App() {
           </div>
           <div className="footer-links">
             <a href="#features">产品能力</a>
+            <a href="#screens">界面预览</a>
             <a href="#workflow">工作流</a>
             <a href="#top">回到顶部</a>
           </div>
