@@ -459,6 +459,7 @@ function ModelSettingsPage() {
 
 function RoleSettingsPage() {
   const activeRole = useSettingsStore((s) => s.activeRole);
+  const theme = useSettingsStore((s) => s.theme);
   const setActiveRole = useSettingsStore((s) => s.setActiveRole);
   const customRoles = useCustomRoleStore((s) => s.customRoles);
   const saveCustomRole = useCustomRoleStore((s) => s.saveCustomRole);
@@ -612,7 +613,7 @@ function RoleSettingsPage() {
                   alt={role.name}
                   className="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-[var(--border-subtle)]"
                   style={
-                    isActive && role.id === "xiaoD"
+                    isActive && role.id === "xiaoD" && theme === "dark"
                       ? { filter: "brightness(0) invert(1)" }
                       : undefined
                   }
