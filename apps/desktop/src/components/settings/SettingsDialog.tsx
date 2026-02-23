@@ -294,13 +294,13 @@ function ModelSettingsPage() {
   const setActiveProvider = useSettingsStore((s) => s.setActiveProvider);
   const updateProvider = useSettingsStore((s) => s.updateProvider);
   const [pendingProvider, setPendingProvider] = useState<ProviderType | null>(null);
-  const [confirmChecked, setConfirmChecked] = useState(false);
-
-  const current = providers[activeProvider];
-  const isServerDefault = current?.usesServerConfig;
-  const pendingProviderConfig = pendingProvider ? providers[pendingProvider] : null;
-  const requiresConfirm = Boolean(
-    pendingProviderConfig && !pendingProviderConfig.usesServerConfig,
+  const selectedProvider: ProviderType = pendingProvider ?? activeProvider;
+  const selectedProviderConfig = providers[selectedProvider];
+  const isSelectedServerDefault = selectedProviderConfig?.usesServerConfig;
+  const canApplyPendingProvider = Boolean(
+    pendingProvider &&
+      pendingProvider !== activeProvider &&
+      !providers[pendingProvider].usesServerConfig,
   );
 
   function onProviderSelect(providerType: ProviderType) {
@@ -313,25 +313,21 @@ function ModelSettingsPage() {
     if (provider.usesServerConfig) {
       setActiveProvider(providerType);
       setPendingProvider(null);
-      setConfirmChecked(false);
       return;
     }
     if (providerType === activeProvider) {
       setPendingProvider(null);
-      setConfirmChecked(false);
       return;
     }
     setPendingProvider(providerType);
-    setConfirmChecked(false);
   }
 
   function applyPendingProvider() {
-    if (!pendingProviderConfig || pendingProviderConfig.usesServerConfig || !confirmChecked) {
+    if (!pendingProvider || !canApplyPendingProvider) {
       return;
     }
-    setActiveProvider(pendingProviderConfig.type);
+    setActiveProvider(pendingProvider);
     setPendingProvider(null);
-    setConfirmChecked(false);
   }
 
   return (
@@ -348,8 +344,7 @@ function ModelSettingsPage() {
             const isTemporarilyUnlocked =
               providerType === "anthropic" || providerType === "deepseek";
             const isDisabled = !provider.enabled && !isTemporarilyUnlocked;
-            const isSelected =
-              activeProvider === providerType || pendingProvider === providerType;
+            const isSelected = selectedProvider === providerType;
             return (
               <button
                 key={providerType}
@@ -371,40 +366,7 @@ function ModelSettingsPage() {
         </p>
       </div>
 
-      {requiresConfirm && pendingProviderConfig && (
-        <div className="settings-group animate-fade-in">
-          <div className="settings-field">
-            <label className="flex items-start gap-2 text-[12px] text-[var(--text-muted)]">
-              <input
-                type="checkbox"
-                checked={confirmChecked}
-                onChange={(event) => setConfirmChecked(event.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-[var(--accent-600)]"
-              />
-              <span>
-                我已确认切换到
-                <span className="font-semibold text-[var(--text-strong)]">
-                  {" "}
-                  {pendingProviderConfig.label}
-                </span>
-                ，并理解后续请求将按该自定义配置调用模型。
-              </span>
-            </label>
-            <div className="mt-2">
-              <button
-                type="button"
-                disabled={!confirmChecked}
-                onClick={applyPendingProvider}
-                className="rounded-lg bg-[var(--accent-600)] px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                确认切换并生效
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {current && !isServerDefault && (
+      {selectedProviderConfig && !isSelectedServerDefault && (
         <div className="settings-group animate-fade-in">
           <div className="settings-field">
             <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
@@ -412,9 +374,9 @@ function ModelSettingsPage() {
             </label>
             <input
               type="text"
-              value={current.baseUrl}
+              value={selectedProviderConfig.baseUrl}
               onChange={(e) =>
-                updateProvider(activeProvider, { baseUrl: e.target.value })
+                updateProvider(selectedProvider, { baseUrl: e.target.value })
               }
               className="settings-input"
             />
@@ -426,9 +388,9 @@ function ModelSettingsPage() {
             </label>
             <input
               type="text"
-              value={current.model}
+              value={selectedProviderConfig.model}
               onChange={(e) =>
-                updateProvider(activeProvider, { model: e.target.value })
+                updateProvider(selectedProvider, { model: e.target.value })
               }
               className="settings-input"
             />
@@ -440,9 +402,9 @@ function ModelSettingsPage() {
             </label>
             <input
               type="password"
-              value={current.apiKey}
+              value={selectedProviderConfig.apiKey}
               onChange={(e) =>
-                updateProvider(activeProvider, { apiKey: e.target.value })
+                updateProvider(selectedProvider, { apiKey: e.target.value })
               }
               placeholder="sk-..."
               className="settings-input"
@@ -451,6 +413,18 @@ function ModelSettingsPage() {
               密钥仅存储在本地，不会上传
             </p>
           </div>
+
+          {canApplyPendingProvider && (
+            <div className="mt-1">
+              <button
+                type="button"
+                onClick={applyPendingProvider}
+                className="settings-provider-pill bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)] transition-opacity hover:opacity-90"
+              >
+                确认切换到 {selectedProviderConfig.label}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
