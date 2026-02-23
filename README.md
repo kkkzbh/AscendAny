@@ -152,6 +152,7 @@ pnpm --filter @ascendany/site build
 `apps/site` 下载区会优先读取站点内置的 `release-assets.json`（由 Pages 工作流在构建时根据 GitHub 最新正式版 Release 生成），自动匹配：
 - Windows：`.exe`
 - Linux：`.rpm`（文件名需包含 `x64`、`amd64` 或 `x86_64`）
+- Android：`.apk`（文件名需包含 `android` / `mobile` / `arm64` / `aarch64` / `armeabi`）
 
 当本地清单不可用时，会回退到 GitHub API（`/releases/latest`）。
 
@@ -171,7 +172,7 @@ VITE_RELEASE_REPO=AscendAny
 - 发布地址：`https://<GitHub 用户名>.github.io/AscendAny/`（仓库级 Pages）。
 - 仓库设置：`Settings -> Pages -> Source` 选择 `GitHub Actions`。
 
-## 桌面端 Release（Windows EXE + Linux RPM x64）
+## 客户端 Release（Windows EXE + Linux RPM x64 + Android APK ARM）
 
 仓库已提供发布工作流：`.github/workflows/release-desktop.yml`。
 
@@ -181,7 +182,11 @@ VITE_RELEASE_REPO=AscendAny
 - 产物：
   - Windows：`exe`（x64）
   - Linux：`rpm`（x64）
+  - Android：`apk`（ARM：`arm64-v8a` + `armeabi-v7a`）
 - 产物会自动上传到对应的 GitHub Release。
+- Android 签名：
+  - 若配置仓库 Secrets（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`），工作流会使用该 keystore 进行 release 签名。
+  - 若未配置，会回退到 debug keystore 签名（可安装，但不建议作为长期正式分发密钥）。
 
 本地手动打包命令：
 
@@ -191,4 +196,7 @@ pnpm --filter @ascendany/desktop dist:win:x64
 
 # Linux RPM x64
 pnpm --filter @ascendany/desktop dist:linux:rpm:x64
+
+# Android APK (ARM)
+pnpm --filter @ascendany/site dist:android:release
 ```

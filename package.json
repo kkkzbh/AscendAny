@@ -7,6 +7,7 @@
     "build:site": "pnpm --filter @ascendany/site build",
     "dev:web": "pnpm --filter @ascendany/site dev",
     "build:web": "pnpm --filter @ascendany/site build",
+    "build:android": "pnpm --filter @ascendany/site dist:android:release",
     "dev:import": "pnpm --filter @ascendany/import-console dev",
     "build:import": "pnpm --filter @ascendany/import-console build"
   },
