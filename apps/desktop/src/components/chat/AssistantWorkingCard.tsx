@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
-import { findRole, resolveRoleWorkingCard } from "@/types/role";
+import { findRole, resolveAnyRoleWorkingCard } from "@/types/role";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useCustomRoleStore } from "@/stores/customRoleStore";
 
 const STAGE_SWITCH_INTERVAL_MS = 5000;
 
 export function AssistantWorkingCard() {
   const activeRole = useSettingsStore((s) => s.activeRole);
-  const role = findRole(activeRole);
-  const workingCard = resolveRoleWorkingCard(activeRole);
+  const customRoles = useCustomRoleStore((s) => s.customRoles);
+  const role = findRole(activeRole, customRoles);
+  const workingCard = resolveAnyRoleWorkingCard(activeRole, customRoles);
   const title = role.id === "sakiko" ? "小祥输入中" : `${role.name} 正在工作`;
 
   const stages = workingCard.stages.length > 0 ? workingCard.stages : ["正在处理请求"];

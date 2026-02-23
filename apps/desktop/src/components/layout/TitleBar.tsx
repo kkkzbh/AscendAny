@@ -1,36 +1,50 @@
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useAvatarStore } from "@/stores/avatarStore";
+import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
-import appLogo from "@/assets/app-logo.png";
+import { findRole } from "@/types/role";
 
 export function TitleBar() {
   const openSettings = useSettingsStore((s) => s.openSettings);
   const theme = useSettingsStore((s) => s.theme);
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
+  const activeRole = useSettingsStore((s) => s.activeRole);
+  const customRoles = useCustomRoleStore((s) => s.customRoles);
   const account = useAuthStore((s) => s.account);
   const logout = useAuthStore((s) => s.logout);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
   const api = window.electronAPI;
   const isMac = api?.platform === "darwin";
   const nextThemeLabel = theme === "light" ? "切换到暗色主题" : "切换到亮色主题";
+  const role = findRole(activeRole, customRoles);
 
   return (
     <header
       className="drag-region titlebar titlebar-pad relative flex h-12 w-full shrink-0 items-center"
     >
       <div
-        className={`titlebar-brand flex items-center gap-3 ${isMac ? "pl-20" : "pr-28"}`}
+        className={`titlebar-brand flex min-w-0 items-center ${isMac ? "pl-20" : ""}`}
       >
-        <img
-          src={appLogo}
-          alt="AscendAny"
-          className="h-7 w-7 rounded-xl object-cover shadow-[0_8px_20px_rgba(3,105,161,0.2)]"
-          draggable={false}
-        />
-        <div className="flex flex-col leading-none">
-          <span className="text-[13px] font-semibold tracking-[0.02em] text-[var(--text-strong)]">AscendAny</span>
-          <span className="text-[10px] text-[var(--text-muted)]">Student Insight Studio</span>
+        <div
+          className={`flex min-w-0 items-center gap-2.5 rounded-xl bg-[var(--surface-soft)] px-2.5 py-1.5 ring-1 ring-[var(--border-subtle)] ${
+            isMac ? "max-w-[460px]" : "max-w-[420px]"
+          }`}
+        >
+          <img
+            src={role.avatarUrl}
+            alt={role.name}
+            className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-[var(--border-subtle)]"
+            draggable={false}
+          />
+          <div className="min-w-0 leading-none">
+            <p className="truncate text-[12px] font-medium text-[var(--text-strong)]">
+              {role.name}
+            </p>
+            <p className="mt-0.5 truncate text-[10px] text-[var(--text-soft)]">
+              {role.description}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -133,30 +147,27 @@ export function TitleBar() {
           <div className="ml-1.5 flex h-full items-center">
             <button
               onClick={() => api?.minimize()}
-              className="ui-window-button"
+              className="ui-window-button ui-window-traffic ui-window-minimize"
               title="最小化"
+              aria-label="最小化"
             >
-              <svg width="10" height="10" viewBox="0 0 12 12">
-                <rect x="2" y="5.5" width="8" height="1" rx="0.5" fill="currentColor" />
-              </svg>
+              <span className="ui-window-dot-symbol" aria-hidden="true">−</span>
             </button>
             <button
               onClick={() => api?.maximize()}
-              className="ui-window-button"
+              className="ui-window-button ui-window-traffic ui-window-maximize"
               title="最大化"
+              aria-label="最大化"
             >
-              <svg width="10" height="10" viewBox="0 0 12 12">
-                <rect x="2" y="2" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-              </svg>
+              <span className="ui-window-dot-symbol" aria-hidden="true">+</span>
             </button>
             <button
               onClick={() => api?.close()}
-              className="ui-window-button ui-window-close"
+              className="ui-window-button ui-window-traffic ui-window-close"
               title="关闭"
+              aria-label="关闭"
             >
-              <svg width="10" height="10" viewBox="0 0 12 12">
-                <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-              </svg>
+              <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
             </button>
           </div>
         )}

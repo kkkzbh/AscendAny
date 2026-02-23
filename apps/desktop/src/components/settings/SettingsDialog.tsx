@@ -1,11 +1,20 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, type ChangeEvent } from "react";
 import {
+  DEFAULT_ZOOM_PERCENT,
   PROVIDER_ORDER,
+  type ProviderType,
+  ZOOM_PERCENT_MAX,
+  ZOOM_PERCENT_MIN,
+  ZOOM_PERCENT_STEP,
 } from "@/types/settings";
-import { BUILT_IN_ROLES } from "@/types/role";
+import {
+  DEFAULT_ROLE_ID,
+  getAllRoles,
+} from "@/types/role";
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useAvatarStore } from "@/stores/avatarStore";
+import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import { AvatarCropper } from "@/components/settings/AvatarCropper";
 
@@ -72,9 +81,13 @@ export function SettingsSidebar({
 
 function GeneralSettingsPage() {
   const account = useAuthStore((s) => s.account);
+  const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
+  const setOpaqueWindowBackground = useSettingsStore((s) => s.setOpaqueWindowBackground);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
   const saveAvatar = useAvatarStore((s) => s.saveAvatar);
   const deleteAvatar = useAvatarStore((s) => s.deleteAvatar);
+  const zoomPercent = useSettingsStore((s) => s.zoomPercent);
+  const setZoomPercent = useSettingsStore((s) => s.setZoomPercent);
   const [showCropper, setShowCropper] = useState(false);
 
   async function onAvatarCropConfirm(dataUrl: string) {
@@ -153,9 +166,97 @@ function GeneralSettingsPage() {
       <div className="settings-group">
         <div className="settings-field">
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+            窗口背景
+          </label>
+          <div className="flex items-center justify-between gap-4">
+            <div className="grid gap-0.5">
+              <p className="text-[13px] font-semibold leading-none text-[var(--text-strong)]">
+                使用不透明窗口背景
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={useOpaqueWindowBackground}
+              onClick={() => {
+                const next = !useOpaqueWindowBackground;
+                setOpaqueWindowBackground(next);
+                const api = window.electronAPI;
+                if (api?.setOpaqueWindowBackground) {
+                  void api.setOpaqueWindowBackground(next);
+                }
+              }}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                useOpaqueWindowBackground
+                  ? "bg-[var(--accent-600)]"
+                  : "bg-[var(--surface-soft)] ring-1 ring-[var(--border-subtle)]"
+              }`}
+              title={useOpaqueWindowBackground ? "已开启不透明背景" : "已关闭不透明背景"}
+            >
+              <span
+                className={`absolute top-[2px] h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  useOpaqueWindowBackground ? "translate-x-[22px]" : "translate-x-[2px]"
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-field">
+          <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+            界面缩放
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setZoomPercent(zoomPercent - ZOOM_PERCENT_STEP)}
+              className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-2 text-sm text-[var(--text-strong)] transition-colors hover:bg-[var(--surface-hover)]"
+              aria-label="缩小界面"
+            >
+              -
+            </button>
+            <input
+              type="range"
+              min={ZOOM_PERCENT_MIN}
+              max={ZOOM_PERCENT_MAX}
+              step={ZOOM_PERCENT_STEP}
+              value={zoomPercent}
+              onChange={(event) => setZoomPercent(Number(event.target.value))}
+              className="h-2 w-full cursor-pointer accent-[var(--accent-600)]"
+            />
+            <button
+              type="button"
+              onClick={() => setZoomPercent(zoomPercent + ZOOM_PERCENT_STEP)}
+              className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-2 text-sm text-[var(--text-strong)] transition-colors hover:bg-[var(--surface-hover)]"
+              aria-label="放大界面"
+            >
+              +
+            </button>
+            <p className="w-14 text-right text-sm font-medium text-[var(--text-strong)]">
+              {zoomPercent}%
+            </p>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-[var(--text-soft)]">
+              调整范围 {ZOOM_PERCENT_MIN}% - {ZOOM_PERCENT_MAX}%。
+            </p>
+            {zoomPercent !== DEFAULT_ZOOM_PERCENT && (
+              <button
+                type="button"
+                onClick={() => setZoomPercent(DEFAULT_ZOOM_PERCENT)}
+                className="text-[12px] font-medium text-[var(--accent-600)] hover:underline"
+              >
+                恢复 100%
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="settings-field">
+          <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             学号
           </label>
-          <p className="rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)]">
+          <p className="settings-readonly-pill text-sm text-[var(--text-strong)]">
             {account?.studentId?.trim() || "未绑定"}
           </p>
         </div>
@@ -164,7 +265,7 @@ function GeneralSettingsPage() {
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             PTA 账号昵称
           </label>
-          <p className="rounded-lg bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)]">
+          <p className="settings-readonly-pill text-sm text-[var(--text-strong)]">
             {account?.ptaNickname?.trim() || "未绑定"}
           </p>
         </div>
@@ -192,9 +293,46 @@ function ModelSettingsPage() {
   const providers = useSettingsStore((s) => s.providers);
   const setActiveProvider = useSettingsStore((s) => s.setActiveProvider);
   const updateProvider = useSettingsStore((s) => s.updateProvider);
+  const [pendingProvider, setPendingProvider] = useState<ProviderType | null>(null);
+  const [confirmChecked, setConfirmChecked] = useState(false);
 
   const current = providers[activeProvider];
   const isServerDefault = current?.usesServerConfig;
+  const pendingProviderConfig = pendingProvider ? providers[pendingProvider] : null;
+  const requiresConfirm = Boolean(
+    pendingProviderConfig && !pendingProviderConfig.usesServerConfig,
+  );
+
+  function onProviderSelect(providerType: ProviderType) {
+    const provider = providers[providerType];
+    const isTemporarilyUnlocked =
+      providerType === "anthropic" || providerType === "deepseek";
+    if (!provider?.enabled && !isTemporarilyUnlocked) {
+      return;
+    }
+    if (provider.usesServerConfig) {
+      setActiveProvider(providerType);
+      setPendingProvider(null);
+      setConfirmChecked(false);
+      return;
+    }
+    if (providerType === activeProvider) {
+      setPendingProvider(null);
+      setConfirmChecked(false);
+      return;
+    }
+    setPendingProvider(providerType);
+    setConfirmChecked(false);
+  }
+
+  function applyPendingProvider() {
+    if (!pendingProviderConfig || pendingProviderConfig.usesServerConfig || !confirmChecked) {
+      return;
+    }
+    setActiveProvider(pendingProviderConfig.type);
+    setPendingProvider(null);
+    setConfirmChecked(false);
+  }
 
   return (
     <div className="settings-page animate-fade-in">
@@ -204,17 +342,21 @@ function ModelSettingsPage() {
         <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
           模型提供商
         </label>
-        <div className="flex flex-wrap gap-2">
+        <div className="settings-provider-list">
           {PROVIDER_ORDER.map((providerType) => {
             const provider = providers[providerType];
-            const isDisabled = !provider.enabled;
+            const isTemporarilyUnlocked =
+              providerType === "anthropic" || providerType === "deepseek";
+            const isDisabled = !provider.enabled && !isTemporarilyUnlocked;
+            const isSelected =
+              activeProvider === providerType || pendingProvider === providerType;
             return (
               <button
                 key={providerType}
-                onClick={() => setActiveProvider(providerType)}
+                onClick={() => onProviderSelect(providerType)}
                 disabled={isDisabled}
-                className={`rounded-lg px-4 py-2 text-sm transition-all duration-200 ${
-                  activeProvider === providerType
+                className={`settings-provider-pill transition-all duration-200 ${
+                  isSelected
                     ? "bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)]"
                     : "bg-[var(--surface-soft)] text-[var(--text-muted)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
                 } ${isDisabled ? "cursor-not-allowed opacity-45 hover:bg-[var(--surface-soft)]" : ""}`}
@@ -224,7 +366,43 @@ function ModelSettingsPage() {
             );
           })}
         </div>
+        <p className="mt-2 text-[11px] text-[var(--text-soft)]">
+          如果对默认模型不满意，可切换至自定义模型。
+        </p>
       </div>
+
+      {requiresConfirm && pendingProviderConfig && (
+        <div className="settings-group animate-fade-in">
+          <div className="settings-field">
+            <label className="flex items-start gap-2 text-[12px] text-[var(--text-muted)]">
+              <input
+                type="checkbox"
+                checked={confirmChecked}
+                onChange={(event) => setConfirmChecked(event.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--accent-600)]"
+              />
+              <span>
+                我已确认切换到
+                <span className="font-semibold text-[var(--text-strong)]">
+                  {" "}
+                  {pendingProviderConfig.label}
+                </span>
+                ，并理解后续请求将按该自定义配置调用模型。
+              </span>
+            </label>
+            <div className="mt-2">
+              <button
+                type="button"
+                disabled={!confirmChecked}
+                onClick={applyPendingProvider}
+                className="rounded-lg bg-[var(--accent-600)] px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                确认切换并生效
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {current && !isServerDefault && (
         <div className="settings-group animate-fade-in">
@@ -282,6 +460,121 @@ function ModelSettingsPage() {
 function RoleSettingsPage() {
   const activeRole = useSettingsStore((s) => s.activeRole);
   const setActiveRole = useSettingsStore((s) => s.setActiveRole);
+  const customRoles = useCustomRoleStore((s) => s.customRoles);
+  const saveCustomRole = useCustomRoleStore((s) => s.saveCustomRole);
+  const removeCustomRole = useCustomRoleStore((s) => s.removeCustomRole);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showCustomRoleDialog, setShowCustomRoleDialog] = useState(false);
+  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
+  const [customRoleName, setCustomRoleName] = useState("");
+  const [customRoleAvatar, setCustomRoleAvatar] = useState("");
+  const [customRolePrompt, setCustomRolePrompt] = useState("");
+
+  const allRoles = useMemo(() => getAllRoles(customRoles), [customRoles]);
+  const customRoleIdSet = useMemo(
+    () => new Set(customRoles.map((role) => role.id)),
+    [customRoles],
+  );
+
+  useEffect(() => {
+    if (!allRoles.some((role) => role.id === activeRole)) {
+      setActiveRole(DEFAULT_ROLE_ID);
+    }
+  }, [allRoles, activeRole, setActiveRole]);
+
+  useEffect(() => {
+    if (!showCustomRoleDialog) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setShowCustomRoleDialog(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [showCustomRoleDialog]);
+
+  function resetCustomRoleForm() {
+    setEditingRoleId(null);
+    setCustomRoleName("");
+    setCustomRoleAvatar("");
+    setCustomRolePrompt("");
+  }
+
+  function onCloseCustomRoleDialog() {
+    setShowCustomRoleDialog(false);
+  }
+
+  function onAvatarFileImport(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setCustomRoleAvatar(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function onCreateCustomRole() {
+    resetCustomRoleForm();
+    setShowCustomRoleDialog(true);
+  }
+
+  function onEditCustomRole(roleId: string) {
+    const role = customRoles.find((item) => item.id === roleId);
+    if (!role) {
+      return;
+    }
+    setEditingRoleId(role.id);
+    setCustomRoleName(role.name);
+    setCustomRoleAvatar(role.avatarUrl);
+    setCustomRolePrompt(role.systemPromptExtra);
+    setShowCustomRoleDialog(true);
+  }
+
+  function onSaveCustomRole() {
+    const name = customRoleName.trim();
+    const avatar = customRoleAvatar.trim();
+    const prompt = customRolePrompt.trim();
+    if (!name || !avatar || !prompt) {
+      return;
+    }
+
+    const savedRoleId = saveCustomRole({
+      id: editingRoleId ?? undefined,
+      name,
+      avatarUrl: avatar,
+      systemPromptExtra: prompt,
+    });
+    setActiveRole(savedRoleId);
+    setEditingRoleId(savedRoleId);
+    setShowCustomRoleDialog(false);
+  }
+
+  function onDeleteCustomRole(roleId: string) {
+    removeCustomRole(roleId);
+    if (activeRole === roleId) {
+      setActiveRole(DEFAULT_ROLE_ID);
+    }
+    if (editingRoleId === roleId) {
+      resetCustomRoleForm();
+      setShowCustomRoleDialog(false);
+    }
+  }
+
+  const canSaveCustomRole = Boolean(
+    customRoleName.trim() && customRoleAvatar.trim() && customRolePrompt.trim(),
+  );
 
   return (
     <div className="settings-page animate-fade-in">
@@ -289,53 +582,46 @@ function RoleSettingsPage() {
 
       <div className="settings-group">
         <p className="text-[12px] leading-relaxed text-[var(--text-muted)]">
-          选择 AI 助教的角色，不同角色拥有不同的对话风格和头像。
+          选择 AI 助教角色；你也可以导入头像、昵称和系统提示词，创建本地自定义角色。
         </p>
+
         <div className="mt-3 flex flex-col gap-2.5">
-          {BUILT_IN_ROLES.map((role) => {
+          {allRoles.map((role) => {
             const isActive = role.id === activeRole;
+            const isCustomRole = customRoleIdSet.has(role.id);
             return (
-              <button
+              <div
                 key={role.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => setActiveRole(role.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setActiveRole(role.id);
+                  }
+                }}
                 className={`flex items-center gap-3.5 rounded-xl px-4 py-3 text-left transition-all duration-200 ${
                   isActive
                     ? "bg-[var(--accent-600)]/8 ring-2 ring-[var(--accent-600)] shadow-[0_4px_12px_rgba(3,105,161,0.12)]"
                     : "bg-[var(--surface-soft)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
                 }`}
               >
-                <div
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-                    isActive
-                      ? "bg-gradient-to-br from-[var(--accent-700)] to-[var(--accent-500)] shadow-[0_4px_12px_rgba(3,105,161,0.24)]"
-                      : "bg-[var(--surface-raised)] ring-1 ring-[var(--border-subtle)]"
-                  }`}
-                >
-                  {role.avatarUrl ? (
-                    <img
-                      src={role.avatarUrl}
-                      alt={role.name}
-                      className="h-6 w-6"
-                      style={
-                        isActive && role.id === "xiaoD"
-                          ? { filter: "brightness(0) invert(1)" }
-                          : undefined
-                      }
-                    />
-                  ) : (
-                    <span
-                      className={`text-sm font-bold ${
-                        isActive ? "text-white" : "text-[var(--text-muted)]"
-                      }`}
-                    >
-                      {role.name.charAt(0)}
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-col gap-0.5">
+                <img
+                  src={role.avatarUrl}
+                  alt={role.name}
+                  className="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-[var(--border-subtle)]"
+                  style={
+                    isActive && role.id === "xiaoD"
+                      ? { filter: "brightness(0) invert(1)" }
+                      : undefined
+                  }
+                />
+
+                <div className="flex min-w-0 flex-col gap-0.5">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`text-[13px] font-medium ${
+                      className={`truncate text-[13px] font-medium ${
                         isActive ? "text-[var(--accent-700)]" : "text-[var(--text-strong)]"
                       }`}
                     >
@@ -346,13 +632,43 @@ function RoleSettingsPage() {
                         默认
                       </span>
                     )}
+                    {isCustomRole && (
+                      <span className="rounded-md bg-[var(--surface-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]">
+                        本地
+                      </span>
+                    )}
                   </div>
-                  <span className="text-[11px] text-[var(--text-soft)]">
+                  <span className="truncate text-[11px] text-[var(--text-soft)]">
                     {role.description}
                   </span>
                 </div>
-                {isActive && (
-                  <div className="ml-auto">
+
+                <div className="ml-auto flex items-center gap-1.5">
+                  {isCustomRole && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEditCustomRole(role.id);
+                        }}
+                        className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[var(--accent-600)] hover:bg-[var(--accent-600)]/8"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteCustomRole(role.id);
+                        }}
+                        className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-[var(--rating-negative)] hover:bg-[var(--rating-negative)]/10"
+                      >
+                        删除
+                      </button>
+                    </>
+                  )}
+                  {isActive && (
                     <svg
                       width="16"
                       height="16"
@@ -365,13 +681,169 @@ function RoleSettingsPage() {
                     >
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
-                  </div>
-                )}
-              </button>
+                  )}
+                </div>
+              </div>
             );
           })}
+
+          <button
+            type="button"
+            onClick={onCreateCustomRole}
+            className="flex items-center gap-3.5 rounded-xl bg-[var(--surface-soft)] px-4 py-3 text-left ring-1 ring-[var(--border-subtle)] transition-all duration-200 hover:bg-[var(--surface-hover)]"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent-600)]/10 text-[var(--accent-600)] ring-1 ring-[var(--accent-600)]/20">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium text-[var(--text-strong)]">自定义</div>
+              <p className="text-[11px] text-[var(--text-soft)]">
+                导入头像、昵称和系统提示词，创建本地角色
+              </p>
+            </div>
+          </button>
         </div>
+        <p className="text-[11px] text-[var(--text-soft)]">
+          自定义角色仅存储在本地设备，不按账号隔离，也不会上传头像文件。
+        </p>
       </div>
+
+      {showCustomRoleDialog && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={onCloseCustomRoleDialog}
+          />
+          <div className="settings-dialog relative z-10 flex w-[560px] max-w-[94vw] flex-col overflow-hidden rounded-2xl max-[720px]:max-h-[90vh]">
+            <div className="border-b border-[var(--border-subtle)] px-6 pt-5 pb-3">
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="settings-page-title mb-0 text-lg font-semibold text-[var(--text-strong)]">
+                  {editingRoleId ? "编辑自定义角色" : "创建自定义角色"}
+                </h3>
+                <button onClick={onCloseCustomRoleDialog} className="ui-icon-button">
+                  <svg width="14" height="14" viewBox="0 0 14 14">
+                    <path
+                      d="M1 1l12 12M13 1L1 13"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 overflow-y-auto px-6 py-5">
+              <div className="settings-field rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/60 p-4">
+                <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+                  导入头像
+                </label>
+                <div className="mt-2 flex items-center gap-4">
+                  <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-full ring-1 ring-[var(--border-subtle)]">
+                    {customRoleAvatar ? (
+                      <img
+                        src={customRoleAvatar}
+                        alt="自定义角色头像预览"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-[11px] text-[var(--text-soft)]">
+                        未导入
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="h-9 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-5 text-[12px] font-medium text-[var(--text-strong)] shadow-[0_2px_8px_rgba(15,23,42,0.06)] transition-colors hover:bg-[var(--surface-hover)]"
+                  >
+                    选择本地图片
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-field rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/60 p-4">
+                <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+                  角色昵称
+                </label>
+                <input
+                  type="text"
+                  value={customRoleName}
+                  onChange={(event) => setCustomRoleName(event.target.value)}
+                  placeholder="例如：竞赛教练"
+                  className="settings-input settings-input-flat mt-1"
+                />
+              </div>
+
+              <div className="settings-field rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/60 p-4">
+                <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+                  系统提示词
+                </label>
+                <textarea
+                  value={customRolePrompt}
+                  onChange={(event) => setCustomRolePrompt(event.target.value)}
+                  placeholder="输入角色的系统提示词，描述语气、分析风格和回答要求"
+                  rows={5}
+                  className="settings-input settings-input-flat mt-1 min-h-[150px] resize-y"
+                />
+              </div>
+            </div>
+
+            <div className="border-t border-[var(--border-subtle)] px-6 py-4">
+              <div className="flex items-center justify-between gap-3 max-[620px]:flex-col max-[620px]:items-stretch">
+                <p className="text-[11px] text-[var(--text-soft)]">
+                  头像仅保存在本地设备，不会上传。
+                </p>
+                <div className="flex items-center justify-end gap-2.5">
+                  {editingRoleId && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteCustomRole(editingRoleId)}
+                      className="h-9 rounded-full border border-[var(--rating-negative)]/25 bg-[var(--rating-negative)]/10 px-4 text-[12px] font-medium text-[var(--rating-negative)] transition-colors hover:bg-[var(--rating-negative)]/20"
+                    >
+                      删除角色
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onCloseCustomRoleDialog}
+                    className="h-9 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-5 text-[12px] font-medium text-[var(--text-strong)] transition-colors hover:bg-[var(--surface-hover)]"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canSaveCustomRole}
+                    onClick={onSaveCustomRole}
+                    className="h-9 rounded-full border border-[var(--accent-600)]/20 bg-[var(--accent-600)] px-5 text-[12px] font-medium text-white shadow-[0_6px_16px_rgba(2,132,199,0.26)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {editingRoleId ? "更新并应用" : "保存并应用"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={onAvatarFileImport}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -409,6 +881,9 @@ export function SettingsDialog() {
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
       if (event.key === "Escape") {
         closeSettings();
       }

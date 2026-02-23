@@ -7,6 +7,10 @@ export const PROVIDER_ORDER = [
 
 export type ProviderType = (typeof PROVIDER_ORDER)[number];
 export type ThemeMode = "light" | "dark";
+export const ZOOM_PERCENT_MIN = 80;
+export const ZOOM_PERCENT_MAX = 130;
+export const ZOOM_PERCENT_STEP = 5;
+export const DEFAULT_ZOOM_PERCENT = 100;
 
 export function isProviderType(value: string): value is ProviderType {
   return (PROVIDER_ORDER as readonly string[]).includes(value);
@@ -24,6 +28,10 @@ export interface ModelProvider {
 
 export interface AppSettings {
   theme: ThemeMode;
+  /** True uses solid window background, false enables translucency when OS supports it */
+  useOpaqueWindowBackground: boolean;
+  /** UI zoom percentage applied to the desktop renderer */
+  zoomPercent: number;
   activeProvider: ProviderType;
   providers: Record<ProviderType, ModelProvider>;
   /** Provider key configured by backend as server default target */

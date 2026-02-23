@@ -8,7 +8,9 @@ import {
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useCustomRoleStore } from "@/stores/customRoleStore";
 import type { ProviderType } from "@/types/settings";
+import { findRole } from "@/types/role";
 
 function normalizeIdentifier(value: string): string | undefined {
   const trimmed = value.trim();
@@ -38,11 +40,13 @@ export function ChatInput() {
   const activeProvider = useSettingsStore((s) => s.activeProvider);
   const providers = useSettingsStore((s) => s.providers);
   const activeRole = useSettingsStore((s) => s.activeRole);
+  const customRoles = useCustomRoleStore((s) => s.customRoles);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || isSending || isAiWorking) return;
     const roleIdAtSend = activeRole;
+    const roleAtSend = findRole(roleIdAtSend, customRoles);
 
     const provider = providers[activeProvider];
     if (!provider) {
@@ -105,6 +109,8 @@ export function ChatInput() {
         providerType: activeProvider,
         providerConfig,
         roleId: roleIdAtSend,
+        roleName: roleAtSend.name,
+        roleSystemPrompt: roleAtSend.systemPromptExtra || undefined,
       }, accessToken ?? undefined);
 
       addMessage("assistant", response.reply, { roleId: roleIdAtSend });
@@ -127,6 +133,7 @@ export function ChatInput() {
     providers,
     activeProvider,
     activeRole,
+    customRoles,
     addMessage,
     account?.studentId,
     account?.ptaNickname,

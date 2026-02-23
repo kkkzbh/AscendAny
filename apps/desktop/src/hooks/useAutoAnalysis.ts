@@ -2,11 +2,13 @@ import { useEffect, useRef } from "react";
 import { useAuthStore } from "@/stores/authStore";
 import { useMetricsStore } from "@/stores/metricsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { storage } from "@/lib/storage";
 import {
   postAutoAnalysis,
   type ClientProviderConfigPayload,
 } from "@/lib/api";
+import { findRole } from "@/types/role";
 
 /**
  * Hook that triggers auto-analysis once per latest exam (per account).
@@ -28,6 +30,7 @@ export function useAutoAnalysis(params: {
   const activeProvider = useSettingsStore((s) => s.activeProvider);
   const providers = useSettingsStore((s) => s.providers);
   const activeRole = useSettingsStore((s) => s.activeRole);
+  const customRoles = useCustomRoleStore((s) => s.customRoles);
 
   useEffect(() => {
     if (status !== "authenticated" || !account || !accessToken) return;
@@ -43,6 +46,7 @@ export function useAutoAnalysis(params: {
 
     (async () => {
       const roleIdAtRequest = activeRole;
+      const roleAtRequest = findRole(roleIdAtRequest, customRoles);
       let taskId: string | undefined;
       try {
         // Build provider config for non-server-config providers
@@ -71,6 +75,8 @@ export function useAutoAnalysis(params: {
             providerType: activeProvider,
             providerConfig,
             roleId: roleIdAtRequest,
+            roleName: roleAtRequest.name,
+            roleSystemPrompt: roleAtRequest.systemPromptExtra || undefined,
             latestExamId,
           },
           accessToken,
@@ -97,6 +103,7 @@ export function useAutoAnalysis(params: {
     activeProvider,
     providers,
     activeRole,
+    customRoles,
     onReply,
     onWorkStart,
     onWorkEnd,

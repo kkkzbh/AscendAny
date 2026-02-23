@@ -8,11 +8,15 @@ import type {
   ThemeMode,
 } from "@/types/settings";
 import {
+  DEFAULT_ZOOM_PERCENT,
   DEFAULT_PROVIDERS,
   PROVIDER_ORDER,
+  ZOOM_PERCENT_MAX,
+  ZOOM_PERCENT_MIN,
+  ZOOM_PERCENT_STEP,
   isProviderType,
 } from "@/types/settings";
-import { DEFAULT_ROLE_ID, BUILT_IN_ROLES } from "@/types/role";
+import { DEFAULT_ROLE_ID } from "@/types/role";
 
 interface SettingsState extends AppSettings {
   isOpen: boolean;
@@ -21,6 +25,8 @@ interface SettingsState extends AppSettings {
   resetForAccount: () => void;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
+  setOpaqueWindowBackground: (enabled: boolean) => void;
+  setZoomPercent: (zoomPercent: number) => void;
   setActiveProvider: (p: ProviderType) => void;
   updateProvider: (type: ProviderType, patch: Partial<ModelProvider>) => void;
   syncProviderOptions: (payload: ModelProvidersResponsePayload) => void;
@@ -29,6 +35,14 @@ interface SettingsState extends AppSettings {
 
 function isThemeMode(value: unknown): value is ThemeMode {
   return value === "light" || value === "dark";
+}
+
+function normalizeZoomPercent(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_ZOOM_PERCENT;
+  }
+  const rounded = Math.round(value / ZOOM_PERCENT_STEP) * ZOOM_PERCENT_STEP;
+  return Math.min(ZOOM_PERCENT_MAX, Math.max(ZOOM_PERCENT_MIN, rounded));
 }
 
 function cloneDefaultProviders(): Record<ProviderType, ModelProvider> {
@@ -86,6 +100,8 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       theme: "light",
+      useOpaqueWindowBackground: true,
+      zoomPercent: DEFAULT_ZOOM_PERCENT,
       activeProvider: "server_default",
       providers: cloneDefaultProviders(),
       serverDefaultTarget: "openai",
@@ -99,6 +115,8 @@ export const useSettingsStore = create<SettingsState>()(
       resetForAccount: () =>
         set({
           theme: "light",
+          useOpaqueWindowBackground: true,
+          zoomPercent: DEFAULT_ZOOM_PERCENT,
           activeProvider: "server_default",
           providers: cloneDefaultProviders(),
           serverDefaultTarget: "openai",
@@ -112,6 +130,14 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({
           theme: state.theme === "light" ? "dark" : "light",
         })),
+      setOpaqueWindowBackground: (enabled) =>
+        set({
+          useOpaqueWindowBackground: enabled,
+        }),
+      setZoomPercent: (zoomPercent) =>
+        set({
+          zoomPercent: normalizeZoomPercent(zoomPercent),
+        }),
 
       setActiveProvider: (providerType) =>
         set((state) => {
@@ -155,6 +181,15 @@ export const useSettingsStore = create<SettingsState>()(
             };
           }
 
+          nextProviders.anthropic = {
+            ...nextProviders.anthropic,
+            enabled: true,
+          };
+          nextProviders.deepseek = {
+            ...nextProviders.deepseek,
+            enabled: true,
+          };
+
           nextProviders.server_default = {
             ...nextProviders.server_default,
             usesServerConfig: true,
@@ -186,8 +221,8 @@ export const useSettingsStore = create<SettingsState>()(
 
       setActiveRole: (roleId) =>
         set(() => {
-          const valid = BUILT_IN_ROLES.some((r) => r.id === roleId);
-          return { activeRole: valid ? roleId : DEFAULT_ROLE_ID };
+          const normalized = roleId.trim();
+          return { activeRole: normalized || DEFAULT_ROLE_ID };
         }),
 
     }),
@@ -195,6 +230,8 @@ export const useSettingsStore = create<SettingsState>()(
       name: "ascendany_settings_guest",
       partialize: (state) => ({
         theme: state.theme,
+        useOpaqueWindowBackground: state.useOpaqueWindowBackground,
+        zoomPercent: state.zoomPercent,
         activeProvider: state.activeProvider,
         providers: state.providers,
         serverDefaultTarget: state.serverDefaultTarget,
@@ -218,6 +255,11 @@ export const useSettingsStore = create<SettingsState>()(
         return {
           ...currentState,
           theme: isThemeMode(persisted.theme) ? persisted.theme : currentState.theme,
+          useOpaqueWindowBackground:
+            typeof persisted.useOpaqueWindowBackground === "boolean"
+              ? persisted.useOpaqueWindowBackground
+              : currentState.useOpaqueWindowBackground,
+          zoomPercent: normalizeZoomPercent(persisted.zoomPercent),
           activeProvider,
           providers,
           serverDefaultTarget:
@@ -235,9 +277,8 @@ export const useSettingsStore = create<SettingsState>()(
               ? persisted.serverDefaultModel
               : currentState.serverDefaultModel,
           activeRole:
-            typeof persisted.activeRole === "string" &&
-            BUILT_IN_ROLES.some((r) => r.id === persisted.activeRole)
-              ? persisted.activeRole
+            typeof persisted.activeRole === "string" && persisted.activeRole.trim()
+              ? persisted.activeRole.trim()
               : currentState.activeRole,
         };
       },

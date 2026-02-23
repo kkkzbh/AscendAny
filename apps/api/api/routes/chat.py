@@ -41,6 +41,17 @@ _DEFAULT_ROLE_ID = "xiaoD"
 _SUPPORTED_PROVIDERS = {"server_default", "openai", "anthropic", "deepseek"}
 
 
+def _resolve_role_name(role_id: str, role_name: str | None) -> str:
+    normalized = (role_name or "").strip()
+    if normalized:
+        return normalized
+    return _ROLE_NAMES.get(role_id, _ROLE_NAMES[_DEFAULT_ROLE_ID])
+
+
+def _resolve_role_system_prompt(role_system_prompt: str | None) -> str:
+    return (role_system_prompt or "").strip()
+
+
 async def _resolve_latest_exam_id(repository: Any, identity: Any) -> int | None:
     student_entity_ids = identity.student_entity_ids or (identity.student_entity_id,)
     per_student_limit = max(20, 20 * len(student_entity_ids))
@@ -141,7 +152,8 @@ async def chat_reply(
             )
 
     role_id = payload.roleId or _DEFAULT_ROLE_ID
-    role_name = _ROLE_NAMES.get(role_id, _ROLE_NAMES[_DEFAULT_ROLE_ID])
+    role_name = _resolve_role_name(role_id, payload.roleName)
+    role_system_prompt = _resolve_role_system_prompt(payload.roleSystemPrompt)
 
     # ── 2. Resolve student identity for prompt context ──
     identity = None
@@ -162,6 +174,7 @@ async def chat_reply(
         identity=identity,
         role_id=role_id,
         role_name=role_name,
+        custom_role_style_prompt=role_system_prompt,
     )
 
     # ── 4. Create tool executor ──
@@ -231,7 +244,8 @@ async def chat_auto_analysis(
 
     # ── 2. Build dedicated proactive-analysis prompt ──
     role_id = payload.roleId or _DEFAULT_ROLE_ID
-    role_name = _ROLE_NAMES.get(role_id, _ROLE_NAMES[_DEFAULT_ROLE_ID])
+    role_name = _resolve_role_name(role_id, payload.roleName)
+    role_system_prompt = _resolve_role_system_prompt(payload.roleSystemPrompt)
 
     cache_row = await _fetch_auto_analysis_cache(
         repository=repository,
@@ -268,6 +282,7 @@ async def chat_auto_analysis(
         identity=identity,
         role_id=role_id,
         role_name=role_name,
+        custom_role_style_prompt=role_system_prompt,
     )
 
     # ── 3. Build the hidden user trigger message ──
@@ -282,6 +297,8 @@ async def chat_auto_analysis(
         providerType=payload.providerType,
         providerConfig=payload.providerConfig,
         roleId=role_id,
+        roleName=role_name,
+        roleSystemPrompt=role_system_prompt,
     )
 
     # ── 5. Generate reply with tools ──

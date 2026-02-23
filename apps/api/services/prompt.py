@@ -242,12 +242,14 @@ class PromptService:
         identity: ResolvedIdentity | None,
         role_id: str = "xiaoD",
         role_name: str = "小D",
+        custom_role_style_prompt: str = "",
     ) -> str:
         """Build minimal system prompt for normal chat mode."""
         return await self._build_prompt_by_mode(
             base_prompt=_NORMAL_SYSTEM_PROMPT_TEMPLATE.format(role_name=role_name),
             identity=identity,
             role_id=role_id,
+            custom_role_style_prompt=custom_role_style_prompt,
         )
 
     async def build_proactive_analysis_system_prompt(
@@ -255,6 +257,7 @@ class PromptService:
         identity: ResolvedIdentity | None,
         role_id: str = "xiaoD",
         role_name: str = "小D",
+        custom_role_style_prompt: str = "",
     ) -> str:
         """Build dedicated system prompt for proactive analysis mode."""
         base_prompt = "\n\n".join(
@@ -269,6 +272,7 @@ class PromptService:
             base_prompt=base_prompt,
             identity=identity,
             role_id=role_id,
+            custom_role_style_prompt=custom_role_style_prompt,
         )
 
     def build_auto_analysis_user_message(self) -> str:
@@ -280,6 +284,7 @@ class PromptService:
         base_prompt: str,
         identity: ResolvedIdentity | None,
         role_id: str,
+        custom_role_style_prompt: str = "",
     ) -> str:
         sections: list[str] = [base_prompt]
         if identity is not None and not identity.no_submission_records:
@@ -289,6 +294,9 @@ class PromptService:
         style = ROLE_STYLE_PROMPTS.get(role_id, "")
         if style:
             sections.append(style)
+        custom_style = custom_role_style_prompt.strip()
+        if custom_style:
+            sections.append(custom_style)
         return "\n\n".join(sections)
 
     async def _build_student_context(self, identity: ResolvedIdentity) -> str:

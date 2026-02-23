@@ -9,7 +9,7 @@ export function AppLayout() {
   return (
     <div className="app-shell flex h-screen w-screen flex-col overflow-hidden">
       <TitleBar />
-      <main className="flex-1 overflow-hidden px-[var(--app-gutter)] pb-[var(--app-gutter)] pt-3 max-[960px]:pt-2">
+      <main className="flex-1 overflow-hidden px-[var(--app-gutter-x)] pb-[var(--app-gutter-y)] pt-3 max-[960px]:pt-2">
         <div className="h-full">
           <SplitPanel
             left={<ChatPanel />}

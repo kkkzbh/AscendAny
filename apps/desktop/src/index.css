@@ -25,7 +25,8 @@ body,
 }
 
 :root {
-  --app-gutter: clamp(16px, 2.4vw, 28px);
+  --app-gutter-x: clamp(4px, 0.7vw, 8px);
+  --app-gutter-y: clamp(12px, 1.8vw, 20px);
 
   --surface-base: #edf2f7;
   --surface-elevated: rgba(255, 255, 255, 0.76);
@@ -120,6 +121,56 @@ body,
   --scrollbar-thumb-hover: rgba(148, 163, 184, 0.45);
 }
 
+:root[data-theme="light"][data-opaque-window="false"] {
+  --surface-base: rgba(237, 242, 247, 0.16);
+  --surface-elevated: rgba(255, 255, 255, 0.42);
+  --surface-raised: rgba(255, 255, 255, 0.56);
+  --surface-soft: rgba(2, 132, 199, 0.14);
+  --surface-hover: rgba(2, 132, 199, 0.2);
+  --border: rgba(15, 23, 42, 0.24);
+  --border-subtle: rgba(148, 163, 184, 0.32);
+  --body-background:
+    radial-gradient(circle at 20% 12%, rgba(56, 189, 248, 0.2), transparent 42%),
+    radial-gradient(circle at 86% 22%, rgba(251, 146, 60, 0.13), transparent 36%),
+    radial-gradient(circle at 78% 78%, rgba(14, 165, 233, 0.12), transparent 40%),
+    linear-gradient(160deg, rgba(235, 242, 248, 0.42) 0%, rgba(233, 238, 246, 0.36) 42%, rgba(244, 247, 251, 0.3) 100%);
+  --app-shell-overlay:
+    linear-gradient(to right, rgba(255, 255, 255, 0.16), transparent 30%),
+    linear-gradient(to left, rgba(255, 255, 255, 0.14), transparent 30%);
+  --titlebar-background: linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.22));
+  --panel-shadow: 0 12px 36px rgba(15, 23, 42, 0.14);
+  --settings-dialog-background: rgba(255, 255, 255, 0.58);
+  --settings-dialog-shadow: 0 20px 72px rgba(15, 23, 42, 0.24);
+  --settings-nav-background: rgba(247, 250, 252, 0.46);
+  --settings-nav-active: rgba(2, 132, 199, 0.2);
+  --tooltip-background: rgba(255, 255, 255, 0.84);
+}
+
+:root[data-theme="dark"][data-opaque-window="false"] {
+  --surface-base: rgba(2, 6, 23, 0.2);
+  --surface-elevated: rgba(15, 23, 42, 0.46);
+  --surface-raised: rgba(15, 23, 42, 0.58);
+  --surface-soft: rgba(56, 189, 248, 0.2);
+  --surface-hover: rgba(56, 189, 248, 0.28);
+  --border: rgba(148, 163, 184, 0.28);
+  --border-subtle: rgba(148, 163, 184, 0.26);
+  --body-background:
+    radial-gradient(circle at 18% 10%, rgba(14, 116, 144, 0.28), transparent 44%),
+    radial-gradient(circle at 88% 26%, rgba(249, 115, 22, 0.14), transparent 36%),
+    radial-gradient(circle at 76% 82%, rgba(2, 132, 199, 0.16), transparent 40%),
+    linear-gradient(160deg, rgba(2, 6, 23, 0.42) 0%, rgba(11, 19, 36, 0.36) 42%, rgba(17, 24, 39, 0.3) 100%);
+  --app-shell-overlay:
+    linear-gradient(to right, rgba(56, 189, 248, 0.1), transparent 30%),
+    linear-gradient(to left, rgba(15, 23, 42, 0.24), transparent 34%);
+  --titlebar-background: linear-gradient(180deg, rgba(15, 23, 42, 0.56), rgba(15, 23, 42, 0.28));
+  --panel-shadow: 0 14px 40px rgba(2, 6, 23, 0.34);
+  --settings-dialog-background: rgba(15, 23, 42, 0.62);
+  --settings-dialog-shadow: 0 22px 80px rgba(2, 6, 23, 0.42);
+  --settings-nav-background: rgba(2, 6, 23, 0.4);
+  --settings-nav-active: rgba(56, 189, 248, 0.24);
+  --tooltip-background: rgba(15, 23, 42, 0.84);
+}
+
 body {
   background: var(--body-background);
   color: var(--text-strong);
@@ -159,7 +210,7 @@ body {
 
 .panel-shell {
   border: 1px solid var(--border-subtle);
-  border-radius: 18px;
+  border-radius: 0;
   background: var(--surface-elevated);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -423,9 +474,51 @@ body {
   background: var(--surface-soft);
 }
 
+.ui-window-traffic {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  margin-inline: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: transform 0.15s var(--ease-out-expo), filter 0.15s var(--ease-out-expo);
+}
+
+.ui-window-traffic:hover {
+  transform: scale(1.06);
+  filter: brightness(0.96);
+  background: initial;
+}
+
+.ui-window-minimize {
+  background: #f6c344;
+}
+
+.ui-window-maximize {
+  background: #35c759;
+}
+
+.ui-window-close {
+  background: #ff5f57;
+}
+
+.ui-window-dot-symbol {
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  color: rgba(20, 20, 20, 0.62);
+  opacity: 0;
+  transform: translateY(-0.5px);
+  transition: opacity 0.12s ease;
+}
+
+.ui-window-traffic:hover .ui-window-dot-symbol {
+  opacity: 1;
+}
+
 .ui-window-close:hover {
-  color: #ffffff;
-  background: #e81123;
+  color: inherit;
+  background: #ff5f57;
 }
 
 .input-shell {
@@ -760,6 +853,10 @@ body {
   box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.14);
 }
 
+.settings-input-flat {
+  border-radius: 0 !important;
+}
+
 .settings-content {
   padding: 20px 18px 16px !important;
 }
@@ -781,6 +878,40 @@ body {
 .settings-field {
   display: grid;
   gap: 6px;
+}
+
+.settings-provider-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-provider-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.settings-readonly-pill {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--surface-soft);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 /* ---- Avatar cropper dialog ---- */
@@ -1150,11 +1281,8 @@ body {
 
 @media (max-width: 959px) {
   :root {
-    --app-gutter: 14px;
-  }
-
-  .panel-shell {
-    border-radius: 14px;
+    --app-gutter-x: 6px;
+    --app-gutter-y: 10px;
   }
 
   .message-list-shell {

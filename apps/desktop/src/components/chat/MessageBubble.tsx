@@ -2,6 +2,7 @@ import type { ChatMessage } from "@/types/chat";
 import { DEFAULT_ROLE_ID, findRole } from "@/types/role";
 import { useAuthStore } from "@/stores/authStore";
 import { useAvatarStore } from "@/stores/avatarStore";
+import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,19 +11,27 @@ interface MessageBubbleProps {
   message: ChatMessage;
 }
 
+function formatMessageTime(date: Date): string {
+  if (Number.isNaN(date.getTime())) return "";
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${month}.${day} ${hour}:${minute}`;
+}
+
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const account = useAuthStore((s) => s.account);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
+  const customRoles = useCustomRoleStore((s) => s.customRoles);
   const role = findRole(
     message.role === "assistant" ? (message.roleId ?? DEFAULT_ROLE_ID) : DEFAULT_ROLE_ID,
+    customRoles,
   );
-
-  const timeStr = new Date(message.timestamp).toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const messageDate = new Date(message.timestamp);
+  const timeStr = formatMessageTime(messageDate);
 
   if (isSystem) {
     return (
@@ -65,6 +74,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </div>
         </div>
         <time
+          dateTime={!Number.isNaN(messageDate.getTime()) ? messageDate.toISOString() : undefined}
           className={`px-1 text-[10px] leading-none ${
             isUser ? "text-right text-[var(--text-soft)]" : "text-left text-[var(--text-soft)]"
           }`}

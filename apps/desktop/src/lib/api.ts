@@ -73,6 +73,8 @@ export interface ChatReplyRequestPayload {
   providerType: ProviderType;
   providerConfig?: ClientProviderConfigPayload;
   roleId?: string;
+  roleName?: string;
+  roleSystemPrompt?: string;
 }
 
 export interface AutoAnalysisRequestPayload {
@@ -81,6 +83,8 @@ export interface AutoAnalysisRequestPayload {
   providerType: ProviderType;
   providerConfig?: ClientProviderConfigPayload;
   roleId?: string;
+  roleName?: string;
+  roleSystemPrompt?: string;
   latestExamId?: string;
 }
 

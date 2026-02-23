@@ -4,6 +4,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   minimize: () => ipcRenderer.send("window-minimize"),
   maximize: () => ipcRenderer.send("window-maximize"),
   close: () => ipcRenderer.send("window-close"),
+  setZoomFactor: (factor: number) =>
+    ipcRenderer.invoke("window-set-zoom-factor", factor) as Promise<boolean>,
+  getOpaqueWindowBackground: () =>
+    ipcRenderer.invoke("window-get-opaque-background") as Promise<boolean>,
+  setOpaqueWindowBackground: (enabled: boolean) =>
+    ipcRenderer.invoke("window-set-opaque-background", enabled) as Promise<boolean>,
   platform: process.platform,
   credentialAvailable: () => ipcRenderer.invoke("credential-available") as Promise<boolean>,
   credentialSave: (username: string, password: string) =>

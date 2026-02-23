@@ -31,6 +31,8 @@ class ChatReplyRequest(BaseModel):
     providerType: ProviderType = "server_default"
     providerConfig: ClientProviderConfig | None = None
     roleId: str | None = None
+    roleName: str | None = None
+    roleSystemPrompt: str | None = None
 
 
 class ChatReplyResponse(BaseModel):
@@ -48,6 +50,8 @@ class AutoAnalysisRequest(BaseModel):
     providerType: ProviderType = "server_default"
     providerConfig: ClientProviderConfig | None = None
     roleId: str | None = None
+    roleName: str | None = None
+    roleSystemPrompt: str | None = None
 
 
 class AutoAnalysisResponse(BaseModel):

@@ -4,6 +4,9 @@ interface ElectronAPI {
   minimize: () => void;
   maximize: () => void;
   close: () => void;
+  setZoomFactor?: (factor: number) => Promise<boolean>;
+  getOpaqueWindowBackground?: () => Promise<boolean>;
+  setOpaqueWindowBackground?: (enabled: boolean) => Promise<boolean>;
   platform: string;
   credentialAvailable?: () => Promise<boolean>;
   credentialSave?: (username: string, password: string) => Promise<boolean>;

@@ -52,8 +52,15 @@ export const BUILT_IN_ROLES: RoleConfig[] = [
   },
 ];
 
-export function findRole(roleId: string): RoleConfig {
-  return BUILT_IN_ROLES.find((r) => r.id === roleId) ?? BUILT_IN_ROLES[0]!;
+export function getAllRoles(customRoles: RoleConfig[] = []): RoleConfig[] {
+  return [...BUILT_IN_ROLES, ...customRoles];
+}
+
+export function findRole(
+  roleId: string,
+  customRoles: RoleConfig[] = [],
+): RoleConfig {
+  return getAllRoles(customRoles).find((r) => r.id === roleId) ?? BUILT_IN_ROLES[0]!;
 }
 
 const FALLBACK_WORKING_CARD: RoleWorkingCardConfig = {
@@ -69,6 +76,23 @@ export function resolveRoleWorkingCard(roleId: string): RoleWorkingCardConfig {
   if (!candidate) {
     return FALLBACK_WORKING_CARD;
   }
+
+  const stages = candidate.stages
+    .map((stage) => stage.trim())
+    .filter((stage) => stage.length > 0);
+
+  return {
+    variant: candidate.variant,
+    stages: stages.length > 0 ? stages : FALLBACK_WORKING_CARD.stages,
+  };
+}
+
+export function resolveAnyRoleWorkingCard(
+  roleId: string,
+  customRoles: RoleConfig[] = [],
+): RoleWorkingCardConfig {
+  const targetRole = getAllRoles(customRoles).find((r) => r.id === roleId);
+  const candidate = targetRole?.workingCard ?? resolveRoleWorkingCard(DEFAULT_ROLE_ID);
 
   const stages = candidate.stages
     .map((stage) => stage.trim())

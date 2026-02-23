@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from "electron";
+import { app, BrowserWindow, ipcMain, safeStorage, type Rectangle } from "electron";
 import fs from "node:fs";
 import path from "path";
 
@@ -12,7 +12,16 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 const CREDENTIAL_FILE_NAME = "secure-credentials.json";
+const WINDOW_APPEARANCE_FILE_NAME = "window-appearance.json";
 const LINUX_DESKTOP_FILE = "ascendany.desktop";
+
+interface WindowAppearanceConfig {
+  useOpaqueWindowBackground: boolean;
+}
+
+const DEFAULT_WINDOW_APPEARANCE: WindowAppearanceConfig = {
+  useOpaqueWindowBackground: true,
+};
 
 function resolveWindowIconPath(): string | undefined {
   if (!isLinux) {
@@ -135,19 +144,80 @@ if (isLinux) {
   configureLinuxInputMethod(linuxGpuMode);
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+function windowAppearanceFilePath(): string {
+  return path.join(app.getPath("userData"), WINDOW_APPEARANCE_FILE_NAME);
+}
+
+function loadWindowAppearance(): WindowAppearanceConfig {
+  try {
+    const filePath = windowAppearanceFilePath();
+    if (!fs.existsSync(filePath)) {
+      return { ...DEFAULT_WINDOW_APPEARANCE };
+    }
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return { ...DEFAULT_WINDOW_APPEARANCE };
+    }
+    const useOpaqueWindowBackground = (parsed as Partial<WindowAppearanceConfig>).useOpaqueWindowBackground;
+    if (typeof useOpaqueWindowBackground !== "boolean") {
+      return { ...DEFAULT_WINDOW_APPEARANCE };
+    }
+    return {
+      useOpaqueWindowBackground,
+    };
+  } catch {
+    return { ...DEFAULT_WINDOW_APPEARANCE };
+  }
+}
+
+function saveWindowAppearance(next: WindowAppearanceConfig): boolean {
+  try {
+    const filePath = windowAppearanceFilePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(next), { encoding: "utf-8" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeOpaqueWindowBackground(value: unknown): boolean | null {
+  if (typeof value !== "boolean") {
+    return null;
+  }
+  return value;
+}
+
+let windowAppearance = loadWindowAppearance();
+
+function loadMainWindow(window: BrowserWindow) {
+  if (VITE_DEV_SERVER_URL) {
+    void window.loadURL(VITE_DEV_SERVER_URL);
+  } else {
+    void window.loadFile(path.join(process.env.DIST!, "index.html"));
+  }
+}
+
+function createWindow(options?: {
+  show?: boolean;
+  bounds?: Rectangle;
+}) {
+  const useOpaqueWindowBackground = windowAppearance.useOpaqueWindowBackground;
+  const enableTranslucentWindow = !useOpaqueWindowBackground;
+  const nextWindow = new BrowserWindow({
+    show: options?.show ?? true,
     width: 1280,
     height: 800,
     minWidth: 900,
     minHeight: 600,
     frame: false,
     titleBarStyle: isMac ? "hiddenInset" : "hidden",
-    // transparent causes GPU crashes on Linux/Wayland; only enable on macOS
-    transparent: isMac,
+    // Linux translucency is opt-in via setting because some environments can be unstable.
+    transparent: isMac || enableTranslucentWindow,
     vibrancy: isMac ? "under-window" : undefined,
     visualEffectState: isMac ? "active" : undefined,
-    backgroundColor: isMac ? "#00000000" : "#f0f2f8",
+    backgroundColor: enableTranslucentWindow || isMac ? "#00000000" : "#f0f2f8",
     icon: resolveWindowIconPath(),
     // On Linux, use rounded corners via CSS instead of OS-level transparency
     ...(isLinux && { backgroundMaterial: undefined }),
@@ -156,12 +226,64 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+    ...(options?.bounds ?? {}),
   });
 
-  if (VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(VITE_DEV_SERVER_URL);
-  } else {
-    mainWindow.loadFile(path.join(process.env.DIST!, "index.html"));
+  nextWindow.on("closed", () => {
+    if (mainWindow === nextWindow) {
+      mainWindow = null;
+    }
+  });
+
+  mainWindow = nextWindow;
+  loadMainWindow(nextWindow);
+  return nextWindow;
+}
+
+let isRebuildingMainWindow = false;
+
+async function rebuildMainWindow(): Promise<boolean> {
+  const currentWindow = mainWindow;
+  if (!currentWindow || currentWindow.isDestroyed()) {
+    createWindow();
+    return true;
+  }
+
+  if (isRebuildingMainWindow) {
+    return false;
+  }
+  isRebuildingMainWindow = true;
+
+  const wasMaximized = currentWindow.isMaximized();
+  const wasFullScreen = currentWindow.isFullScreen();
+  const bounds = currentWindow.getBounds();
+  const nextWindow = createWindow({
+    show: false,
+    bounds: wasMaximized || wasFullScreen ? undefined : bounds,
+  });
+
+  try {
+    await new Promise<void>((resolve) => {
+      nextWindow.once("ready-to-show", () => resolve());
+      nextWindow.webContents.once("did-finish-load", () => resolve());
+      nextWindow.webContents.once("did-fail-load", () => resolve());
+    });
+
+    if (wasFullScreen) {
+      nextWindow.setFullScreen(true);
+    } else if (wasMaximized) {
+      nextWindow.maximize();
+    }
+
+    nextWindow.show();
+    currentWindow.close();
+    return true;
+  } catch {
+    nextWindow.close();
+    mainWindow = currentWindow;
+    return false;
+  } finally {
+    isRebuildingMainWindow = false;
   }
 }
 
@@ -267,6 +389,13 @@ function avatarFilePath(accountId: string): string {
   return path.join(avatarDir(), `${safe}.png`);
 }
 
+function normalizeZoomFactor(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.min(1.3, Math.max(0.8, value));
+}
+
 ipcMain.handle("avatar-save", (_event, accountId: unknown, base64Data: unknown) => {
   const id = typeof accountId === "string" ? accountId.trim() : "";
   const data = typeof base64Data === "string" ? base64Data : "";
@@ -313,6 +442,46 @@ ipcMain.handle("avatar-delete", (_event, accountId: unknown) => {
   }
 });
 
+ipcMain.handle("window-set-zoom-factor", (event, value: unknown) => {
+  const zoomFactor = normalizeZoomFactor(value);
+  if (zoomFactor === null) {
+    return false;
+  }
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window) {
+    return false;
+  }
+  window.webContents.setZoomFactor(zoomFactor);
+  return true;
+});
+
+ipcMain.handle("window-get-opaque-background", () => {
+  return windowAppearance.useOpaqueWindowBackground;
+});
+
+ipcMain.handle("window-set-opaque-background", async (_event, value: unknown) => {
+  const useOpaqueWindowBackground = normalizeOpaqueWindowBackground(value);
+  if (useOpaqueWindowBackground === null) {
+    return false;
+  }
+
+  if (windowAppearance.useOpaqueWindowBackground === useOpaqueWindowBackground) {
+    return true;
+  }
+
+  const next: WindowAppearanceConfig = {
+    useOpaqueWindowBackground,
+  };
+  const saved = saveWindowAppearance(next);
+  if (!saved) {
+    return false;
+  }
+
+  windowAppearance = next;
+  // `transparent` is immutable after window creation; recreate window to apply seamlessly.
+  return rebuildMainWindow();
+});
+
 // Window control IPC handlers
 ipcMain.on("window-minimize", () => {
   mainWindow?.minimize();
@@ -343,4 +512,6 @@ app.on("activate", () => {
   }
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+});
