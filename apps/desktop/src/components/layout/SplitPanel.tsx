@@ -94,7 +94,7 @@ export function SplitPanel({
   return (
     <div
       ref={containerRef}
-      className="split-panel flex h-full w-full gap-3 overflow-hidden max-[959px]:flex-col"
+      className="split-panel flex h-full w-full gap-0 overflow-hidden max-[959px]:flex-col"
     >
       <div
         className="panel-shell panel-chat flex h-full min-w-0 overflow-hidden"
@@ -116,11 +116,11 @@ export function SplitPanel({
         aria-orientation="vertical"
         aria-label="调整面板宽度"
         tabIndex={isStacked ? -1 : 0}
-        className="split-handle relative flex h-full w-3 shrink-0 cursor-col-resize items-center justify-center max-[959px]:hidden"
+        className="split-handle relative flex h-full w-1 shrink-0 cursor-col-resize items-center justify-center max-[959px]:hidden"
         onPointerDown={onMouseDown}
         onKeyDown={onHandleKeyDown}
       >
-        <div className="split-handle-bar h-10 w-1 rounded-full" />
+        <div className="split-handle-bar h-10 w-px rounded-full" />
       </div>
 
       <div className="panel-shell panel-metrics flex h-full min-w-0 flex-1 overflow-hidden">

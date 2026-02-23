@@ -65,19 +65,19 @@ export function MetricCard({ name, value, delta, isMissing = false }: MetricCard
           };
 
   return (
-    <div className="metric-row flex items-center gap-3 rounded-lg transition-colors duration-150 hover:bg-[var(--surface-soft)]">
+    <div className="metric-row flex items-center gap-3 transition-colors duration-150 hover:bg-[var(--surface-soft)]">
       <div
-        className="h-2 w-2 shrink-0 rounded-full"
+        className="h-2 w-2 shrink-0"
         style={{ backgroundColor: color }}
       />
       <span className="w-8 text-xs text-[var(--text-muted)]">{label}</span>
       <span className="w-7 text-right text-xs font-bold tabular-nums text-[var(--text-strong)]">
         {isMissing ? "N/A" : roundedValue}
       </span>
-      <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--surface-soft)]">
+      <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden bg-[var(--surface-soft)]">
         {!isMissing && solidWidth > 0 && (
           <div
-            className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
+            className="absolute inset-y-0 left-0 transition-all duration-500"
             style={{
               width: `${solidWidth}%`,
               backgroundColor: color,
@@ -86,7 +86,7 @@ export function MetricCard({ name, value, delta, isMissing = false }: MetricCard
         )}
         {!isMissing && positiveSegmentWidth > 0 && (
           <div
-            className="absolute inset-y-0 rounded-full transition-all duration-500"
+            className="absolute inset-y-0 transition-all duration-500"
             style={{
               left: `${previousValue}%`,
               width: `${positiveSegmentWidth}%`,
@@ -96,7 +96,7 @@ export function MetricCard({ name, value, delta, isMissing = false }: MetricCard
         )}
         {!isMissing && negativeSegmentWidth > 0 && (
           <div
-            className="absolute inset-y-0 rounded-full border transition-all duration-500"
+            className="absolute inset-y-0 border transition-all duration-500"
             style={{
               left: `${roundedValue}%`,
               width: `${negativeSegmentWidth}%`,
@@ -107,7 +107,7 @@ export function MetricCard({ name, value, delta, isMissing = false }: MetricCard
         )}
       </div>
       <span
-        className="metric-delta-chip min-w-[40px] shrink-0 rounded px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums"
+        className="metric-delta-chip min-w-[40px] shrink-0 px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums"
         style={deltaStyle}
       >
         {deltaText}

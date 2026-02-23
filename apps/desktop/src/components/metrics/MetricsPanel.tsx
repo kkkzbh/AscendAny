@@ -61,101 +61,105 @@ export function MetricsPanel() {
 
   return (
     <section className="flex h-full w-full flex-col">
-      <div className="flex h-full w-full min-h-0 flex-col gap-3 overflow-hidden p-4 pt-4">
-        <div className="shrink-0">
-          <RatingDisplay rating={rating} />
-        </div>
+      <div className="flex h-full w-full min-h-0 flex-col overflow-hidden p-4 pt-4">
+        <div className="metric-section flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="shrink-0 px-1 pt-2">
+            <RatingDisplay rating={rating} />
+          </div>
 
-        <div className="metric-section shrink-0 rounded-xl p-3.5">
-          <RadarChart metrics={metrics} />
-        </div>
+          <div className="shrink-0 px-3.5 pb-2">
+            <RadarChart metrics={metrics} />
+          </div>
 
-        <div className="metric-section metric-bars shrink-0 rounded-xl">
-          {METRIC_ORDER.map((name) => (
-            <MetricCard
-              key={name}
-              name={name}
-              value={metrics[name]}
-              delta={metricDelta?.values[name] ?? 0}
-              isMissing={metricMissing?.[name] ?? false}
-            />
-          ))}
-        </div>
+          <div className="metric-bars shrink-0 border-t border-[var(--border-subtle)]">
+            {METRIC_ORDER.map((name) => (
+              <MetricCard
+                key={name}
+                name={name}
+                value={metrics[name]}
+                delta={metricDelta?.values[name] ?? 0}
+                isMissing={metricMissing?.[name] ?? false}
+              />
+            ))}
+          </div>
 
-        <div
-          className={`metric-section rating-history-section rounded-xl ${
-            historyOpen ? "flex min-h-0 flex-1 flex-col" : "shrink-0"
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => setHistoryOpen((open) => !open)}
-            className="flex w-full items-center justify-between px-2 pb-1 text-left"
+          <div className="border-t border-[var(--border-subtle)]" />
+
+          <div
+            className={`rating-history-section ${
+              historyOpen ? "flex min-h-0 flex-1 flex-col" : "shrink-0"
+            }`}
           >
-            <h3
-              className="rating-history-title text-[11px] font-semibold tracking-[0.12em] text-[var(--text-soft)] uppercase"
-              style={{ paddingLeft: 12 }}
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((open) => !open)}
+              className="flex w-full items-center justify-between px-2 pb-1 text-left"
             >
-              Rating 历史
-            </h3>
-            <div className="flex items-center gap-1 text-[10px] font-medium text-[var(--text-soft)]">
-              <span>{historyItems.length}</span>
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                className={`transition-transform duration-200 ${historyOpen ? "rotate-180" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+              <h3
+                className="rating-history-title text-[11px] font-semibold tracking-[0.12em] text-[var(--text-soft)] uppercase"
+                style={{ paddingLeft: 12 }}
               >
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </div>
-          </button>
-
-          {historyOpen && (
-            <div className="rating-history-list min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
-              {historyItems.map((point) => (
-                <div
-                  key={point.examId}
-                  className="rating-history-row flex items-center justify-between rounded-lg text-xs transition-colors duration-150 hover:bg-[var(--surface-soft)]"
+                Rating 历史
+              </h3>
+              <div className="flex items-center gap-1 text-[10px] font-medium text-[var(--text-soft)]">
+                <span>{historyItems.length}</span>
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  className={`transition-transform duration-200 ${historyOpen ? "rotate-180" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                 >
-                  <div className="flex flex-col">
-                    <span className="font-medium text-[var(--text-strong)]">
-                      {point.examName}
-                    </span>
-                    <span className="text-[10px] text-[var(--text-soft)]">
-                      {point.date}
-                    </span>
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </div>
+            </button>
+
+            {historyOpen && (
+              <div className="rating-history-list min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+                {historyItems.map((point) => (
+                  <div
+                    key={point.examId}
+                    className="rating-history-row flex items-center justify-between text-xs transition-colors duration-150 hover:bg-[var(--surface-soft)]"
+                  >
+                    <div className="flex flex-col">
+                      <span className="font-medium text-[var(--text-strong)]">
+                        {point.examName}
+                      </span>
+                      <span className="text-[10px] text-[var(--text-soft)]">
+                        {point.date}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="tabular-nums font-medium text-[var(--text-strong)]">
+                        {point.newRating}
+                      </span>
+                      <span
+                        className="min-w-[32px] px-1 py-0.5 text-center text-[10px] font-semibold tabular-nums"
+                        style={{
+                          color:
+                            point.delta >= 0
+                              ? "var(--rating-positive)"
+                              : "var(--rating-negative)",
+                          backgroundColor:
+                            point.delta >= 0
+                              ? "var(--rating-positive-soft)"
+                              : "var(--rating-negative-soft)",
+                        }}
+                      >
+                        {point.delta >= 0 ? "+" : ""}
+                        {point.delta}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="tabular-nums font-medium text-[var(--text-strong)]">
-                      {point.newRating}
-                    </span>
-                    <span
-                      className="min-w-[32px] rounded px-1 py-0.5 text-center text-[10px] font-semibold tabular-nums"
-                      style={{
-                        color:
-                          point.delta >= 0
-                            ? "var(--rating-positive)"
-                            : "var(--rating-negative)",
-                        backgroundColor:
-                          point.delta >= 0
-                            ? "var(--rating-positive-soft)"
-                            : "var(--rating-negative-soft)",
-                      }}
-                    >
-                      {point.delta >= 0 ? "+" : ""}
-                      {point.delta}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </section>

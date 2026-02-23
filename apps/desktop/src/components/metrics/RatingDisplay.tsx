@@ -24,9 +24,9 @@ export function RatingDisplay({ rating }: RatingDisplayProps) {
   const delta = rating.lastDelta;
 
   return (
-    <div className="relative rounded-xl bg-[var(--surface-raised)] px-5 py-4 ring-1 ring-[var(--border-subtle)]">
+    <div className="relative px-5 py-3">
       <div
-        className="absolute inset-0 rounded-xl opacity-[0.08]"
+        className="absolute inset-0 opacity-[0.08]"
         style={{
           background: `radial-gradient(circle at 50% 30%, ${color}, transparent 70%)`,
         }}
@@ -43,14 +43,14 @@ export function RatingDisplay({ rating }: RatingDisplayProps) {
         </span>
         <div className="flex items-center gap-1.5">
           <span
-              className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            className="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
             style={{ color, backgroundColor: `${color}12` }}
           >
             {label}
           </span>
           {delta !== null && (
             <span
-              className="rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums"
+              className="px-1.5 py-0.5 text-[11px] font-semibold tabular-nums"
               style={{
                 color:
                   delta >= 0

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useChatStore } from "@/stores/chatStore";
 import { MessageBubble } from "./MessageBubble";
 import { AssistantWorkingCard } from "./AssistantWorkingCard";
@@ -6,10 +6,28 @@ import { AssistantWorkingCard } from "./AssistantWorkingCard";
 export function MessageList() {
   const messages = useChatStore((s) => s.session.messages);
   const isAiWorking = useChatStore((s) => s.isAiWorking);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = (behavior: ScrollBehavior) => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior });
+  };
+
+  useLayoutEffect(() => {
+    // Ensure initial restore/login render lands at exact bottom.
+    scrollToBottom("auto");
+  }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    scrollToBottom("smooth");
+    const rafId = window.requestAnimationFrame(() => {
+      // Smooth scroll can stop short while layout is still settling.
+      scrollToBottom("auto");
+    });
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
   }, [messages.length, isAiWorking]);
 
   if (messages.length === 0 && !isAiWorking) {
@@ -46,14 +64,13 @@ export function MessageList() {
     : "space-y-1";
 
   return (
-    <div className="message-list-shell flex-1 overflow-y-auto">
+    <div ref={containerRef} className="message-list-shell flex-1 overflow-y-auto">
       <div className={contentClassName}>
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
         {isAiWorking ? <AssistantWorkingCard /> : null}
       </div>
-      <div ref={bottomRef} />
     </div>
   );
 }
