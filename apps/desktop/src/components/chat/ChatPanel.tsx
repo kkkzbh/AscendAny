@@ -1,10 +1,16 @@
 import { useCallback } from "react";
 import { MessageList } from "./MessageList";
-import { ChatInput } from "./ChatInput";
+import { ChatInput, type ChatInputProps } from "./ChatInput";
 import { useChatStore } from "@/stores/chatStore";
 import { useAutoAnalysis } from "@/hooks/useAutoAnalysis";
 
-export function ChatPanel() {
+interface ChatPanelProps extends ChatInputProps {}
+
+export function ChatPanel({
+  showClearButton,
+  sendVariant,
+  sendLabel,
+}: ChatPanelProps = {}) {
   const addMessage = useChatStore((s) => s.addMessage);
   const startAiWork = useChatStore((s) => s.startAiWork);
   const finishAiWork = useChatStore((s) => s.finishAiWork);
@@ -38,7 +44,11 @@ export function ChatPanel() {
   return (
     <section className="flex h-full w-full flex-col">
       <MessageList />
-      <ChatInput />
+      <ChatInput
+        showClearButton={showClearButton}
+        sendVariant={sendVariant}
+        sendLabel={sendLabel}
+      />
     </section>
   );
 }

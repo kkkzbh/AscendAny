@@ -248,9 +248,12 @@ jobs:
           ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD: ${{ env.ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          pnpm --filter @ascendany/site build
-          pnpm --filter @ascendany/site exec cap sync android
-          cd apps/site/android
+          pnpm --filter @ascendany/mobile build
+          if [ ! -d "apps/mobile/android" ]; then
+            pnpm --filter @ascendany/mobile exec cap add android
+          fi
+          pnpm --filter @ascendany/mobile exec cap sync android
+          cd apps/mobile/android
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleRelease
 
@@ -258,7 +261,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          apk_dir="apps/site/android/app/build/outputs/apk/release"
+          apk_dir="apps/mobile/android/app/build/outputs/apk/release"
           apk_path=""
           if [ -f "${apk_dir}/app-release.apk" ]; then
             apk_path="${apk_dir}/app-release.apk"
