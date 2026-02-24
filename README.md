@@ -172,6 +172,21 @@ VITE_RELEASE_REPO=AscendAny
 - 发布地址：`https://<GitHub 用户名>.github.io/AscendAny/`（仓库级 Pages）。
 - 仓库设置：`Settings -> Pages -> Source` 选择 `GitHub Actions`。
 
+
+## 移动端应用（apps/mobile）
+
+Android APK 现已切换到 `apps/mobile/`（Capacitor 容器 + 桌面端业务界面移动适配），与官网 `apps/site/` 完全隔离。
+
+> 说明：`apps/mobile/android/` 为本地生成目录，默认不纳入版本控制；首次打包会自动执行 `cap add android`。
+
+```bash
+# 本地开发
+pnpm --filter @ascendany/mobile dev
+
+# Android Release APK
+pnpm --filter @ascendany/mobile dist:android:release
+```
+
 ## 客户端 Release（Windows EXE + Linux RPM x64 + Android APK ARM）
 
 仓库已提供发布工作流：`.github/workflows/release-desktop.yml`。
@@ -198,5 +213,5 @@ pnpm --filter @ascendany/desktop dist:win:x64
 pnpm --filter @ascendany/desktop dist:linux:rpm:x64
 
 # Android APK (ARM)
-pnpm --filter @ascendany/site dist:android:release
+pnpm --filter @ascendany/mobile dist:android:release
 ```

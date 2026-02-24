@@ -7,9 +7,11 @@
     "build:site": "pnpm --filter @ascendany/site build",
     "dev:web": "pnpm --filter @ascendany/site dev",
     "build:web": "pnpm --filter @ascendany/site build",
-    "build:android": "pnpm --filter @ascendany/site dist:android:release",
+    "build:android": "pnpm --filter @ascendany/mobile dist:android:release",
     "dev:import": "pnpm --filter @ascendany/import-console dev",
-    "build:import": "pnpm --filter @ascendany/import-console build"
+    "build:import": "pnpm --filter @ascendany/import-console build",
+    "dev:mobile": "pnpm --filter @ascendany/mobile dev",
+    "build:mobile": "pnpm --filter @ascendany/mobile build"
   },
   "engines": {
     "node": ">=18"
