@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, safeStorage, type Rectangle } from "electron";
 import fs from "node:fs";
 import path from "path";
+import nodemailer from "nodemailer";
 
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = app.isPackaged
@@ -8,12 +9,31 @@ process.env.VITE_PUBLIC = app.isPackaged
   : path.join(process.env.DIST, "../public");
 
 let mainWindow: BrowserWindow | null = null;
+let feedbackWindow: BrowserWindow | null = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 const CREDENTIAL_FILE_NAME = "secure-credentials.json";
 const WINDOW_APPEARANCE_FILE_NAME = "window-appearance.json";
 const LINUX_DESKTOP_FILE = "ascendany.desktop";
+const DEFAULT_FEEDBACK_TARGET_EMAIL = "1405359129@qq.com";
+const FEEDBACK_FAILURE_MESSAGE = "当前反馈功能异常，以后可再来尝试一下";
+
+interface FeedbackImagePayload {
+  name: string;
+  dataUrl: string;
+}
+
+interface FeedbackSubmitPayload {
+  title: string;
+  content: string;
+  images: FeedbackImagePayload[];
+}
+
+interface FeedbackSubmitResult {
+  success: boolean;
+  message: string;
+}
 
 interface WindowAppearanceConfig {
   useOpaqueWindowBackground: boolean;
@@ -199,6 +219,16 @@ function loadMainWindow(window: BrowserWindow) {
   }
 }
 
+function loadFeedbackWindow(window: BrowserWindow) {
+  if (VITE_DEV_SERVER_URL) {
+    void window.loadURL(`${VITE_DEV_SERVER_URL}#/feedback`);
+  } else {
+    void window.loadFile(path.join(process.env.DIST!, "index.html"), {
+      hash: "/feedback",
+    });
+  }
+}
+
 function createWindow(options?: {
   show?: boolean;
   bounds?: Rectangle;
@@ -237,6 +267,50 @@ function createWindow(options?: {
 
   mainWindow = nextWindow;
   loadMainWindow(nextWindow);
+  return nextWindow;
+}
+
+function createFeedbackWindow() {
+  if (feedbackWindow && !feedbackWindow.isDestroyed()) {
+    feedbackWindow.show();
+    feedbackWindow.focus();
+    return feedbackWindow;
+  }
+
+  const useOpaqueWindowBackground = windowAppearance.useOpaqueWindowBackground;
+  const enableTranslucentWindow = !useOpaqueWindowBackground;
+  const nextWindow = new BrowserWindow({
+    show: true,
+    width: 700,
+    height: 880,
+    minWidth: 620,
+    minHeight: 740,
+    frame: false,
+    titleBarStyle: isMac ? "hiddenInset" : "hidden",
+    transparent: isMac || enableTranslucentWindow,
+    vibrancy: isMac ? "under-window" : undefined,
+    visualEffectState: isMac ? "active" : undefined,
+    backgroundColor: enableTranslucentWindow || isMac ? "#00000000" : "#f0f2f8",
+    icon: resolveWindowIconPath(),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    ...(isLinux && { backgroundMaterial: undefined }),
+  });
+
+  nextWindow.show();
+  nextWindow.focus();
+
+  nextWindow.on("closed", () => {
+    if (feedbackWindow === nextWindow) {
+      feedbackWindow = null;
+    }
+  });
+
+  feedbackWindow = nextWindow;
+  loadFeedbackWindow(nextWindow);
   return nextWindow;
 }
 
@@ -327,6 +401,138 @@ function saveCredentialStore(next: Record<string, string>): boolean {
 
 function normalizeCredentialKey(username: unknown): string {
   return typeof username === "string" ? username.trim() : "";
+}
+
+function readBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
+    return false;
+  }
+  return fallback;
+}
+
+function resolveMailExtension(contentType: string): string {
+  if (contentType.includes("png")) return "png";
+  if (contentType.includes("jpeg") || contentType.includes("jpg")) return "jpg";
+  if (contentType.includes("gif")) return "gif";
+  if (contentType.includes("webp")) return "webp";
+  return "png";
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function parseFeedbackPayload(payload: unknown): FeedbackSubmitPayload | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const maybe = payload as Partial<FeedbackSubmitPayload>;
+  const title = typeof maybe.title === "string" ? maybe.title.trim() : "";
+  const content = typeof maybe.content === "string" ? maybe.content.trim() : "";
+  const images = Array.isArray(maybe.images)
+    ? maybe.images
+        .filter((item): item is FeedbackImagePayload => {
+          return Boolean(item)
+            && typeof item === "object"
+            && typeof (item as FeedbackImagePayload).name === "string"
+            && typeof (item as FeedbackImagePayload).dataUrl === "string";
+        })
+        .map((item) => ({
+          name: item.name.trim() || "image",
+          dataUrl: item.dataUrl,
+        }))
+    : [];
+
+  if (!title || !content) {
+    return null;
+  }
+
+  return {
+    title,
+    content,
+    images: images.slice(0, 8),
+  };
+}
+
+async function sendFeedbackEmail(payload: FeedbackSubmitPayload): Promise<FeedbackSubmitResult> {
+  const smtpUser = process.env.ASCENDANY_FEEDBACK_SMTP_USER?.trim() ?? "";
+  const smtpPass = process.env.ASCENDANY_FEEDBACK_SMTP_PASS?.trim() ?? "";
+  if (!smtpUser || !smtpPass) {
+    throw new Error("Missing SMTP credentials: ASCENDANY_FEEDBACK_SMTP_USER/ASCENDANY_FEEDBACK_SMTP_PASS.");
+  }
+
+  const host = process.env.ASCENDANY_FEEDBACK_SMTP_HOST?.trim() || "smtp.qq.com";
+  const port = Number.parseInt(process.env.ASCENDANY_FEEDBACK_SMTP_PORT?.trim() ?? "465", 10);
+  const secure = readBooleanEnv("ASCENDANY_FEEDBACK_SMTP_SECURE", port === 465);
+  const from = process.env.ASCENDANY_FEEDBACK_FROM?.trim() || smtpUser;
+  const to = process.env.ASCENDANY_FEEDBACK_TO?.trim() || DEFAULT_FEEDBACK_TARGET_EMAIL;
+  const sentAt = new Date().toISOString();
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port: Number.isFinite(port) ? port : 465,
+    secure,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  const attachments = payload.images.flatMap((item, index) => {
+    const matched = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(item.dataUrl);
+    if (!matched) {
+      return [];
+    }
+    const contentType = matched[1].toLowerCase();
+    const buffer = Buffer.from(matched[2], "base64");
+    const extension = resolveMailExtension(contentType);
+    const safeName = item.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const filename = safeName.endsWith(`.${extension}`) ? safeName : `${safeName || `image_${index + 1}`}.${extension}`;
+    return [{
+      filename,
+      content: buffer,
+      contentType,
+    }];
+  });
+
+  const escapedTitle = escapeHtml(payload.title);
+  const escapedContent = escapeHtml(payload.content).replaceAll("\n", "<br/>");
+  const subject = `[AscendAny 反馈] ${payload.title}`;
+
+  await transporter.sendMail({
+    from,
+    to,
+    subject,
+    text: `${payload.content}\n\n---\n发送时间: ${sentAt}\n平台: ${process.platform}\n附件数: ${attachments.length}`,
+    html: `
+      <h2>AscendAny 用户反馈</h2>
+      <p><strong>标题：</strong>${escapedTitle}</p>
+      <p><strong>内容：</strong><br/>${escapedContent}</p>
+      <hr/>
+      <p><strong>发送时间：</strong>${escapeHtml(sentAt)}</p>
+      <p><strong>系统平台：</strong>${escapeHtml(process.platform)}</p>
+      <p><strong>附件数量：</strong>${attachments.length}</p>
+    `,
+    attachments,
+  });
+
+  return {
+    success: true,
+    message: `反馈已发送至 ${to}`,
+  };
 }
 
 ipcMain.handle("credential-available", () => {
@@ -447,7 +653,7 @@ ipcMain.handle("window-set-zoom-factor", (event, value: unknown) => {
   if (zoomFactor === null) {
     return false;
   }
-  const window = BrowserWindow.fromWebContents(event.sender);
+  const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
   if (!window) {
     return false;
   }
@@ -482,21 +688,55 @@ ipcMain.handle("window-set-opaque-background", async (_event, value: unknown) =>
   return rebuildMainWindow();
 });
 
-// Window control IPC handlers
-ipcMain.on("window-minimize", () => {
-  mainWindow?.minimize();
-});
-
-ipcMain.on("window-maximize", () => {
-  if (mainWindow?.isMaximized()) {
-    mainWindow.unmaximize();
-  } else {
-    mainWindow?.maximize();
+ipcMain.handle("window-open-feedback", () => {
+  try {
+    createFeedbackWindow();
+    return true;
+  } catch (error) {
+    console.error("[AscendAny] Failed to create feedback window:", error);
+    return false;
   }
 });
 
-ipcMain.on("window-close", () => {
-  mainWindow?.close();
+ipcMain.handle("feedback-submit", async (_event, payload: unknown) => {
+  const parsed = parseFeedbackPayload(payload);
+  if (!parsed) {
+    console.error("[AscendAny] Invalid feedback payload.");
+    return {
+      success: false,
+      message: FEEDBACK_FAILURE_MESSAGE,
+    } satisfies FeedbackSubmitResult;
+  }
+
+  try {
+    return await sendFeedbackEmail(parsed);
+  } catch (error) {
+    console.error("[AscendAny] Feedback email send failed:", error);
+    return {
+      success: false,
+      message: FEEDBACK_FAILURE_MESSAGE,
+    } satisfies FeedbackSubmitResult;
+  }
+});
+
+// Window control IPC handlers
+ipcMain.on("window-minimize", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  window?.minimize();
+});
+
+ipcMain.on("window-maximize", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (window?.isMaximized()) {
+    window.unmaximize();
+  } else {
+    window?.maximize();
+  }
+});
+
+ipcMain.on("window-close", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  window?.close();
 });
 
 app.on("window-all-closed", () => {

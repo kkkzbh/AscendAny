@@ -2,11 +2,13 @@ import { useEffect } from "react";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { FeedbackWindow } from "@/components/feedback/FeedbackWindow";
 import { fetchModelProviders } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export default function App() {
+  const isFeedbackMode = window.location.hash.startsWith("#/feedback");
   const theme = useSettingsStore((s) => s.theme);
   const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
   const setOpaqueWindowBackground = useSettingsStore((s) => s.setOpaqueWindowBackground);
@@ -23,6 +25,9 @@ export default function App() {
   }, [theme, useOpaqueWindowBackground]);
 
   useEffect(() => {
+    if (isFeedbackMode) {
+      return;
+    }
     const factor = zoomPercent / 100;
     const api = window.electronAPI;
     if (api?.setZoomFactor) {
@@ -31,7 +36,7 @@ export default function App() {
     }
     // Fallback for browser/test environments without Electron bridge.
     document.documentElement.style.zoom = `${zoomPercent}%`;
-  }, [zoomPercent]);
+  }, [isFeedbackMode, zoomPercent]);
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -46,10 +51,16 @@ export default function App() {
   }, [setOpaqueWindowBackground]);
 
   useEffect(() => {
+    if (isFeedbackMode) {
+      return;
+    }
     void bootstrap();
-  }, [bootstrap]);
+  }, [bootstrap, isFeedbackMode]);
 
   useEffect(() => {
+    if (isFeedbackMode) {
+      return;
+    }
     if (authStatus !== "authenticated") {
       return;
     }
@@ -72,7 +83,11 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authStatus, syncProviderOptions]);
+  }, [authStatus, isFeedbackMode, syncProviderOptions]);
+
+  if (isFeedbackMode) {
+    return <FeedbackWindow />;
+  }
 
   if (authStatus === "booting") {
     return (

@@ -58,89 +58,89 @@ export function TitleBar() {
         </div>
 
         <div
-          className={`titlebar-actions no-drag flex h-full items-center gap-0.5 ${
+          className={`titlebar-actions flex h-full items-center ${
             isMac ? "ml-auto" : "absolute right-2 top-0"
           }`}
         >
-          {account && (
-            <div className="mr-2 hidden items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-[var(--text-soft)] sm:flex">
-              <AvatarDisplay
-                size={20}
-                avatarUrl={avatarUrl}
-                username={account.displayName ?? account.username}
-              />
-              @{account.displayName ?? account.username}
-            </div>
-          )}
-          <button
-            onClick={() => setIsLeaderboardOpen(true)}
-            className="ui-icon-button"
-            title="排行榜"
-            aria-label="打开排行榜"
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M8 21h8" />
-              <path d="M12 17v4" />
-              <path d="M7 4h10l-1.2 5.5a4 4 0 0 1-3.9 3.2h0a4 4 0 0 1-3.9-3.2L7 4Z" />
-              <path d="M6.2 5.6H4a2 2 0 0 0 2 2" />
-              <path d="M17.8 5.6H20a2 2 0 0 1-2 2" />
-            </svg>
-          </button>
-          <button
-            onClick={toggleMetricsPanel}
-            className="ui-icon-button"
-            title={metricsPanelLabel}
-            aria-label={metricsPanelLabel}
-          >
-            {isMetricsPanelVisible ? (
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <rect x="3.2" y="4" width="17.6" height="16" rx="2.6" />
-                <path d="M13.5 4v16" />
-                <path d="M17.2 9.5l-3 2.5 3 2.5" />
-              </svg>
-            ) : (
-              <svg
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <rect x="3.2" y="4" width="17.6" height="16" rx="2.6" />
-                <path d="M13.5 4v16" />
-                <path d="M14.2 9.5l3 2.5-3 2.5" />
-              </svg>
+          <div className="titlebar-actions-capsule no-drag flex items-center gap-0.5">
+            {account && (
+              <div className="titlebar-account-chip mr-1 hidden items-center gap-1.5 rounded-full px-2 py-1 text-[11px] text-[var(--text-soft)] sm:flex">
+                <AvatarDisplay
+                  size={20}
+                  avatarUrl={avatarUrl}
+                  username={account.displayName ?? account.username}
+                />
+                @{account.displayName ?? account.username}
+              </div>
             )}
-          </button>
+            <button
+              onClick={() => setIsLeaderboardOpen(true)}
+              className="ui-icon-button"
+              title="排行榜"
+              aria-label="打开排行榜"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M8 21h8" />
+                <path d="M12 17v4" />
+                <path d="M7 4h10l-1.2 5.5a4 4 0 0 1-3.9 3.2h0a4 4 0 0 1-3.9-3.2L7 4Z" />
+                <path d="M6.2 5.6H4a2 2 0 0 0 2 2" />
+                <path d="M17.8 5.6H20a2 2 0 0 1-2 2" />
+              </svg>
+            </button>
+            <button
+              onClick={toggleMetricsPanel}
+              className="ui-icon-button"
+              title={metricsPanelLabel}
+              aria-label={metricsPanelLabel}
+            >
+              {isMetricsPanelVisible ? (
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3.2" y="4" width="17.6" height="16" rx="2.6" />
+                  <path d="M13.5 4v16" />
+                  <path d="M17.2 9.5l-3 2.5 3 2.5" />
+                </svg>
+              ) : (
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3.2" y="4" width="17.6" height="16" rx="2.6" />
+                  <path d="M13.5 4v16" />
+                  <path d="M14.2 9.5l3 2.5-3 2.5" />
+                </svg>
+              )}
+            </button>
 
-          <button
-            onClick={toggleTheme}
-            className="ui-icon-button"
-            title={nextThemeLabel}
-            aria-label={nextThemeLabel}
-          >
-            {theme === "light" ? (
+            <button
+              onClick={toggleTheme}
+              className="ui-icon-button"
+              title={nextThemeLabel}
+              aria-label={nextThemeLabel}
+            >
               <svg
                 width="15"
                 height="15"
@@ -151,10 +151,23 @@ export function TitleBar() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <path d="M12 3v2.2M12 18.8V21M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M3 12h2.2M18.8 12H21M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" />
-                <circle cx="12" cy="12" r="4.2" />
+                {theme === "light" ? (
+                  <>
+                    <path d="M12 3v2.2M12 18.8V21M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M3 12h2.2M18.8 12H21M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" />
+                    <circle cx="12" cy="12" r="4.2" />
+                  </>
+                ) : (
+                  <path d="M20.4 14.5A8.5 8.5 0 1 1 9.5 3.6a6.8 6.8 0 0 0 10.9 10.9z" />
+                )}
               </svg>
-            ) : (
+            </button>
+
+            <button
+              onClick={openSettings}
+              className="ui-icon-button"
+              title="设置"
+              aria-label="打开设置"
+            >
               <svg
                 width="15"
                 height="15"
@@ -165,83 +178,87 @@ export function TitleBar() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <path d="M20.4 14.5A8.5 8.5 0 1 1 9.5 3.6a6.8 6.8 0 0 0 10.9 10.9z" />
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
+            </button>
+
+            <button
+              onClick={() => {
+                void api?.openFeedbackWindow?.();
+              }}
+              className="ui-icon-button"
+              title="反馈"
+              aria-label="打开反馈窗口"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M7 10h10M7 14h7" />
+                <path d="M21 12a8.8 8.8 0 0 1-8.9 8.7h-3.8L3 23l1.8-4.4A8.8 8.8 0 1 1 21 12Z" />
+              </svg>
+            </button>
+
+            <button
+              onClick={() => {
+                void logout();
+              }}
+              className="ui-icon-button"
+              title="退出登录"
+              aria-label="退出登录"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
+
+            {!isMac && (
+              <div className="ml-1.5 flex h-full items-center">
+                <button
+                  onClick={() => api?.minimize()}
+                  className="ui-window-button ui-window-traffic ui-window-minimize"
+                  title="最小化"
+                  aria-label="最小化"
+                >
+                  <span className="ui-window-dot-symbol" aria-hidden="true">−</span>
+                </button>
+                <button
+                  onClick={() => api?.maximize()}
+                  className="ui-window-button ui-window-traffic ui-window-maximize"
+                  title="最大化"
+                  aria-label="最大化"
+                >
+                  <span className="ui-window-dot-symbol" aria-hidden="true">+</span>
+                </button>
+                <button
+                  onClick={() => api?.close()}
+                  className="ui-window-button ui-window-traffic ui-window-close"
+                  title="关闭"
+                  aria-label="关闭"
+                >
+                  <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+                </button>
+              </div>
             )}
-          </button>
-
-          <button
-            onClick={openSettings}
-            className="ui-icon-button"
-            title="设置"
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-
-          <button
-            onClick={() => {
-              void logout();
-            }}
-            className="ui-icon-button"
-            title="退出登录"
-            aria-label="退出登录"
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-          </button>
-
-          {!isMac && (
-            <div className="ml-1.5 flex h-full items-center">
-              <button
-                onClick={() => api?.minimize()}
-                className="ui-window-button ui-window-traffic ui-window-minimize"
-                title="最小化"
-                aria-label="最小化"
-              >
-                <span className="ui-window-dot-symbol" aria-hidden="true">−</span>
-              </button>
-              <button
-                onClick={() => api?.maximize()}
-                className="ui-window-button ui-window-traffic ui-window-maximize"
-                title="最大化"
-                aria-label="最大化"
-              >
-                <span className="ui-window-dot-symbol" aria-hidden="true">+</span>
-              </button>
-              <button
-                onClick={() => api?.close()}
-                className="ui-window-button ui-window-traffic ui-window-close"
-                title="关闭"
-                aria-label="关闭"
-              >
-                <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
-              </button>
-            </div>
-          )}
+          </div>
         </div>
       </header>
       <LeaderboardDialog
