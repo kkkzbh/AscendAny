@@ -781,15 +781,12 @@ function RoleSettingsPage() {
                 <h3 className="settings-page-title mb-0 text-lg font-semibold text-[var(--text-strong)]">
                   {editingRoleId ? "编辑自定义角色" : "创建自定义角色"}
                 </h3>
-                <button onClick={onCloseCustomRoleDialog} className="ui-icon-button">
-                  <svg width="14" height="14" viewBox="0 0 14 14">
-                    <path
-                      d="M1 1l12 12M13 1L1 13"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                    />
-                  </svg>
+                <button
+                  onClick={onCloseCustomRoleDialog}
+                  className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic"
+                  aria-label="关闭自定义角色弹窗"
+                >
+                  <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
                 </button>
               </div>
             </div>
@@ -969,16 +966,10 @@ export function SettingsDialog() {
 
         <button
           onClick={closeSettings}
-          className="ui-icon-button absolute right-5 top-5"
+          className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic absolute right-5 top-5"
+          aria-label="关闭设置"
         >
-          <svg width="14" height="14" viewBox="0 0 14 14">
-            <path
-              d="M1 1l12 12M13 1L1 13"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
+          <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
         </button>
       </div>
     </div>

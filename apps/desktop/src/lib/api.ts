@@ -1,4 +1,5 @@
 import type { Role } from "@/types/chat";
+import type { LeaderboardEntry } from "@/types/leaderboard";
 import {
   createEmptyMilestoneStreak,
   createEmptyPeerComparison,
@@ -52,6 +53,22 @@ type StudentDashboardPayload = Partial<StudentDashboardData> & {
   peerComparison?: Partial<PeerComparison>;
   postExamSupport?: Partial<PostExamSupport>;
 };
+
+interface LeaderboardEntryPayload {
+  studentId?: string;
+  grade?: string;
+  username?: string;
+  rating?: number;
+  knowledge?: number;
+  accuracy?: number;
+  quality?: number;
+  flexibility?: number;
+  proficiency?: number;
+}
+
+interface StudentLeaderboardPayload {
+  items?: LeaderboardEntryPayload[];
+}
 
 export interface ChatMessagePayload {
   role: Role;
@@ -362,6 +379,55 @@ export async function fetchStudentDashboard(params: {
     },
   );
   return normalizeDashboardData(payload);
+}
+
+function normalizeLeaderboardEntry(
+  payload: LeaderboardEntryPayload,
+): LeaderboardEntry | null {
+  const studentId = String(payload.studentId ?? "").trim();
+  if (!studentId || !/^\d{4,}$/.test(studentId)) {
+    return null;
+  }
+
+  const username = String(payload.username ?? "").trim();
+  if (!username || username.toLowerCase().startsWith("test_")) {
+    return null;
+  }
+
+  const gradeInput = String(payload.grade ?? "").trim();
+  const grade = gradeInput || studentId.slice(0, 4);
+  if (!grade || grade.length < 4) {
+    return null;
+  }
+
+  return {
+    studentId,
+    grade: grade.slice(0, 4),
+    username,
+    rating: Number(payload.rating ?? 0),
+    knowledge: Number(payload.knowledge ?? 0),
+    accuracy: Number(payload.accuracy ?? 0),
+    quality: Number(payload.quality ?? 0),
+    flexibility: Number(payload.flexibility ?? 0),
+    proficiency: Number(payload.proficiency ?? 0),
+  };
+}
+
+export async function fetchStudentsLeaderboard(
+  authToken?: string,
+): Promise<LeaderboardEntry[]> {
+  const payload = await requestJson<StudentLeaderboardPayload>(
+    "/api/v1/students/leaderboard",
+    {
+      authToken,
+    },
+  );
+  if (!Array.isArray(payload.items)) {
+    return [];
+  }
+  return payload.items
+    .map((item) => normalizeLeaderboardEntry(item))
+    .filter((item): item is LeaderboardEntry => item !== null);
 }
 
 export async function postChatReply(
