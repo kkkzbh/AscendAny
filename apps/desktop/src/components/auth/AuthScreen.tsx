@@ -30,6 +30,8 @@ export function AuthScreen() {
   const register = useAuthStore((s) => s.register);
   const refreshPolicy = useAuthStore((s) => s.refreshPolicy);
   const clearError = useAuthStore((s) => s.clearError);
+  const api = window.electronAPI;
+  const isMac = api?.platform === "darwin";
 
   const isContactPhoneRequired = policy?.requirePhone ?? false;
   const isContactEmailRequired = policy?.requireEmail ?? false;
@@ -176,6 +178,37 @@ export function AuthScreen() {
 
   return (
     <div className="auth-root">
+      {!isMac && api && (
+        <div className="auth-window-controls no-drag" aria-label="窗口控制">
+          <button
+            type="button"
+            onClick={() => api.minimize()}
+            className="ui-window-button ui-window-traffic ui-window-minimize"
+            title="最小化"
+            aria-label="最小化"
+          >
+            <span className="ui-window-dot-symbol" aria-hidden="true">−</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => api.maximize()}
+            className="ui-window-button ui-window-traffic ui-window-maximize"
+            title="最大化"
+            aria-label="最大化"
+          >
+            <span className="ui-window-dot-symbol" aria-hidden="true">+</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => api.close()}
+            className="ui-window-button ui-window-traffic ui-window-close"
+            title="关闭"
+            aria-label="关闭"
+          >
+            <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+          </button>
+        </div>
+      )}
       <div className="auth-workbench">
         <section className="auth-intro">
           <div className="auth-intro-header">
