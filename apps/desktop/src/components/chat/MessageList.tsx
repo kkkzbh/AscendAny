@@ -14,21 +14,54 @@ export function MessageList() {
     container.scrollTo({ top: container.scrollHeight, behavior });
   };
 
+  const scrollToBottomSettled = (behavior: ScrollBehavior) => {
+    scrollToBottom(behavior);
+
+    let rafId1 = 0;
+    let rafId2 = 0;
+    const timeoutId = window.setTimeout(() => {
+      scrollToBottom("auto");
+    }, 220);
+
+    rafId1 = window.requestAnimationFrame(() => {
+      scrollToBottom("auto");
+      rafId2 = window.requestAnimationFrame(() => {
+        scrollToBottom("auto");
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId1);
+      window.cancelAnimationFrame(rafId2);
+      window.clearTimeout(timeoutId);
+    };
+  };
+
   useLayoutEffect(() => {
     // Ensure initial restore/login render lands at exact bottom.
-    scrollToBottom("auto");
+    return scrollToBottomSettled("auto");
   }, []);
 
   useEffect(() => {
-    scrollToBottom("smooth");
-    const rafId = window.requestAnimationFrame(() => {
-      // Smooth scroll can stop short while layout is still settling.
+    return scrollToBottomSettled("smooth");
+  }, [messages.length, isAiWorking]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+
+    const content = container.firstElementChild;
+    if (!(content instanceof HTMLElement)) return;
+
+    const observer = new ResizeObserver(() => {
       scrollToBottom("auto");
     });
+    observer.observe(content);
+
     return () => {
-      window.cancelAnimationFrame(rafId);
+      observer.disconnect();
     };
-  }, [messages.length, isAiWorking]);
+  }, [messages.length]);
 
   if (messages.length === 0 && !isAiWorking) {
     return (
