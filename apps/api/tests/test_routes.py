@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
-from apps.api.db.repository import StudentIdentityMatch, StudentNoMatch
+from apps.api.db.repository import (
+    LeaderboardEntryRow,
+    StudentIdentityMatch,
+    StudentNoMatch,
+)
 from apps.api.main import create_app
 from apps.api.schemas.chat import ChatReplyResponse
 from apps.api.schemas.model import ModelProvidersResponse, ProviderOptionResponse
@@ -42,6 +47,20 @@ class FakeRepo:
 
     async def fetch_exam_metric_history(self, student_id: int, limit: int = 50):
         return []
+
+    async def fetch_student_leaderboard(self):
+        return [
+            LeaderboardEntryRow(
+                student_no="20230001",
+                username="alice",
+                rating=1012,
+                knowledge=Decimal("88.5"),
+                accuracy=Decimal("81.0"),
+                quality=Decimal("77.2"),
+                flexibility=None,
+                proficiency=Decimal("74.4"),
+            )
+        ]
 
 
 class FakeLLM:
@@ -152,6 +171,22 @@ def test_students_dashboard_returns_fallback_when_student_id_not_found() -> None
     assert payload["milestoneStreak"]["available"] is False
     assert payload["peerComparison"]["available"] is False
     assert payload["postExamSupport"]["available"] is False
+
+
+def test_students_leaderboard_route_returns_rows() -> None:
+    app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
+    with TestClient(app) as client:
+        response = client.get("/api/v1/students/leaderboard")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["studentId"] == "20230001"
+    assert payload["items"][0]["grade"] == "2023"
+    assert payload["items"][0]["username"] == "alice"
+    assert payload["items"][0]["rating"] == 1012
+    assert payload["items"][0]["knowledge"] == 88.5
+    assert payload["items"][0]["flexibility"] == 0
 
 
 def test_chat_reply_hello_still_goes_to_llm() -> None:

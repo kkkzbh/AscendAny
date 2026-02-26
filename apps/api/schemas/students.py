@@ -139,3 +139,19 @@ class StudentDashboardResponse(BaseModel):
     milestoneStreak: MilestoneStreakResponse
     peerComparison: PeerComparisonResponse
     postExamSupport: PostExamSupportResponse
+
+
+class LeaderboardEntryResponse(BaseModel):
+    studentId: str
+    grade: str
+    username: str
+    rating: int
+    knowledge: float
+    accuracy: float
+    quality: float
+    flexibility: float
+    proficiency: float
+
+
+class StudentLeaderboardResponse(BaseModel):
+    items: list[LeaderboardEntryResponse]

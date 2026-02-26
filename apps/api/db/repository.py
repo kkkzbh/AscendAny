@@ -35,6 +35,18 @@ class DashboardMetricsRow:
 
 
 @dataclass(slots=True)
+class LeaderboardEntryRow:
+    student_no: str
+    username: str
+    rating: int
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+
+
+@dataclass(slots=True)
 class RatingHistoryRow:
     exam_id: int
     exam_name: str
@@ -1421,6 +1433,68 @@ class ApiRepository:
             if isinstance(row.get("updated_at"), datetime)
             else None,
         )
+
+    async def fetch_student_leaderboard(self) -> list[LeaderboardEntryRow]:
+        query = """
+            SELECT
+                profile.student_no,
+                profile.username,
+                scm.rating,
+                scm.knowledge,
+                scm.accuracy,
+                scm.quality,
+                scm.flexibility,
+                scm.proficiency
+            FROM (
+                SELECT
+                    ua.account_id,
+                    ua.display_name AS username,
+                    NULLIF(BTRIM(up.student_id), '') AS student_no
+                FROM ascendany.user_accounts AS ua
+                JOIN ascendany.user_profiles AS up
+                  ON up.account_id = ua.account_id
+                WHERE ua.is_active = TRUE
+                  AND LEFT(lower(ua.username), 5) <> 'test_'
+                  AND LEFT(lower(ua.display_name), 5) <> 'test_'
+                  AND NULLIF(BTRIM(up.student_id), '') ~ '^[0-9]{4,}$'
+            ) AS profile
+            JOIN LATERAL (
+                SELECT si.student_id
+                FROM ascendany.student_identities AS si
+                LEFT JOIN ascendany.student_current_metrics AS scm2
+                  ON scm2.student_id = si.student_id
+                WHERE si.external_id = profile.student_no
+                  AND si.source LIKE %s
+                ORDER BY
+                    COALESCE(scm2.updated_at, TIMESTAMPTZ 'epoch') DESC,
+                    si.identity_id ASC
+                LIMIT 1
+            ) AS identity ON TRUE
+            JOIN ascendany.student_current_metrics AS scm
+              ON scm.student_id = identity.student_id
+            ORDER BY
+                scm.rating DESC,
+                COALESCE(scm.knowledge, 0) DESC,
+                profile.username ASC,
+                profile.account_id ASC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, ("%student_no",))
+                rows = await cursor.fetchall()
+        return [
+            LeaderboardEntryRow(
+                student_no=str(row["student_no"]),
+                username=str(row["username"]),
+                rating=int(row["rating"]),
+                knowledge=row.get("knowledge"),
+                accuracy=row.get("accuracy"),
+                quality=row.get("quality"),
+                flexibility=row.get("flexibility"),
+                proficiency=row.get("proficiency"),
+            )
+            for row in rows
+        ]
 
     async def fetch_rating_history(
         self, student_id: int, limit: int = 50

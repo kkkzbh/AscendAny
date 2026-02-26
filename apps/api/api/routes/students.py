@@ -5,12 +5,14 @@ from fastapi import APIRouter, Depends, Query
 from ..deps import get_current_account_optional, get_repository, get_settings
 from ...core.errors import AppError
 from ...schemas.students import (
+    LeaderboardEntryResponse,
     MetricDeltaInfoResponse,
     MetricDeltaItemResponse,
     MetricMissingItemResponse,
     RatingInfoResponse,
     ResolvedIdentityResponse,
     StudentDashboardResponse,
+    StudentLeaderboardResponse,
     StudentMetricsResponse,
 )
 from ...services.dashboard import DashboardService
@@ -18,6 +20,15 @@ from ...services.growth_insights import build_empty_growth_insights
 from ...services.identity import StudentIdentityService
 
 router = APIRouter(tags=["students"])
+
+
+def _metric_number(value: object) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _build_not_found_fallback_dashboard(
@@ -100,3 +111,25 @@ async def students_dashboard(
         rating_history_limit=settings.dashboard.rating_history_limit,
     )
     return await dashboard_service.build(identity)
+
+
+@router.get("/students/leaderboard", response_model=StudentLeaderboardResponse)
+async def students_leaderboard(
+    repository=Depends(get_repository),
+) -> StudentLeaderboardResponse:
+    rows = await repository.fetch_student_leaderboard()
+    items = [
+        LeaderboardEntryResponse(
+            studentId=row.student_no,
+            grade=row.student_no[:4],
+            username=row.username,
+            rating=row.rating,
+            knowledge=_metric_number(row.knowledge),
+            accuracy=_metric_number(row.accuracy),
+            quality=_metric_number(row.quality),
+            flexibility=_metric_number(row.flexibility),
+            proficiency=_metric_number(row.proficiency),
+        )
+        for row in rows
+    ]
+    return StudentLeaderboardResponse(items=items)

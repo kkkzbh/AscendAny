@@ -13,7 +13,7 @@ from .chat import ChatReplyRequest, ChatReplyResponse
 from .common import ErrorResponse, HealthzResponse
 from .meta import LatestExamImportedAtResponse
 from .model import ModelProvidersResponse
-from .students import StudentDashboardResponse
+from .students import StudentDashboardResponse, StudentLeaderboardResponse
 
 __all__ = [
     "AuthMeResponse",
@@ -32,4 +32,5 @@ __all__ = [
     "RefreshRequest",
     "RegisterRequest",
     "StudentDashboardResponse",
+    "StudentLeaderboardResponse",
 ]
