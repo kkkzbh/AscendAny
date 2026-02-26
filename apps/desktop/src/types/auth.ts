@@ -10,6 +10,7 @@ export interface AuthPolicy {
 }
 
 export interface AuthProfile {
+  displayName: string | null;
   studentId: string | null;
   ptaNickname: string | null;
 }

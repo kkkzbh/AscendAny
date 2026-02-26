@@ -54,8 +54,9 @@ interface AuthState {
   register: (input: RegisterInput) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (payload: {
-    studentId: string | null;
-    ptaNickname: string | null;
+    displayName?: string | null;
+    studentId?: string | null;
+    ptaNickname?: string | null;
   }) => Promise<void>;
   clearError: () => void;
 }
@@ -243,6 +244,7 @@ export const useAuthStore = create<AuthState>()(
         const accessToken = get().accessToken;
         const refreshToken = get().refreshToken;
         const account = get().account;
+        const rememberPassword = get().rememberPassword;
         if (accessToken) {
           try {
             await postLogout({ refreshToken: refreshToken ?? undefined }, accessToken);
@@ -250,7 +252,7 @@ export const useAuthStore = create<AuthState>()(
             // Ignore logout network failures on client cleanup path.
           }
         }
-        if (account?.username) {
+        if (!rememberPassword && account?.username) {
           const api = window.electronAPI;
           if (api?.credentialDelete) {
             try {
@@ -283,6 +285,7 @@ export const useAuthStore = create<AuthState>()(
         try {
           const profile = await putAuthProfile(
             {
+              displayName: payload.displayName,
               studentId: payload.studentId,
               ptaNickname: payload.ptaNickname,
             },
@@ -291,6 +294,7 @@ export const useAuthStore = create<AuthState>()(
           set({
             account: {
               ...account,
+              displayName: profile.displayName ?? account.displayName,
               studentId: profile.studentId,
               ptaNickname: profile.ptaNickname,
             },

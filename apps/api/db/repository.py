@@ -142,6 +142,7 @@ class ExamPreviousRankerRow:
 class AccountRow:
     account_id: int
     username: str
+    display_name: str
     password_hash: str
     is_active: bool
     is_admin: bool = False
@@ -189,23 +190,24 @@ class ApiRepository:
         self._pool = pool
 
     async def create_account(
-        self, username: str, password_hash: str
+        self, username: str, display_name: str, password_hash: str
     ) -> AccountRow | None:
         query = """
-            INSERT INTO ascendany.user_accounts (username, password_hash)
-            VALUES (%s, %s)
-            ON CONFLICT (username_normalized) DO NOTHING
-            RETURNING account_id, username, password_hash, is_active, is_admin
+            INSERT INTO ascendany.user_accounts (username, display_name, password_hash)
+            VALUES (%s, %s, %s)
+            ON CONFLICT DO NOTHING
+            RETURNING account_id, username, display_name, password_hash, is_active, is_admin
         """
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
-                await cursor.execute(query, (username, password_hash))
+                await cursor.execute(query, (username, display_name, password_hash))
                 row = await cursor.fetchone()
         if not row:
             return None
         return AccountRow(
             account_id=int(row["account_id"]),
             username=str(row["username"]),
+            display_name=str(row["display_name"]),
             password_hash=str(row["password_hash"]),
             is_active=bool(row["is_active"]),
             is_admin=bool(row.get("is_admin", False)),
@@ -228,7 +230,7 @@ class ApiRepository:
 
     async def fetch_account_by_username(self, username: str) -> AccountRow | None:
         query = """
-            SELECT account_id, username, password_hash, is_active, is_admin
+            SELECT account_id, username, display_name, password_hash, is_active, is_admin
             FROM ascendany.user_accounts
             WHERE username_normalized = lower(BTRIM(%s))
             LIMIT 1
@@ -242,6 +244,7 @@ class ApiRepository:
         return AccountRow(
             account_id=int(row["account_id"]),
             username=str(row["username"]),
+            display_name=str(row["display_name"]),
             password_hash=str(row["password_hash"]),
             is_active=bool(row["is_active"]),
             is_admin=bool(row.get("is_admin", False)),
@@ -249,7 +252,7 @@ class ApiRepository:
 
     async def fetch_account_by_id(self, account_id: int) -> AccountRow | None:
         query = """
-            SELECT account_id, username, password_hash, is_active, is_admin
+            SELECT account_id, username, display_name, password_hash, is_active, is_admin
             FROM ascendany.user_accounts
             WHERE account_id = %s
             LIMIT 1
@@ -263,6 +266,40 @@ class ApiRepository:
         return AccountRow(
             account_id=int(row["account_id"]),
             username=str(row["username"]),
+            display_name=str(row["display_name"]),
+            password_hash=str(row["password_hash"]),
+            is_active=bool(row["is_active"]),
+            is_admin=bool(row.get("is_admin", False)),
+        )
+
+    async def update_account_display_name(
+        self, account_id: int, display_name: str
+    ) -> AccountRow | None:
+        query = """
+            UPDATE ascendany.user_accounts
+            SET display_name = %s, updated_at = now()
+            WHERE account_id = %s
+              AND NOT EXISTS (
+                SELECT 1
+                FROM ascendany.user_accounts AS ua
+                WHERE ua.account_id <> %s
+                  AND ua.display_name_normalized = lower(BTRIM(%s))
+              )
+            RETURNING account_id, username, display_name, password_hash, is_active, is_admin
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (display_name, account_id, account_id, display_name),
+                )
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return AccountRow(
+            account_id=int(row["account_id"]),
+            username=str(row["username"]),
+            display_name=str(row["display_name"]),
             password_hash=str(row["password_hash"]),
             is_active=bool(row["is_active"]),
             is_admin=bool(row.get("is_admin", False)),

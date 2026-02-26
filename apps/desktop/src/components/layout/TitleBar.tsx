@@ -62,9 +62,9 @@ export function TitleBar() {
             <AvatarDisplay
               size={20}
               avatarUrl={avatarUrl}
-              username={account.username}
+              username={account.displayName ?? account.username}
             />
-            @{account.username}
+            @{account.displayName ?? account.username}
           </div>
         )}
         <button

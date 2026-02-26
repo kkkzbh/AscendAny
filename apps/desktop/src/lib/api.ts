@@ -418,6 +418,7 @@ export interface LogoutPayload {
 interface AuthAccountPayload {
   accountId: string;
   username: string;
+  displayName?: string | null;
   studentId?: string | null;
   ptaNickname?: string | null;
 }
@@ -435,6 +436,7 @@ interface AuthMePayload {
 }
 
 interface AuthProfilePayload {
+  displayName?: string | null;
   studentId?: string | null;
   ptaNickname?: string | null;
 }
@@ -443,6 +445,7 @@ function normalizeAccount(payload: AuthAccountPayload): AuthAccount {
   return {
     accountId: payload.accountId,
     username: payload.username,
+    displayName: payload.displayName ?? payload.username,
     studentId: payload.studentId ?? null,
     ptaNickname: payload.ptaNickname ?? null,
   };
@@ -460,6 +463,7 @@ function normalizeTokens(payload: AuthTokensPayload): AuthTokens {
 
 function normalizeProfile(payload: AuthProfilePayload): AuthProfile {
   return {
+    displayName: payload.displayName ?? null,
     studentId: payload.studentId ?? null,
     ptaNickname: payload.ptaNickname ?? null,
   };
@@ -517,12 +521,13 @@ export async function fetchAuthMe(authToken: string): Promise<AuthAccount> {
 }
 
 export async function putAuthProfile(
-  payload: AuthProfile,
+  payload: Partial<AuthProfile>,
   authToken: string,
 ): Promise<AuthProfile> {
   const response = await requestJson<AuthProfilePayload>("/api/v1/auth/profile", {
     method: "PUT",
     body: {
+      displayName: payload.displayName ?? null,
       studentId: payload.studentId ?? null,
       ptaNickname: payload.ptaNickname ?? null,
     },

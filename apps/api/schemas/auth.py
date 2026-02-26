@@ -55,6 +55,7 @@ class AuthPolicyResponse(BaseModel):
 class AuthAccountResponse(BaseModel):
     accountId: str
     username: str
+    displayName: str
     isAdmin: bool = False
     studentId: str | None = None
     ptaNickname: str | None = None
@@ -75,10 +76,12 @@ class AuthMeResponse(BaseModel):
 class AuthProfileUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    displayName: str | None = Field(default=None, max_length=32)
     studentId: str | None = Field(default=None, max_length=64)
     ptaNickname: str | None = Field(default=None, max_length=128)
 
 
 class AuthProfileResponse(BaseModel):
+    displayName: str | None = None
     studentId: str | None = None
     ptaNickname: str | None = None

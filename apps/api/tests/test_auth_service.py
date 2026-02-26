@@ -35,6 +35,7 @@ class FakeAuthRepo:
         self._next_student_entity_id = 1
         self.accounts_by_id: dict[int, AccountRow] = {}
         self.account_by_username_norm: dict[str, int] = {}
+        self.account_by_display_name_norm: dict[str, int] = {}
         self.profiles: dict[int, AccountProfileRow] = {}
         self.refresh_by_hash: dict[str, RefreshTokenRow] = {}
         self.contacts: set[tuple[str, str]] = set()
@@ -43,20 +44,28 @@ class FakeAuthRepo:
         self.student_identities: dict[tuple[str, str], int] = {}
         self.reassigned_calls: list[tuple[int, tuple[str, ...], str]] = []
 
-    async def create_account(self, username: str, password_hash: str) -> AccountRow | None:
+    async def create_account(
+        self, username: str, display_name: str, password_hash: str
+    ) -> AccountRow | None:
         username_norm = username.strip().lower()
-        if username_norm in self.account_by_username_norm:
+        display_name_norm = display_name.strip().lower()
+        if (
+            username_norm in self.account_by_username_norm
+            or display_name_norm in self.account_by_display_name_norm
+        ):
             return None
         account_id = self._next_account_id
         self._next_account_id += 1
         row = AccountRow(
             account_id=account_id,
             username=username.strip(),
+            display_name=display_name.strip(),
             password_hash=password_hash,
             is_active=True,
         )
         self.accounts_by_id[account_id] = row
         self.account_by_username_norm[username_norm] = account_id
+        self.account_by_display_name_norm[display_name_norm] = account_id
         return row
 
     async def add_account_contact(self, account_id: int, contact_type: str, value: str) -> bool:
@@ -75,6 +84,31 @@ class FakeAuthRepo:
     async def fetch_account_by_id(self, account_id: int) -> AccountRow | None:
         return self.accounts_by_id.get(account_id)
 
+    async def update_account_display_name(
+        self, account_id: int, display_name: str
+    ) -> AccountRow | None:
+        row = self.accounts_by_id.get(account_id)
+        if row is None:
+            return None
+        next_display_name = display_name.strip()
+        next_display_name_norm = next_display_name.lower()
+        existing_account = self.account_by_display_name_norm.get(next_display_name_norm)
+        if existing_account is not None and existing_account != account_id:
+            return None
+        old_display_name_norm = row.display_name.strip().lower()
+        self.account_by_display_name_norm.pop(old_display_name_norm, None)
+        updated = AccountRow(
+            account_id=row.account_id,
+            username=row.username,
+            display_name=next_display_name,
+            password_hash=row.password_hash,
+            is_active=row.is_active,
+            is_admin=row.is_admin,
+        )
+        self.accounts_by_id[account_id] = updated
+        self.account_by_display_name_norm[next_display_name_norm] = account_id
+        return updated
+
     async def touch_account_login(self, account_id: int) -> None:
         _ = account_id
 
@@ -83,6 +117,7 @@ class FakeAuthRepo:
         if row is None:
             return
         self.account_by_username_norm.pop(row.username.lower(), None)
+        self.account_by_display_name_norm.pop(row.display_name.lower(), None)
         self.profiles.pop(account_id, None)
 
     async def fetch_account_profile(self, account_id: int) -> AccountProfileRow | None:
@@ -234,6 +269,7 @@ def test_auth_register_login_refresh_and_profile(monkeypatch) -> None:
     )
 
     assert register_result.account.username == "alice_01"
+    assert register_result.account.displayName.startswith("user_")
     assert register_result.account.studentId == "20230001"
     assert register_result.account.ptaNickname == "Alice"
     assert register_result.refreshToken
@@ -241,6 +277,7 @@ def test_auth_register_login_refresh_and_profile(monkeypatch) -> None:
     current = service.authenticate_access_token(register_result.accessToken)
     me_result = asyncio.run(service.me(current))
     assert me_result.account.username == "alice_01"
+    assert me_result.account.displayName == register_result.account.displayName
     assert me_result.account.studentId == "20230001"
     assert me_result.account.ptaNickname == "Alice"
 
@@ -253,6 +290,7 @@ def test_auth_register_login_refresh_and_profile(monkeypatch) -> None:
         )
     )
     assert refresh_result.refreshToken != register_result.refreshToken
+    assert refresh_result.account.displayName == register_result.account.displayName
     assert refresh_result.account.studentId == "20230001"
     assert refresh_result.account.ptaNickname == "Alice"
 
@@ -302,6 +340,65 @@ def test_auth_update_profile_updates_nickname(monkeypatch) -> None:
 
     assert profile.studentId == "20230001"
     assert profile.ptaNickname == "Bob"
+
+
+def test_auth_update_profile_updates_display_name(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    register_result = asyncio.run(service.register(_build_register_request()))
+    current = service.authenticate_access_token(register_result.accessToken)
+
+    profile = asyncio.run(
+        service.update_profile(
+            current,
+            AuthProfileUpdateRequest(displayName="learner_88"),
+        )
+    )
+
+    assert profile.displayName == "learner_88"
+    assert profile.studentId == "20230001"
+    assert profile.ptaNickname == "Alice"
+
+
+def test_auth_update_profile_rejects_duplicate_display_name(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    first_register = asyncio.run(service.register(_build_register_request(username="alice_01")))
+    second_register = asyncio.run(
+        service.register(
+            _build_register_request(
+                username="alice_02",
+                studentId="20230002",
+                ptaNickname="Alice2",
+            )
+        )
+    )
+
+    first_current = service.authenticate_access_token(first_register.accessToken)
+    second_current = service.authenticate_access_token(second_register.accessToken)
+
+    asyncio.run(
+        service.update_profile(
+            first_current,
+            AuthProfileUpdateRequest(displayName="same_name"),
+        )
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.update_profile(
+                second_current,
+                AuthProfileUpdateRequest(displayName="same_name"),
+            )
+        )
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "AUTH_DISPLAY_NAME_TAKEN"
 
 
 def test_auth_update_profile_rejects_student_id_change(monkeypatch) -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
+import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -31,8 +33,10 @@ from ..schemas.auth import (
 )
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
+_DISPLAY_NAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _PHONE_RE = re.compile(r"^[0-9+][0-9\-\s]{5,31}$")
+_DISPLAY_NAME_CHARS = string.ascii_lowercase + string.digits
 
 
 @dataclass(slots=True)
@@ -93,15 +97,34 @@ class AuthService:
         pepper = self._load_password_pepper()
         password_hash = hash_password(password, pepper=pepper)
 
-        account = await self._repository.create_account(
-            username=username,
-            password_hash=password_hash,
-        )
-        if account is None:
+        existing = await self._fetch_account_by_username(username)
+        if existing is not None:
             raise AppError(
                 status_code=409,
                 code="AUTH_USERNAME_TAKEN",
                 message="Username is already in use.",
+            )
+        account = None
+        for _ in range(12):
+            candidate_display_name = self._generate_random_display_name()
+            account = await self._repository.create_account(
+                username=username,
+                display_name=candidate_display_name,
+                password_hash=password_hash,
+            )
+            if account is not None:
+                break
+        if account is None:
+            if await self._fetch_account_by_username(username) is not None:
+                raise AppError(
+                    status_code=409,
+                    code="AUTH_USERNAME_TAKEN",
+                    message="Username is already in use.",
+                )
+            raise AppError(
+                status_code=503,
+                code="AUTH_DISPLAY_NAME_ALLOCATE_FAILED",
+                message="Failed to allocate display name, please retry.",
             )
 
         if phone:
@@ -283,7 +306,39 @@ class AuthService:
         payload: AuthProfileUpdateRequest,
     ) -> AuthProfileResponse:
         self._ensure_enabled()
+        account = await self._repository.fetch_account_by_id(current.account_id)
+        if account is None:
+            raise AppError(
+                status_code=404,
+                code="AUTH_ACCOUNT_NOT_FOUND",
+                message="Account was not found.",
+            )
         profile = await self._repository.fetch_account_profile(current.account_id)
+        if payload.displayName is not None:
+            next_display_name = self._normalize_display_name(payload.displayName)
+            if next_display_name != account.display_name:
+                updated_account = await self._repository.update_account_display_name(
+                    account_id=current.account_id,
+                    display_name=next_display_name,
+                )
+                if updated_account is None:
+                    raise AppError(
+                        status_code=409,
+                        code="AUTH_DISPLAY_NAME_TAKEN",
+                        message="displayName is already in use.",
+                    )
+                account = updated_account
+
+        should_update_profile = (
+            payload.studentId is not None or payload.ptaNickname is not None
+        )
+        if not should_update_profile:
+            return AuthProfileResponse(
+                displayName=account.display_name,
+                studentId=profile.student_id if profile else None,
+                ptaNickname=profile.pta_nickname if profile else None,
+            )
+
         if profile is None or not self._clean(profile.student_id):
             raise AppError(
                 status_code=404,
@@ -357,6 +412,7 @@ class AuthService:
             pta_nickname=next_nickname,
         )
         return AuthProfileResponse(
+            displayName=account.display_name,
             studentId=updated.student_id,
             ptaNickname=updated.pta_nickname,
         )
@@ -447,6 +503,7 @@ class AuthService:
         return AuthAccountResponse(
             accountId=str(account.account_id),
             username=account.username,
+            displayName=account.display_name,
             isAdmin=bool(getattr(account, "is_admin", False)),
             studentId=student_id,
             ptaNickname=pta_nickname,
@@ -492,6 +549,16 @@ class AuthService:
                 status_code=400,
                 code="AUTH_INVALID_USERNAME",
                 message="Username must be 4-32 chars and contain only letters, digits, underscore.",
+            )
+        return value
+
+    def _normalize_display_name(self, display_name: str) -> str:
+        value = display_name.strip()
+        if not _DISPLAY_NAME_RE.fullmatch(value):
+            raise AppError(
+                status_code=400,
+                code="AUTH_INVALID_DISPLAY_NAME",
+                message="displayName must be 4-32 chars and contain only letters, digits, underscore.",
             )
         return value
 
@@ -555,6 +622,11 @@ class AuthService:
 
     def _load_password_pepper(self) -> str:
         return os.getenv(self._settings.auth.password_pepper_env, "").strip()
+
+    @staticmethod
+    def _generate_random_display_name() -> str:
+        suffix = "".join(secrets.choice(_DISPLAY_NAME_CHARS) for _ in range(8))
+        return f"user_{suffix}"
 
     @staticmethod
     def _clean(value: str | None) -> str | None:

@@ -81,6 +81,10 @@ export function SettingsSidebar({
 
 function GeneralSettingsPage() {
   const account = useAuthStore((s) => s.account);
+  const authError = useAuthStore((s) => s.error);
+  const profileSaving = useAuthStore((s) => s.profileSaving);
+  const updateProfile = useAuthStore((s) => s.updateProfile);
+  const clearAuthError = useAuthStore((s) => s.clearError);
   const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
   const setOpaqueWindowBackground = useSettingsStore((s) => s.setOpaqueWindowBackground);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
@@ -89,6 +93,13 @@ function GeneralSettingsPage() {
   const zoomPercent = useSettingsStore((s) => s.zoomPercent);
   const setZoomPercent = useSettingsStore((s) => s.setZoomPercent);
   const [showCropper, setShowCropper] = useState(false);
+  const [displayNameInput, setDisplayNameInput] = useState(account?.displayName ?? "");
+  const [displayNameSaved, setDisplayNameSaved] = useState(false);
+
+  useEffect(() => {
+    setDisplayNameInput(account?.displayName ?? "");
+    setDisplayNameSaved(false);
+  }, [account?.accountId, account?.displayName]);
 
   async function onAvatarCropConfirm(dataUrl: string) {
     if (account?.accountId) {
@@ -100,6 +111,28 @@ function GeneralSettingsPage() {
   async function onAvatarRemove() {
     if (account?.accountId) {
       await deleteAvatar(account.accountId);
+    }
+  }
+
+  const normalizedDisplayName = displayNameInput.trim();
+  const currentDisplayName = account?.displayName?.trim() ?? "";
+  const canSaveDisplayName =
+    Boolean(account?.accountId) &&
+    Boolean(normalizedDisplayName) &&
+    normalizedDisplayName !== currentDisplayName &&
+    !profileSaving;
+
+  async function onDisplayNameSave() {
+    if (!canSaveDisplayName) {
+      return;
+    }
+    clearAuthError();
+    setDisplayNameSaved(false);
+    try {
+      await updateProfile({ displayName: normalizedDisplayName });
+      setDisplayNameSaved(true);
+    } catch {
+      // Error text is from auth store.
     }
   }
 
@@ -121,7 +154,7 @@ function GeneralSettingsPage() {
               <AvatarDisplay
                 size={72}
                 avatarUrl={avatarUrl}
-                username={account?.username ?? ""}
+                username={account?.displayName ?? account?.username ?? ""}
               />
               <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/0 transition-all duration-200 group-hover:bg-black/40">
                 <svg
@@ -254,6 +287,48 @@ function GeneralSettingsPage() {
 
         <div className="settings-field">
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+            用户名
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={displayNameInput}
+              onChange={(event) => {
+                setDisplayNameInput(event.target.value);
+                setDisplayNameSaved(false);
+                clearAuthError();
+              }}
+              className="settings-input"
+              placeholder="4-32 位字母 / 数字 / 下划线"
+              maxLength={32}
+            />
+            <button
+              type="button"
+              onClick={() => void onDisplayNameSave()}
+              disabled={!canSaveDisplayName}
+              className={`settings-provider-pill px-4 ${
+                canSaveDisplayName
+                  ? "bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)] hover:opacity-90"
+                  : "cursor-not-allowed bg-[var(--surface-soft)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]"
+              }`}
+            >
+              {profileSaving ? "保存中..." : "保存"}
+            </button>
+          </div>
+          {displayNameSaved && (
+            <p className="mt-1 text-[11px] text-[var(--rating-positive)]">
+              用户名已更新。
+            </p>
+          )}
+          {authError && (
+            <p className="mt-1 text-[11px] text-[var(--rating-negative)]">
+              {authError}
+            </p>
+          )}
+        </div>
+
+        <div className="settings-field">
+          <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             学号
           </label>
           <p className="settings-readonly-pill text-sm text-[var(--text-strong)]">
@@ -272,7 +347,7 @@ function GeneralSettingsPage() {
 
         <div className="settings-field">
           <p className="text-[11px] text-[var(--text-soft)]">
-            学号在注册后不可修改；PTA 昵称可由服务端按规则更新并回填历史提交。
+            用户名可随时修改；学号在注册后不可修改；PTA 昵称可由服务端按规则更新并回填历史提交。
           </p>
         </div>
 
