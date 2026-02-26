@@ -8,6 +8,8 @@ import { useLayoutStore } from "@/stores/layoutStore";
 export function AppLayout() {
   useAvatarSync();
   const isMetricsPanelVisible = useLayoutStore((s) => s.isMetricsPanelVisible);
+  const splitRatio = useLayoutStore((s) => s.splitRatio);
+  const setSplitRatio = useLayoutStore((s) => s.setSplitRatio);
   return (
     <div className="app-shell flex h-screen w-screen flex-col overflow-hidden">
       <TitleBar />
@@ -18,6 +20,8 @@ export function AppLayout() {
             right={<MetricsPanel />}
             defaultRatio={0.55}
             minRatio={0.3}
+            ratio={splitRatio}
+            onRatioChange={setSplitRatio}
             showRightPanel={isMetricsPanelVisible}
           />
         </div>

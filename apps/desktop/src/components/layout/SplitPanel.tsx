@@ -5,6 +5,8 @@ interface SplitPanelProps {
   right: React.ReactNode;
   defaultRatio?: number;
   minRatio?: number;
+  ratio?: number;
+  onRatioChange?: (ratio: number) => void;
   showRightPanel?: boolean;
 }
 
@@ -13,14 +15,27 @@ export function SplitPanel({
   right,
   defaultRatio = 0.6,
   minRatio = 0.3,
+  ratio,
+  onRatioChange,
   showRightPanel = true,
 }: SplitPanelProps) {
-  const [ratio, setRatio] = useState(defaultRatio);
+  const [internalRatio, setInternalRatio] = useState(defaultRatio);
   const [isStacked, setIsStacked] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < 960 : false,
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const activeRatio = ratio ?? internalRatio;
+
+  const applyRatio = useCallback(
+    (nextRatio: number) => {
+      if (ratio === undefined) {
+        setInternalRatio(nextRatio);
+      }
+      onRatioChange?.(nextRatio);
+    },
+    [onRatioChange, ratio],
+  );
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 959px)");
@@ -39,9 +54,9 @@ export function SplitPanel({
       const rect = containerRef.current.getBoundingClientRect();
       let newRatio = (clientX - rect.left) / rect.width;
       newRatio = Math.max(minRatio, Math.min(1 - minRatio, newRatio));
-      setRatio(newRatio);
+      applyRatio(newRatio);
     },
-    [minRatio],
+    [applyRatio, minRatio],
   );
 
   useEffect(() => {
@@ -86,11 +101,9 @@ export function SplitPanel({
       event.preventDefault();
       const step = event.shiftKey ? 0.05 : 0.02;
       const delta = event.key === "ArrowLeft" ? -step : step;
-      setRatio((current) =>
-        Math.max(minRatio, Math.min(1 - minRatio, current + delta)),
-      );
+      applyRatio(Math.max(minRatio, Math.min(1 - minRatio, activeRatio + delta)));
     },
-    [isStacked, minRatio],
+    [activeRatio, applyRatio, isStacked, minRatio],
   );
 
   return (
@@ -104,7 +117,7 @@ export function SplitPanel({
           isStacked || !showRightPanel
             ? undefined
             : {
-                flexBasis: `${ratio * 100}%`,
+                flexBasis: `${activeRatio * 100}%`,
                 flexGrow: 0,
                 flexShrink: 0,
               }
