@@ -2,6 +2,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useAvatarStore } from "@/stores/avatarStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
+import { useLayoutStore } from "@/stores/layoutStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import { findRole } from "@/types/role";
 
@@ -14,9 +15,12 @@ export function TitleBar() {
   const account = useAuthStore((s) => s.account);
   const logout = useAuthStore((s) => s.logout);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
+  const isMetricsPanelVisible = useLayoutStore((s) => s.isMetricsPanelVisible);
+  const toggleMetricsPanel = useLayoutStore((s) => s.toggleMetricsPanel);
   const api = window.electronAPI;
   const isMac = api?.platform === "darwin";
   const nextThemeLabel = theme === "light" ? "切换到暗色主题" : "切换到亮色主题";
+  const metricsPanelLabel = isMetricsPanelVisible ? "收起能力栏" : "展开能力栏";
   const role = findRole(activeRole, customRoles);
 
   return (
@@ -63,6 +67,45 @@ export function TitleBar() {
             @{account.username}
           </div>
         )}
+        <button
+          onClick={toggleMetricsPanel}
+          className="ui-icon-button"
+          title={metricsPanelLabel}
+          aria-label={metricsPanelLabel}
+        >
+          {isMetricsPanelVisible ? (
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3.2" y="4" width="17.6" height="16" rx="2.6" />
+              <path d="M13.5 4v16" />
+              <path d="M17.2 9.5l-3 2.5 3 2.5" />
+            </svg>
+          ) : (
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3.2" y="4" width="17.6" height="16" rx="2.6" />
+              <path d="M13.5 4v16" />
+              <path d="M14.2 9.5l3 2.5-3 2.5" />
+            </svg>
+          )}
+        </button>
+
         <button
           onClick={toggleTheme}
           className="ui-icon-button"

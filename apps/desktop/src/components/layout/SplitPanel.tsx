@@ -5,6 +5,7 @@ interface SplitPanelProps {
   right: React.ReactNode;
   defaultRatio?: number;
   minRatio?: number;
+  showRightPanel?: boolean;
 }
 
 export function SplitPanel({
@@ -12,6 +13,7 @@ export function SplitPanel({
   right,
   defaultRatio = 0.6,
   minRatio = 0.3,
+  showRightPanel = true,
 }: SplitPanelProps) {
   const [ratio, setRatio] = useState(defaultRatio);
   const [isStacked, setIsStacked] = useState(() =>
@@ -97,9 +99,9 @@ export function SplitPanel({
       className="split-panel flex h-full w-full gap-0 overflow-hidden max-[959px]:flex-col"
     >
       <div
-        className="panel-shell panel-chat flex h-full min-w-0 overflow-hidden"
+        className={`panel-shell panel-chat flex h-full min-w-0 overflow-hidden ${showRightPanel ? "" : "flex-1"}`}
         style={
-          isStacked
+          isStacked || !showRightPanel
             ? undefined
             : {
                 flexBasis: `${ratio * 100}%`,
@@ -111,21 +113,25 @@ export function SplitPanel({
         {left}
       </div>
 
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="调整面板宽度"
-        tabIndex={isStacked ? -1 : 0}
-        className="split-handle relative flex h-full w-1 shrink-0 cursor-col-resize items-center justify-center max-[959px]:hidden"
-        onPointerDown={onMouseDown}
-        onKeyDown={onHandleKeyDown}
-      >
-        <div className="split-handle-bar h-10 w-px rounded-full" />
-      </div>
+      {showRightPanel ? (
+        <>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整面板宽度"
+            tabIndex={isStacked ? -1 : 0}
+            className="split-handle relative flex h-full w-1 shrink-0 cursor-col-resize items-center justify-center max-[959px]:hidden"
+            onPointerDown={onMouseDown}
+            onKeyDown={onHandleKeyDown}
+          >
+            <div className="split-handle-bar h-10 w-px rounded-full" />
+          </div>
 
-      <div className="panel-shell panel-metrics flex h-full min-w-0 flex-1 overflow-hidden">
-        {right}
-      </div>
+          <div className="panel-shell panel-metrics flex h-full min-w-0 flex-1 overflow-hidden">
+            {right}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
