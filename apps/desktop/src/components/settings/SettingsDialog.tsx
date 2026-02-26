@@ -770,34 +770,32 @@ function RoleSettingsPage() {
       </div>
 
       {showCustomRoleDialog && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-5">
           <div
             className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             onClick={onCloseCustomRoleDialog}
           />
-          <div className="settings-dialog relative z-10 flex w-[560px] max-w-[94vw] flex-col overflow-hidden rounded-2xl max-[720px]:max-h-[90vh]">
-            <div className="border-b border-[var(--border-subtle)] px-6 pt-5 pb-3">
-              <div className="flex items-start justify-between gap-3">
-                <h3 className="settings-page-title mb-0 text-lg font-semibold text-[var(--text-strong)]">
-                  {editingRoleId ? "编辑自定义角色" : "创建自定义角色"}
-                </h3>
-                <button
-                  onClick={onCloseCustomRoleDialog}
-                  className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic"
-                  aria-label="关闭自定义角色弹窗"
-                >
-                  <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
-                </button>
-              </div>
+          <div className="custom-role-dialog relative z-10 flex w-[620px] max-w-[92vw] flex-col overflow-hidden max-[720px]:max-h-[90vh]">
+            <div className="custom-role-dialog-header flex items-center justify-between gap-3">
+              <h3 className="settings-page-title custom-role-dialog-title mb-0 text-lg font-semibold text-[var(--text-strong)]">
+                {editingRoleId ? "编辑自定义角色" : "创建自定义角色"}
+              </h3>
+              <button
+                onClick={onCloseCustomRoleDialog}
+                className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic shrink-0"
+                aria-label="关闭自定义角色弹窗"
+              >
+                <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+              </button>
             </div>
 
-            <div className="grid gap-4 overflow-y-auto px-6 py-5">
-              <div className="settings-field rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/60 p-4">
+            <div className="custom-role-dialog-body grid min-h-0 flex-1 gap-4 overflow-y-auto">
+              <div className="settings-field rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 p-4">
                 <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
                   导入头像
                 </label>
-                <div className="mt-2 flex items-center gap-4">
-                  <div className="h-[52px] w-[52px] shrink-0 overflow-hidden rounded-full ring-1 ring-[var(--border-subtle)]">
+                <div className="mt-2 flex items-center gap-3">
+                  <div className="h-[50px] w-[50px] shrink-0 overflow-hidden rounded-full border border-[var(--border-subtle)]/75 bg-[var(--surface-raised)]">
                     {customRoleAvatar ? (
                       <img
                         src={customRoleAvatar}
@@ -820,7 +818,7 @@ function RoleSettingsPage() {
                 </div>
               </div>
 
-              <div className="settings-field rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/60 p-4">
+              <div className="settings-field rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 p-4">
                 <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
                   角色昵称
                 </label>
@@ -829,11 +827,11 @@ function RoleSettingsPage() {
                   value={customRoleName}
                   onChange={(event) => setCustomRoleName(event.target.value)}
                   placeholder="例如：竞赛教练"
-                  className="settings-input settings-input-flat mt-1"
+                  className="settings-input mt-1 rounded-xl"
                 />
               </div>
 
-              <div className="settings-field rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/60 p-4">
+              <div className="settings-field rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 p-4">
                 <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
                   系统提示词
                 </label>
@@ -842,42 +840,21 @@ function RoleSettingsPage() {
                   onChange={(event) => setCustomRolePrompt(event.target.value)}
                   placeholder="输入角色的系统提示词，描述语气、分析风格和回答要求"
                   rows={5}
-                  className="settings-input settings-input-flat mt-1 min-h-[150px] resize-y"
+                  className="settings-input mt-1 min-h-[150px] resize-y rounded-xl"
                 />
               </div>
             </div>
 
-            <div className="border-t border-[var(--border-subtle)] px-6 py-4">
-              <div className="flex items-center justify-between gap-3 max-[620px]:flex-col max-[620px]:items-stretch">
-                <p className="text-[11px] text-[var(--text-soft)]">
-                  头像仅保存在本地设备，不会上传。
-                </p>
-                <div className="flex items-center justify-end gap-2.5">
-                  {editingRoleId && (
-                    <button
-                      type="button"
-                      onClick={() => onDeleteCustomRole(editingRoleId)}
-                      className="h-9 rounded-full border border-[var(--rating-negative)]/25 bg-[var(--rating-negative)]/10 px-4 text-[12px] font-medium text-[var(--rating-negative)] transition-colors hover:bg-[var(--rating-negative)]/20"
-                    >
-                      删除角色
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={onCloseCustomRoleDialog}
-                    className="h-9 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-5 text-[12px] font-medium text-[var(--text-strong)] transition-colors hover:bg-[var(--surface-hover)]"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!canSaveCustomRole}
-                    onClick={onSaveCustomRole}
-                    className="h-9 rounded-full border border-[var(--accent-600)]/20 bg-[var(--accent-600)] px-5 text-[12px] font-medium text-white shadow-[0_6px_16px_rgba(2,132,199,0.26)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    {editingRoleId ? "更新并应用" : "保存并应用"}
-                  </button>
-                </div>
+            <div className="custom-role-dialog-footer border-t border-[var(--border-subtle)]/75">
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  disabled={!canSaveCustomRole}
+                  onClick={onSaveCustomRole}
+                  className="h-10 min-w-[86px] rounded-full border border-[var(--accent-600)]/20 bg-[var(--accent-600)] px-6 text-[13px] font-semibold text-white shadow-[0_8px_18px_rgba(2,132,199,0.28)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  保存
+                </button>
               </div>
             </div>
 

@@ -1173,6 +1173,36 @@ body {
   margin-inline: 0;
 }
 
+.custom-role-dialog {
+  border: 1px solid var(--border-subtle);
+  background: var(--settings-dialog-background);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: var(--settings-dialog-shadow);
+  border-radius: 12px;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.custom-role-dialog-header {
+  padding: 18px 20px 12px;
+}
+
+.custom-role-dialog-title {
+  line-height: 1.4;
+  padding-top: 1px;
+}
+
+.custom-role-dialog-body {
+  padding: 0 20px 14px;
+}
+
+.custom-role-dialog-footer {
+  padding: 12px 20px 16px;
+}
+
 .leaderboard-table-wrap {
   --leaderboard-header-height: 44px;
 }
@@ -1692,5 +1722,17 @@ body {
 
   .settings-page-title {
     margin-bottom: 10px;
+  }
+
+  .custom-role-dialog-header {
+    padding: 14px 14px 10px;
+  }
+
+  .custom-role-dialog-body {
+    padding: 0 14px 12px;
+  }
+
+  .custom-role-dialog-footer {
+    padding: 10px 14px 14px;
   }
 }
