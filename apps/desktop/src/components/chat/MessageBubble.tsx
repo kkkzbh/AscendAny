@@ -59,7 +59,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         <div
           className={`message-bubble rounded-[18px] text-[13px] leading-relaxed ${
             isUser
-              ? "bg-gradient-to-br from-[var(--accent-600)] to-[var(--accent-500)] text-white shadow-[0_10px_26px_rgba(3,105,161,0.24)]"
+              ? "message-bubble-user text-white"
               : "bg-[var(--surface-raised)] text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)]"
           }`}
         >

@@ -552,6 +552,16 @@ body {
   padding: 10px 14px !important;
 }
 
+.message-bubble-user {
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  box-shadow: 0 10px 26px rgba(3, 105, 161, 0.24);
+}
+
+:root[data-theme="dark"] .message-bubble-user {
+  background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+  box-shadow: 0 12px 28px rgba(2, 132, 199, 0.3);
+}
+
 .assistant-working-card {
   position: relative;
   overflow: hidden;
