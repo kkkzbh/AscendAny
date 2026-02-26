@@ -1,0 +1,37 @@
+def ascendanyVersionNameEnv = (System.getenv("ASCENDANY_ANDROID_VERSION_NAME") ?: "").trim()
+def ascendanyVersionCodeEnv = (System.getenv("ASCENDANY_ANDROID_VERSION_CODE") ?: "").trim()
+def ascendanyVersionCodeValue = ascendanyVersionCodeEnv.isInteger() ? ascendanyVersionCodeEnv.toInteger() : null
+
+def ascendanyReleaseStoreFilePath = (System.getenv("ASCENDANY_ANDROID_SIGNING_STORE_FILE") ?: "").trim()
+def ascendanyReleaseStorePassword = (System.getenv("ASCENDANY_ANDROID_SIGNING_STORE_PASSWORD") ?: "").trim()
+def ascendanyReleaseKeyAlias = (System.getenv("ASCENDANY_ANDROID_SIGNING_KEY_ALIAS") ?: "").trim()
+def ascendanyReleaseKeyPassword = (System.getenv("ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD") ?: "").trim()
+def ascendanyHasReleaseSigning = ascendanyReleaseStoreFilePath && ascendanyReleaseStorePassword && ascendanyReleaseKeyAlias && ascendanyReleaseKeyPassword
+
+android {
+    defaultConfig {
+        if (ascendanyVersionNameEnv) {
+            versionName ascendanyVersionNameEnv
+        }
+        if (ascendanyVersionCodeValue != null) {
+            versionCode ascendanyVersionCodeValue
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (ascendanyHasReleaseSigning) {
+                storeFile file(ascendanyReleaseStoreFilePath)
+                storePassword ascendanyReleaseStorePassword
+                keyAlias ascendanyReleaseKeyAlias
+                keyPassword ascendanyReleaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig ascendanyHasReleaseSigning ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+}

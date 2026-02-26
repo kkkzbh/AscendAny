@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "sync:android": "pnpm run build && ([ -d android ] || pnpm exec cap add android) && pnpm exec cap sync android",
+    "sync:android": "pnpm run build && ([ -d android ] || pnpm exec cap add android) && pnpm exec cap sync android && node ./scripts/ensure-android-signing.mjs",
     "dist:android:release": "pnpm run sync:android && cd android && ./gradlew :app:assembleRelease"
   },
   "dependencies": {

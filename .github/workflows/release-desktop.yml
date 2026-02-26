@@ -248,11 +248,7 @@ jobs:
           ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD: ${{ env.ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          pnpm --filter @ascendany/mobile build
-          if [ ! -d "apps/mobile/android" ]; then
-            pnpm --filter @ascendany/mobile exec cap add android
-          fi
-          pnpm --filter @ascendany/mobile exec cap sync android
+          pnpm --filter @ascendany/mobile run sync:android
           cd apps/mobile/android
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleRelease
@@ -269,10 +265,8 @@ jobs:
             apk_path="$(find "${apk_dir}" -maxdepth 1 -type f -name '*release*.apk' ! -name '*unsigned*' | head -n 1 || true)"
           fi
           if [ -z "${apk_path}" ]; then
-            apk_path="$(find "${apk_dir}" -maxdepth 1 -type f -name '*.apk' | head -n 1 || true)"
-          fi
-          if [ -z "${apk_path}" ]; then
-            echo "No Android APK artifact found in ${apk_dir}" >&2
+            echo "No signed Android APK artifact found in ${apk_dir}" >&2
+            find "${apk_dir}" -maxdepth 1 -type f -name '*.apk' -print || true
             exit 1
           fi
           cp "${apk_path}" "release-assets/AscendAny-android-arm64-v7a-${APP_VERSION}.apk"
