@@ -3,6 +3,7 @@ export const PROVIDER_ORDER = [
   "openai",
   "anthropic",
   "deepseek",
+  "gemini",
 ] as const;
 
 export type ProviderType = (typeof PROVIDER_ORDER)[number];
@@ -77,6 +78,15 @@ export const DEFAULT_PROVIDERS: Record<ProviderType, ModelProvider> = {
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
+    apiKey: "",
+    usesServerConfig: false,
+    enabled: true,
+  },
+  gemini: {
+    type: "gemini",
+    label: "Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    model: "gemini-2.0-flash",
     apiKey: "",
     usesServerConfig: false,
     enabled: true,

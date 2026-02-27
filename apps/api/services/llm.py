@@ -89,6 +89,10 @@ class LLMService:
             reply = await self._anthropic_with_tools(
                 provider, prepared_messages, tool_executor
             )
+        elif provider.mode == "gemini":
+            reply = await self._gemini_with_tools(
+                provider, prepared_messages, tool_executor
+            )
         else:
             raise AppError(
                 status_code=400,
@@ -438,6 +442,178 @@ class LLMService:
         return ""
 
     # ------------------------------------------------------------------
+    # Gemini path (Google Generative Language REST API)
+    # ------------------------------------------------------------------
+
+    async def _gemini_with_tools(
+        self,
+        provider: RuntimeProvider,
+        messages: list[dict[str, Any]],
+        tool_executor: ToolExecutor | None,
+    ) -> str:
+        base = provider.base_url.rstrip("/")
+        url = f"{base}/models/{provider.model}:generateContent?key={provider.api_key}"
+        headers = {"Content-Type": "application/json"}
+
+        # Convert messages to Gemini contents format.
+        # System messages are merged into systemInstruction.
+        system_parts: list[str] = []
+        contents: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "system":
+                system_parts.append(content)
+                continue
+            # Gemini uses "user" / "model" roles
+            gemini_role = "model" if role == "assistant" else "user"
+            # content can be a string or list of parts (tool results)
+            if isinstance(content, list):
+                # Already a list of parts (tool result round)
+                contents.append({"role": gemini_role, "parts": content})
+            else:
+                contents.append({"role": gemini_role, "parts": [{"text": content}]})
+
+        if not contents:
+            raise AppError(
+                status_code=400,
+                code="INVALID_GEMINI_MESSAGES",
+                message="Gemini requests need at least one user or model message.",
+            )
+
+        # Build tool declarations (Gemini function calling format)
+        gemini_tools: list[dict[str, Any]] | None = None
+        if tool_executor is not None:
+            function_declarations = [
+                {
+                    "name": t["function"]["name"],
+                    "description": t["function"]["description"],
+                    "parameters": t["function"]["parameters"],
+                }
+                for t in TOOL_DEFINITIONS
+            ]
+            gemini_tools = [{"functionDeclarations": function_declarations}]
+
+        for _ in range(_MAX_TOOL_ROUNDS):
+            payload: dict[str, Any] = {"contents": contents}
+            if system_parts:
+                payload["systemInstruction"] = {
+                    "parts": [{"text": "\n\n".join(system_parts)}]
+                }
+            if gemini_tools is not None:
+                payload["tools"] = gemini_tools
+            payload["generationConfig"] = {"temperature": 0.2}
+
+            data = await self._post_json(url=url, headers=headers, payload=payload)
+
+            candidates = data.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                raise AppError(
+                    status_code=502,
+                    code="INVALID_GEMINI_RESPONSE",
+                    message="Missing candidates in Gemini response.",
+                )
+            candidate = candidates[0]
+            if not isinstance(candidate, dict):
+                raise AppError(
+                    status_code=502,
+                    code="INVALID_GEMINI_RESPONSE",
+                    message="Invalid candidate in Gemini response.",
+                )
+
+            content_obj = candidate.get("content")
+            if not isinstance(content_obj, dict):
+                raise AppError(
+                    status_code=502,
+                    code="INVALID_GEMINI_RESPONSE",
+                    message="Missing content in Gemini candidate.",
+                )
+
+            parts = content_obj.get("parts")
+            if not isinstance(parts, list):
+                raise AppError(
+                    status_code=502,
+                    code="INVALID_GEMINI_RESPONSE",
+                    message="Missing parts in Gemini content.",
+                )
+
+            # Separate text parts and function call parts
+            text_chunks: list[str] = []
+            function_calls: list[dict[str, Any]] = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if "text" in part:
+                    text = part["text"]
+                    if isinstance(text, str):
+                        text_chunks.append(text)
+                elif "functionCall" in part:
+                    function_calls.append(part["functionCall"])
+
+            # No function calls or no executor — return text
+            if not function_calls or tool_executor is None:
+                return "\n".join(text_chunks).strip()
+
+            # Append assistant turn (model role with function call parts)
+            contents.append({"role": "model", "parts": parts})
+
+            # Execute each function call and collect results
+            function_response_parts: list[dict[str, Any]] = []
+            for fc in function_calls:
+                tool_name = fc.get("name", "")
+                arguments = fc.get("args", {})
+                if not isinstance(arguments, dict):
+                    arguments = {}
+
+                logger.info("Tool call (gemini): %s(%s)", tool_name, arguments)
+                result = await tool_executor.execute(tool_name, arguments)
+
+                # Try to parse result as JSON for structured response
+                try:
+                    result_data = json.loads(result)
+                except (json.JSONDecodeError, ValueError):
+                    result_data = {"result": result}
+
+                function_response_parts.append(
+                    {
+                        "functionResponse": {
+                            "name": tool_name,
+                            "response": result_data,
+                        }
+                    }
+                )
+
+            # Append tool results as user turn
+            contents.append({"role": "user", "parts": function_response_parts})
+
+        # Exhausted rounds; final call without tools
+        payload = {
+            "contents": contents,
+            "generationConfig": {"temperature": 0.2},
+        }
+        if system_parts:
+            payload["systemInstruction"] = {
+                "parts": [{"text": "\n\n".join(system_parts)}]
+            }
+        data = await self._post_json(url=url, headers=headers, payload=payload)
+        candidates = data.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            cand = candidates[0]
+            if isinstance(cand, dict):
+                content_obj = cand.get("content")
+                if isinstance(content_obj, dict):
+                    parts = content_obj.get("parts", [])
+                    if isinstance(parts, list):
+                        chunks: list[str] = []
+                        for part in parts:
+                            if isinstance(part, dict) and "text" in part:
+                                text = part["text"]
+                                if isinstance(text, str):
+                                    chunks.append(text)
+                        return "\n".join(chunks).strip()
+        return ""
+
+    # ------------------------------------------------------------------
     # Provider resolution (unchanged)
     # ------------------------------------------------------------------
 
@@ -501,7 +677,7 @@ class LLMService:
                 code="SERVER_DEFAULT_PROVIDER_KEY_MISSING",
                 message=f"Missing API key env var: {config.api_key_env}",
             )
-        if provider_type in {"openai", "anthropic", "deepseek"}:
+        if provider_type in {"openai", "anthropic", "deepseek", "gemini"}:
             provider_key = provider_type
         else:
             provider_key = "openai"
@@ -518,6 +694,8 @@ class LLMService:
     def _default_mode(provider_type: ProviderType) -> str:
         if provider_type == "anthropic":
             return "anthropic"
+        if provider_type == "gemini":
+            return "gemini"
         return "openai_compatible"
 
     # ------------------------------------------------------------------

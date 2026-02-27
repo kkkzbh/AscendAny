@@ -93,6 +93,14 @@ def _default_providers() -> dict[str, LLMProviderConfig]:
             api_key_env="DEEPSEEK_API_KEY",
             enabled=False,
         ),
+        "gemini": LLMProviderConfig(
+            label="Gemini",
+            mode="gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            model="gemini-2.0-flash",
+            api_key_env="GEMINI_API_KEY",
+            enabled=False,
+        ),
     }
 
 

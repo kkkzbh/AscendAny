@@ -26,7 +26,9 @@ function normalizeIdentifier(value: string): string | undefined {
 function resolveProviderMode(
   providerType: ProviderType,
 ): ClientProviderConfigPayload["mode"] {
-  return providerType === "anthropic" ? "anthropic" : "openai_compatible";
+  if (providerType === "anthropic") return "anthropic";
+  if (providerType === "gemini") return "gemini";
+  return "openai_compatible";
 }
 
 export function ChatInput({

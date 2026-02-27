@@ -47,6 +47,13 @@ llm:
       base_url: https://api.deepseek.com/v1
       model: deepseek-chat
       api_key_env: DEEPSEEK_API_KEY
+    gemini:
+      label: Gemini
+      enabled: false
+      mode: gemini
+      base_url: https://generativelanguage.googleapis.com/v1beta
+      model: gemini-2.0-flash
+      api_key_env: GEMINI_API_KEY
 
 auth:
   enabled: true
