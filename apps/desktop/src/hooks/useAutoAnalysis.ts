@@ -63,7 +63,12 @@ export function useAutoAnalysis(params: {
             baseUrl,
             model,
             apiKey,
-            mode: activeProvider === "anthropic" ? "anthropic" : "openai_compatible",
+            mode:
+              activeProvider === "anthropic"
+                ? "anthropic"
+                : activeProvider === "gemini"
+                  ? "gemini"
+                  : "openai_compatible",
           };
         }
         taskId = onWorkStart?.();

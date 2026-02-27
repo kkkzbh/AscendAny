@@ -79,7 +79,7 @@ export interface ClientProviderConfigPayload {
   baseUrl: string;
   model: string;
   apiKey: string;
-  mode: "openai_compatible" | "anthropic";
+  mode: "openai_compatible" | "anthropic" | "gemini";
 }
 
 export interface ChatReplyRequestPayload {

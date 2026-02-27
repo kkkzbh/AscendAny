@@ -189,6 +189,10 @@ export const useSettingsStore = create<SettingsState>()(
             ...nextProviders.deepseek,
             enabled: true,
           };
+          nextProviders.gemini = {
+            ...nextProviders.gemini,
+            enabled: true,
+          };
 
           nextProviders.server_default = {
             ...nextProviders.server_default,

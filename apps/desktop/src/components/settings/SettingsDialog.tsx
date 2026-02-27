@@ -381,7 +381,7 @@ function ModelSettingsPage() {
   function onProviderSelect(providerType: ProviderType) {
     const provider = providers[providerType];
     const isTemporarilyUnlocked =
-      providerType === "anthropic" || providerType === "deepseek";
+      providerType === "anthropic" || providerType === "deepseek" || providerType === "gemini";
     if (!provider?.enabled && !isTemporarilyUnlocked) {
       return;
     }
@@ -417,7 +417,7 @@ function ModelSettingsPage() {
           {PROVIDER_ORDER.map((providerType) => {
             const provider = providers[providerType];
             const isTemporarilyUnlocked =
-              providerType === "anthropic" || providerType === "deepseek";
+              providerType === "anthropic" || providerType === "deepseek" || providerType === "gemini";
             const isDisabled = !provider.enabled && !isTemporarilyUnlocked;
             const isSelected = selectedProvider === providerType;
             return (
