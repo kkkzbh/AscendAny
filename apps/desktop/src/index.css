@@ -1203,22 +1203,69 @@ body {
   padding: 12px 20px 16px;
 }
 
-.leaderboard-table-wrap {
-  --leaderboard-header-height: 44px;
+/* ---- Leaderboard header ---- */
+
+.leaderboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 14px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-elevated);
+  flex-shrink: 0;
 }
 
-.leaderboard-table-close {
-  position: absolute;
-  top: calc((var(--leaderboard-header-height) - 18px) / 2);
-  right: 12px;
-  z-index: 3;
+.leaderboard-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
+
+.leaderboard-header-icon {
+  font-size: 18px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15));
+}
+
+.leaderboard-header-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text-strong);
+}
+
+/* 加载指示点 */
+@keyframes leaderboard-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50%       { opacity: 1;   transform: scale(1); }
+}
+
+.leaderboard-loading-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-500);
+  animation: leaderboard-pulse 1.2s ease-in-out infinite;
+}
+
+/* ---- Leaderboard table wrap ---- */
+
+.leaderboard-table-wrap {
+  --leaderboard-header-height: 40px;
+  /* 保证动画层合成隔离，避免影响父层重绘 */
+  contain: layout style;
+}
+
+/* ---- Table base ---- */
 
 .leaderboard-table {
   width: 100%;
 }
 
-.leaderboard-table thead th {
+/* ---- Table header ---- */
+
+.leaderboard-th {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -1233,15 +1280,46 @@ body {
   height: var(--leaderboard-header-height);
   padding: 0 12px;
   vertical-align: middle;
+  white-space: nowrap;
 }
 
-.leaderboard-table tbody tr {
-  transition: background-color 0.15s var(--ease-out-expo);
+.leaderboard-th--rank  { padding-left: 16px; width: 64px; }
+.leaderboard-th--name  { min-width: 120px; }
+.leaderboard-th--rating {
+  color: var(--accent-600);
 }
 
-.leaderboard-table tbody tr:hover {
+/* ---- Table rows ---- */
+
+.leaderboard-row {
+  transition: background-color 0.12s var(--ease-out-expo);
+}
+
+.leaderboard-row:hover {
   background: var(--surface-soft);
 }
+
+/* 前三名行高亮 */
+.leaderboard-row--top1 {
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.08) 0%, transparent 80%);
+}
+.leaderboard-row--top1:hover {
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.15) 0%, rgba(251, 191, 36, 0.04) 80%);
+}
+.leaderboard-row--top2 {
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.1) 0%, transparent 80%);
+}
+.leaderboard-row--top2:hover {
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.18) 0%, rgba(148, 163, 184, 0.04) 80%);
+}
+.leaderboard-row--top3 {
+  background: linear-gradient(90deg, rgba(205, 127, 50, 0.07) 0%, transparent 80%);
+}
+.leaderboard-row--top3:hover {
+  background: linear-gradient(90deg, rgba(205, 127, 50, 0.14) 0%, rgba(205, 127, 50, 0.03) 80%);
+}
+
+/* ---- Table cells ---- */
 
 .leaderboard-cell {
   padding: 9px 12px;
@@ -1250,27 +1328,48 @@ body {
   white-space: nowrap;
 }
 
-.leaderboard-rank-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 34px;
-  height: 18px;
-  border-radius: 999px;
-  font-size: 10px;
-  line-height: 1;
-  color: var(--text-soft);
-  background: var(--surface-soft);
-  box-shadow: inset 0 0 0 1px var(--border-subtle);
+.leaderboard-cell--rank { padding-left: 16px; }
+
+.leaderboard-cell--muted { color: var(--text-soft); }
+
+.leaderboard-cell--name {
+  font-weight: 500;
 }
+
+.leaderboard-cell--rating {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-600);
+}
+
+/* ---- Rank badge ---- */
+
+.leaderboard-rank-medal {
+  display: inline-block;
+  font-size: 16px;
+  line-height: 1;
+  /* GPU 合成层，避免每帧触发 layout */
+  will-change: transform;
+}
+
+.leaderboard-rank-num {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Top-value cell highlight ---- */
 
 .leaderboard-cell--top {
   position: relative;
   font-weight: 700;
   color: var(--accent-700);
   background:
-    radial-gradient(circle at 0% 0%, rgba(251, 191, 36, 0.2), transparent 64%),
-    linear-gradient(180deg, rgba(251, 191, 36, 0.12), rgba(251, 191, 36, 0.04));
+    radial-gradient(circle at 0% 50%, rgba(251, 191, 36, 0.18), transparent 60%),
+    linear-gradient(180deg, rgba(251, 191, 36, 0.1), rgba(251, 191, 36, 0.04));
+  overflow: hidden;
 }
 
 .leaderboard-cell--top::after {
@@ -1284,8 +1383,39 @@ body {
     rgba(255, 255, 255, 0.26) 46%,
     transparent 80%
   );
+  /* 使用 transform 做合成动画，不触发 layout/paint */
+  will-change: transform;
   transform: translateX(-110%);
-  animation: leaderboard-glint 2.5s var(--ease-out-expo) infinite;
+  animation: leaderboard-glint 2.8s var(--ease-out-expo) infinite;
+}
+
+/* ---- Skeleton loading ---- */
+
+@keyframes leaderboard-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.leaderboard-skeleton-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 16px 20px;
+}
+
+.leaderboard-skeleton-row {
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-soft) 0%,
+    var(--surface-hover) 50%,
+    var(--surface-soft) 100%
+  );
+  background-size: 800px 100%;
+  animation: leaderboard-shimmer 1.4s linear infinite;
+  will-change: background-position;
 }
 
 /* ---- Avatar cropper dialog ---- */

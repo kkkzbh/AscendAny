@@ -59,12 +59,22 @@ export function rankLeaderboardEntries(
 export function getLeaderboardColumnMax(
   entries: LeaderboardEntry[],
 ): Record<LeaderboardValueKey, number> {
-  return {
-    rating: Math.max(0, ...entries.map((item) => item.rating)),
-    knowledge: Math.max(0, ...entries.map((item) => item.knowledge)),
-    accuracy: Math.max(0, ...entries.map((item) => item.accuracy)),
-    quality: Math.max(0, ...entries.map((item) => item.quality)),
-    flexibility: Math.max(0, ...entries.map((item) => item.flexibility)),
-    proficiency: Math.max(0, ...entries.map((item) => item.proficiency)),
+  // 单次遍历，避免为每列分别 map 产生 O(n*6) 临时数组
+  const result: Record<LeaderboardValueKey, number> = {
+    rating: 0,
+    knowledge: 0,
+    accuracy: 0,
+    quality: 0,
+    flexibility: 0,
+    proficiency: 0,
   };
+  for (const item of entries) {
+    if (item.rating      > result.rating)      result.rating      = item.rating;
+    if (item.knowledge   > result.knowledge)   result.knowledge   = item.knowledge;
+    if (item.accuracy    > result.accuracy)    result.accuracy    = item.accuracy;
+    if (item.quality     > result.quality)     result.quality     = item.quality;
+    if (item.flexibility > result.flexibility) result.flexibility = item.flexibility;
+    if (item.proficiency > result.proficiency) result.proficiency = item.proficiency;
+  }
+  return result;
 }

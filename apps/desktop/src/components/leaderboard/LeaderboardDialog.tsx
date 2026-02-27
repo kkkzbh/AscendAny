@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchStudentsLeaderboard, getApiErrorMessage } from "@/lib/api";
 import {
@@ -23,6 +23,20 @@ function formatMetric(value: number): string {
   return String(Math.round(value));
 }
 
+/** 前三名奖牌 emoji */
+function RankBadge({ rank }: { rank: number }) {
+  if (rank === 1) {
+    return <span className="leaderboard-rank-medal leaderboard-rank-medal--1">🥇</span>;
+  }
+  if (rank === 2) {
+    return <span className="leaderboard-rank-medal leaderboard-rank-medal--2">🥈</span>;
+  }
+  if (rank === 3) {
+    return <span className="leaderboard-rank-medal leaderboard-rank-medal--3">🥉</span>;
+  }
+  return <span className="leaderboard-rank-num">#{rank}</span>;
+}
+
 export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
@@ -32,7 +46,7 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
   const requestIdRef = useRef(0);
   const rafRef = useRef<number | null>(null);
 
-  async function loadLeaderboard() {
+  const loadLeaderboard = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     setLoading(true);
@@ -53,8 +67,9 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
         setLoading(false);
       }
     }
-  }
+  }, [accessToken]);
 
+  // 挂载动画
   useEffect(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
@@ -75,13 +90,15 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
     setMounted(false);
   }, [isOpen]);
 
+  // 初次加载
   useEffect(() => {
     if (!isOpen) {
       return;
     }
     void loadLeaderboard();
-  }, [isOpen, accessToken]);
+  }, [isOpen, loadLeaderboard]);
 
+  // 轮询刷新（10 秒）
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -92,8 +109,9 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
     return () => {
       window.clearInterval(timer);
     };
-  }, [isOpen, accessToken]);
+  }, [isOpen, loadLeaderboard]);
 
+  // ESC 关闭
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -122,11 +140,35 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
     [rankedEntries],
   );
 
-  function isTopValue(
-    row: (typeof rankedEntries)[number],
-    key: LeaderboardValueKey,
-  ): boolean {
-    return Math.abs(row[key] - maxValues[key]) <= TOP_VALUE_EPSILON;
+  /**
+   * 预计算每列的"最优值"条目 ID 集合，避免在渲染时对每行每列重复比较。
+   * key → Set<studentId>
+   */
+  const topValueSets = useMemo<Partial<Record<LeaderboardValueKey, Set<string>>>>(() => {
+    const keys: LeaderboardValueKey[] = [
+      "rating",
+      "knowledge",
+      "accuracy",
+      "quality",
+      "flexibility",
+      "proficiency",
+    ];
+    const result: Partial<Record<LeaderboardValueKey, Set<string>>> = {};
+    for (const key of keys) {
+      const maxVal = maxValues[key];
+      const ids = new Set<string>();
+      for (const row of rankedEntries) {
+        if (Math.abs(row[key] - maxVal) <= TOP_VALUE_EPSILON) {
+          ids.add(row.studentId);
+        }
+      }
+      result[key] = ids;
+    }
+    return result;
+  }, [rankedEntries, maxValues]);
+
+  function isTopValue(studentId: string, key: LeaderboardValueKey): boolean {
+    return topValueSets[key]?.has(studentId) ?? false;
   }
 
   if (!isOpen) {
@@ -135,18 +177,45 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 max-[960px]:p-4">
+      {/* 背景遮罩 */}
       <div
         className={`absolute inset-0 bg-black/35 backdrop-blur-sm transition-opacity duration-250 ${mounted ? "opacity-100" : "opacity-0"}`}
         onClick={onClose}
       />
+
+      {/* 弹窗主体 */}
       <section
-        className={`leaderboard-dialog relative z-10 flex h-[560px] w-[980px] max-h-[84vh] max-w-[92vw] flex-col overflow-hidden rounded-2xl transition-all duration-300 ${mounted ? "scale-100 opacity-100" : "scale-95 opacity-0"}`}
+        className={`leaderboard-dialog relative z-10 flex h-[600px] w-[1020px] max-h-[88vh] max-w-[94vw] flex-col overflow-hidden rounded-2xl transition-all duration-300 ${mounted ? "scale-100 opacity-100" : "scale-95 opacity-0"}`}
         style={{ transitionTimingFunction: "var(--ease-spring)" }}
       >
-        <div className="leaderboard-dialog-body min-h-0 flex-1 px-6 py-6">
+        {/* 标题栏 */}
+        <div className="leaderboard-header">
+          <div className="leaderboard-header-left">
+            <span className="leaderboard-header-icon" aria-hidden="true">🏆</span>
+            <span className="leaderboard-header-title">排行榜</span>
+            {loading && (
+              <span className="leaderboard-loading-dot" aria-label="加载中" />
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic"
+            aria-label="关闭排行榜"
+          >
+            <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+          </button>
+        </div>
+
+        {/* 主体内容 */}
+        <div className="leaderboard-dialog-body min-h-0 flex-1 overflow-hidden px-5 pb-5">
           {loading && rankedEntries.length === 0 && (
-            <div className="flex h-full items-center justify-center text-sm text-[var(--text-soft)]">
-              正在加载排行榜...
+            <div className="flex h-full items-center justify-center">
+              <div className="leaderboard-skeleton-wrap">
+                {Array.from({ length: 8 }, (_, i) => (
+                  <div key={i} className="leaderboard-skeleton-row" style={{ opacity: 1 - i * 0.1 }} />
+                ))}
+              </div>
             </div>
           )}
 
@@ -164,51 +233,48 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
           )}
 
           {rankedEntries.length > 0 && (
-            <div className="leaderboard-table-wrap relative h-full overflow-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-raised)]/70">
-              <button
-                type="button"
-                onClick={onClose}
-                className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic leaderboard-table-close"
-                aria-label="关闭排行榜"
-              >
-                <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
-              </button>
-              <table className="leaderboard-table min-w-[920px] border-collapse text-[12px]">
+            <div className="leaderboard-table-wrap h-full overflow-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-raised)]/70">
+              <table className="leaderboard-table min-w-[940px] border-collapse text-[12px]">
                 <thead>
                   <tr>
-                    <th>排名</th>
-                    <th>年级</th>
-                    <th>用户名</th>
-                    <th>RATING</th>
-                    <th>知识</th>
-                    <th>准确</th>
-                    <th>质量</th>
-                    <th>灵活</th>
-                    <th>熟练</th>
+                    <th className="leaderboard-th leaderboard-th--rank">排名</th>
+                    <th className="leaderboard-th">年级</th>
+                    <th className="leaderboard-th leaderboard-th--name">用户名</th>
+                    <th className="leaderboard-th leaderboard-th--rating">RATING</th>
+                    <th className="leaderboard-th">知识</th>
+                    <th className="leaderboard-th">准确</th>
+                    <th className="leaderboard-th">质量</th>
+                    <th className="leaderboard-th">灵活</th>
+                    <th className="leaderboard-th">熟练</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rankedEntries.map((row) => (
-                    <tr key={`${row.studentId}:${row.username}`}>
-                      <td className="leaderboard-cell text-[var(--text-soft)]">#{row.rank}</td>
-                      <td className="leaderboard-cell text-[var(--text-soft)]">{row.grade}</td>
-                      <td className="leaderboard-cell">{row.username}</td>
-                      <td className={`leaderboard-cell ${isTopValue(row, "rating") ? "leaderboard-cell--top" : ""}`}>
+                    <tr
+                      key={`${row.studentId}:${row.username}`}
+                      className={`leaderboard-row${row.rank <= 3 ? ` leaderboard-row--top${row.rank}` : ""}`}
+                    >
+                      <td className="leaderboard-cell leaderboard-cell--rank">
+                        <RankBadge rank={row.rank} />
+                      </td>
+                      <td className="leaderboard-cell leaderboard-cell--muted">{row.grade}</td>
+                      <td className="leaderboard-cell leaderboard-cell--name">{row.username}</td>
+                      <td className={`leaderboard-cell leaderboard-cell--rating${isTopValue(row.studentId, "rating") ? " leaderboard-cell--top" : ""}`}>
                         {Math.round(row.rating)}
                       </td>
-                      <td className={`leaderboard-cell ${isTopValue(row, "knowledge") ? "leaderboard-cell--top" : ""}`}>
+                      <td className={`leaderboard-cell${isTopValue(row.studentId, "knowledge") ? " leaderboard-cell--top" : ""}`}>
                         {formatMetric(row.knowledge)}
                       </td>
-                      <td className={`leaderboard-cell ${isTopValue(row, "accuracy") ? "leaderboard-cell--top" : ""}`}>
+                      <td className={`leaderboard-cell${isTopValue(row.studentId, "accuracy") ? " leaderboard-cell--top" : ""}`}>
                         {formatMetric(row.accuracy)}
                       </td>
-                      <td className={`leaderboard-cell ${isTopValue(row, "quality") ? "leaderboard-cell--top" : ""}`}>
+                      <td className={`leaderboard-cell${isTopValue(row.studentId, "quality") ? " leaderboard-cell--top" : ""}`}>
                         {formatMetric(row.quality)}
                       </td>
-                      <td className={`leaderboard-cell ${isTopValue(row, "flexibility") ? "leaderboard-cell--top" : ""}`}>
+                      <td className={`leaderboard-cell${isTopValue(row.studentId, "flexibility") ? " leaderboard-cell--top" : ""}`}>
                         {formatMetric(row.flexibility)}
                       </td>
-                      <td className={`leaderboard-cell ${isTopValue(row, "proficiency") ? "leaderboard-cell--top" : ""}`}>
+                      <td className={`leaderboard-cell${isTopValue(row.studentId, "proficiency") ? " leaderboard-cell--top" : ""}`}>
                         {formatMetric(row.proficiency)}
                       </td>
                     </tr>
@@ -219,6 +285,7 @@ export function LeaderboardDialog({ isOpen, onClose }: LeaderboardDialogProps) {
           )}
         </div>
 
+        {/* 错误提示条（有数据时的次要错误） */}
         {error && rankedEntries.length > 0 && (
           <div className="border-t border-[var(--border-subtle)] px-5 py-2 text-[11px] text-[var(--rating-negative)]">
             {error}
