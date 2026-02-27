@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ChatRole = Literal["user", "assistant", "system"]
-ProviderType = Literal["server_default", "openai", "anthropic", "deepseek"]
+ProviderType = Literal["server_default", "openai", "anthropic", "deepseek", "gemini"]
 
 
 class ChatMessageRequest(BaseModel):
@@ -18,7 +18,7 @@ class ClientProviderConfig(BaseModel):
     baseUrl: str = Field(min_length=1)
     model: str = Field(min_length=1)
     apiKey: str = Field(min_length=1)
-    mode: Literal["openai_compatible", "anthropic"] | None = None
+    mode: Literal["openai_compatible", "anthropic", "gemini"] | None = None
 
 
 class ChatReplyRequest(BaseModel):
