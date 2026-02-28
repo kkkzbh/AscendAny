@@ -161,11 +161,13 @@ export function TitleBar() {
 
             <button
               onClick={toggleTheme}
-              className="ui-icon-button"
+              className="ui-icon-button ui-theme-toggle"
+              data-theme={theme}
               title={nextThemeLabel}
               aria-label={nextThemeLabel}
             >
               <svg
+                className="ui-theme-toggle-icon ui-theme-toggle-icon--sun"
                 width="15"
                 height="15"
                 viewBox="0 0 24 24"
@@ -174,15 +176,24 @@ export function TitleBar() {
                 strokeWidth="1.8"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                aria-hidden="true"
               >
-                {theme === "light" ? (
-                  <>
-                    <path d="M12 3v2.2M12 18.8V21M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M3 12h2.2M18.8 12H21M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" />
-                    <circle cx="12" cy="12" r="4.2" />
-                  </>
-                ) : (
-                  <path d="M20.4 14.5A8.5 8.5 0 1 1 9.5 3.6a6.8 6.8 0 0 0 10.9 10.9z" />
-                )}
+                <path d="M12 3v2.2M12 18.8V21M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M3 12h2.2M18.8 12H21M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" />
+                <circle cx="12" cy="12" r="4.2" />
+              </svg>
+              <svg
+                className="ui-theme-toggle-icon ui-theme-toggle-icon--moon"
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M20.4 14.5A8.5 8.5 0 1 1 9.5 3.6a6.8 6.8 0 0 0 10.9 10.9z" />
               </svg>
             </button>
 
