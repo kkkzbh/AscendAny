@@ -156,6 +156,8 @@ pnpm --filter @ascendany/site build
 
 当本地清单不可用时，会回退到 GitHub API（`/releases/latest`）。
 
+此外，Pages 工作流会同步生成 `apps/site/public/desktop-updates/`，用于桌面端自动更新（`latest.yml`、`latest-linux.yml`、Windows 安装包与 blockmap、Linux RPM）。
+
 可通过环境变量覆盖默认仓库（默认 `kkkzbh/AscendAny`）：
 
 ```bash
@@ -199,6 +201,9 @@ pnpm --filter @ascendany/mobile dist:android:release
   - Linux：`rpm`（x64）
   - Android：`apk`（ARM：`arm64-v8a` + `armeabi-v7a`）
 - 产物会自动上传到对应的 GitHub Release。
+- 桌面端自动更新必需元数据也会同步上传：
+  - Windows：`latest.yml`、`AscendAny-win-*.exe.blockmap`
+  - Linux：`latest-linux.yml`
 - Android 签名：
   - 若配置仓库 Secrets（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`），工作流会使用该 keystore 进行 release 签名。
   - 若未配置，会回退到 debug keystore 签名（可安装，但不建议作为长期正式分发密钥）。

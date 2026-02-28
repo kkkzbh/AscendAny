@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, safeStorage, type Rectangle } from "electr
 import fs from "node:fs";
 import path from "path";
 import nodemailer from "nodemailer";
+import { desktopUpdater } from "./updater";
 
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = app.isPackaged
@@ -753,5 +754,7 @@ app.on("activate", () => {
 });
 
 app.whenReady().then(() => {
+  desktopUpdater.registerIpc();
+  desktopUpdater.start();
   createWindow();
 });

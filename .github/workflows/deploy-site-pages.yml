@@ -59,6 +59,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p apps/site/public
+          mkdir -p apps/site/public/desktop-updates
+          find apps/site/public/desktop-updates -type f -delete
 
           tmp="$(mktemp)"
           status="$(curl -sS -o "$tmp" -w "%{http_code}" \
@@ -66,12 +68,46 @@ jobs:
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             "https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases/latest")"
 
+          download_release_asset() {
+            local regex="$1"
+            local label="$2"
+            local entry
+            entry="$(jq -r --arg pattern "$regex" '
+              first((.assets // [])[] | select((.name // "") | test($pattern)))
+              | if . == null then "" else "\(.name)\t\(.browser_download_url // "")" end
+            ' "$tmp")"
+
+            if [ -z "$entry" ]; then
+              echo "No ${label} asset found in latest release."
+              return
+            fi
+
+            local name
+            local url
+            IFS=$'\t' read -r name url <<< "$entry"
+            if [ -z "$name" ] || [ -z "$url" ]; then
+              echo "Skip invalid ${label} asset metadata."
+              return
+            fi
+
+            curl -fL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/octet-stream" \
+              -o "apps/site/public/desktop-updates/${name}" \
+              "$url"
+          }
+
           if [ "$status" = "200" ]; then
             jq '{
               generated_at: (now | todateiso8601),
               tag_name,
               assets: [(.assets // [])[] | {name, browser_download_url}]
             }' "$tmp" > apps/site/public/release-assets.json
+            download_release_asset '^latest\.yml$' "latest.yml"
+            download_release_asset '^latest-linux\.yml$' "latest-linux.yml"
+            download_release_asset '^AscendAny-win-.*\.exe$' "Windows installer"
+            download_release_asset '^AscendAny-win-.*\.exe\.blockmap$' "Windows blockmap"
+            download_release_asset '^AscendAny-linux-.*\.rpm$' "Linux RPM"
           else
             echo '{"generated_at":null,"tag_name":null,"assets":[]}' > apps/site/public/release-assets.json
             echo "No latest release manifest available (HTTP ${status})."

@@ -37,6 +37,12 @@
       }
     ],
     "asar": true,
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://site.kkkzbh.cn/desktop-updates"
+      }
+    ],
     "win": {
       "icon": "resources/icon.ico",
       "target": [
@@ -69,6 +75,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "^6.6.2",
     "nodemailer": "^8.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -38,6 +38,28 @@ const NAV_ITEMS: { key: SettingsPage; label: string; icon: string }[] = [
   },
 ];
 
+const UPDATE_STATUS_LABEL: Record<UpdateStatus, string> = {
+  idle: "待检查",
+  checking: "检查中",
+  available: "发现新版本",
+  downloading: "下载中",
+  downloaded: "下载完成",
+  up_to_date: "已是最新",
+  error: "检查失败",
+  disabled: "不可用",
+};
+
+function formatUpdateTime(value: string | null): string {
+  if (!value) {
+    return "尚未检查";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "尚未检查";
+  }
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
 export function SettingsSidebar({
   active,
   onSelect,
@@ -95,6 +117,8 @@ function GeneralSettingsPage() {
   const [showCropper, setShowCropper] = useState(false);
   const [displayNameInput, setDisplayNameInput] = useState(account?.displayName ?? "");
   const [displayNameSaved, setDisplayNameSaved] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateStateSnapshot | null>(null);
+  const [updateActionMessage, setUpdateActionMessage] = useState("");
 
   useEffect(() => {
     setDisplayNameInput(account?.displayName ?? "");
@@ -135,6 +159,59 @@ function GeneralSettingsPage() {
       // Error text is from auth store.
     }
   }
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.updaterGetState) {
+      return;
+    }
+
+    let active = true;
+    void api.updaterGetState().then((state) => {
+      if (!active) {
+        return;
+      }
+      setUpdateState(state);
+    }).catch(() => {
+      if (!active) {
+        return;
+      }
+      setUpdateActionMessage("当前环境暂不支持自动更新。");
+    });
+
+    const unlisten = api.updaterOnStateChanged?.((state) => {
+      setUpdateState(state);
+      setUpdateActionMessage("");
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  async function onCheckForUpdates() {
+    const api = window.electronAPI;
+    if (!api?.updaterCheckNow) {
+      setUpdateActionMessage("当前环境暂不支持自动更新。");
+      return;
+    }
+    const result = await api.updaterCheckNow();
+    setUpdateActionMessage(result.message);
+  }
+
+  async function onQuitAndInstall() {
+    const api = window.electronAPI;
+    if (!api?.updaterQuitAndInstall) {
+      setUpdateActionMessage("当前环境暂不支持自动更新。");
+      return;
+    }
+    const result = await api.updaterQuitAndInstall();
+    setUpdateActionMessage(result.message);
+  }
+
+  const canCheckUpdates = updateState?.status !== "checking" && updateState?.status !== "downloading";
+  const canInstallUpdates = updateState?.status === "downloaded";
+  const updateProgress = updateState?.progressPercent;
 
   return (
     <div className="settings-page animate-fade-in">
@@ -283,6 +360,66 @@ function GeneralSettingsPage() {
               </button>
             )}
           </div>
+        </div>
+
+        <div className="settings-field">
+          <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+            版本与更新
+          </label>
+          <div className="grid gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 p-3.5">
+            <div className="flex items-center justify-between gap-3 text-[12px]">
+              <span className="font-medium text-[var(--text-strong)]">
+                当前版本：{updateState?.currentVersion ?? "未知"}
+              </span>
+              <span className="text-[var(--text-soft)]">
+                状态：{UPDATE_STATUS_LABEL[updateState?.status ?? "disabled"]}
+              </span>
+            </div>
+            <p className="text-[11px] text-[var(--text-soft)]">
+              上次检查：{formatUpdateTime(updateState?.lastCheckedAt ?? null)}
+            </p>
+            {typeof updateProgress === "number" && (
+              <p className="text-[11px] text-[var(--text-soft)]">
+                下载进度：{updateProgress.toFixed(2)}%
+              </p>
+            )}
+            {updateState?.latestVersion && (
+              <p className="text-[11px] text-[var(--text-soft)]">
+                最新版本：{updateState.latestVersion}
+              </p>
+            )}
+            {(updateState?.message || updateActionMessage) && (
+              <p className="text-[11px] text-[var(--text-soft)]">
+                {updateActionMessage || updateState?.message}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void onCheckForUpdates()}
+                disabled={!canCheckUpdates}
+                className={`settings-provider-pill px-4 ${
+                  canCheckUpdates
+                    ? "bg-[var(--surface-raised)] text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
+                    : "cursor-not-allowed bg-[var(--surface-soft)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]"
+                }`}
+              >
+                检查更新
+              </button>
+              {canInstallUpdates && (
+                <button
+                  type="button"
+                  onClick={() => void onQuitAndInstall()}
+                  className="settings-provider-pill bg-[var(--accent-600)] px-4 font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)] hover:opacity-90"
+                >
+                  重启并更新
+                </button>
+              )}
+            </div>
+          </div>
+          <p className="mt-1 text-[11px] text-[var(--text-soft)]">
+            客户端每次启动后会自动检查更新。
+          </p>
         </div>
 
         <div className="settings-field">
