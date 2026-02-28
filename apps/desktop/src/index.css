@@ -259,6 +259,14 @@ body {
   border: 1px solid var(--border-subtle);
 }
 
+.metrics-sidebar-scroll {
+  overscroll-behavior: contain;
+}
+
+.metrics-sidebar-content {
+  min-height: 100%;
+}
+
 .metric-bars {
   padding: 8px 8px !important;
 }
@@ -275,6 +283,10 @@ body {
   padding: 0 2px 2px !important;
 }
 
+.rating-history-list--inner-scroll {
+  max-height: 240px;
+}
+
 .rating-history-row {
   padding: 9px 10px !important;
 }
@@ -285,6 +297,61 @@ body {
 
 .rating-history-title {
   padding-left: 10px !important;
+}
+
+.rating-trend-section {
+  display: grid;
+  gap: 8px;
+  padding: 8px 2px 2px;
+}
+
+.rating-trend-title {
+  padding-left: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--text-soft);
+  text-transform: uppercase;
+}
+
+.rating-trend-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.rating-trend-chart {
+  min-height: 176px;
+}
+
+.rating-trend-empty {
+  padding-left: 10px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.rating-trend-tooltip {
+  border: 1px solid var(--tooltip-border);
+  border-radius: 8px;
+  background: var(--tooltip-background);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--tooltip-shadow);
+  padding: 8px 10px;
+  color: var(--text-strong);
+  min-width: 128px;
+}
+
+.rating-trend-tooltip-title {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.rating-trend-tooltip-row {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .growth-card {

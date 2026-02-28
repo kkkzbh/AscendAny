@@ -4,6 +4,7 @@ import { useMetricsStore } from "@/stores/metricsStore";
 import { RadarChart } from "./RadarChart";
 import { RatingDisplay } from "./RatingDisplay";
 import { MetricCard } from "./MetricCard";
+import { RatingHistoryLineChart } from "./RatingHistoryLineChart";
 import type { MetricName } from "@/types/metrics";
 
 const METRIC_ORDER: MetricName[] = [
@@ -60,9 +61,9 @@ export function MetricsPanel() {
   const historyItems = rating.history;
 
   return (
-    <section className="flex h-full w-full flex-col">
-      <div className="flex h-full w-full min-h-0 flex-col overflow-hidden p-4 pt-4">
-        <div className="metric-section flex min-h-0 flex-1 flex-col overflow-hidden">
+    <section className="metrics-sidebar-scroll flex h-full w-full flex-col overflow-y-auto">
+      <div className="metrics-sidebar-content flex w-full min-h-full flex-col p-4 pt-4">
+        <div className="metric-section flex w-full flex-col overflow-hidden">
           <div className="shrink-0 px-1 pt-2">
             <RatingDisplay rating={rating} />
           </div>
@@ -85,11 +86,7 @@ export function MetricsPanel() {
 
           <div className="border-t border-[var(--border-subtle)]" />
 
-          <div
-            className={`rating-history-section ${
-              historyOpen ? "flex min-h-0 flex-1 flex-col" : "shrink-0"
-            }`}
-          >
+          <div className="rating-history-section">
             <button
               type="button"
               onClick={() => setHistoryOpen((open) => !open)}
@@ -120,44 +117,48 @@ export function MetricsPanel() {
             </button>
 
             {historyOpen && (
-              <div className="rating-history-list min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
-                {historyItems.map((point) => (
-                  <div
-                    key={point.examId}
-                    className="rating-history-row flex items-center justify-between text-xs transition-colors duration-150 hover:bg-[var(--surface-soft)]"
-                  >
-                    <div className="flex flex-col">
-                      <span className="font-medium text-[var(--text-strong)]">
-                        {point.examName}
-                      </span>
-                      <span className="text-[10px] text-[var(--text-soft)]">
-                        {point.date}
-                      </span>
+              <>
+                <div className="rating-history-list rating-history-list--inner-scroll space-y-1 overflow-y-auto pr-1">
+                  {historyItems.map((point) => (
+                    <div
+                      key={point.examId}
+                      className="rating-history-row flex items-center justify-between text-xs transition-colors duration-150 hover:bg-[var(--surface-soft)]"
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-medium text-[var(--text-strong)]">
+                          {point.examName}
+                        </span>
+                        <span className="text-[10px] text-[var(--text-soft)]">
+                          {point.date}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="tabular-nums font-medium text-[var(--text-strong)]">
+                          {point.newRating}
+                        </span>
+                        <span
+                          className="min-w-[32px] px-1 py-0.5 text-center text-[10px] font-semibold tabular-nums"
+                          style={{
+                            color:
+                              point.delta >= 0
+                                ? "var(--rating-positive)"
+                                : "var(--rating-negative)",
+                            backgroundColor:
+                              point.delta >= 0
+                                ? "var(--rating-positive-soft)"
+                                : "var(--rating-negative-soft)",
+                          }}
+                        >
+                          {point.delta >= 0 ? "+" : ""}
+                          {point.delta}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="tabular-nums font-medium text-[var(--text-strong)]">
-                        {point.newRating}
-                      </span>
-                      <span
-                        className="min-w-[32px] px-1 py-0.5 text-center text-[10px] font-semibold tabular-nums"
-                        style={{
-                          color:
-                            point.delta >= 0
-                              ? "var(--rating-positive)"
-                              : "var(--rating-negative)",
-                          backgroundColor:
-                            point.delta >= 0
-                              ? "var(--rating-positive-soft)"
-                              : "var(--rating-negative-soft)",
-                        }}
-                      >
-                        {point.delta >= 0 ? "+" : ""}
-                        {point.delta}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+
+                <RatingHistoryLineChart history={historyItems} />
+              </>
             )}
           </div>
         </div>
