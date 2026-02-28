@@ -244,9 +244,10 @@ export function ChatInput({
         </div>
       </div>
 
-      <p className="chat-input-hint mt-1.5 text-[10px] text-[var(--text-soft)]">
-        {isAiWorking ? "助手正在处理请求..." : "Shift + Enter 换行"}
-      </p>
+      <div className="chat-input-hint mt-1.5 flex items-center justify-between gap-3 text-[10px] text-[var(--text-soft)]">
+        <span>{isAiWorking ? "助手正在处理请求..." : "Shift + Enter 换行"}</span>
+        <span className="text-right">对话纯本地存储，不会上传至服务器</span>
+      </div>
     </div>
   );
 }
