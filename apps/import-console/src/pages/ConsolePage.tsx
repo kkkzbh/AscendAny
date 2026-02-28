@@ -417,6 +417,12 @@ export function ConsolePage({ account, onLogout }: Props) {
                             {String(stream.result.nicknameConflicts ?? 0)}
                           </span>
                         </div>
+                        <div className="result-item">
+                          <span className="result-label">成就重算人数</span>
+                          <span className="result-value">
+                            {String(stream.result.achievementsRecomputedStudents ?? 0)}
+                          </span>
+                        </div>
                       </>
                     )}
                   </div>

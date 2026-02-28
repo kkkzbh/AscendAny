@@ -23,6 +23,12 @@ import type {
   AuthTokens,
 } from "@/types/auth";
 import type { ProviderType } from "@/types/settings";
+import type {
+  AchievementIdentity,
+  AchievementItem,
+  AchievementSummary,
+  StudentAchievementsData,
+} from "@/types/achievements";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const API_BASE_URL =
@@ -52,6 +58,12 @@ type StudentDashboardPayload = Partial<StudentDashboardData> & {
   milestoneStreak?: Partial<MilestoneStreak>;
   peerComparison?: Partial<PeerComparison>;
   postExamSupport?: Partial<PostExamSupport>;
+};
+
+type StudentAchievementsPayload = Partial<StudentAchievementsData> & {
+  identity?: Partial<AchievementIdentity>;
+  summary?: Partial<AchievementSummary>;
+  items?: Array<Partial<AchievementItem>>;
 };
 
 interface LeaderboardEntryPayload {
@@ -363,6 +375,43 @@ export function normalizeDashboardData(
   };
 }
 
+export function normalizeAchievementsData(
+  payload: StudentAchievementsPayload,
+): StudentAchievementsData {
+  const items = Array.isArray(payload.items)
+    ? payload.items.map((item) => ({
+        code: String(item.code ?? ""),
+        title: String(item.title ?? ""),
+        description: String(item.description ?? ""),
+        tier: Number(item.tier ?? 0),
+        progress: Number(item.progress ?? 0),
+        bronzeTarget: Number(item.bronzeTarget ?? 0),
+        silverTarget: Number(item.silverTarget ?? 0),
+        goldTarget: Number(item.goldTarget ?? 0),
+        sortOrder: Number(item.sortOrder ?? 0),
+      }))
+    : [];
+
+  return {
+    identity: {
+      studentId: String(payload.identity?.studentId ?? ""),
+      ptaNickname:
+        typeof payload.identity?.ptaNickname === "string"
+          ? payload.identity.ptaNickname
+          : null,
+      noSubmissionRecords: Boolean(payload.identity?.noSubmissionRecords ?? false),
+    },
+    summary: {
+      total: Number(payload.summary?.total ?? items.length),
+      locked: Number(payload.summary?.locked ?? 0),
+      bronze: Number(payload.summary?.bronze ?? 0),
+      silver: Number(payload.summary?.silver ?? 0),
+      gold: Number(payload.summary?.gold ?? 0),
+    },
+    items,
+  };
+}
+
 export async function fetchStudentDashboard(params: {
   studentId?: string;
   ptaNickname?: string;
@@ -379,6 +428,42 @@ export async function fetchStudentDashboard(params: {
     },
   );
   return normalizeDashboardData(payload);
+}
+
+export async function fetchStudentAchievements(params: {
+  studentId?: string;
+  ptaNickname?: string;
+  authToken?: string;
+}): Promise<StudentAchievementsData> {
+  const query = {
+    studentId: params.studentId,
+    ptaNickname: params.ptaNickname,
+  };
+  try {
+    const payload = await requestJson<StudentAchievementsPayload>(
+      "/api/v1/students/achievements",
+      {
+        query,
+        authToken: params.authToken,
+      },
+    );
+    return normalizeAchievementsData(payload);
+  } catch (error) {
+    // Some runtime environments may fail cross-origin preflight when Authorization
+    // header is present; retry once without auth header when network error appears.
+    if (
+      params.authToken &&
+      error instanceof Error &&
+      /failed to fetch|networkerror/i.test(error.message)
+    ) {
+      const payload = await requestJson<StudentAchievementsPayload>(
+        "/api/v1/students/achievements",
+        { query },
+      );
+      return normalizeAchievementsData(payload);
+    }
+    throw error;
+  }
 }
 
 function normalizeLeaderboardEntry(

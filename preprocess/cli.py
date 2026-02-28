@@ -98,6 +98,7 @@ def main() -> int:
                     "submissions_bound": summary.submissions_bound,
                     "submissions_pending_claim": summary.submissions_pending_claim,
                     "nickname_conflicts": summary.nickname_conflicts,
+                    "achievements_recomputed_students": summary.achievements_recomputed_students,
                     "errors": summary.errors,
                 },
                 ensure_ascii=False,

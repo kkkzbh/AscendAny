@@ -14,13 +14,15 @@ describe("layoutStore", () => {
   it("persists split ratio and metrics panel visibility", async () => {
     useLayoutStore.getState().setSplitRatio(0.37);
     useLayoutStore.getState().toggleMetricsPanel();
+    useLayoutStore.getState().setActiveFullscreenView("achievements");
 
-    useLayoutStore.getState().resetForAccount();
     await useLayoutStore.persist.rehydrate();
+    const persistedRaw = localStorage.getItem("ascendany_layout_guest");
+    const persisted = persistedRaw ? JSON.parse(persistedRaw) : {};
 
-    const state = useLayoutStore.getState();
-    expect(state.splitRatio).toBe(0.37);
-    expect(state.isMetricsPanelVisible).toBe(false);
+    expect(persisted?.state?.splitRatio).toBe(0.37);
+    expect(persisted?.state?.isMetricsPanelVisible).toBe(false);
+    expect(persisted?.state?.activeFullscreenView).toBeUndefined();
   });
 
   it("normalizes split ratio from runtime updates and persisted snapshots", async () => {
@@ -42,5 +44,13 @@ describe("layoutStore", () => {
     const state = useLayoutStore.getState();
     expect(state.splitRatio).toBe(0.55);
     expect(state.isMetricsPanelVisible).toBe(true);
+  });
+
+  it("can open and close fullscreen achievement view", () => {
+    useLayoutStore.getState().setActiveFullscreenView("achievements");
+    expect(useLayoutStore.getState().activeFullscreenView).toBe("achievements");
+
+    useLayoutStore.getState().closeFullscreenView();
+    expect(useLayoutStore.getState().activeFullscreenView).toBe("none");
   });
 });

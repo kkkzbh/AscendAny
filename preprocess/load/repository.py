@@ -7,6 +7,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from ..models import ExamMeta, ParticipantRow, ProblemInfo, SourceFile, SubmissionRow
+from .achievements import AchievementDefinition, build_state_rows
 
 
 def _to_sql_like_pattern(pattern: str) -> str:
@@ -602,6 +603,374 @@ class Repository:
                 """,
                 (ingest_run_id, exam_id, fingerprint, status, error_message),
             )
+
+    def fetch_achievement_definitions(
+        self,
+        source: str,
+        enabled_only: bool = True,
+    ) -> list[AchievementDefinition]:
+        query = """
+            SELECT
+                achievement_code,
+                progress_key,
+                bronze_target,
+                silver_target,
+                gold_target
+            FROM ascendany.achievement_definitions
+            WHERE source = %s
+        """
+        params: list[Any] = [source]
+        if enabled_only:
+            query += " AND is_enabled = TRUE"
+        query += " ORDER BY sort_order ASC, achievement_code ASC"
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        return [
+            AchievementDefinition(
+                achievement_code=str(row["achievement_code"]),
+                progress_key=str(row["progress_key"]),
+                bronze_target=float(row["bronze_target"]),
+                silver_target=float(row["silver_target"]),
+                gold_target=float(row["gold_target"]),
+            )
+            for row in rows
+        ]
+
+    def fetch_student_ingest_achievement_progress(
+        self, student_ids: list[int]
+    ) -> dict[int, dict[str, float]]:
+        unique_student_ids = sorted(set(student_ids))
+        if not unique_student_ids:
+            return {}
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                WITH target_students AS (
+                    SELECT DISTINCT unnest(%s::bigint[]) AS student_id
+                ),
+                exam_stats AS (
+                    SELECT
+                        ts.student_id,
+                        COUNT(*) FILTER (WHERE ep.exam_id IS NOT NULL)::numeric AS exam_count,
+                        COUNT(*) FILTER (
+                            WHERE ep.exam_id IS NOT NULL
+                              AND COALESCE(rh.delta, 0) > 0
+                        )::numeric AS positive_delta_count,
+                        COALESCE(MAX(rh.new_rating), 0)::numeric AS max_rating,
+                        GREATEST(COALESCE(MAX(rh.delta), 0), 0)::numeric AS max_rating_delta,
+                        COUNT(*) FILTER (
+                            WHERE ep.rank IS NOT NULL
+                              AND ep.rank <= 10
+                        )::numeric AS top10_count,
+                        COUNT(*) FILTER (
+                            WHERE ep.rank IS NOT NULL
+                              AND ep.rank <= 3
+                        )::numeric AS top3_count,
+                        COUNT(*) FILTER (WHERE ep.rank = 1)::numeric AS rank1_count
+                    FROM target_students AS ts
+                    LEFT JOIN ascendany.exam_participants AS ep
+                      ON ep.student_id = ts.student_id
+                     AND ep.absent = FALSE
+                    LEFT JOIN ascendany.rating_history AS rh
+                      ON rh.student_id = ep.student_id
+                     AND rh.exam_id = ep.exam_id
+                    GROUP BY ts.student_id
+                ),
+                ordered_rating AS (
+                    SELECT
+                        ts.student_id,
+                        rh.delta,
+                        SUM(
+                            CASE
+                                WHEN COALESCE(rh.delta, 0) > 0 THEN 0
+                                ELSE 1
+                            END
+                        ) OVER (
+                            PARTITION BY ts.student_id
+                            ORDER BY COALESCE(e.starts_at, e.created_at, rh.created_at), rh.exam_id
+                        ) AS streak_group
+                    FROM target_students AS ts
+                    LEFT JOIN ascendany.rating_history AS rh
+                      ON rh.student_id = ts.student_id
+                    LEFT JOIN ascendany.exams AS e
+                      ON e.exam_id = rh.exam_id
+                ),
+                streak_stats AS (
+                    SELECT
+                        ts.student_id,
+                        COALESCE(MAX(streak_len), 0)::numeric AS best_positive_streak
+                    FROM target_students AS ts
+                    LEFT JOIN (
+                        SELECT
+                            student_id,
+                            streak_group,
+                            COUNT(*)::numeric AS streak_len
+                        FROM ordered_rating
+                        WHERE delta > 0
+                        GROUP BY student_id, streak_group
+                    ) AS s
+                      ON s.student_id = ts.student_id
+                    GROUP BY ts.student_id
+                ),
+                metric_max_stats AS (
+                    SELECT
+                        ts.student_id,
+                        COALESCE(MAX(esm.knowledge), 0)::numeric AS knowledge_max,
+                        COALESCE(MAX(esm.accuracy), 0)::numeric AS accuracy_max,
+                        COALESCE(MAX(esm.quality), 0)::numeric AS quality_max,
+                        COALESCE(MAX(esm.flexibility), 0)::numeric AS flexibility_max,
+                        COALESCE(MAX(esm.proficiency), 0)::numeric AS proficiency_max
+                    FROM target_students AS ts
+                    LEFT JOIN ascendany.exam_student_metrics AS esm
+                      ON esm.student_id = ts.student_id
+                    GROUP BY ts.student_id
+                ),
+                balanced_stats AS (
+                    SELECT
+                        ts.student_id,
+                        COALESCE(MAX(
+                            CASE
+                                WHEN esm.knowledge IS NULL
+                                  OR esm.accuracy IS NULL
+                                  OR esm.quality IS NULL
+                                  OR esm.flexibility IS NULL
+                                  OR esm.proficiency IS NULL
+                                THEN NULL
+                                ELSE LEAST(
+                                    esm.knowledge,
+                                    esm.accuracy,
+                                    esm.quality,
+                                    esm.flexibility,
+                                    esm.proficiency
+                                )::numeric
+                            END
+                        ), 0)::numeric AS max_of_exam_min_metric
+                    FROM target_students AS ts
+                    LEFT JOIN ascendany.exam_student_metrics AS esm
+                      ON esm.student_id = ts.student_id
+                    GROUP BY ts.student_id
+                ),
+                per_exam_metric_max AS (
+                    SELECT
+                        esm.exam_id,
+                        MAX(esm.knowledge) AS max_knowledge,
+                        MAX(esm.accuracy) AS max_accuracy,
+                        MAX(esm.quality) AS max_quality,
+                        MAX(esm.flexibility) AS max_flexibility,
+                        MAX(esm.proficiency) AS max_proficiency
+                    FROM ascendany.exam_student_metrics AS esm
+                    JOIN ascendany.exam_participants AS ep
+                      ON ep.exam_id = esm.exam_id
+                     AND ep.student_id = esm.student_id
+                     AND ep.absent = FALSE
+                    GROUP BY esm.exam_id
+                ),
+                metric_top1_hits AS (
+                    SELECT DISTINCT
+                        ts.student_id,
+                        esm.exam_id
+                    FROM target_students AS ts
+                    JOIN ascendany.exam_student_metrics AS esm
+                      ON esm.student_id = ts.student_id
+                    JOIN ascendany.exam_participants AS ep
+                      ON ep.exam_id = esm.exam_id
+                     AND ep.student_id = esm.student_id
+                     AND ep.absent = FALSE
+                    JOIN per_exam_metric_max AS pem
+                      ON pem.exam_id = esm.exam_id
+                    WHERE (
+                        esm.knowledge IS NOT NULL
+                        AND pem.max_knowledge IS NOT NULL
+                        AND esm.knowledge = pem.max_knowledge
+                    ) OR (
+                        esm.accuracy IS NOT NULL
+                        AND pem.max_accuracy IS NOT NULL
+                        AND esm.accuracy = pem.max_accuracy
+                    ) OR (
+                        esm.quality IS NOT NULL
+                        AND pem.max_quality IS NOT NULL
+                        AND esm.quality = pem.max_quality
+                    ) OR (
+                        esm.flexibility IS NOT NULL
+                        AND pem.max_flexibility IS NOT NULL
+                        AND esm.flexibility = pem.max_flexibility
+                    ) OR (
+                        esm.proficiency IS NOT NULL
+                        AND pem.max_proficiency IS NOT NULL
+                        AND esm.proficiency = pem.max_proficiency
+                    )
+                ),
+                metric_top1_stats AS (
+                    SELECT
+                        ts.student_id,
+                        COALESCE(COUNT(mh.exam_id), 0)::numeric AS any_metric_top1_count
+                    FROM target_students AS ts
+                    LEFT JOIN metric_top1_hits AS mh
+                      ON mh.student_id = ts.student_id
+                    GROUP BY ts.student_id
+                ),
+                current_stats AS (
+                    SELECT
+                        ts.student_id,
+                        COALESCE(
+                            CASE
+                                WHEN scm.knowledge IS NULL
+                                  OR scm.accuracy IS NULL
+                                  OR scm.quality IS NULL
+                                  OR scm.flexibility IS NULL
+                                  OR scm.proficiency IS NULL
+                                THEN 0
+                                ELSE LEAST(
+                                    scm.knowledge,
+                                    scm.accuracy,
+                                    scm.quality,
+                                    scm.flexibility,
+                                    scm.proficiency
+                                )
+                            END,
+                            0
+                        )::numeric AS current_min_metric
+                    FROM target_students AS ts
+                    LEFT JOIN ascendany.student_current_metrics AS scm
+                      ON scm.student_id = ts.student_id
+                )
+                SELECT
+                    ts.student_id,
+                    COALESCE(es.exam_count, 0)::numeric AS exam_count,
+                    COALESCE(es.positive_delta_count, 0)::numeric AS positive_delta_count,
+                    COALESCE(ss.best_positive_streak, 0)::numeric AS best_positive_streak,
+                    COALESCE(mm.knowledge_max, 0)::numeric AS knowledge_max,
+                    COALESCE(mm.accuracy_max, 0)::numeric AS accuracy_max,
+                    COALESCE(mm.quality_max, 0)::numeric AS quality_max,
+                    COALESCE(mm.flexibility_max, 0)::numeric AS flexibility_max,
+                    COALESCE(mm.proficiency_max, 0)::numeric AS proficiency_max,
+                    COALESCE(es.max_rating, 0)::numeric AS max_rating,
+                    COALESCE(es.max_rating_delta, 0)::numeric AS max_rating_delta,
+                    COALESCE(es.top10_count, 0)::numeric AS top10_count,
+                    COALESCE(es.top3_count, 0)::numeric AS top3_count,
+                    COALESCE(bs.max_of_exam_min_metric, 0)::numeric AS max_of_exam_min_metric,
+                    COALESCE(mt.any_metric_top1_count, 0)::numeric AS any_metric_top1_count,
+                    COALESCE(es.rank1_count, 0)::numeric AS rank1_count,
+                    COALESCE(cs.current_min_metric, 0)::numeric AS current_min_metric
+                FROM target_students AS ts
+                LEFT JOIN exam_stats AS es
+                  ON es.student_id = ts.student_id
+                LEFT JOIN streak_stats AS ss
+                  ON ss.student_id = ts.student_id
+                LEFT JOIN metric_max_stats AS mm
+                  ON mm.student_id = ts.student_id
+                LEFT JOIN balanced_stats AS bs
+                  ON bs.student_id = ts.student_id
+                LEFT JOIN metric_top1_stats AS mt
+                  ON mt.student_id = ts.student_id
+                LEFT JOIN current_stats AS cs
+                  ON cs.student_id = ts.student_id
+                ORDER BY ts.student_id ASC
+                """,
+                (unique_student_ids,),
+            )
+            rows = cursor.fetchall()
+        progress_by_student: dict[int, dict[str, float]] = {}
+        for row in rows:
+            student_id = int(row["student_id"])
+            progress_by_student[student_id] = {
+                key: float(row.get(key) or 0.0)
+                for key in (
+                    "exam_count",
+                    "positive_delta_count",
+                    "best_positive_streak",
+                    "knowledge_max",
+                    "accuracy_max",
+                    "quality_max",
+                    "flexibility_max",
+                    "proficiency_max",
+                    "max_rating",
+                    "max_rating_delta",
+                    "top10_count",
+                    "top3_count",
+                    "max_of_exam_min_metric",
+                    "any_metric_top1_count",
+                    "rank1_count",
+                    "current_min_metric",
+                )
+            }
+        return progress_by_student
+
+    def upsert_student_achievement_states(
+        self,
+        rows: list[tuple[int, str, float, int, int]],
+    ) -> None:
+        if not rows:
+            return
+        with self.conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO ascendany.student_achievement_states (
+                    student_id,
+                    achievement_code,
+                    progress_value,
+                    tier,
+                    achieved_at
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    CASE
+                        WHEN %s > 0 THEN now()
+                        ELSE NULL
+                    END
+                )
+                ON CONFLICT (student_id, achievement_code)
+                DO UPDATE SET
+                    progress_value = GREATEST(
+                        ascendany.student_achievement_states.progress_value,
+                        EXCLUDED.progress_value
+                    ),
+                    tier = GREATEST(
+                        ascendany.student_achievement_states.tier,
+                        EXCLUDED.tier
+                    ),
+                    achieved_at = CASE
+                        WHEN ascendany.student_achievement_states.achieved_at IS NOT NULL
+                            THEN ascendany.student_achievement_states.achieved_at
+                        WHEN GREATEST(
+                            ascendany.student_achievement_states.tier,
+                            EXCLUDED.tier
+                        ) > 0
+                            THEN COALESCE(EXCLUDED.achieved_at, now())
+                        ELSE NULL
+                    END,
+                    updated_at = now()
+                """,
+                rows,
+            )
+
+    def recompute_achievements_for_students(
+        self,
+        student_ids: list[int],
+        source: str = "ingest",
+    ) -> int:
+        unique_student_ids = sorted(set(student_ids))
+        if not unique_student_ids:
+            return 0
+        definitions = self.fetch_achievement_definitions(source=source, enabled_only=True)
+        if not definitions:
+            return 0
+        progress_by_student: dict[int, dict[str, float]] = {}
+        if source == "ingest":
+            progress_by_student = self.fetch_student_ingest_achievement_progress(
+                unique_student_ids
+            )
+        rows = build_state_rows(
+            student_ids=unique_student_ids,
+            definitions=definitions,
+            progress_by_student=progress_by_student,
+        )
+        self.upsert_student_achievement_states(rows)
+        return len(unique_student_ids)
 
     def cleanup_orphan_students(self) -> dict[str, int]:
         with self.conn.cursor() as cursor:

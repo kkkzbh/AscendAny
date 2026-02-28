@@ -141,6 +141,32 @@ class StudentDashboardResponse(BaseModel):
     postExamSupport: PostExamSupportResponse
 
 
+class AchievementSummaryResponse(BaseModel):
+    total: int
+    locked: int
+    bronze: int
+    silver: int
+    gold: int
+
+
+class AchievementItemResponse(BaseModel):
+    code: str
+    title: str
+    description: str
+    tier: int
+    progress: float
+    bronzeTarget: float
+    silverTarget: float
+    goldTarget: float
+    sortOrder: int
+
+
+class StudentAchievementsResponse(BaseModel):
+    identity: ResolvedIdentityResponse
+    summary: AchievementSummaryResponse
+    items: list[AchievementItemResponse]
+
+
 class LeaderboardEntryResponse(BaseModel):
     studentId: str
     grade: str

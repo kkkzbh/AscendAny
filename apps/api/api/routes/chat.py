@@ -123,6 +123,27 @@ def _safe_provider(provider: str | None, fallback: str) -> str:
     return "server_default"
 
 
+async def _increment_ai_dialogue_counter(repository: Any, identity: Any) -> None:
+    if identity is None:
+        return
+    incrementer = getattr(repository, "increment_ai_dialogue_count", None)
+    if not callable(incrementer):
+        return
+    student_entity_ids = getattr(identity, "student_entity_ids", None)
+    student_entity_id = getattr(identity, "student_entity_id", None)
+    raw_ids = student_entity_ids or (student_entity_id,)
+    student_ids = sorted(
+        {
+            int(student_id)
+            for student_id in raw_ids
+            if student_id is not None and int(student_id) > 0
+        }
+    )
+    if not student_ids:
+        return
+    await incrementer(student_ids, delta=1)
+
+
 @router.post("/chat/reply", response_model=ChatReplyResponse)
 async def chat_reply(
     payload: ChatReplyRequest,
@@ -181,11 +202,13 @@ async def chat_reply(
     tool_executor = ToolExecutor(repository=repository, identity=identity)
 
     # ── 5. Generate LLM reply ──
-    return await llm_service.generate_reply(
+    result = await llm_service.generate_reply(
         effective_payload,
         system_prompt=system_prompt,
         tool_executor=tool_executor,
     )
+    await _increment_ai_dialogue_counter(repository, identity)
+    return result
 
 
 @router.post("/chat/auto-analysis", response_model=AutoAnalysisResponse)
@@ -264,6 +287,7 @@ async def chat_auto_analysis(
         str(getattr(cache_row, "reply", "")).strip() if cache_row is not None else ""
     )
     if cached_reply:
+        await _increment_ai_dialogue_counter(repository, identity)
         await _mark_auto_analysis_delivered(
             repository=repository,
             account_id=current_account.account_id,
@@ -326,6 +350,7 @@ async def chat_auto_analysis(
             role_id=role_id,
         )
 
+    await _increment_ai_dialogue_counter(repository, identity)
     return AutoAnalysisResponse(
         reply=reply,
         provider=result.provider,

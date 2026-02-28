@@ -19,6 +19,7 @@ from apps.api.services.auth import AuthenticatedAccount
 class FakeRepo:
     def __init__(self) -> None:
         self.cache: dict[tuple[int, int, str], AutoAnalysisCacheRow] = {}
+        self.ai_counter_calls: list[tuple[int, ...]] = []
 
     async def fetch_account_profile(self, account_id: int):
         return None
@@ -101,6 +102,10 @@ class FakeRepo:
             updated_at=now,
         )
 
+    async def increment_ai_dialogue_count(self, student_ids: list[int], delta: int = 1):
+        _ = delta
+        self.ai_counter_calls.append(tuple(sorted(student_ids)))
+
     async def fetch_auto_analysis_candidates_by_exam(
         self, exam_id: int, limit: int = 2000
     ):
@@ -161,6 +166,7 @@ def test_auto_analysis_delivered_only_once_per_latest_exam() -> None:
     assert first.json()["reply"] == "这是一条自动分析缓存。"
     assert second.json()["reply"] == ""
     assert llm.calls == 1
+    assert repo.ai_counter_calls == [(1,)]
 
 
 def test_auto_analysis_uses_cached_reply_before_llm() -> None:
@@ -194,6 +200,7 @@ def test_auto_analysis_uses_cached_reply_before_llm() -> None:
     assert response.status_code == 200
     assert response.json()["reply"] == "预热缓存命中"
     assert llm.calls == 0
+    assert repo.ai_counter_calls == [(1,)]
 
 
 def test_auto_analysis_uses_proactive_prompt_mode() -> None:

@@ -6,6 +6,8 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 
 from apps.api.db.repository import (
+    AchievementDefinitionRow,
+    AggregatedAchievementStateRow,
     LeaderboardEntryRow,
     StudentIdentityMatch,
     StudentNoMatch,
@@ -16,6 +18,9 @@ from apps.api.schemas.model import ModelProvidersResponse, ProviderOptionRespons
 
 
 class FakeRepo:
+    def __init__(self) -> None:
+        self.ai_counter_calls: list[tuple[int, ...]] = []
+
     async def fetch_latest_exam_imported_at(self):
         return datetime(2026, 2, 13, 9, 30, tzinfo=timezone.utc)
 
@@ -34,10 +39,28 @@ class FakeRepo:
                     student_name="Alice",
                 )
             ]
+        if student_no == "20230088":
+            return [
+                StudentIdentityMatch(
+                    student_id=88,
+                    student_no="20230088",
+                    student_name="MergeUser",
+                ),
+                StudentIdentityMatch(
+                    student_id=99,
+                    student_no="20230088",
+                    student_name="MergeUser",
+                ),
+            ]
         return []
 
     async def exists_pta_submission_by_actor_name(self, actor_name: str):
         return False
+
+    async def exists_learning_records_for_student_ids(
+        self, student_ids: list[int]
+    ) -> bool:
+        return bool(student_ids)
 
     async def fetch_current_metrics(self, student_id: int):
         return None
@@ -61,6 +84,77 @@ class FakeRepo:
                 proficiency=Decimal("74.4"),
             )
         ]
+
+    async def fetch_achievement_definitions(
+        self,
+        source: str | None = None,
+        enabled_only: bool = True,
+    ):
+        _ = source, enabled_only
+        return [
+            AchievementDefinitionRow(
+                achievement_code="exam_count_first",
+                title="初试锋芒",
+                description="累计参赛次数达到 1 / 3 / 8 场。",
+                source="ingest",
+                progress_key="exam_count",
+                bronze_target=1,
+                silver_target=3,
+                gold_target=8,
+                sort_order=1,
+            ),
+            AchievementDefinitionRow(
+                achievement_code="ai_dialogue_count",
+                title="AI陪练",
+                description="与 AI 成功对话次数达到 3 / 15 / 40 次。",
+                source="realtime",
+                progress_key="ai_dialogue_count",
+                bronze_target=3,
+                silver_target=15,
+                gold_target=40,
+                sort_order=2,
+            ),
+        ]
+
+    async def fetch_aggregated_achievement_states(
+        self,
+        student_ids: list[int],
+    ):
+        if set(student_ids) == {88, 99}:
+            return [
+                AggregatedAchievementStateRow(
+                    achievement_code="exam_count_first",
+                    progress_value=10,
+                    tier=3,
+                )
+            ]
+        if 1 in student_ids:
+            return [
+                AggregatedAchievementStateRow(
+                    achievement_code="exam_count_first",
+                    progress_value=2,
+                    tier=1,
+                )
+            ]
+        return []
+
+    async def fetch_student_activity_counters(
+        self,
+        student_ids: list[int],
+    ):
+        if set(student_ids) == {88, 99}:
+            return {88: 3, 99: 22}
+        if 1 in student_ids:
+            return {1: 5}
+        return {}
+
+    async def increment_ai_dialogue_count(
+        self,
+        student_ids: list[int],
+        delta: int = 1,
+    ):
+        _ = delta
+        self.ai_counter_calls.append(tuple(sorted(student_ids)))
 
 
 class FakeLLM:
@@ -173,6 +267,61 @@ def test_students_dashboard_returns_fallback_when_student_id_not_found() -> None
     assert payload["postExamSupport"]["available"] is False
 
 
+def test_students_achievements_route_returns_items() -> None:
+    app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/students/achievements",
+            params={"studentId": "20230001"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity"]["studentId"] == "20230001"
+    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["bronze"] == 2
+    assert payload["summary"]["silver"] == 0
+    assert payload["summary"]["gold"] == 0
+    assert payload["items"][0]["code"] == "exam_count_first"
+    assert payload["items"][0]["tier"] == 1
+    assert payload["items"][1]["code"] == "ai_dialogue_count"
+    assert payload["items"][1]["tier"] == 1
+
+
+def test_students_achievements_route_merges_identity_entities() -> None:
+    app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/students/achievements",
+            params={"studentId": "20230088"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity"]["studentId"] == "20230088"
+    assert payload["items"][0]["progress"] == 10
+    assert payload["items"][0]["tier"] == 3
+    assert payload["items"][1]["progress"] == 22
+    assert payload["items"][1]["tier"] == 2
+
+
+def test_students_achievements_route_handles_not_found_student() -> None:
+    app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/students/achievements",
+            params={"studentId": "20999999"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity"]["studentId"] == "20999999"
+    assert payload["identity"]["noSubmissionRecords"] is True
+    assert payload["summary"]["locked"] == 2
+    assert payload["items"][0]["tier"] == 0
+    assert payload["items"][1]["tier"] == 0
+
+
 def test_students_leaderboard_route_returns_rows() -> None:
     app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
     with TestClient(app) as client:
@@ -208,3 +357,4 @@ def test_chat_reply_hello_still_goes_to_llm() -> None:
     payload = response.json()
     assert payload["reply"] == "ok"
     assert llm.calls == 1
+    assert repo.ai_counter_calls == [(1,)]

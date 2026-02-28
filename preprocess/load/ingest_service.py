@@ -27,6 +27,7 @@ class RunSummary:
     submissions_bound: int
     submissions_pending_claim: int
     nickname_conflicts: int
+    achievements_recomputed_students: int
     errors: list[str]
 
 
@@ -99,6 +100,7 @@ class IngestService:
                         "submissionsBound": 0,
                         "submissionsPendingClaim": 0,
                         "nicknameConflicts": 0,
+                        "achievementsRecomputedStudents": 0,
                         "errors": [],
                     },
                 )
@@ -111,6 +113,7 @@ class IngestService:
                 submissions_bound=0,
                 submissions_pending_claim=0,
                 nickname_conflicts=0,
+                achievements_recomputed_students=0,
                 errors=[],
             )
 
@@ -132,6 +135,7 @@ class IngestService:
         submissions_bound = 0
         submissions_pending_claim = 0
         nickname_conflicts = 0
+        achievements_recomputed_students = 0
         errors: list[str] = []
         successful_exam_ids: list[int] = []
 
@@ -268,6 +272,12 @@ class IngestService:
                         )
 
                     self._refresh_current_profiles(participant_ids)
+                    achievements_recomputed_students += (
+                        self.repo.recompute_achievements_for_students(
+                            participant_ids,
+                            source="ingest",
+                        )
+                    )
                     self.repo.record_ingest_exam_run(
                         ingest_run_id=ingest_run_id,
                         exam_id=exam_id,
@@ -324,6 +334,7 @@ class IngestService:
                     "submissions_bound": submissions_bound,
                     "submissions_pending_claim": submissions_pending_claim,
                     "nickname_conflicts": nickname_conflicts,
+                    "achievements_recomputed_students": achievements_recomputed_students,
                     "errors": errors,
                     "cleanup": cleanup_stats,
                 },
@@ -340,6 +351,7 @@ class IngestService:
             submissions_bound=submissions_bound,
             submissions_pending_claim=submissions_pending_claim,
             nickname_conflicts=nickname_conflicts,
+            achievements_recomputed_students=achievements_recomputed_students,
             errors=errors,
         )
         if on_progress:
@@ -352,6 +364,7 @@ class IngestService:
                 "submissionsBound": summary.submissions_bound,
                 "submissionsPendingClaim": summary.submissions_pending_claim,
                 "nicknameConflicts": summary.nickname_conflicts,
+                "achievementsRecomputedStudents": summary.achievements_recomputed_students,
                 "errors": summary.errors,
             })
         return summary

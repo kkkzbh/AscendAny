@@ -73,6 +73,7 @@ class SSEDoneEvent(BaseModel):
     submissionsBound: int = 0
     submissionsPendingClaim: int = 0
     nicknameConflicts: int = 0
+    achievementsRecomputedStudents: int = 0
     errors: list[str] = Field(default_factory=list)
 
 

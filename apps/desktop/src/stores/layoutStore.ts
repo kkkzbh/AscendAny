@@ -4,9 +4,12 @@ import { persist } from "zustand/middleware";
 interface LayoutState {
   isMetricsPanelVisible: boolean;
   splitRatio: number;
+  activeFullscreenView: "none" | "achievements";
   resetForAccount: () => void;
   toggleMetricsPanel: () => void;
   setSplitRatio: (ratio: number) => void;
+  setActiveFullscreenView: (view: "none" | "achievements") => void;
+  closeFullscreenView: () => void;
 }
 
 const DEFAULT_SPLIT_RATIO = 0.55;
@@ -25,10 +28,12 @@ export const useLayoutStore = create<LayoutState>()(
     (set) => ({
       isMetricsPanelVisible: true,
       splitRatio: DEFAULT_SPLIT_RATIO,
+      activeFullscreenView: "none",
       resetForAccount: () =>
         set({
           isMetricsPanelVisible: true,
           splitRatio: DEFAULT_SPLIT_RATIO,
+          activeFullscreenView: "none",
         }),
       toggleMetricsPanel: () =>
         set((state) => ({
@@ -37,6 +42,14 @@ export const useLayoutStore = create<LayoutState>()(
       setSplitRatio: (ratio) =>
         set({
           splitRatio: normalizeSplitRatio(ratio),
+        }),
+      setActiveFullscreenView: (view) =>
+        set({
+          activeFullscreenView: view,
+        }),
+      closeFullscreenView: () =>
+        set({
+          activeFullscreenView: "none",
         }),
     }),
     {

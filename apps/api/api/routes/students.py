@@ -6,6 +6,7 @@ from ..deps import get_current_account_optional, get_repository, get_settings
 from ...core.errors import AppError
 from ...schemas.students import (
     LeaderboardEntryResponse,
+    StudentAchievementsResponse,
     MetricDeltaInfoResponse,
     MetricDeltaItemResponse,
     MetricMissingItemResponse,
@@ -15,9 +16,10 @@ from ...schemas.students import (
     StudentLeaderboardResponse,
     StudentMetricsResponse,
 )
+from ...services.achievements import AchievementsService
 from ...services.dashboard import DashboardService
 from ...services.growth_insights import build_empty_growth_insights
-from ...services.identity import StudentIdentityService
+from ...services.identity import ResolvedIdentity, StudentIdentityService
 
 router = APIRouter(tags=["students"])
 
@@ -77,6 +79,20 @@ def _build_not_found_fallback_dashboard(
     )
 
 
+def _build_not_found_fallback_identity(
+    student_id: str | None,
+    pta_nickname: str | None,
+) -> ResolvedIdentity:
+    return ResolvedIdentity(
+        student_entity_id=0,
+        student_entity_ids=(),
+        student_id=(student_id or "").strip(),
+        pta_nickname=(pta_nickname or "").strip() or None,
+        no_submission_records=True,
+        matched_by="student_id",
+    )
+
+
 @router.get("/students/dashboard", response_model=StudentDashboardResponse)
 async def students_dashboard(
     student_id: str | None = Query(default=None, alias="studentId"),
@@ -111,6 +127,37 @@ async def students_dashboard(
         rating_history_limit=settings.dashboard.rating_history_limit,
     )
     return await dashboard_service.build(identity)
+
+
+@router.get("/students/achievements", response_model=StudentAchievementsResponse)
+async def students_achievements(
+    student_id: str | None = Query(default=None, alias="studentId"),
+    pta_nickname: str | None = Query(default=None, alias="ptaNickname"),
+    repository=Depends(get_repository),
+    current_account=Depends(get_current_account_optional),
+) -> StudentAchievementsResponse:
+    if (student_id is None or not student_id.strip()) and (
+        pta_nickname is None or not pta_nickname.strip()
+    ):
+        if current_account is not None:
+            profile = await repository.fetch_account_profile(current_account.account_id)
+            if profile is not None:
+                student_id = profile.student_id
+                pta_nickname = profile.pta_nickname
+
+    identity_service = StudentIdentityService(repository=repository)
+    try:
+        identity = await identity_service.resolve(
+            student_id=student_id,
+            pta_nickname=pta_nickname,
+        )
+    except AppError as exc:
+        if exc.code != "STUDENT_NOT_FOUND":
+            raise
+        identity = _build_not_found_fallback_identity(student_id, pta_nickname)
+
+    achievements_service = AchievementsService(repository=repository)
+    return await achievements_service.build(identity)
 
 
 @router.get("/students/leaderboard", response_model=StudentLeaderboardResponse)

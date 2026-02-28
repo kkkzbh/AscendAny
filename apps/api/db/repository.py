@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 import json
 
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
@@ -188,6 +189,26 @@ class AutoAnalysisCandidateRow:
 
 
 @dataclass(slots=True)
+class AchievementDefinitionRow:
+    achievement_code: str
+    title: str
+    description: str
+    source: str
+    progress_key: str
+    bronze_target: Decimal | float | int
+    silver_target: Decimal | float | int
+    gold_target: Decimal | float | int
+    sort_order: int
+
+
+@dataclass(slots=True)
+class AggregatedAchievementStateRow:
+    achievement_code: str
+    progress_value: Decimal | float | int
+    tier: int
+
+
+@dataclass(slots=True)
 class RefreshTokenRow:
     token_id: int
     account_id: int
@@ -200,6 +221,10 @@ class RefreshTokenRow:
 class ApiRepository:
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
+
+    @staticmethod
+    def _is_missing_relation_error(exc: Exception) -> bool:
+        return getattr(exc, "sqlstate", None) == "42P01"
 
     async def create_account(
         self, username: str, display_name: str, password_hash: str
@@ -1400,6 +1425,152 @@ class ApiRepository:
         if not row:
             return False
         return bool(row["has_records"])
+
+    async def fetch_achievement_definitions(
+        self,
+        source: str | None = None,
+        enabled_only: bool = True,
+    ) -> list[AchievementDefinitionRow]:
+        query = """
+            SELECT
+                achievement_code,
+                title,
+                description,
+                source,
+                progress_key,
+                bronze_target,
+                silver_target,
+                gold_target,
+                sort_order
+            FROM ascendany.achievement_definitions
+            WHERE 1 = 1
+        """
+        params: list[object] = []
+        if source:
+            query += " AND source = %s"
+            params.append(source)
+        if enabled_only:
+            query += " AND is_enabled = TRUE"
+        query += " ORDER BY sort_order ASC, achievement_code ASC"
+
+        try:
+            async with self._pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(query, params)
+                    rows = await cursor.fetchall()
+        except psycopg.Error as exc:
+            if self._is_missing_relation_error(exc):
+                return []
+            raise
+        return [
+            AchievementDefinitionRow(
+                achievement_code=str(row["achievement_code"]),
+                title=str(row["title"]),
+                description=str(row["description"]),
+                source=str(row["source"]),
+                progress_key=str(row["progress_key"]),
+                bronze_target=row["bronze_target"],
+                silver_target=row["silver_target"],
+                gold_target=row["gold_target"],
+                sort_order=int(row["sort_order"]),
+            )
+            for row in rows
+        ]
+
+    async def fetch_aggregated_achievement_states(
+        self,
+        student_ids: list[int],
+    ) -> list[AggregatedAchievementStateRow]:
+        unique_student_ids = sorted(set(student_ids))
+        if not unique_student_ids:
+            return []
+        query = """
+            SELECT
+                achievement_code,
+                MAX(progress_value) AS progress_value,
+                MAX(tier) AS tier
+            FROM ascendany.student_achievement_states
+            WHERE student_id = ANY(%s::bigint[])
+            GROUP BY achievement_code
+        """
+        try:
+            async with self._pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(query, (unique_student_ids,))
+                    rows = await cursor.fetchall()
+        except psycopg.Error as exc:
+            if self._is_missing_relation_error(exc):
+                return []
+            raise
+        return [
+            AggregatedAchievementStateRow(
+                achievement_code=str(row["achievement_code"]),
+                progress_value=row["progress_value"],
+                tier=int(row.get("tier", 0)),
+            )
+            for row in rows
+        ]
+
+    async def fetch_student_activity_counters(
+        self,
+        student_ids: list[int],
+    ) -> dict[int, int]:
+        unique_student_ids = sorted(set(student_ids))
+        if not unique_student_ids:
+            return {}
+        query = """
+            SELECT student_id, ai_dialogue_count
+            FROM ascendany.student_activity_counters
+            WHERE student_id = ANY(%s::bigint[])
+        """
+        try:
+            async with self._pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(query, (unique_student_ids,))
+                    rows = await cursor.fetchall()
+        except psycopg.Error as exc:
+            if self._is_missing_relation_error(exc):
+                return {}
+            raise
+        return {
+            int(row["student_id"]): int(row.get("ai_dialogue_count", 0))
+            for row in rows
+        }
+
+    async def increment_ai_dialogue_count(
+        self,
+        student_ids: list[int],
+        delta: int = 1,
+    ) -> None:
+        unique_student_ids = sorted(set(student_ids))
+        if not unique_student_ids or delta <= 0:
+            return
+        query = """
+            WITH target_students AS (
+                SELECT DISTINCT unnest(%s::bigint[]) AS student_id
+            )
+            INSERT INTO ascendany.student_activity_counters (
+                student_id,
+                ai_dialogue_count,
+                updated_at
+            )
+            SELECT student_id, %s, now()
+            FROM target_students
+            ON CONFLICT (student_id)
+            DO UPDATE SET
+                ai_dialogue_count =
+                    ascendany.student_activity_counters.ai_dialogue_count
+                    + EXCLUDED.ai_dialogue_count,
+                updated_at = now()
+        """
+        try:
+            async with self._pool.connection() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(query, (unique_student_ids, delta))
+        except psycopg.Error as exc:
+            if self._is_missing_relation_error(exc):
+                return
+            raise
 
     async def fetch_current_metrics(
         self, student_id: int
