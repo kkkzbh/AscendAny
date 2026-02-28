@@ -643,6 +643,132 @@ class ApiRepository:
                 )
                 return cursor.rowcount
 
+    async def find_student_ids_by_submission_nicknames(
+        self,
+        nicknames: list[str],
+    ) -> list[int]:
+        normalized = sorted({item.strip().casefold() for item in nicknames if item.strip()})
+        if not normalized:
+            return []
+        query = """
+            SELECT DISTINCT s.student_id
+            FROM ascendany.submissions AS s
+            WHERE (
+                (
+                    s.actor_source = 'datastructure_nickname'
+                    AND (
+                        lower(BTRIM(COALESCE(s.actor_name, ''))) = ANY(%s)
+                        OR lower(BTRIM(COALESCE(s.actor_external_id, ''))) = ANY(%s)
+                    )
+                )
+                OR (
+                    s.actor_source ~ '^pta_.*_account$'
+                    AND lower(BTRIM(COALESCE(s.actor_name, ''))) = ANY(%s)
+                )
+            )
+              AND s.student_id IS NOT NULL
+            ORDER BY s.student_id ASC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        normalized,
+                        normalized,
+                        normalized,
+                    ),
+                )
+                rows = await cursor.fetchall()
+        return [
+            int(row["student_id"])
+            for row in rows
+            if row.get("student_id") is not None
+        ]
+
+    async def merge_achievement_states_for_student(
+        self,
+        target_student_id: int,
+        source_student_ids: list[int],
+    ) -> int:
+        unique_student_ids = sorted(
+            {
+                int(student_id)
+                for student_id in source_student_ids
+                if int(student_id) > 0
+            }
+        )
+        if target_student_id > 0 and target_student_id not in unique_student_ids:
+            unique_student_ids.append(target_student_id)
+        if not unique_student_ids:
+            return 0
+
+        query = """
+            WITH aggregated AS (
+                SELECT
+                    achievement_code,
+                    MAX(progress_value) AS progress_value,
+                    MAX(tier) AS tier,
+                    MIN(achieved_at) FILTER (WHERE achieved_at IS NOT NULL) AS achieved_at
+                FROM ascendany.student_achievement_states
+                WHERE student_id = ANY(%s::bigint[])
+                GROUP BY achievement_code
+            )
+            INSERT INTO ascendany.student_achievement_states (
+                student_id,
+                achievement_code,
+                progress_value,
+                tier,
+                achieved_at,
+                updated_at
+            )
+            SELECT
+                %s::bigint AS student_id,
+                aggregated.achievement_code,
+                aggregated.progress_value,
+                aggregated.tier,
+                CASE
+                    WHEN aggregated.tier > 0
+                        THEN COALESCE(aggregated.achieved_at, now())
+                    ELSE NULL
+                END AS achieved_at,
+                now() AS updated_at
+            FROM aggregated
+            ON CONFLICT (student_id, achievement_code)
+            DO UPDATE SET
+                progress_value = GREATEST(
+                    ascendany.student_achievement_states.progress_value,
+                    EXCLUDED.progress_value
+                ),
+                tier = GREATEST(
+                    ascendany.student_achievement_states.tier,
+                    EXCLUDED.tier
+                ),
+                achieved_at = CASE
+                    WHEN ascendany.student_achievement_states.achieved_at IS NOT NULL
+                        THEN ascendany.student_achievement_states.achieved_at
+                    WHEN GREATEST(
+                        ascendany.student_achievement_states.tier,
+                        EXCLUDED.tier
+                    ) > 0
+                        THEN COALESCE(EXCLUDED.achieved_at, now())
+                    ELSE NULL
+                END,
+                updated_at = now()
+        """
+        try:
+            async with self._pool.connection() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(
+                        query,
+                        (unique_student_ids, target_student_id),
+                    )
+                    return cursor.rowcount or 0
+        except psycopg.Error as exc:
+            if self._is_missing_relation_error(exc):
+                return 0
+            raise
+
     async def fetch_auto_analysis_cache(
         self,
         account_id: int,

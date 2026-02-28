@@ -43,6 +43,8 @@ class FakeAuthRepo:
         self.active_claims: dict[str, int] = {}
         self.student_identities: dict[tuple[str, str], int] = {}
         self.reassigned_calls: list[tuple[int, tuple[str, ...], str]] = []
+        self.related_students_by_nickname: dict[str, set[int]] = {}
+        self.achievement_merge_calls: list[tuple[int, tuple[int, ...]]] = []
 
     async def create_account(
         self, username: str, display_name: str, password_hash: str
@@ -189,6 +191,29 @@ class FakeAuthRepo:
         self.reassigned_calls.append((student_id, normalized, reason))
         return 0
 
+    async def find_student_ids_by_submission_nicknames(
+        self,
+        nicknames: list[str],
+    ) -> list[int]:
+        related: set[int] = set()
+        for nickname in nicknames:
+            key = nickname.strip().casefold()
+            if not key:
+                continue
+            related.update(self.related_students_by_nickname.get(key, set()))
+        return sorted(related)
+
+    async def merge_achievement_states_for_student(
+        self,
+        target_student_id: int,
+        source_student_ids: list[int],
+    ) -> int:
+        normalized_sources = tuple(
+            sorted({int(student_id) for student_id in source_student_ids if int(student_id) > 0})
+        )
+        self.achievement_merge_calls.append((target_student_id, normalized_sources))
+        return len(normalized_sources)
+
     async def insert_refresh_token(
         self,
         account_id: int,
@@ -298,6 +323,19 @@ def test_auth_register_login_refresh_and_profile(monkeypatch) -> None:
         service.login(LoginRequest(username="alice_01", password="password_123"))
     )
     assert login_result.account.accountId == register_result.account.accountId
+
+
+def test_auth_register_merges_legacy_achievement_states(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    repo.related_students_by_nickname["alice"] = {77}
+    service = AuthService(settings=settings, repository=repo)
+
+    register_result = asyncio.run(service.register(_build_register_request()))
+
+    assert register_result.account.accountId == "1"
+    assert repo.achievement_merge_calls == [(1, (1, 77))]
 
 
 def test_auth_register_rejects_claimed_nickname(monkeypatch) -> None:

@@ -177,10 +177,17 @@ class AuthService:
                 external_id=pta_nickname,
                 external_name=pta_nickname,
             )
+            related_student_ids = await self._find_related_student_ids_by_nicknames(
+                [pta_nickname]
+            )
             await self._repository.reassign_submissions_by_nicknames(
                 student_id=student_entity_id,
                 nicknames=[pta_nickname],
                 reason="register_claim",
+            )
+            await self._merge_achievement_states_for_student(
+                target_student_id=student_entity_id,
+                source_student_ids=related_student_ids + [student_entity_id],
             )
             profile = await self._repository.upsert_account_profile(
                 account_id=account.account_id,
@@ -400,10 +407,17 @@ class AuthService:
         reassigned_nicknames = [next_nickname]
         if previous_nickname and previous_nickname != next_nickname:
             reassigned_nicknames.append(previous_nickname)
+        related_student_ids = await self._find_related_student_ids_by_nicknames(
+            reassigned_nicknames
+        )
         await self._repository.reassign_submissions_by_nicknames(
             student_id=student_entity_id,
             nicknames=reassigned_nicknames,
             reason="profile_nickname_update",
+        )
+        await self._merge_achievement_states_for_student(
+            target_student_id=student_entity_id,
+            source_student_ids=related_student_ids + [student_entity_id],
         )
 
         updated = await self._repository.upsert_account_profile(
@@ -622,6 +636,41 @@ class AuthService:
 
     def _load_password_pepper(self) -> str:
         return os.getenv(self._settings.auth.password_pepper_env, "").strip()
+
+    async def _find_related_student_ids_by_nicknames(
+        self,
+        nicknames: list[str],
+    ) -> list[int]:
+        finder = getattr(
+            self._repository,
+            "find_student_ids_by_submission_nicknames",
+            None,
+        )
+        if not callable(finder):
+            return []
+        rows = await finder(nicknames)
+        return [
+            int(student_id)
+            for student_id in rows
+            if int(student_id) > 0
+        ]
+
+    async def _merge_achievement_states_for_student(
+        self,
+        target_student_id: int,
+        source_student_ids: list[int],
+    ) -> None:
+        merger = getattr(
+            self._repository,
+            "merge_achievement_states_for_student",
+            None,
+        )
+        if not callable(merger):
+            return
+        await merger(
+            target_student_id=target_student_id,
+            source_student_ids=source_student_ids,
+        )
 
     @staticmethod
     def _generate_random_display_name() -> str:
