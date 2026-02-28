@@ -83,18 +83,9 @@ const memoryStateStorage: StateStorage = {
   },
 };
 
-function resolveAuthSessionStateStorage(): StateStorage {
+function resolveBrowserStateStorage(): StateStorage {
   if (typeof window === "undefined") {
     return memoryStateStorage;
-  }
-
-  const api = window.electronAPI;
-  if (api?.authSessionGet && api?.authSessionSet && api?.authSessionDelete) {
-    return {
-      getItem: (name) => api.authSessionGet!(name),
-      setItem: (name, value) => api.authSessionSet!(name, value),
-      removeItem: (name) => api.authSessionDelete!(name),
-    };
   }
 
   try {
@@ -102,6 +93,53 @@ function resolveAuthSessionStateStorage(): StateStorage {
   } catch {
     return memoryStateStorage;
   }
+}
+
+function resolveAuthSessionStateStorage(): StateStorage {
+  const browserStorage = resolveBrowserStateStorage();
+
+  if (typeof window === "undefined") {
+    return browserStorage;
+  }
+
+  const api = window.electronAPI;
+  if (api?.authSessionGet && api?.authSessionSet && api?.authSessionDelete) {
+    return {
+      getItem: async (name) => {
+        try {
+          const value = await api.authSessionGet!(name);
+          if (typeof value === "string") {
+            return value;
+          }
+        } catch {
+          // Fall back to browser storage when IPC is unavailable.
+        }
+        return browserStorage.getItem(name);
+      },
+      setItem: async (name, value) => {
+        try {
+          const saved = await api.authSessionSet!(name, value);
+          if (!saved) {
+            browserStorage.setItem(name, value);
+            return;
+          }
+          browserStorage.setItem(name, value);
+        } catch {
+          browserStorage.setItem(name, value);
+        }
+      },
+      removeItem: async (name) => {
+        try {
+          await api.authSessionDelete!(name);
+        } catch {
+          // Best effort cleanup.
+        }
+        browserStorage.removeItem(name);
+      },
+    };
+  }
+
+  return browserStorage;
 }
 
 async function applySession(params: {

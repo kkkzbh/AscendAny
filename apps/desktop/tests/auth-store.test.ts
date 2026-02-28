@@ -175,4 +175,46 @@ describe("authStore bootstrap", () => {
     hasHydratedSpy.mockRestore();
     rehydrateSpy.mockRestore();
   });
+
+  it("falls back to localStorage when auth session IPC read fails", async () => {
+    localStorage.setItem(
+      "ascendany_auth_session",
+      JSON.stringify({
+        state: {
+          account: null,
+          accessToken: "local-access-token",
+          refreshToken: "local-refresh-token",
+          autoLogin: true,
+          rememberPassword: false,
+          lastUsername: "alice",
+        },
+        version: 0,
+      }),
+    );
+
+    window.electronAPI = {
+      minimize: vi.fn(),
+      maximize: vi.fn(),
+      close: vi.fn(),
+      platform: "linux",
+      authSessionGet: vi.fn().mockRejectedValue(new Error("ipc_unavailable")),
+      authSessionSet: vi.fn().mockResolvedValue(true),
+      authSessionDelete: vi.fn().mockResolvedValue(true),
+    };
+
+    fetchAuthPolicy.mockResolvedValue({});
+    fetchAuthMe.mockResolvedValue({
+      accountId: "acc-1",
+      username: "alice",
+      displayName: "Alice",
+      studentId: "20230001",
+      ptaNickname: "alice_pta",
+    });
+
+    await useAuthStore.persist.rehydrate();
+    await useAuthStore.getState().bootstrap();
+
+    expect(fetchAuthMe).toHaveBeenCalledWith("local-access-token");
+    expect(useAuthStore.getState().status).toBe("authenticated");
+  });
 });
