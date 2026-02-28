@@ -37,6 +37,11 @@ jobs:
       DEPLOY_API_SERVICE: ${{ vars.ASCENDANY_API_SERVICE || 'ascendany-api' }}
       DEPLOY_INTERNAL_HEALTHZ_URL: ${{ vars.ASCENDANY_API_INTERNAL_HEALTHZ || 'http://127.0.0.1:8000/api/v1/healthz' }}
       DEPLOY_HEALTHZ_URL: ${{ vars.ASCENDANY_API_HEALTHZ || 'https://ascendany.kkkzbh.cn/api/v1/healthz' }}
+      DEPLOY_DB_HOST: ${{ vars.ASCENDANY_DB_HOST || '127.0.0.1' }}
+      DEPLOY_DB_PORT: ${{ vars.ASCENDANY_DB_PORT || '6432' }}
+      DEPLOY_DB_NAME: ${{ vars.ASCENDANY_DB_NAME || 'AscendAny' }}
+      DEPLOY_DB_USER: ${{ vars.ASCENDANY_DB_USER || 'AscendAny' }}
+      DEPLOY_DB_ENV_FILE: ${{ vars.ASCENDANY_DB_ENV_FILE || '/opt/ascendany/infra/.env' }}
       DEPLOY_REF: ${{ github.event.inputs.deploy_ref || github.ref_name }}
       DEPLOY_SHA: ${{ github.sha }}
     steps:
@@ -84,6 +89,11 @@ jobs:
           API_VENV="${DEPLOY_API_VENV}"
           API_SERVICE="${DEPLOY_API_SERVICE}"
           INTERNAL_HEALTHZ_URL="${DEPLOY_INTERNAL_HEALTHZ_URL}"
+          DB_HOST="${DEPLOY_DB_HOST}"
+          DB_PORT="${DEPLOY_DB_PORT}"
+          DB_NAME="${DEPLOY_DB_NAME}"
+          DB_USER="${DEPLOY_DB_USER}"
+          DB_ENV_FILE="${DEPLOY_DB_ENV_FILE}"
           DEPLOY_REF="${DEPLOY_REF}"
           EXPECTED_SHA="${DEPLOY_SHA}"
 
@@ -115,6 +125,34 @@ jobs:
 
           "\${PIP_BIN}" install -r apps/api/requirements.txt
           "\${PIP_BIN}" install -r preprocess/requirements.txt
+
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "psql is not installed on deploy target" >&2
+            exit 1
+          fi
+
+          # Keep DB schema synchronized with deployed code (idempotent DDL).
+          if [ -r "\${HOME}/.pgpass" ] && grep -q "^\${DB_HOST}:\${DB_PORT}:\${DB_NAME}:\${DB_USER}:" "\${HOME}/.pgpass"; then
+            for f in db/schema/*.sql; do
+              psql -w -v ON_ERROR_STOP=1 -h "\${DB_HOST}" -p "\${DB_PORT}" -U "\${DB_USER}" -d "\${DB_NAME}" -f "\${f}"
+            done
+          else
+            DB_PASSWORD=""
+            if [ -r "\${DB_ENV_FILE}" ]; then
+              DB_PASSWORD="\$(sed -n 's/^DB_PASSWORD=//p' "\${DB_ENV_FILE}" | tail -n1)"
+            elif sudo test -r "\${DB_ENV_FILE}"; then
+              DB_PASSWORD="\$(sudo sed -n 's/^DB_PASSWORD=//p' "\${DB_ENV_FILE}" | tail -n1)"
+            fi
+
+            if [ -z "\${DB_PASSWORD}" ]; then
+              echo "Unable to load DB_PASSWORD from \${DB_ENV_FILE}" >&2
+              exit 1
+            fi
+
+            for f in db/schema/*.sql; do
+              PGPASSWORD="\${DB_PASSWORD}" psql -v ON_ERROR_STOP=1 -h "\${DB_HOST}" -p "\${DB_PORT}" -U "\${DB_USER}" -d "\${DB_NAME}" -f "\${f}"
+            done
+          fi
 
           sudo systemctl restart "\${API_SERVICE}"
           sudo systemctl is-active --quiet "\${API_SERVICE}"
