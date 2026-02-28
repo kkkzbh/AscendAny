@@ -57,7 +57,7 @@ uv.lock
 practice
 
 tmp/
+output/
 # Local artifacts
 artifacts/
 *.snap
-
