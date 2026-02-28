@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
@@ -8,7 +8,11 @@ import { fetchModelProviders } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
+type ThemeMode = "light" | "dark";
+const THEME_TRANSITION_MS = 280;
+
 export default function App() {
+  const themeTransitionTimerRef = useRef<number | null>(null);
   const isFeedbackMode = window.location.hash.startsWith("#/feedback");
   const theme = useSettingsStore((s) => s.theme);
   const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
@@ -20,10 +24,57 @@ export default function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    root.setAttribute("data-theme", theme);
+    const clearTransitionState = () => {
+      if (themeTransitionTimerRef.current !== null) {
+        window.clearTimeout(themeTransitionTimerRef.current);
+        themeTransitionTimerRef.current = null;
+      }
+      root.classList.remove("theme-switching");
+    };
+    const applyTheme = (mode: ThemeMode) => {
+      root.setAttribute("data-theme", mode);
+      root.style.colorScheme = mode;
+    };
+
+    const currentThemeAttr = root.getAttribute("data-theme");
+    const currentTheme: ThemeMode = currentThemeAttr === "dark" ? "dark" : "light";
+
+    if (!currentThemeAttr) {
+      clearTransitionState();
+      applyTheme(theme);
+      return;
+    }
+
+    if (currentTheme === theme) {
+      clearTransitionState();
+      applyTheme(theme);
+      return;
+    }
+
+    clearTransitionState();
+    root.classList.add("theme-switching");
+    applyTheme(theme);
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+    if (prefersReducedMotion) {
+      root.classList.remove("theme-switching");
+      return;
+    }
+
+    themeTransitionTimerRef.current = window.setTimeout(() => {
+      root.classList.remove("theme-switching");
+      themeTransitionTimerRef.current = null;
+    }, THEME_TRANSITION_MS);
+
+    return () => {
+      clearTransitionState();
+    };
+  }, [theme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
     root.setAttribute("data-opaque-window", useOpaqueWindowBackground ? "true" : "false");
-    root.style.colorScheme = theme;
-  }, [theme, useOpaqueWindowBackground]);
+  }, [useOpaqueWindowBackground]);
 
   useEffect(() => {
     if (isFeedbackMode) {

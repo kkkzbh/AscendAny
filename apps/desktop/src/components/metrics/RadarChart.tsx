@@ -29,7 +29,7 @@ export function RadarChart({ metrics }: RadarChartProps) {
   }));
 
   return (
-    <div className="h-[220px] w-full">
+    <div className="radar-chart-shell h-[220px] w-full">
       <ResponsiveContainer width="100%" height="100%">
         <RechartsRadar cx="50%" cy="50%" outerRadius="70%" data={data}>
           <PolarGrid

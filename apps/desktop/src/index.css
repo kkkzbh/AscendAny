@@ -171,6 +171,24 @@ body,
   --tooltip-background: rgba(15, 23, 42, 0.84);
 }
 
+:root.theme-switching body,
+:root.theme-switching .app-shell,
+:root.theme-switching .app-shell::before,
+:root.theme-switching .titlebar,
+:root.theme-switching .panel-shell,
+:root.theme-switching .panel-header,
+:root.theme-switching .metric-section,
+:root.theme-switching .titlebar-account-chip,
+:root.theme-switching .ui-icon-button,
+:root.theme-switching .ui-window-button {
+  transition:
+    background 0.28s ease,
+    background-color 0.28s ease,
+    border-color 0.28s ease,
+    color 0.28s ease,
+    box-shadow 0.28s ease;
+}
+
 body {
   background: var(--body-background);
   color: var(--text-strong);
@@ -257,6 +275,11 @@ body {
 .metric-section {
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
+}
+
+.radar-chart-shell {
+  position: relative;
+  isolation: isolate;
 }
 
 .metrics-sidebar-scroll {
@@ -541,6 +564,38 @@ body {
   background: var(--surface-soft);
 }
 
+.ui-theme-toggle {
+  position: relative;
+  overflow: hidden;
+}
+
+.ui-theme-toggle-icon {
+  position: absolute;
+  transition: opacity 0.2s ease;
+  transform-origin: 50% 50%;
+  transform: none;
+}
+
+.ui-theme-toggle-icon--moon {
+  opacity: 0;
+}
+
+:root[data-theme="light"] .ui-theme-toggle-icon--sun {
+  opacity: 1;
+}
+
+:root[data-theme="light"] .ui-theme-toggle-icon--moon {
+  opacity: 0;
+}
+
+:root[data-theme="dark"] .ui-theme-toggle-icon--sun {
+  opacity: 0;
+}
+
+:root[data-theme="dark"] .ui-theme-toggle-icon--moon {
+  opacity: 1;
+}
+
 .ui-window-button {
   display: inline-flex;
   align-items: center;
@@ -602,6 +657,25 @@ body {
 .ui-window-close:hover {
   color: inherit;
   background: #ff5f57;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root.theme-switching body,
+  :root.theme-switching .app-shell,
+  :root.theme-switching .app-shell::before,
+  :root.theme-switching .titlebar,
+  :root.theme-switching .panel-shell,
+  :root.theme-switching .panel-header,
+  :root.theme-switching .metric-section,
+  :root.theme-switching .titlebar-account-chip,
+  :root.theme-switching .ui-icon-button,
+  :root.theme-switching .ui-window-button {
+    transition: none;
+  }
+
+  .ui-theme-toggle-icon {
+    transition: none;
+  }
 }
 
 .feedback-window-shell {
