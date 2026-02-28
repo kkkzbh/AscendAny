@@ -261,10 +261,12 @@ body {
 
 .metrics-sidebar-scroll {
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .metrics-sidebar-content {
   min-height: 100%;
+  padding-bottom: 14px;
 }
 
 .metric-bars {

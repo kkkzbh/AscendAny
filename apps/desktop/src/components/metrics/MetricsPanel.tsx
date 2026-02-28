@@ -61,9 +61,9 @@ export function MetricsPanel() {
   const historyItems = rating.history;
 
   return (
-    <section className="metrics-sidebar-scroll flex h-full w-full flex-col overflow-y-auto">
-      <div className="metrics-sidebar-content flex w-full min-h-full flex-col p-4 pt-4">
-        <div className="metric-section flex w-full flex-col overflow-hidden">
+    <section className="metrics-sidebar-scroll h-full w-full overflow-y-auto">
+      <div className="metrics-sidebar-content w-full p-4 pt-4">
+        <div className="metric-section w-full overflow-visible">
           <div className="shrink-0 px-1 pt-2">
             <RatingDisplay rating={rating} />
           </div>
