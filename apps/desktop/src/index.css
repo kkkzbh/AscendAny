@@ -1651,6 +1651,8 @@ body {
   min-height: 100vh;
   width: 100vw;
   padding: 0;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .auth-window-controls {
@@ -1841,6 +1843,8 @@ body {
   font-size: 16px;
   outline: none;
   transition: all 0.2s var(--ease-out-expo);
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .auth-input:focus {
