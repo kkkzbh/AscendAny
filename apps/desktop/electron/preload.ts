@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("credential-read", username) as Promise<string | null>,
   credentialDelete: (username: string) =>
     ipcRenderer.invoke("credential-delete", username) as Promise<boolean>,
+  authSessionGet: (key: string) =>
+    ipcRenderer.invoke("auth-session-get", key) as Promise<string | null>,
+  authSessionSet: (key: string, value: string) =>
+    ipcRenderer.invoke("auth-session-set", key, value) as Promise<boolean>,
+  authSessionDelete: (key: string) =>
+    ipcRenderer.invoke("auth-session-delete", key) as Promise<boolean>,
   avatarSave: (accountId: string, base64Data: string) =>
     ipcRenderer.invoke("avatar-save", accountId, base64Data) as Promise<boolean>,
   avatarRead: (accountId: string) =>

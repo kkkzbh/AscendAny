@@ -104,3 +104,75 @@ describe("authStore logout", () => {
     expect(credentialDelete).not.toHaveBeenCalled();
   });
 });
+
+describe("authStore bootstrap", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    fetchAuthMe.mockReset();
+    fetchAuthPolicy.mockReset();
+    postRefresh.mockReset();
+    switchAccountNamespace.mockClear();
+    cleanupLegacyAnonymousStorage.mockClear();
+
+    window.electronAPI = {
+      minimize: vi.fn(),
+      maximize: vi.fn(),
+      close: vi.fn(),
+      platform: "linux",
+    };
+
+    useAuthStore.setState({
+      status: "booting",
+      account: null,
+      accessToken: null,
+      refreshToken: null,
+      rememberPassword: false,
+      autoLogin: true,
+      lastUsername: "",
+      initialized: false,
+      error: null,
+    });
+  });
+
+  it("rehydrates persisted session before bootstrap auth check", async () => {
+    localStorage.setItem(
+      "ascendany_auth_session",
+      JSON.stringify({
+        state: {
+          account: null,
+          accessToken: "persisted-access-token",
+          refreshToken: "persisted-refresh-token",
+          autoLogin: true,
+          rememberPassword: false,
+          lastUsername: "alice",
+        },
+        version: 0,
+      }),
+    );
+
+    fetchAuthPolicy.mockResolvedValue({});
+    fetchAuthMe.mockResolvedValue({
+      accountId: "acc-1",
+      username: "alice",
+      displayName: "Alice",
+      studentId: "20230001",
+      ptaNickname: "alice_pta",
+    });
+
+    const hasHydratedSpy = vi.spyOn(useAuthStore.persist, "hasHydrated").mockReturnValue(false);
+    const rehydrateImpl = useAuthStore.persist.rehydrate.bind(useAuthStore.persist);
+    const rehydrateSpy = vi
+      .spyOn(useAuthStore.persist, "rehydrate")
+      .mockImplementation(() => rehydrateImpl());
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(rehydrateSpy).toHaveBeenCalledTimes(1);
+    expect(fetchAuthMe).toHaveBeenCalledWith("persisted-access-token");
+    expect(useAuthStore.getState().status).toBe("authenticated");
+    expect(useAuthStore.getState().lastUsername).toBe("alice");
+
+    hasHydratedSpy.mockRestore();
+    rehydrateSpy.mockRestore();
+  });
+});

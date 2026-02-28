@@ -15,6 +15,7 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 const CREDENTIAL_FILE_NAME = "secure-credentials.json";
+const RENDERER_STATE_FILE_NAME = "renderer-state.json";
 const WINDOW_APPEARANCE_FILE_NAME = "window-appearance.json";
 const LINUX_DESKTOP_FILE = "ascendany.desktop";
 const DEFAULT_FEEDBACK_TARGET_EMAIL = "1405359129@qq.com";
@@ -404,6 +405,48 @@ function normalizeCredentialKey(username: unknown): string {
   return typeof username === "string" ? username.trim() : "";
 }
 
+function rendererStateFilePath(): string {
+  return path.join(app.getPath("userData"), RENDERER_STATE_FILE_NAME);
+}
+
+function loadRendererStateStore(): Record<string, string> {
+  try {
+    const filePath = rendererStateFilePath();
+    if (!fs.existsSync(filePath)) {
+      return {};
+    }
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string") {
+        result[key] = value;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveRendererStateStore(next: Record<string, string>): boolean {
+  try {
+    const filePath = rendererStateFilePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(next), { encoding: "utf-8" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeRendererStateKey(key: unknown): string {
+  return typeof key === "string" ? key.trim() : "";
+}
+
 function readBooleanEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (!raw) {
@@ -580,6 +623,38 @@ ipcMain.handle("credential-delete", (_event, username: unknown) => {
   }
   delete next[key];
   return saveCredentialStore(next);
+});
+
+ipcMain.handle("auth-session-get", (_event, key: unknown) => {
+  const normalized = normalizeRendererStateKey(key);
+  if (!normalized) {
+    return null;
+  }
+  const store = loadRendererStateStore();
+  return store[normalized] ?? null;
+});
+
+ipcMain.handle("auth-session-set", (_event, key: unknown, value: unknown) => {
+  const normalized = normalizeRendererStateKey(key);
+  if (!normalized || typeof value !== "string") {
+    return false;
+  }
+  const next = loadRendererStateStore();
+  next[normalized] = value;
+  return saveRendererStateStore(next);
+});
+
+ipcMain.handle("auth-session-delete", (_event, key: unknown) => {
+  const normalized = normalizeRendererStateKey(key);
+  if (!normalized) {
+    return false;
+  }
+  const next = loadRendererStateStore();
+  if (!(normalized in next)) {
+    return true;
+  }
+  delete next[normalized];
+  return saveRendererStateStore(next);
 });
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,9 @@ interface ElectronAPI {
   credentialSave?: (username: string, password: string) => Promise<boolean>;
   credentialRead?: (username: string) => Promise<string | null>;
   credentialDelete?: (username: string) => Promise<boolean>;
+  authSessionGet?: (key: string) => Promise<string | null>;
+  authSessionSet?: (key: string, value: string) => Promise<boolean>;
+  authSessionDelete?: (key: string) => Promise<boolean>;
   avatarSave?: (accountId: string, base64Data: string) => Promise<boolean>;
   avatarRead?: (accountId: string) => Promise<string | null>;
   avatarDelete?: (accountId: string) => Promise<boolean>;

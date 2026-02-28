@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import {
   fetchAuthMe,
   fetchAuthPolicy,
@@ -61,9 +61,47 @@ interface AuthState {
   clearError: () => void;
 }
 
+type AuthPersistedState = Pick<
+  AuthState,
+  "account" | "accessToken" | "refreshToken" | "autoLogin" | "rememberPassword" | "lastUsername"
+>;
+
 function normalizeOptional(value?: string | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+const memoryAuthSessionStorage = new Map<string, string>();
+
+const memoryStateStorage: StateStorage = {
+  getItem: (name) => memoryAuthSessionStorage.get(name) ?? null,
+  setItem: (name, value) => {
+    memoryAuthSessionStorage.set(name, value);
+  },
+  removeItem: (name) => {
+    memoryAuthSessionStorage.delete(name);
+  },
+};
+
+function resolveAuthSessionStateStorage(): StateStorage {
+  if (typeof window === "undefined") {
+    return memoryStateStorage;
+  }
+
+  const api = window.electronAPI;
+  if (api?.authSessionGet && api?.authSessionSet && api?.authSessionDelete) {
+    return {
+      getItem: (name) => api.authSessionGet!(name),
+      setItem: (name, value) => api.authSessionSet!(name, value),
+      removeItem: (name) => api.authSessionDelete!(name),
+    };
+  }
+
+  try {
+    return window.localStorage;
+  } catch {
+    return memoryStateStorage;
+  }
 }
 
 async function applySession(params: {
@@ -104,6 +142,10 @@ export const useAuthStore = create<AuthState>()(
       profileSaving: false,
 
       bootstrap: async () => {
+        if (!useAuthStore.persist.hasHydrated()) {
+          await useAuthStore.persist.rehydrate();
+        }
+
         if (get().initialized) {
           return;
         }
@@ -314,6 +356,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "ascendany_auth_session",
+      storage: createJSONStorage<AuthPersistedState>(() => resolveAuthSessionStateStorage()),
       partialize: (state) => ({
         account: state.account,
         accessToken: state.autoLogin ? state.accessToken : null,
