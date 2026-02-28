@@ -506,7 +506,11 @@ function ModelSettingsPage() {
   );
 }
 
-function RoleSettingsPage() {
+function RoleSettingsPage({
+  onCustomRoleDialogVisibilityChange,
+}: {
+  onCustomRoleDialogVisibilityChange: (visible: boolean) => void;
+}) {
   const activeRole = useSettingsStore((s) => s.activeRole);
   const theme = useSettingsStore((s) => s.theme);
   const setActiveRole = useSettingsStore((s) => s.setActiveRole);
@@ -548,6 +552,13 @@ function RoleSettingsPage() {
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [showCustomRoleDialog]);
+
+  useEffect(() => {
+    onCustomRoleDialogVisibilityChange(showCustomRoleDialog);
+    return () => {
+      onCustomRoleDialogVisibilityChange(false);
+    };
+  }, [showCustomRoleDialog, onCustomRoleDialogVisibilityChange]);
 
   function resetCustomRoleForm() {
     setEditingRoleId(null);
@@ -876,6 +887,7 @@ export function SettingsDialog() {
   const isOpen = useSettingsStore((s) => s.isOpen);
   const closeSettings = useSettingsStore((s) => s.closeSettings);
   const [activePage, setActivePage] = useState<SettingsPage>("general");
+  const [isCustomRoleDialogOpen, setIsCustomRoleDialogOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const rafRef = useRef<number | null>(null);
 
@@ -938,16 +950,20 @@ export function SettingsDialog() {
         <div className="settings-content flex-1 overflow-y-auto">
           {activePage === "general" && <GeneralSettingsPage />}
           {activePage === "model" && <ModelSettingsPage />}
-          {activePage === "role" && <RoleSettingsPage />}
+          {activePage === "role" && (
+            <RoleSettingsPage onCustomRoleDialogVisibilityChange={setIsCustomRoleDialogOpen} />
+          )}
         </div>
 
-        <button
-          onClick={closeSettings}
-          className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic absolute right-5 top-5"
-          aria-label="关闭设置"
-        >
-          <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
-        </button>
+        {!isCustomRoleDialogOpen && (
+          <button
+            onClick={closeSettings}
+            className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic absolute right-5 top-5"
+            aria-label="关闭设置"
+          >
+            <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+          </button>
+        )}
       </div>
     </div>
   );
