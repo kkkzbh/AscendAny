@@ -50,6 +50,7 @@ interface ElectronAPI {
   avatarDelete?: (accountId: string) => Promise<boolean>;
   updaterGetState?: () => Promise<UpdateStateSnapshot>;
   updaterCheckNow?: () => Promise<UpdateActionResult>;
+  updaterStartDownload?: () => Promise<UpdateActionResult>;
   updaterQuitAndInstall?: () => Promise<UpdateActionResult>;
   updaterOnStateChanged?: (listener: (state: UpdateStateSnapshot) => void) => () => void;
 }

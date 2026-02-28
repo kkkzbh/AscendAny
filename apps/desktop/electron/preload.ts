@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("updater-get-state") as Promise<UpdateStateSnapshot>,
   updaterCheckNow: () =>
     ipcRenderer.invoke("updater-check-now") as Promise<UpdateActionResult>,
+  updaterStartDownload: () =>
+    ipcRenderer.invoke("updater-start-download") as Promise<UpdateActionResult>,
   updaterQuitAndInstall: () =>
     ipcRenderer.invoke("updater-quit-and-install") as Promise<UpdateActionResult>,
   updaterOnStateChanged: (listener: (state: UpdateStateSnapshot) => void) => {

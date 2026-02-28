@@ -22,6 +22,7 @@ declare class DesktopUpdaterService {
     private updateState;
     private broadcastState;
     checkForUpdates(trigger: "startup" | "manual"): Promise<UpdateActionResult>;
+    startDownload(): Promise<UpdateActionResult>;
     quitAndInstall(): UpdateActionResult;
 }
 export declare const desktopUpdater: DesktopUpdaterService;

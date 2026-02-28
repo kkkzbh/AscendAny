@@ -209,7 +209,18 @@ function GeneralSettingsPage() {
     setUpdateActionMessage(result.message);
   }
 
+  async function onStartDownload() {
+    const api = window.electronAPI;
+    if (!api?.updaterStartDownload) {
+      setUpdateActionMessage("当前环境暂不支持自动更新。");
+      return;
+    }
+    const result = await api.updaterStartDownload();
+    setUpdateActionMessage(result.message);
+  }
+
   const canCheckUpdates = updateState?.status !== "checking" && updateState?.status !== "downloading";
+  const canStartDownload = updateState?.status === "available";
   const canInstallUpdates = updateState?.status === "downloaded";
   const updateProgress = updateState?.progressPercent;
 
@@ -406,6 +417,15 @@ function GeneralSettingsPage() {
               >
                 检查更新
               </button>
+              {canStartDownload && (
+                <button
+                  type="button"
+                  onClick={() => void onStartDownload()}
+                  className="settings-provider-pill bg-[var(--surface-raised)] px-4 font-medium text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
+                >
+                  立即更新
+                </button>
+              )}
               {canInstallUpdates && (
                 <button
                   type="button"

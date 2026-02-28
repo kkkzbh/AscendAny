@@ -125,4 +125,48 @@ describe("SettingsDialog update section", () => {
     const checkButtons = screen.getAllByRole("button", { name: "检查更新" });
     expect(checkButtons.some((button) => button.hasAttribute("disabled"))).toBe(true);
   });
+
+  it("shows download button when update is available", async () => {
+    const updaterStartDownload = vi.fn().mockResolvedValue({
+      success: true,
+      message: "已开始下载更新包。",
+    } satisfies TestUpdateActionResult);
+
+    window.electronAPI = {
+      minimize: vi.fn(),
+      maximize: vi.fn(),
+      close: vi.fn(),
+      platform: "linux",
+      updaterGetState: vi.fn().mockResolvedValue(
+        mockUpdaterState({
+          status: "available",
+          currentVersion: "1.0.0",
+          latestVersion: "1.1.0",
+        }),
+      ),
+      updaterCheckNow: vi.fn().mockResolvedValue({
+        success: true,
+        message: "",
+      } satisfies TestUpdateActionResult),
+      updaterStartDownload,
+      updaterQuitAndInstall: vi.fn().mockResolvedValue({
+        success: true,
+        message: "",
+      } satisfies TestUpdateActionResult),
+      updaterOnStateChanged: vi.fn().mockImplementation((_listener: (state: TestUpdateStateSnapshot) => void) => {
+        return () => {};
+      }),
+    };
+
+    render(<SettingsDialog />);
+
+    await waitFor(() => {
+      expect(screen.getByText("状态：发现新版本")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
+
+    await waitFor(() => {
+      expect(updaterStartDownload).toHaveBeenCalledTimes(1);
+    });
+  });
 });

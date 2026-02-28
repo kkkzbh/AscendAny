@@ -3,6 +3,7 @@ import { AuthScreen } from "@/components/auth/AuthScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { FeedbackWindow } from "@/components/feedback/FeedbackWindow";
+import { UpdateFlowDialog } from "@/components/updater/UpdateFlowDialog";
 import { fetchModelProviders } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -105,6 +106,7 @@ export default function App() {
     <>
       <AppLayout />
       <SettingsDialog />
+      <UpdateFlowDialog />
     </>
   );
 }

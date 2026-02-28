@@ -77,6 +77,7 @@ class DesktopUpdaterService {
 
     ipcMain.handle("updater-get-state", () => this.getState());
     ipcMain.handle("updater-check-now", async () => this.checkForUpdates("manual"));
+    ipcMain.handle("updater-start-download", async () => this.startDownload());
     ipcMain.handle("updater-quit-and-install", () => this.quitAndInstall());
   }
 
@@ -94,7 +95,7 @@ class DesktopUpdaterService {
     }
     this.eventBound = true;
 
-    autoUpdater.autoDownload = true;
+    autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.allowPrerelease = false;
     autoUpdater.allowDowngrade = false;
@@ -113,8 +114,8 @@ class DesktopUpdaterService {
       this.updateState({
         status: "available",
         latestVersion: info.version ?? null,
-        progressPercent: 0,
-        message: "发现新版本，开始后台下载。",
+        progressPercent: null,
+        message: "发现新版本，请确认是否更新。",
       });
     });
 
@@ -213,6 +214,60 @@ class DesktopUpdaterService {
       };
     } finally {
       this.checking = false;
+    }
+  }
+
+  async startDownload(): Promise<UpdateActionResult> {
+    if (!app.isPackaged) {
+      return {
+        success: false,
+        message: "开发环境不支持下载更新。",
+      };
+    }
+
+    if (this.state.status === "downloading") {
+      return {
+        success: false,
+        message: "更新包正在下载中。",
+      };
+    }
+
+    if (this.state.status === "downloaded") {
+      return {
+        success: true,
+        message: "更新包已下载完成。",
+      };
+    }
+
+    if (this.state.status !== "available") {
+      return {
+        success: false,
+        message: "当前没有可下载的更新包。",
+      };
+    }
+
+    try {
+      this.updateState({
+        status: "downloading",
+        progressPercent: 0,
+        message: "正在下载更新包...",
+      });
+      await autoUpdater.downloadUpdate();
+      return {
+        success: true,
+        message: "已开始下载更新包。",
+      };
+    } catch (error) {
+      const message = normalizeUpdateError(error);
+      this.updateState({
+        status: "error",
+        progressPercent: null,
+        message,
+      });
+      return {
+        success: false,
+        message,
+      };
     }
   }
 
