@@ -29,17 +29,46 @@ function getInitialTheme(): Theme {
 
 function useTheme() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [pendingTheme, setPendingTheme] = useState<Theme | null>(null);
+  const transitionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem(STORAGE_KEY, theme); } catch { /* noop */ }
   }, [theme]);
 
-  const toggle = useCallback(() => {
-    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  useEffect(() => () => {
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+    }
   }, []);
 
-  return { theme, toggle } as const;
+  const startTransition = useCallback((next: Theme, current: Theme) => {
+    const root = document.documentElement;
+    root.setAttribute("data-theme-next", next);
+    root.setAttribute("data-theme-transition", `${current}-to-${next}`);
+    setPendingTheme(next);
+
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+    }
+
+    transitionTimerRef.current = window.setTimeout(() => {
+      setTheme(next);
+      setPendingTheme(null);
+      root.removeAttribute("data-theme-next");
+      root.removeAttribute("data-theme-transition");
+      transitionTimerRef.current = null;
+    }, 260);
+  }, []);
+
+  const toggle = useCallback(() => {
+    const current = pendingTheme ?? theme;
+    const next = current === "light" ? "dark" : "light";
+    startTransition(next, current);
+  }, [pendingTheme, startTransition, theme]);
+
+  return { theme, pendingTheme, toggle } as const;
 }
 
 /* ─── Scroll Reveal Hook ─── */

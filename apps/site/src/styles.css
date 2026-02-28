@@ -48,6 +48,10 @@
   --toggle-bg: rgba(100, 116, 139, 0.1);
   --toggle-bg-hover: rgba(100, 116, 139, 0.18);
   --toggle-icon: var(--text-secondary);
+  --toggle-sun: #fbbf24;
+  --toggle-moon: #1f2937;
+  --toggle-ring: rgba(148, 163, 184, 0.35);
+  --toggle-glow: rgba(14, 165, 233, 0.35);
 
   /* Semi-transparent surfaces (referenced by components) */
   --glass-white: rgba(255, 255, 255, 0.72);
@@ -136,6 +140,10 @@
   --toggle-bg: rgba(148, 163, 184, 0.12);
   --toggle-bg-hover: rgba(148, 163, 184, 0.22);
   --toggle-icon: #94a3b8;
+  --toggle-sun: #f8fafc;
+  --toggle-moon: #0f172a;
+  --toggle-ring: rgba(56, 189, 248, 0.4);
+  --toggle-glow: rgba(167, 139, 250, 0.35);
 
   --glass-white: rgba(15, 23, 42, 0.72);
   --glass-white-soft: rgba(15, 23, 42, 0.5);
@@ -416,38 +424,98 @@ a {
 
 /* ─── Theme Toggle ─── */
 .theme-toggle {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   border: none;
   background: var(--toggle-bg);
   color: var(--toggle-icon);
   cursor: pointer;
-  transition: background 0.2s ease, color 0.2s ease, transform 0.25s var(--ease-spring);
+  transition: background 0.25s ease, color 0.25s ease, transform 0.25s var(--ease-spring), box-shadow 0.25s ease;
   flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--toggle-ring), 0 8px 18px rgba(0, 0, 0, 0.08);
+}
+
+.theme-toggle::before,
+.theme-toggle::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  transition: transform 0.35s var(--ease-spring), opacity 0.35s ease, filter 0.35s ease;
+  pointer-events: none;
+}
+
+.theme-toggle::before {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.6) 40%, rgba(255, 255, 255, 0) 60%),
+    radial-gradient(circle at 80% 80%, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0));
+  filter: drop-shadow(0 6px 16px var(--toggle-glow));
+  opacity: 1;
+}
+
+.theme-toggle::after {
+  background: radial-gradient(circle at 70% 35%, rgba(248, 250, 252, 0.9) 0%, rgba(248, 250, 252, 0.5) 35%, rgba(248, 250, 252, 0) 55%),
+    radial-gradient(circle at 30% 80%, rgba(99, 102, 241, 0.2), rgba(15, 23, 42, 0));
+  opacity: 0;
 }
 
 .theme-toggle:hover {
   background: var(--toggle-bg-hover);
   color: var(--text-primary);
-  transform: scale(1.08);
+  transform: scale(1.05);
+  box-shadow: inset 0 0 0 1px var(--toggle-ring), 0 10px 22px rgba(0, 0, 0, 0.12);
 }
 
 .theme-toggle:active {
-  transform: scale(0.95);
+  transform: scale(0.97);
 }
 
 .theme-toggle svg {
   width: 18px;
   height: 18px;
-  transition: transform 0.35s var(--ease-spring);
+  transition: transform 0.45s var(--ease-spring), opacity 0.35s ease;
+  z-index: 1;
 }
 
 .theme-toggle:hover svg {
-  transform: rotate(15deg);
+  transform: rotate(12deg) scale(1.02);
+}
+
+[data-theme-transition="light-to-dark"] .theme-toggle::before {
+  transform: scale(1.1) translateY(-6px);
+  opacity: 0.15;
+}
+
+[data-theme-transition="light-to-dark"] .theme-toggle::after {
+  opacity: 1;
+  transform: scale(1.05) translateY(4px);
+}
+
+[data-theme-transition="dark-to-light"] .theme-toggle::before {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+[data-theme-transition="dark-to-light"] .theme-toggle::after {
+  opacity: 0;
+  transform: scale(0.9) translateY(6px);
+}
+
+[data-theme-next="dark"] .theme-toggle svg path,
+[data-theme-next="dark"] .theme-toggle svg circle {
+  stroke: var(--toggle-sun);
+  fill: var(--toggle-sun);
+}
+
+[data-theme-next="light"] .theme-toggle svg path,
+[data-theme-next="light"] .theme-toggle svg circle {
+  stroke: var(--toggle-moon);
+  fill: var(--toggle-moon);
 }
 
 /* ─── Header Right Group ─── */
