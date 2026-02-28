@@ -1,5 +1,29 @@
 /// <reference types="vite/client" />
 
+type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "downloaded"
+  | "up_to_date"
+  | "error"
+  | "disabled";
+
+interface UpdateStateSnapshot {
+  status: UpdateStatus;
+  currentVersion: string;
+  latestVersion: string | null;
+  progressPercent: number | null;
+  lastCheckedAt: string | null;
+  message: string | null;
+}
+
+interface UpdateActionResult {
+  success: boolean;
+  message: string;
+}
+
 interface ElectronAPI {
   minimize: () => void;
   maximize: () => void;
@@ -21,6 +45,10 @@ interface ElectronAPI {
   avatarSave?: (accountId: string, base64Data: string) => Promise<boolean>;
   avatarRead?: (accountId: string) => Promise<string | null>;
   avatarDelete?: (accountId: string) => Promise<boolean>;
+  updaterGetState?: () => Promise<UpdateStateSnapshot>;
+  updaterCheckNow?: () => Promise<UpdateActionResult>;
+  updaterQuitAndInstall?: () => Promise<UpdateActionResult>;
+  updaterOnStateChanged?: (listener: (state: UpdateStateSnapshot) => void) => () => void;
 }
 
 interface Window {

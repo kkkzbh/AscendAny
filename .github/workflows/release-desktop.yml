@@ -71,15 +71,26 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path release-assets -Force | Out-Null
           Get-ChildItem -Path apps/desktop/release -Filter "AscendAny-win-*.exe" -Recurse | Copy-Item -Destination release-assets -Force
+          Get-ChildItem -Path apps/desktop/release -Filter "AscendAny-win-*.exe.blockmap" -Recurse | Copy-Item -Destination release-assets -Force
+          Get-ChildItem -Path apps/desktop/release -Filter "latest.yml" -Recurse | Copy-Item -Destination release-assets -Force
           if (-not (Get-ChildItem -Path release-assets -Filter "AscendAny-win-*.exe")) {
             throw "No Windows installer .exe artifact found in apps/desktop/release"
+          }
+          if (-not (Get-ChildItem -Path release-assets -Filter "AscendAny-win-*.exe.blockmap")) {
+            throw "No Windows blockmap artifact found in apps/desktop/release"
+          }
+          if (-not (Get-ChildItem -Path release-assets -Filter "latest.yml")) {
+            throw "No latest.yml metadata found in apps/desktop/release"
           }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-win-exe
-          path: release-assets/AscendAny-win-*.exe
+          name: desktop-win-updater
+          path: |
+            release-assets/AscendAny-win-*.exe
+            release-assets/AscendAny-win-*.exe.blockmap
+            release-assets/latest.yml
           if-no-files-found: error
 
   build-linux:
@@ -144,18 +155,26 @@ jobs:
         run: |
           mkdir -p release-assets
           find apps/desktop/release -type f -name "AscendAny-linux-*.rpm" -exec cp {} release-assets/ \;
+          find apps/desktop/release -type f -name "latest-linux.yml" -exec cp {} release-assets/ \;
           shopt -s nullglob
           files=(release-assets/AscendAny-linux-*.rpm)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No .rpm artifact found in apps/desktop/release" >&2
             exit 1
           fi
+          linux_meta=(release-assets/latest-linux.yml)
+          if [ ${#linux_meta[@]} -eq 0 ]; then
+            echo "No latest-linux.yml metadata found in apps/desktop/release" >&2
+            exit 1
+          fi
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-linux-rpm
-          path: release-assets/AscendAny-linux-*.rpm
+          name: desktop-linux-updater
+          path: |
+            release-assets/AscendAny-linux-*.rpm
+            release-assets/latest-linux.yml
           if-no-files-found: error
 
   build-android:
@@ -309,7 +328,10 @@ jobs:
           generate_release_notes: true
           files: |
             release-assets/AscendAny-win-*.exe
+            release-assets/AscendAny-win-*.exe.blockmap
+            release-assets/latest.yml
             release-assets/AscendAny-linux-*.rpm
+            release-assets/latest-linux.yml
             release-assets/AscendAny-android-*.apk
 
   refresh-pages-manifest:

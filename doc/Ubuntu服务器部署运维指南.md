@@ -124,6 +124,9 @@ sudo systemctl restart ascendany-api
 说明：
 - Release 打包会注入线上 API 地址。
 - 本地 `pnpm --filter @ascendany/desktop dev` 仍默认使用 `http://127.0.0.1:8000`，便于本地调试。
+- 自动更新发布自检（Windows + Linux）：
+  - GitHub Release 必须包含：`latest.yml`、`latest-linux.yml`、`AscendAny-win-*.exe.blockmap`、安装包本体（`.exe/.rpm`）。
+  - Pages 构建后应存在目录：`apps/site/public/desktop-updates/`，并包含上述更新元数据与安装包。
 
 ## 9. 预处理导入（后续图形化触发）
 
