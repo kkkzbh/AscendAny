@@ -366,8 +366,8 @@ function GeneralSettingsPage() {
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             版本与更新
           </label>
-          <div className="grid gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 p-3.5">
-            <div className="flex items-center justify-between gap-3 text-[12px]">
+          <div className="grid gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 px-5 py-5 sm:px-6 sm:py-5">
+            <div className="flex items-center justify-between gap-3 text-[12px] leading-5">
               <span className="font-medium text-[var(--text-strong)]">
                 当前版本：{updateState?.currentVersion ?? "未知"}
               </span>
@@ -375,25 +375,25 @@ function GeneralSettingsPage() {
                 状态：{UPDATE_STATUS_LABEL[updateState?.status ?? "disabled"]}
               </span>
             </div>
-            <p className="text-[11px] text-[var(--text-soft)]">
+            <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
               上次检查：{formatUpdateTime(updateState?.lastCheckedAt ?? null)}
             </p>
             {typeof updateProgress === "number" && (
-              <p className="text-[11px] text-[var(--text-soft)]">
+              <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
                 下载进度：{updateProgress.toFixed(2)}%
               </p>
             )}
             {updateState?.latestVersion && (
-              <p className="text-[11px] text-[var(--text-soft)]">
+              <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
                 最新版本：{updateState.latestVersion}
               </p>
             )}
             {(updateState?.message || updateActionMessage) && (
-              <p className="text-[11px] text-[var(--text-soft)]">
+              <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
                 {updateActionMessage || updateState?.message}
               </p>
             )}
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => void onCheckForUpdates()}
