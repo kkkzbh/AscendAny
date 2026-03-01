@@ -127,21 +127,21 @@ jobs:
           sudo chown -R "\${SERVICE_USER}:\${SERVICE_USER}" "\${WEB_DIR}"
 
           sudo tee "/etc/systemd/system/\${WEB_SERVICE}.service" > /dev/null <<SERVICE
-[Unit]
-Description=AscendAny Desktop Web
-After=network.target
+          [Unit]
+          Description=AscendAny Desktop Web
+          After=network.target
 
-[Service]
-Type=simple
-User=\${SERVICE_USER}
-WorkingDirectory=\${WEB_DIR}
-ExecStart=/usr/bin/python3 -m http.server \${WEB_PORT} --bind 0.0.0.0 --directory \${WEB_DIR}
-Restart=always
-RestartSec=2
+          [Service]
+          Type=simple
+          User=\${SERVICE_USER}
+          WorkingDirectory=\${WEB_DIR}
+          ExecStart=/usr/bin/python3 -m http.server \${WEB_PORT} --bind 0.0.0.0 --directory \${WEB_DIR}
+          Restart=always
+          RestartSec=2
 
-[Install]
-WantedBy=multi-user.target
-SERVICE
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE
 
           sudo systemctl daemon-reload
           sudo systemctl enable --now "\${WEB_SERVICE}"
