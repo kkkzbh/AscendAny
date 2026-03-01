@@ -37,13 +37,21 @@ class IngestService:
         self.settings = settings
 
     def discover_changed_units(
-        self, exam_types: list[str] | None = None, limit: int | None = None
+        self,
+        exam_types: list[str] | None = None,
+        source_paths: list[str] | None = None,
+        limit: int | None = None,
     ) -> list[ExamUnit]:
         discovered = discover_exam_units(
             practice_root=self.settings.practice_root,
             exam_types=exam_types,
             fingerprint_roles=set(self.settings.ingest.fingerprint_roles),
         )
+        source_path_filter = self._normalized_source_path_filter(source_paths)
+        if source_path_filter is not None:
+            discovered = [
+                unit for unit in discovered if unit.source_path in source_path_filter
+            ]
         changed: list[ExamUnit] = []
         for unit in discovered:
             previous = self.repo.get_latest_success_fingerprint(
@@ -60,6 +68,7 @@ class IngestService:
     def run(
         self,
         exam_types: list[str] | None = None,
+        source_paths: list[str] | None = None,
         limit: int | None = None,
         dry_run: bool = False,
         force: bool = False,
@@ -70,6 +79,11 @@ class IngestService:
             exam_types=exam_types,
             fingerprint_roles=set(self.settings.ingest.fingerprint_roles),
         )
+        source_path_filter = self._normalized_source_path_filter(source_paths)
+        if source_path_filter is not None:
+            discovered = [
+                unit for unit in discovered if unit.source_path in source_path_filter
+            ]
         included_problem_kinds = set(self.settings.metrics.included_problem_kinds)
         if force:
             changed = list(discovered)
@@ -252,7 +266,11 @@ class IngestService:
                         for item in participants
                         if item.student_id is not None
                     ]
-                    current_ratings = self.repo.fetch_current_ratings(participant_ids)
+                    current_ratings = self.repo.fetch_ratings_before_exam(
+                        exam_id=exam_id,
+                        student_ids=participant_ids,
+                        default_rating=self.settings.rating.initial_rating,
+                    )
                     rating_results = compute_exam_rating(
                         participants=participants,
                         current_ratings=current_ratings,
@@ -368,6 +386,19 @@ class IngestService:
                 "errors": summary.errors,
             })
         return summary
+
+    @staticmethod
+    def _normalized_source_path_filter(
+        source_paths: list[str] | None,
+    ) -> set[str] | None:
+        if not source_paths:
+            return None
+        normalized: set[str] = set()
+        for source_path in source_paths:
+            item = clean_text(source_path).replace("\\", "/").strip("/")
+            if item:
+                normalized.add(item)
+        return normalized or None
 
     def _materialize_participants(
         self, participants: list[ParticipantRow]

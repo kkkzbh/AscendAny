@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 from apps.api.api.routes import import_data
 
 
@@ -45,3 +48,20 @@ def test_ensure_practice_root_writable_creates_missing_dirs(tmp_path: Path) -> N
 
     assert target.exists()
     assert target.is_dir()
+
+
+def test_normalize_single_source_path_prepends_exam_type() -> None:
+    result = import_data._normalize_single_source_path(
+        exam_type="datastructure",
+        source_path="2023秋学期第1次月测",
+    )
+    assert result == "datastructure/2023秋学期第1次月测"
+
+
+def test_normalize_single_source_path_rejects_mismatched_type() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        import_data._normalize_single_source_path(
+            exam_type="datastructure",
+            source_path="pta_ioi/2023秋学期第1次月测",
+        )
+    assert exc_info.value.status_code == 400

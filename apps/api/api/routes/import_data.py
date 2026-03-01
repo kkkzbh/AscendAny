@@ -30,6 +30,7 @@ from ..deps import get_admin_account, get_repository
 from ...schemas.import_data import (
     ImportRunRequest,
     ImportRunResponse,
+    SingleImportRunRequest,
     IngestHistoryItem,
     IngestHistoryResponse,
     UploadResponse,
@@ -98,6 +99,21 @@ def _ensure_practice_root_writable(practice_root: Path) -> None:
             status_code=500,
             detail=f"无法创建 practice 目录：{practice_root} ({exc})",
         ) from exc
+
+
+def _normalize_single_source_path(exam_type: str, source_path: str) -> str:
+    normalized = source_path.strip().replace("\\", "/").strip("/")
+    if not normalized:
+        raise HTTPException(status_code=400, detail="sourcePath 不能为空")
+    if normalized.startswith(f"{exam_type}/"):
+        return normalized
+    top = normalized.split("/", 1)[0]
+    if top in VALID_EXAM_TYPES and top != exam_type:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sourcePath 与 examType 不匹配：{source_path}",
+        )
+    return f"{exam_type}/{normalized}"
 
 
 # ── POST /import/upload ───────────────────────────────────
@@ -264,6 +280,102 @@ async def start_import_run(
     return ImportRunResponse(
         runId=run_id,
         message="导入任务已启动",
+    )
+
+
+@router.post("/run-single", response_model=ImportRunResponse)
+async def start_single_import_run(
+    body: SingleImportRunRequest,
+    _admin: AuthenticatedAccount = Depends(get_admin_account),
+) -> ImportRunResponse:
+    if body.examType not in VALID_EXAM_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的考试类型 '{body.examType}'，可选: {', '.join(sorted(VALID_EXAM_TYPES))}",
+        )
+    normalized_source_path = _normalize_single_source_path(
+        exam_type=body.examType,
+        source_path=body.sourcePath,
+    )
+
+    tm = get_task_manager()
+    run_id = tm.create_task("import")
+
+    def _worker() -> None:
+        try:
+            tm.mark_running(run_id)
+            tm.emit_log(
+                run_id,
+                "info",
+                f"正在重跑单场考试: {normalized_source_path} ...",
+            )
+
+            pp_settings = _load_preprocess_settings()
+            done_payload: dict[str, Any] | None = None
+            with _create_preprocess_connection(pp_settings) as conn:
+                from preprocess.load import IngestService, Repository
+
+                repo = Repository(conn)
+                service = IngestService(repo=repo, settings=pp_settings)
+
+                def _on_progress(event_type: str, data: dict[str, Any]) -> None:
+                    if event_type == "log":
+                        tm.emit_log(
+                            run_id,
+                            data.get("level", "info"),
+                            data.get("message", ""),
+                        )
+                    elif event_type == "progress":
+                        tm.emit_progress(
+                            run_id,
+                            data.get("current", 0),
+                            data.get("total", 0),
+                            exam_type=data.get("examType"),
+                            source_path=data.get("sourcePath"),
+                            phase=data.get("phase"),
+                        )
+                    else:
+                        tm.emit(run_id, TaskEvent(event_type=event_type, data=data))
+
+                summary = service.run(
+                    exam_types=[body.examType],
+                    source_paths=[normalized_source_path],
+                    limit=1,
+                    dry_run=body.dryRun,
+                    force=body.force,
+                    on_progress=_on_progress,
+                )
+                done_payload = {
+                    "ingestRunId": summary.ingest_run_id,
+                    "scanned": summary.scanned,
+                    "skipped": summary.skipped,
+                    "succeeded": summary.succeeded,
+                    "failed": summary.failed,
+                    "submissionsBound": summary.submissions_bound,
+                    "submissionsPendingClaim": summary.submissions_pending_claim,
+                    "nicknameConflicts": summary.nickname_conflicts,
+                    "achievementsRecomputedStudents": summary.achievements_recomputed_students,
+                    "errors": summary.errors,
+                }
+
+                if summary.scanned == 0:
+                    tm.emit_error(
+                        run_id,
+                        f"未找到指定考试目录: {normalized_source_path}",
+                    )
+                    return
+
+            tm.emit_done(run_id, done_payload or {})
+        except Exception as exc:
+            logger.exception("Single import task %s failed", run_id)
+            tm.emit_error(run_id, str(exc))
+
+    thread = threading.Thread(target=_worker, daemon=True, name=f"import-single-{run_id}")
+    thread.start()
+
+    return ImportRunResponse(
+        runId=run_id,
+        message="单场重跑任务已启动",
     )
 
 

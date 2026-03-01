@@ -34,6 +34,13 @@ export interface ImportRunResponse {
   message: string;
 }
 
+export interface SingleImportRunRequest {
+  examType: string;
+  sourcePath: string;
+  dryRun?: boolean;
+  force?: boolean;
+}
+
 export interface IngestHistoryItem {
   ingestRunId: number;
   status: string;
@@ -107,6 +114,15 @@ export async function uploadExamZip(
 
 export function startImportRun(req: ImportRunRequest): Promise<ImportRunResponse> {
   return apiFetch("/api/v1/import/run", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function startSingleImportRun(
+  req: SingleImportRunRequest,
+): Promise<ImportRunResponse> {
+  return apiFetch("/api/v1/import/run-single", {
     method: "POST",
     body: JSON.stringify(req),
   });

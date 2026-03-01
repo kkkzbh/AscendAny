@@ -445,6 +445,62 @@ class Repository:
             rows = cursor.fetchall()
             return {int(row["student_id"]): int(row["rating"]) for row in rows}
 
+    def fetch_ratings_before_exam(
+        self,
+        exam_id: int,
+        student_ids: list[int],
+        default_rating: int,
+    ) -> dict[int, int]:
+        unique_student_ids = sorted(set(student_ids))
+        if not unique_student_ids:
+            return {}
+
+        ratings = {student_id: default_rating for student_id in unique_student_ids}
+        with self.conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                WITH target_exam AS (
+                    SELECT
+                        e.exam_id,
+                        COALESCE(e.starts_at, e.created_at) AS event_time
+                    FROM ascendany.exams AS e
+                    WHERE e.exam_id = %s
+                ),
+                ranked AS (
+                    SELECT
+                        rh.student_id,
+                        rh.new_rating,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY rh.student_id
+                            ORDER BY
+                                COALESCE(e.starts_at, e.created_at) DESC,
+                                rh.exam_id DESC
+                        ) AS rn
+                    FROM ascendany.rating_history AS rh
+                    JOIN ascendany.exams AS e
+                      ON e.exam_id = rh.exam_id
+                    CROSS JOIN target_exam AS target
+                    WHERE rh.student_id = ANY(%s)
+                      AND (
+                            COALESCE(e.starts_at, e.created_at) < target.event_time
+                            OR (
+                                COALESCE(e.starts_at, e.created_at) = target.event_time
+                                AND rh.exam_id < target.exam_id
+                            )
+                        )
+                )
+                SELECT student_id, new_rating
+                FROM ranked
+                WHERE rn = 1
+                """,
+                (exam_id, unique_student_ids),
+            )
+            rows = cursor.fetchall()
+
+        for row in rows:
+            ratings[int(row["student_id"])] = int(row["new_rating"])
+        return ratings
+
     def upsert_rating_history(
         self,
         exam_id: int,

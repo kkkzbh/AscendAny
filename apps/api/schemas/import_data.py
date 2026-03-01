@@ -45,6 +45,24 @@ class ImportRunResponse(BaseModel):
     message: str
 
 
+class SingleImportRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    examType: str = Field(description="Exam type, e.g. datastructure")
+    sourcePath: str = Field(
+        min_length=1,
+        description="Exam source_path, supports both full (datastructure/xxx) and short (xxx).",
+    )
+    dryRun: bool = Field(
+        default=False,
+        description="If true, only scan without writing to DB.",
+    )
+    force: bool = Field(
+        default=True,
+        description="If true, reprocess regardless of fingerprint.",
+    )
+
+
 # ── SSE Events (documented here for reference) ───────────
 
 class SSELogEvent(BaseModel):

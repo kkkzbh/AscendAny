@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="run incremental ingest")
     run_parser.add_argument("--exam-type", action="append", default=None)
+    run_parser.add_argument(
+        "--source-path",
+        action="append",
+        default=None,
+        help="only process specific source_path(s), e.g. datastructure/2023秋学期第1次月测",
+    )
     run_parser.add_argument("--limit", type=int)
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument(
@@ -83,6 +89,7 @@ def main() -> int:
         service = IngestService(repo=repo, settings=settings)
         summary = service.run(
             exam_types=args.exam_type,
+            source_paths=args.source_path,
             limit=args.limit,
             dry_run=args.dry_run,
             force=args.force,
