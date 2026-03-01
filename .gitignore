@@ -53,6 +53,7 @@ coverage/
 uv.lock
 
 .opencode
+.playwright-cli/
 
 practice
 
