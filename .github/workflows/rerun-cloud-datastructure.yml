@@ -1,0 +1,107 @@
+name: Rerun Cloud Datastructure Ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force reprocess all discovered exams"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rerun-cloud-datastructure-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    name: Rerun datastructure ingest on server
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.ASCENDANY_SERVER_HOST }}
+      DEPLOY_USER: ${{ secrets.ASCENDANY_SERVER_USER }}
+      DEPLOY_PORT: ${{ vars.ASCENDANY_SERVER_PORT || '22' }}
+      DEPLOY_APP_DIR: ${{ vars.ASCENDANY_SERVER_APP_DIR || '/opt/ascendany/api/current' }}
+      DEPLOY_API_VENV: ${{ vars.ASCENDANY_API_VENV || '/opt/ascendany/api/.venv' }}
+      DEPLOY_DB_ENV_FILE: ${{ vars.ASCENDANY_DB_ENV_FILE || '/opt/ascendany/infra/.env' }}
+      FORCE_REINGEST: ${{ github.event.inputs.force == 'true' && '1' || '0' }}
+
+    steps:
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HOST}" ]; then
+            echo "Missing required secret: ASCENDANY_SERVER_HOST" >&2
+            exit 1
+          fi
+          if [ -z "${DEPLOY_USER}" ]; then
+            echo "Missing required secret: ASCENDANY_SERVER_USER" >&2
+            exit 1
+          fi
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.ASCENDANY_SSH_PRIVATE_KEY }}
+
+      - name: Setup known_hosts
+        env:
+          SSH_KNOWN_HOSTS: ${{ secrets.ASCENDANY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          if [ -n "${SSH_KNOWN_HOSTS}" ]; then
+            printf "%s\n" "${SSH_KNOWN_HOSTS}" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "${DEPLOY_PORT}" "${DEPLOY_HOST}" > "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Rerun datastructure ingest on server
+        run: |
+          set -euo pipefail
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
+          set -euo pipefail
+
+          APP_DIR="${DEPLOY_APP_DIR}"
+          API_VENV="${DEPLOY_API_VENV}"
+          DB_ENV_FILE="${DEPLOY_DB_ENV_FILE}"
+          FORCE_REINGEST="${FORCE_REINGEST}"
+
+          cd "${APP_DIR}"
+
+          PYTHON_BIN="${API_VENV}/bin/python"
+          if [ ! -x "${PYTHON_BIN}" ]; then
+            echo "python not found: ${PYTHON_BIN}" >&2
+            exit 1
+          fi
+
+          if [ -r "${HOME}/.pgpass" ]; then
+            echo "Using ~/.pgpass for DB auth"
+          else
+            DB_PASSWORD=""
+            if [ -r "${DB_ENV_FILE}" ]; then
+              DB_PASSWORD="$(sed -n 's/^DB_PASSWORD=//p' "${DB_ENV_FILE}" | tail -n1)"
+            elif sudo test -r "${DB_ENV_FILE}"; then
+              DB_PASSWORD="$(sudo sed -n 's/^DB_PASSWORD=//p' "${DB_ENV_FILE}" | tail -n1)"
+            fi
+
+            if [ -z "${DB_PASSWORD}" ]; then
+              echo "Unable to load DB_PASSWORD from ${DB_ENV_FILE}" >&2
+              exit 1
+            fi
+            export ASCENDANY_DB_PASSWORD="${DB_PASSWORD}"
+          fi
+
+          RUN_CMD="${PYTHON_BIN} -m preprocess.cli run --exam-type datastructure"
+          if [ "${FORCE_REINGEST}" = "1" ]; then
+            RUN_CMD="${RUN_CMD} --force"
+          fi
+
+          echo "Running: ${RUN_CMD}"
+          eval "${RUN_CMD}"
+          EOF
