@@ -207,17 +207,15 @@ async def start_import_run(
             tm.emit_log(run_id, "info", "正在启动增量导入 ...")
 
             pp_settings = _load_preprocess_settings()
-            conn = _create_preprocess_connection(pp_settings)
-            try:
+            done_payload: dict[str, Any] | None = None
+            with _create_preprocess_connection(pp_settings) as conn:
                 from preprocess.load import IngestService, Repository
 
                 repo = Repository(conn)
                 service = IngestService(repo=repo, settings=pp_settings)
 
                 def _on_progress(event_type: str, data: dict[str, Any]) -> None:
-                    if event_type == "done":
-                        tm.emit_done(run_id, data)
-                    elif event_type == "log":
+                    if event_type == "log":
                         tm.emit_log(
                             run_id,
                             data.get("level", "info"),
@@ -235,15 +233,27 @@ async def start_import_run(
                     else:
                         tm.emit(run_id, TaskEvent(event_type=event_type, data=data))
 
-                service.run(
+                summary = service.run(
                     exam_types=body.examTypes,
                     limit=body.limit,
                     dry_run=body.dryRun,
                     force=body.force,
                     on_progress=_on_progress,
                 )
-            finally:
-                conn.close()
+                done_payload = {
+                    "ingestRunId": summary.ingest_run_id,
+                    "scanned": summary.scanned,
+                    "skipped": summary.skipped,
+                    "succeeded": summary.succeeded,
+                    "failed": summary.failed,
+                    "submissionsBound": summary.submissions_bound,
+                    "submissionsPendingClaim": summary.submissions_pending_claim,
+                    "nicknameConflicts": summary.nickname_conflicts,
+                    "achievementsRecomputedStudents": summary.achievements_recomputed_students,
+                    "errors": summary.errors,
+                }
+
+            tm.emit_done(run_id, done_payload or {})
         except Exception as exc:
             logger.exception("Import task %s failed", run_id)
             tm.emit_error(run_id, str(exc))
