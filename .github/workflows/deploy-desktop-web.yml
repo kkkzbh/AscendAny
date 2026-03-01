@@ -172,10 +172,13 @@ jobs:
           set -euo pipefail
           TARGET_URL="${DEPLOY_DESKTOP_WEB_URL}"
           if [ -z "${TARGET_URL}" ]; then
-            TARGET_URL="http://${DEPLOY_HOST}:${DEPLOY_DESKTOP_WEB_PORT}/"
+            echo "Skip external URL check: DEPLOY_DESKTOP_WEB_URL is not configured."
+            echo "Service is already verified via server-local check on 127.0.0.1:${DEPLOY_DESKTOP_WEB_PORT}."
+            echo "If you need public access checks, set ASCENDANY_DESKTOP_WEB_URL and ensure cloud security group allows ${DEPLOY_DESKTOP_WEB_PORT}/tcp."
+            exit 0
           fi
           for attempt in $(seq 1 12); do
-            if curl -fsS "${TARGET_URL}" >/dev/null; then
+            if curl --connect-timeout 5 --max-time 10 -fsS "${TARGET_URL}" >/dev/null; then
               echo "Desktop web check passed on attempt ${attempt}: ${TARGET_URL}"
               exit 0
             fi
