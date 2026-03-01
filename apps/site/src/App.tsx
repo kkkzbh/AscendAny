@@ -9,6 +9,7 @@ import "./styles.css";
 
 const RELEASE_OWNER = (import.meta.env.VITE_RELEASE_OWNER ?? "kkkzbh").trim() || "kkkzbh";
 const RELEASE_REPO = (import.meta.env.VITE_RELEASE_REPO ?? "AscendAny").trim() || "AscendAny";
+const WEB_ACCESS_URL = (import.meta.env.VITE_WEB_ACCESS_URL ?? "https://ascendany.kkkzbh.cn/").trim();
 const RELEASE_API_URL = `https://api.github.com/repos/${encodeURIComponent(RELEASE_OWNER)}/${encodeURIComponent(RELEASE_REPO)}/releases/latest`;
 const RELEASE_MANIFEST_URL = `${import.meta.env.BASE_URL}release-assets.json`;
 
@@ -342,7 +343,7 @@ const defaultDownloads: DownloadItem[] = [
   { target: "windows", platform: "Windows", icon: "windows", pkg: "EXE", arch: "x64", status: "soon", action: "暂无资源" },
   { target: "android", platform: "Android", icon: "android", pkg: "APK", arch: "Mobile", status: "soon", action: "即将支持" },
   { target: "ios", platform: "iOS", icon: "ios", pkg: "TestFlight / App Store", arch: "Mobile", status: "later", action: "敬请期待" },
-  { target: "macos", platform: "macOS", icon: "apple", pkg: "DMG", arch: "Apple Silicon / Intel", status: "later", action: "敬请期待" },
+  { target: "macos", platform: "macOS", icon: "apple", pkg: "Web", arch: "Browser", status: "available", action: "立即访问", href: WEB_ACCESS_URL },
 ];
 
 const statusLabel: Record<DownloadStatus, string> = {
@@ -827,7 +828,7 @@ export default function App() {
                 ))}
               </div>
               <p className="download-note" id="notify">
-                Windows EXE、Linux RPM (x64) 与 Android APK (ARM) 会在 GitHub Releases 发布后自动开放下载；macOS 与 iOS 敬请期待。
+                Windows EXE、Linux RPM (x64) 与 Android APK (ARM) 会在 GitHub Releases 发布后自动开放下载；macOS 已提供 Web 访问入口，iOS 敬请期待。
               </p>
             </section>
           </RevealGroup>
