@@ -194,3 +194,38 @@ cd /opt/ascendany/api/current
 2. 安装/同步 Python 依赖（`apps/api/requirements.txt` + `preprocess/requirements.txt`）；
 3. 重启 `ascendany-api`；
 4. 校验 `is-active` 与 `healthz`。
+
+## 11. 桌面端 Web 版自动部署（开放端口给浏览器访问）
+
+仓库已新增工作流：`.github/workflows/deploy-desktop-web.yml`  
+触发条件：
+- push 到 `main/master` 且命中 `apps/desktop/**` 或相关前端依赖文件；
+- 手动触发 `workflow_dispatch`。
+
+### 11.1 功能说明
+
+- CI 构建 `apps/desktop` 的独立 Web 产物（不影响原 Electron 构建链路）；
+- 将 `dist/` 同步到服务器目录（默认 `/opt/ascendany/desktop-web`）；
+- 自动写入/更新 systemd 服务（默认服务名 `ascendany-desktop-web`）；
+- 服务监听 `0.0.0.0:4173`（可改变量覆盖）；
+- 如果服务器启用了 `ufw`，自动执行 `ufw allow <port>/tcp` 放行端口；
+- 部署后执行本机与外部可用性探测。
+
+### 11.2 GitHub Variables（可选，均有默认值）
+
+- `DESKTOP_WEB_API_BASE_URL`（默认回退 `DESKTOP_API_BASE_URL`，再回退 `https://ascendany.kkkzbh.cn`）
+- `ASCENDANY_DESKTOP_WEB_DIR`（默认 `/opt/ascendany/desktop-web`）
+- `ASCENDANY_DESKTOP_WEB_SERVICE`（默认 `ascendany-desktop-web`）
+- `ASCENDANY_DESKTOP_WEB_PORT`（默认 `4173`）
+- `ASCENDANY_DESKTOP_WEB_URL`（默认空，空时按 `http://<server_host>:<port>/` 校验）
+
+### 11.3 服务器查看与排障
+
+```bash
+sudo systemctl status ascendany-desktop-web --no-pager
+sudo journalctl -u ascendany-desktop-web -n 120 --no-pager
+ss -ltnp | grep 4173
+curl -fsS http://127.0.0.1:4173/
+```
+
+若使用云厂商安全组，还需在安全组层面额外放行 `4173/tcp`。

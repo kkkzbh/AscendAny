@@ -11,11 +11,14 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
+    "web:dev": "vite --config vite.web.config.ts --host 0.0.0.0 --port 4173",
     "build": "tsc -b && vite build",
+    "web:build": "tsc -b && vite build --config vite.web.config.ts",
     "test": "vitest run",
     "dist:win:x64": "pnpm run build && electron-builder --win nsis --x64",
     "dist:linux:rpm:x64": "pnpm run build && electron-builder --linux rpm --x64",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "web:preview": "vite preview --config vite.web.config.ts --host 0.0.0.0 --port 4173"
   },
   "build": {
     "appId": "com.ascendany.desktop",

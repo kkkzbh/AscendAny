@@ -135,6 +135,23 @@ ASCENDANY_LINUX_IM_MODULE=fcitx ASCENDANY_LINUX_IME_MODE=on pnpm --filter @ascen
 - `ASCENDANY_LINUX_GPU_MODE=x11` 会强制 XWayland 路径，并跳过 Wayland IME 开关。
 - 若你只关心稳定输入法，建议优先使用 `ASCENDANY_LINUX_IME_MODE=on` 在 Wayland 下验证。
 
+## 桌面端 Web 访问（独立端口，不影响 Electron）
+
+`apps/desktop` 已支持独立 Web 构建配置（与 Electron 配置分离）：
+
+```bash
+# Web 本地开发（默认监听 0.0.0.0:4173）
+pnpm --filter @ascendany/desktop web:dev
+
+# Web 生产构建
+pnpm --filter @ascendany/desktop web:build
+
+# Web 预览服务
+pnpm --filter @ascendany/desktop web:preview
+```
+
+push 后自动部署到服务器可用工作流：`.github/workflows/deploy-desktop-web.yml`。
+
 ## 产品官网（apps/site）
 
 产品介绍网页已独立放在 `apps/site/`，与桌面端 `apps/desktop/` 隔离。
