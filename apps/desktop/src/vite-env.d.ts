@@ -1,5 +1,9 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  readonly VITE_DIRECT_LOGIN_ENABLED?: string;
+}
+
 type UpdateStatus =
   | "idle"
   | "checking"

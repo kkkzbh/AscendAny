@@ -179,7 +179,18 @@ cd /opt/ascendany/api/current
 - `ASCENDANY_SERVER_APP_DIR`（默认 `/opt/ascendany/api/current`）
 - `ASCENDANY_API_VENV`（默认 `/opt/ascendany/api/.venv`）
 - `ASCENDANY_API_SERVICE`（默认 `ascendany-api`）
+- `ASCENDANY_API_ENV_FILE`（默认 `/etc/ascendany/api.env`）
 - `ASCENDANY_API_HEALTHZ`（默认 `https://ascendany.kkkzbh.cn/api/v1/healthz`）
+- `ASCENDANY_SECONDARY_API_ENABLED`（默认 `false`）
+- `ASCENDANY_SECONDARY_API_SERVICE`（默认 `ascendany-api-external-auth`）
+- `ASCENDANY_SECONDARY_API_HOST`（默认 `0.0.0.0`）
+- `ASCENDANY_SECONDARY_API_PORT`（默认 `8010`）
+- `ASCENDANY_SECONDARY_API_LOG_LEVEL`（默认 `info`）
+- `ASCENDANY_SECONDARY_API_ENV_FILE`（默认 `/etc/ascendany/api-external-auth.env`）
+- `ASCENDANY_SECONDARY_API_AUTH_PROVIDER`（默认 `app01_mysql`）
+- `ASCENDANY_SECONDARY_APP01_DB_CONFIG_PATH`（默认空）
+- `ASCENDANY_SECONDARY_API_INTERNAL_HEALTHZ`（默认空，空时自动按端口推导）
+- `ASCENDANY_SECONDARY_API_HEALTHZ`（默认空，空时跳过外部 URL 探测）
 
 ### 10.3 服务器前置条件
 
@@ -193,7 +204,20 @@ cd /opt/ascendany/api/current
 1. 切到部署分支并 `git pull --ff-only`；
 2. 安装/同步 Python 依赖（`apps/api/requirements.txt` + `preprocess/requirements.txt`）；
 3. 重启 `ascendany-api`；
-4. 校验 `is-active` 与 `healthz`。
+4. 校验主 API 的 `is-active` 与 `healthz`；
+5. 若启用 `ASCENDANY_SECONDARY_API_ENABLED=true`，会额外创建/更新第二 API systemd 服务（新端口 + 新启动参数），并做本机 healthz 校验。
+
+### 10.5 外部项目子功能接入（第二 API 实例）
+
+建议最小配置：
+- `ASCENDANY_SECONDARY_API_ENABLED=true`
+- `ASCENDANY_SECONDARY_API_PORT=8010`
+- `ASCENDANY_SECONDARY_API_AUTH_PROVIDER=app01_mysql`
+- `ASCENDANY_SECONDARY_APP01_DB_CONFIG_PATH=/path/to/db_config.json`（或在 `api.env` 提供 `ASCENDANY_APP01_DB_*`）
+
+效果：
+- 主 API（原有项目）保持不变；
+- 第二 API 在新端口启动，供其他项目使用外部 user 表登录。
 
 ## 11. 桌面端 Web 版自动部署（开放端口给浏览器访问）
 
@@ -204,28 +228,55 @@ cd /opt/ascendany/api/current
 
 ### 11.1 功能说明
 
-- CI 构建 `apps/desktop` 的独立 Web 产物（不影响原 Electron 构建链路）；
-- 将 `dist/` 同步到服务器目录（默认 `/opt/ascendany/desktop-web`）；
-- 自动写入/更新 systemd 服务（默认服务名 `ascendany-desktop-web`）；
-- 服务监听 `0.0.0.0:4173`（可改变量覆盖）；
+- CI 会构建两个 Web 产物：
+  - 主 Web（原有部署）
+  - Integration Web（给其他项目嵌入，默认开启直登参数能力）
+- 将两个产物分别同步到服务器目录（默认主：`/opt/ascendany/desktop-web`，Integration：`/opt/ascendany/desktop-web-integration`）；
+- 自动写入/更新对应 systemd 服务（默认主：`ascendany-desktop-web`，Integration：`ascendany-desktop-web-integration`）；
+- 主服务默认监听 `0.0.0.0:4173`；Integration 默认监听 `0.0.0.0:4174`；
 - 如果服务器启用了 `ufw`，自动执行 `ufw allow <port>/tcp` 放行端口；
 - 部署后执行本机与外部可用性探测。
 
 ### 11.2 GitHub Variables（可选，均有默认值）
 
 - `DESKTOP_WEB_API_BASE_URL`（默认回退 `DESKTOP_API_BASE_URL`，再回退 `https://ascendany.kkkzbh.cn`）
+- `DESKTOP_WEB_DIRECT_LOGIN_ENABLED`（主 Web 直登开关，默认 `false`）
 - `ASCENDANY_DESKTOP_WEB_DIR`（默认 `/opt/ascendany/desktop-web`）
 - `ASCENDANY_DESKTOP_WEB_SERVICE`（默认 `ascendany-desktop-web`）
 - `ASCENDANY_DESKTOP_WEB_PORT`（默认 `4173`）
 - `ASCENDANY_DESKTOP_WEB_URL`（默认空，空时按 `http://<server_host>:<port>/` 校验）
+- `ASCENDANY_DESKTOP_WEB_INTEGRATION_ENABLED`（默认 `false`）
+- `DESKTOP_WEB_INTEGRATION_API_BASE_URL`（Integration Web 的 API 地址）
+- `DESKTOP_WEB_INTEGRATION_DIRECT_LOGIN_ENABLED`（默认 `true`）
+- `ASCENDANY_DESKTOP_WEB_INTEGRATION_DIR`（默认 `/opt/ascendany/desktop-web-integration`）
+- `ASCENDANY_DESKTOP_WEB_INTEGRATION_SERVICE`（默认 `ascendany-desktop-web-integration`）
+- `ASCENDANY_DESKTOP_WEB_INTEGRATION_PORT`（默认 `4174`）
+- `ASCENDANY_DESKTOP_WEB_INTEGRATION_URL`（默认空，空时仅做本机探测）
 
 ### 11.3 服务器查看与排障
 
 ```bash
 sudo systemctl status ascendany-desktop-web --no-pager
 sudo journalctl -u ascendany-desktop-web -n 120 --no-pager
+sudo systemctl status ascendany-desktop-web-integration --no-pager
+sudo journalctl -u ascendany-desktop-web-integration -n 120 --no-pager
 ss -ltnp | grep 4173
+ss -ltnp | grep 4174
 curl -fsS http://127.0.0.1:4173/
+curl -fsS http://127.0.0.1:4174/
 ```
 
 若使用云厂商安全组，还需在安全组层面额外放行 `4173/tcp`。
+
+### 11.4 Integration Web 直登参数
+
+当 `DESKTOP_WEB_INTEGRATION_DIRECT_LOGIN_ENABLED=true` 时，可通过 URL 传参自动登录：
+
+```text
+https://<integration-host>/?username=<账号>&password=<密码>&autoLogin=true&rememberPassword=false
+```
+
+说明：
+- 别名参数也支持：`user`/`pass`；
+- 可选传 `deviceId`；
+- 前端尝试登录后会自动清理 URL 中的敏感参数。
