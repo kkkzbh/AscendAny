@@ -57,9 +57,12 @@ llm:
 
 auth:
   enabled: true
+  provider: internal
   signup_policy: username_password_only
   jwt_secret_env: ASCENDANY_AUTH_JWT_SECRET
   jwt_secret: ascendany-dev-insecure-secret
   access_ttl_minutes: 15
   refresh_ttl_days: 30
   password_pepper_env: ASCENDANY_AUTH_PASSWORD_PEPPER
+  app01_db_config_path: null
+  app01_db_config_path_env: ASCENDANY_APP01_DB_CONFIG_PATH

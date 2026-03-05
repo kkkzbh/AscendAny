@@ -376,9 +376,7 @@ class ApiRepository:
             return None
         return AccountProfileRow(
             student_id=str(row["student_id"]) if row.get("student_id") else None,
-            pta_nickname=str(row["pta_nickname"])
-            if row.get("pta_nickname")
-            else None,
+            pta_nickname=str(row["pta_nickname"]) if row.get("pta_nickname") else None,
             updated_at=row.get("updated_at")
             if isinstance(row.get("updated_at"), datetime)
             else None,
@@ -402,12 +400,12 @@ class ApiRepository:
                 await cursor.execute(query, (account_id, student_id, pta_nickname))
                 row = await cursor.fetchone()
         if not row:
-            return AccountProfileRow(student_id=None, pta_nickname=None, updated_at=None)
+            return AccountProfileRow(
+                student_id=None, pta_nickname=None, updated_at=None
+            )
         return AccountProfileRow(
             student_id=str(row["student_id"]) if row.get("student_id") else None,
-            pta_nickname=str(row["pta_nickname"])
-            if row.get("pta_nickname")
-            else None,
+            pta_nickname=str(row["pta_nickname"]) if row.get("pta_nickname") else None,
             updated_at=row.get("updated_at")
             if isinstance(row.get("updated_at"), datetime)
             else None,
@@ -589,7 +587,9 @@ class ApiRepository:
         nicknames: list[str],
         reason: str = "claim_backfill",
     ) -> int:
-        normalized = sorted({item.strip().casefold() for item in nicknames if item.strip()})
+        normalized = sorted(
+            {item.strip().casefold() for item in nicknames if item.strip()}
+        )
         if not normalized:
             return 0
         payload = json.dumps(
@@ -647,7 +647,9 @@ class ApiRepository:
         self,
         nicknames: list[str],
     ) -> list[int]:
-        normalized = sorted({item.strip().casefold() for item in nicknames if item.strip()})
+        normalized = sorted(
+            {item.strip().casefold() for item in nicknames if item.strip()}
+        )
         if not normalized:
             return []
         query = """
@@ -681,9 +683,7 @@ class ApiRepository:
                 )
                 rows = await cursor.fetchall()
         return [
-            int(row["student_id"])
-            for row in rows
-            if row.get("student_id") is not None
+            int(row["student_id"]) for row in rows if row.get("student_id") is not None
         ]
 
     async def merge_achievement_states_for_student(
@@ -978,7 +978,9 @@ class ApiRepository:
         """
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
-                await cursor.execute(query, (account_id, token_hash, expires_at, device_id))
+                await cursor.execute(
+                    query, (account_id, token_hash, expires_at, device_id)
+                )
                 row = await cursor.fetchone()
         if not row:
             raise RuntimeError("Failed to insert refresh token row")
@@ -1552,6 +1554,64 @@ class ApiRepository:
             return False
         return bool(row["has_records"])
 
+    async def _fetch_distinct_student_entity_ids_by_exam(
+        self, exam_id: int
+    ) -> list[int]:
+        query = """
+            SELECT DISTINCT rh.student_id
+            FROM ascendany.rating_history AS rh
+            WHERE rh.exam_id = %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id,))
+                rows = await cursor.fetchall()
+        return [int(r["student_id"]) for r in rows if r.get("student_id") is not None]
+
+    async def _fetch_student_nos_for_student_ids(
+        self, student_ids: list[int]
+    ) -> list[str]:
+        if not student_ids:
+            return []
+        query = """
+            SELECT DISTINCT si.external_id
+            FROM ascendany.student_identities AS si
+            WHERE si.student_id = ANY(%s::bigint[])
+              AND si.source LIKE %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (student_ids, "%student_no"))
+                rows = await cursor.fetchall()
+        out: list[str] = []
+        for r in rows:
+            v = (r.get("external_id") or "").strip()
+            if v:
+                out.append(v)
+        return out
+
+    async def _fetch_active_nicknames_for_student_ids(
+        self, student_ids: list[int]
+    ) -> list[str]:
+        if not student_ids:
+            return []
+        query = """
+            SELECT DISTINCT lower(BTRIM(snc.nickname)) AS nickname
+            FROM ascendany.student_nickname_claims AS snc
+            WHERE snc.is_active = TRUE
+              AND snc.student_id = ANY(%s::bigint[])
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (student_ids,))
+                rows = await cursor.fetchall()
+        out: list[str] = []
+        for r in rows:
+            v = (r.get("nickname") or "").strip().lower()
+            if v:
+                out.append(v)
+        return out
+
     async def fetch_achievement_definitions(
         self,
         source: str | None = None,
@@ -1659,8 +1719,7 @@ class ApiRepository:
                 return {}
             raise
         return {
-            int(row["student_id"]): int(row.get("ai_dialogue_count", 0))
-            for row in rows
+            int(row["student_id"]): int(row.get("ai_dialogue_count", 0)) for row in rows
         }
 
     async def increment_ai_dialogue_count(

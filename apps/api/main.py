@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -28,6 +31,17 @@ from .services.llm import LLMService
 logger = logging.getLogger(__name__)
 
 
+if sys.platform == "win32":
+    # psycopg async connections require the selector event loop on Windows.
+    # This is a no-op on non-Windows platforms.
+    policy = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+    if policy is not None:
+        try:
+            asyncio.set_event_loop_policy(policy())
+        except Exception:
+            pass
+
+
 def create_app(
     settings: Settings | None = None,
     repository: Any | None = None,
@@ -44,7 +58,24 @@ def create_app(
         if repository is None:
             managed_pool = build_pool(app_settings)
             await managed_pool.open()
-            app.state.repository = ApiRepository(managed_pool)
+            pg_repo = ApiRepository(managed_pool)
+
+            provider = (app_settings.auth.provider or "internal").strip().lower()
+            if provider in {"", "internal"}:
+                app.state.repository = pg_repo
+            else:
+                from .db.composite_repository import CompositeRepository
+                from .db.mysql_user_repository import (
+                    MySQLUserRepository,
+                    load_app01_mysql_config,
+                )
+
+                mysql_cfg = load_app01_mysql_config(
+                    explicit_path=app_settings.auth.app01_db_config_path,
+                    env_get=os.getenv,
+                )
+                mysql_repo = MySQLUserRepository(mysql_cfg)
+                app.state.repository = CompositeRepository(pg=pg_repo, mysql=mysql_repo)
         else:
             app.state.repository = repository
 

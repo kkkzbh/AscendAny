@@ -28,7 +28,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    username: str = Field(min_length=4, max_length=32)
+    username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)
     deviceId: str | None = Field(default=None, max_length=128)
 
@@ -76,7 +76,7 @@ class AuthMeResponse(BaseModel):
 class AuthProfileUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    displayName: str | None = Field(default=None, max_length=32)
+    displayName: str | None = Field(default=None, max_length=128)
     studentId: str | None = Field(default=None, max_length=64)
     ptaNickname: str | None = Field(default=None, max_length=128)
 
