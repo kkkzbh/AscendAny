@@ -51,6 +51,10 @@ class AuthService:
         self._settings = settings
         self._repository = repository
 
+    def _is_external_provider(self) -> bool:
+        provider = getattr(self._settings.auth, "provider", "internal") or "internal"
+        return provider.strip().lower() not in {"", "internal"}
+
     async def _fetch_account_by_username(self, username: str) -> AccountRow | None:
         fetcher = getattr(self._repository, "fetch_account_by_username", None)
         if callable(fetcher):
@@ -78,6 +82,13 @@ class AuthService:
 
     async def register(self, payload: RegisterRequest) -> AuthTokensResponse:
         self._ensure_enabled()
+
+        if self._is_external_provider():
+            raise AppError(
+                status_code=503,
+                code="AUTH_REGISTER_DISABLED",
+                message="Registration is disabled when using an external auth provider.",
+            )
 
         username = self._normalize_username(payload.username)
         password = payload.password
@@ -313,6 +324,44 @@ class AuthService:
         payload: AuthProfileUpdateRequest,
     ) -> AuthProfileResponse:
         self._ensure_enabled()
+
+        if self._is_external_provider():
+            if payload.studentId is not None or payload.ptaNickname is not None:
+                raise AppError(
+                    status_code=403,
+                    code="AUTH_PROFILE_IMMUTABLE",
+                    message="studentId/ptaNickname are managed by the external provider.",
+                )
+
+            account = await self._repository.fetch_account_by_id(current.account_id)
+            if account is None:
+                raise AppError(
+                    status_code=404,
+                    code="AUTH_ACCOUNT_NOT_FOUND",
+                    message="Account was not found.",
+                )
+
+            if payload.displayName is not None:
+                next_display_name = payload.displayName.strip()
+                if not next_display_name:
+                    raise AppError(
+                        status_code=400,
+                        code="AUTH_INVALID_DISPLAY_NAME",
+                        message="displayName must not be blank.",
+                    )
+                updated = await self._repository.update_account_display_name(
+                    account_id=current.account_id,
+                    display_name=next_display_name,
+                )
+                if updated is not None:
+                    account = updated
+
+            profile = await self._repository.fetch_account_profile(current.account_id)
+            return AuthProfileResponse(
+                displayName=account.display_name,
+                studentId=profile.student_id if profile else None,
+                ptaNickname=profile.pta_nickname if profile else None,
+            )
         account = await self._repository.fetch_account_by_id(current.account_id)
         if account is None:
             raise AppError(
@@ -459,14 +508,22 @@ class AuthService:
 
         sub = payload.get("sub")
         username = payload.get("username")
-        if not isinstance(sub, str) or not sub.isdigit() or not isinstance(username, str):
+        if (
+            not isinstance(sub, str)
+            or not sub.isdigit()
+            or not isinstance(username, str)
+        ):
             raise AppError(
                 status_code=401,
                 code="AUTH_TOKEN_INVALID",
                 message="Access token is invalid.",
             )
 
-        return AuthenticatedAccount(account_id=int(sub), username=username, is_admin=bool(payload.get("adm", False)))
+        return AuthenticatedAccount(
+            account_id=int(sub),
+            username=username,
+            is_admin=bool(payload.get("adm", False)),
+        )
 
     async def _issue_tokens(
         self,
@@ -558,6 +615,15 @@ class AuthService:
 
     def _normalize_username(self, username: str) -> str:
         value = username.strip()
+        if self._is_external_provider():
+            if not value or len(value) > 50:
+                raise AppError(
+                    status_code=400,
+                    code="AUTH_INVALID_USERNAME",
+                    message="Username must not be blank.",
+                )
+            return value
+
         if not _USERNAME_RE.fullmatch(value):
             raise AppError(
                 status_code=400,
@@ -568,6 +634,14 @@ class AuthService:
 
     def _normalize_display_name(self, display_name: str) -> str:
         value = display_name.strip()
+        if self._is_external_provider():
+            if not value or len(value) > 128:
+                raise AppError(
+                    status_code=400,
+                    code="AUTH_INVALID_DISPLAY_NAME",
+                    message="displayName must not be blank.",
+                )
+            return value
         if not _DISPLAY_NAME_RE.fullmatch(value):
             raise AppError(
                 status_code=400,
@@ -649,11 +723,7 @@ class AuthService:
         if not callable(finder):
             return []
         rows = await finder(nicknames)
-        return [
-            int(student_id)
-            for student_id in rows
-            if int(student_id) > 0
-        ]
+        return [int(student_id) for student_id in rows if int(student_id) > 0]
 
     async def _merge_achievement_states_for_student(
         self,

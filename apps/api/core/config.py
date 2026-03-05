@@ -116,12 +116,18 @@ class LLMConfig:
 @dataclass(slots=True)
 class AuthConfig:
     enabled: bool = True
+    provider: str = "internal"
     signup_policy: str = "username_password_only"
     jwt_secret_env: str = "ASCENDANY_AUTH_JWT_SECRET"
     jwt_secret: str = "ascendany-dev-insecure-secret"
     access_ttl_minutes: int = 15
     refresh_ttl_days: int = 30
     password_pepper_env: str = "ASCENDANY_AUTH_PASSWORD_PEPPER"
+
+    # External auth provider (MySQL app01_user) integration.
+    # When provider != "internal", `username`/`password` verification is delegated.
+    app01_db_config_path: str | None = None
+    app01_db_config_path_env: str = "ASCENDANY_APP01_DB_CONFIG_PATH"
 
 
 @dataclass(slots=True)
@@ -192,12 +198,15 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
         },
         "auth": {
             "enabled": settings.auth.enabled,
+            "provider": settings.auth.provider,
             "signup_policy": settings.auth.signup_policy,
             "jwt_secret_env": settings.auth.jwt_secret_env,
             "jwt_secret": settings.auth.jwt_secret,
             "access_ttl_minutes": settings.auth.access_ttl_minutes,
             "refresh_ttl_days": settings.auth.refresh_ttl_days,
             "password_pepper_env": settings.auth.password_pepper_env,
+            "app01_db_config_path": settings.auth.app01_db_config_path,
+            "app01_db_config_path_env": settings.auth.app01_db_config_path_env,
         },
     }
 
@@ -299,6 +308,7 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
         ),
         auth=AuthConfig(
             enabled=bool(auth.get("enabled", True)),
+            provider=str(auth.get("provider", "internal")).strip() or "internal",
             signup_policy=str(
                 auth.get("signup_policy", "username_password_only")
             ).strip(),
@@ -312,6 +322,14 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             refresh_ttl_days=max(1, int(auth.get("refresh_ttl_days", 30))),
             password_pepper_env=str(
                 auth.get("password_pepper_env", "ASCENDANY_AUTH_PASSWORD_PEPPER")
+            ).strip(),
+            app01_db_config_path=(
+                str(auth.get("app01_db_config_path")).strip()
+                if auth.get("app01_db_config_path")
+                else None
+            ),
+            app01_db_config_path_env=str(
+                auth.get("app01_db_config_path_env", "ASCENDANY_APP01_DB_CONFIG_PATH")
             ).strip(),
         ),
     )
@@ -341,7 +359,9 @@ def _apply_env_overrides(settings: Settings) -> None:
     ).strip()
     if env_server_default_base_url:
         settings.llm.server_default.base_url = env_server_default_base_url
-    env_server_default_model = os.getenv("ASCENDANY_LLM_SERVER_DEFAULT_MODEL", "").strip()
+    env_server_default_model = os.getenv(
+        "ASCENDANY_LLM_SERVER_DEFAULT_MODEL", ""
+    ).strip()
     if env_server_default_model:
         settings.llm.server_default.model = env_server_default_model
     env_server_default_api_key_env = os.getenv(
@@ -365,6 +385,9 @@ def _apply_env_overrides(settings: Settings) -> None:
     env_signup_policy = os.getenv("ASCENDANY_AUTH_SIGNUP_POLICY", "").strip()
     if env_signup_policy:
         settings.auth.signup_policy = env_signup_policy
+    env_provider = os.getenv("ASCENDANY_AUTH_PROVIDER", "").strip()
+    if env_provider:
+        settings.auth.provider = env_provider
     env_jwt_secret_env = os.getenv("ASCENDANY_AUTH_JWT_SECRET_ENV", "").strip()
     if env_jwt_secret_env:
         settings.auth.jwt_secret_env = env_jwt_secret_env
@@ -374,9 +397,15 @@ def _apply_env_overrides(settings: Settings) -> None:
     env_refresh_ttl = os.getenv("ASCENDANY_AUTH_REFRESH_TTL_DAYS", "").strip()
     if env_refresh_ttl:
         settings.auth.refresh_ttl_days = max(1, int(env_refresh_ttl))
-    env_password_pepper_env = os.getenv("ASCENDANY_AUTH_PASSWORD_PEPPER_ENV", "").strip()
+    env_password_pepper_env = os.getenv(
+        "ASCENDANY_AUTH_PASSWORD_PEPPER_ENV", ""
+    ).strip()
     if env_password_pepper_env:
         settings.auth.password_pepper_env = env_password_pepper_env
+
+    env_app01_cfg = os.getenv(settings.auth.app01_db_config_path_env, "").strip()
+    if env_app01_cfg:
+        settings.auth.app01_db_config_path = env_app01_cfg
 
 
 def load_settings(config_path: Path | None = None) -> Settings:

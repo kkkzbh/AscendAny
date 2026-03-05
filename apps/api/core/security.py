@@ -39,27 +39,58 @@ def hash_password(password: str, pepper: str = "") -> str:
 
 
 def verify_password(password: str, encoded: str, pepper: str = "") -> bool:
-    try:
-        algorithm, n_raw, r_raw, p_raw, salt_raw, digest_raw = encoded.split("$", 5)
-        if algorithm != "scrypt":
-            return False
-        n = int(n_raw)
-        r = int(r_raw)
-        p = int(p_raw)
-        salt = _b64url_decode(salt_raw)
-        expected = _b64url_decode(digest_raw)
-    except (ValueError, TypeError, binascii.Error, AttributeError):
+    if not encoded:
         return False
 
-    actual = hashlib.scrypt(
-        (password + pepper).encode("utf-8"),
-        salt=salt,
-        n=n,
-        r=r,
-        p=p,
-        dklen=len(expected),
-    )
-    return hmac.compare_digest(actual, expected)
+    if encoded.startswith("scrypt$"):
+        try:
+            algorithm, n_raw, r_raw, p_raw, salt_raw, digest_raw = encoded.split("$", 5)
+            if algorithm != "scrypt":
+                return False
+            n = int(n_raw)
+            r = int(r_raw)
+            p = int(p_raw)
+            salt = _b64url_decode(salt_raw)
+            expected = _b64url_decode(digest_raw)
+        except (ValueError, TypeError, binascii.Error, AttributeError):
+            return False
+
+        actual = hashlib.scrypt(
+            (password + pepper).encode("utf-8"),
+            salt=salt,
+            n=n,
+            r=r,
+            p=p,
+            dklen=len(expected),
+        )
+        return hmac.compare_digest(actual, expected)
+
+    # Django-style hash: pbkdf2_sha256$<iterations>$<salt>$<digest>
+    if encoded.startswith("pbkdf2_sha256$"):
+        try:
+            algorithm, iter_raw, salt, digest = encoded.split("$", 3)
+            if algorithm != "pbkdf2_sha256":
+                return False
+            iterations = int(iter_raw)
+            if iterations <= 0:
+                return False
+            if not salt:
+                return False
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+        # NOTE: This verifier intentionally ignores `pepper`.
+        dk = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt.encode("utf-8"),
+            iterations,
+            dklen=32,
+        )
+        actual = base64.b64encode(dk).decode("ascii").strip()
+        return hmac.compare_digest(actual, str(digest))
+
+    return False
 
 
 def hash_refresh_token(token: str, pepper: str = "") -> str:
@@ -99,7 +130,9 @@ def verify_access_token(token: str, secret: str) -> dict[str, Any]:
 
     header_raw, payload_raw, signature_raw = parts
     signing_input = f"{header_raw}.{payload_raw}".encode("ascii")
-    expected_sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    expected_sig = hmac.new(
+        secret.encode("utf-8"), signing_input, hashlib.sha256
+    ).digest()
     try:
         actual_sig = _b64url_decode(signature_raw)
     except (ValueError, binascii.Error) as exc:
