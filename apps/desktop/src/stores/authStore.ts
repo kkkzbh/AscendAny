@@ -19,6 +19,7 @@ import {
 interface LoginInput {
   username: string;
   password: string;
+  passwordMode?: "plain" | "stored_value";
   autoLogin: boolean;
   rememberPassword: boolean;
   deviceId?: string;
@@ -256,6 +257,7 @@ export const useAuthStore = create<AuthState>()(
           const tokens = await postLogin({
             username,
             password: input.password,
+            passwordMode: input.passwordMode,
             deviceId: normalizeOptional(input.deviceId),
           });
           await applySession({

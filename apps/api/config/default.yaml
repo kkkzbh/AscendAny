@@ -64,5 +64,6 @@ auth:
   access_ttl_minutes: 15
   refresh_ttl_days: 30
   password_pepper_env: ASCENDANY_AUTH_PASSWORD_PEPPER
+  allow_stored_password_direct_login: false
   app01_db_config_path: null
   app01_db_config_path_env: ASCENDANY_APP01_DB_CONFIG_PATH

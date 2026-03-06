@@ -30,6 +30,7 @@ class LoginRequest(BaseModel):
 
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)
+    passwordMode: Literal["plain", "stored_value"] = "plain"
     deviceId: str | None = Field(default=None, max_length=128)
 
 

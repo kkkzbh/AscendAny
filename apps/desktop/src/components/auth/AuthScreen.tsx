@@ -112,6 +112,7 @@ export function AuthScreen() {
     void login({
       username: params.username,
       password: params.password,
+      passwordMode: params.passwordMode,
       autoLogin: params.autoLogin,
       rememberPassword: credentialAvailable ? params.rememberPassword : false,
       deviceId: params.deviceId ?? "desktop-web-direct-login",
@@ -197,6 +198,7 @@ export function AuthScreen() {
         await login({
           username: nextUsername,
           password,
+          passwordMode: "plain",
           autoLogin,
           rememberPassword: effectiveRememberPassword,
           deviceId: "desktop",

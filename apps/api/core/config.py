@@ -123,6 +123,7 @@ class AuthConfig:
     access_ttl_minutes: int = 15
     refresh_ttl_days: int = 30
     password_pepper_env: str = "ASCENDANY_AUTH_PASSWORD_PEPPER"
+    allow_stored_password_direct_login: bool = False
 
     # External auth provider (MySQL app01_user) integration.
     # When provider != "internal", `username`/`password` verification is delegated.
@@ -205,6 +206,7 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "access_ttl_minutes": settings.auth.access_ttl_minutes,
             "refresh_ttl_days": settings.auth.refresh_ttl_days,
             "password_pepper_env": settings.auth.password_pepper_env,
+            "allow_stored_password_direct_login": settings.auth.allow_stored_password_direct_login,
             "app01_db_config_path": settings.auth.app01_db_config_path,
             "app01_db_config_path_env": settings.auth.app01_db_config_path_env,
         },
@@ -323,6 +325,9 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             password_pepper_env=str(
                 auth.get("password_pepper_env", "ASCENDANY_AUTH_PASSWORD_PEPPER")
             ).strip(),
+            allow_stored_password_direct_login=bool(
+                auth.get("allow_stored_password_direct_login", False)
+            ),
             app01_db_config_path=(
                 str(auth.get("app01_db_config_path")).strip()
                 if auth.get("app01_db_config_path")
@@ -402,6 +407,13 @@ def _apply_env_overrides(settings: Settings) -> None:
     ).strip()
     if env_password_pepper_env:
         settings.auth.password_pepper_env = env_password_pepper_env
+    env_allow_stored_password_direct_login = os.getenv(
+        "ASCENDANY_AUTH_ALLOW_STORED_PASSWORD_DIRECT_LOGIN", ""
+    ).strip().lower()
+    if env_allow_stored_password_direct_login in {"1", "true", "yes"}:
+        settings.auth.allow_stored_password_direct_login = True
+    elif env_allow_stored_password_direct_login in {"0", "false", "no"}:
+        settings.auth.allow_stored_password_direct_login = False
 
     env_app01_cfg = os.getenv(settings.auth.app01_db_config_path_env, "").strip()
     if env_app01_cfg:

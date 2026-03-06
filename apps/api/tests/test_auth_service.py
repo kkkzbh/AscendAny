@@ -7,6 +7,7 @@ import pytest
 
 from apps.api.core.config import Settings
 from apps.api.core.errors import AppError
+from apps.api.core.security import hash_password
 from apps.api.db.repository import AccountProfileRow, AccountRow, RefreshTokenRow
 from apps.api.schemas.auth import (
     AuthProfileUpdateRequest,
@@ -26,6 +27,16 @@ def _build_register_request(**overrides) -> RegisterRequest:
     }
     payload.update(overrides)
     return RegisterRequest(**payload)
+
+
+async def _create_account(repo: FakeAuthRepo, *, username: str, password_hash: str) -> AccountRow:
+    account = await repo.create_account(
+        username=username,
+        display_name=username,
+        password_hash=password_hash,
+    )
+    assert account is not None
+    return account
 
 
 class FakeAuthRepo:
@@ -475,6 +486,139 @@ def test_auth_login_rejects_wrong_password(monkeypatch) -> None:
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.code == "AUTH_INVALID_CREDENTIALS"
+
+
+def test_auth_login_accepts_stored_password_value_for_external_provider(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    settings.auth.provider = "app01_mysql"
+    settings.auth.allow_stored_password_direct_login = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    account = asyncio.run(
+        _create_account(repo, username="alice_01", password_hash="pbkdf2_sha256$stored-value")
+    )
+
+    result = asyncio.run(
+        service.login(
+            LoginRequest(
+                username="alice_01",
+                password="pbkdf2_sha256$stored-value",
+                passwordMode="stored_value",
+            )
+        )
+    )
+
+    assert result.account.accountId == str(account.account_id)
+    assert result.account.username == "alice_01"
+
+
+def test_auth_login_rejects_wrong_stored_password_value(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    settings.auth.provider = "app01_mysql"
+    settings.auth.allow_stored_password_direct_login = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    asyncio.run(
+        _create_account(repo, username="alice_01", password_hash="pbkdf2_sha256$stored-value")
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.login(
+                LoginRequest(
+                    username="alice_01",
+                    password="pbkdf2_sha256$different",
+                    passwordMode="stored_value",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.code == "AUTH_INVALID_CREDENTIALS"
+
+
+def test_auth_login_rejects_stored_password_value_when_flag_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    settings.auth.provider = "app01_mysql"
+    settings.auth.allow_stored_password_direct_login = False
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    asyncio.run(
+        _create_account(repo, username="alice_01", password_hash="pbkdf2_sha256$stored-value")
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.login(
+                LoginRequest(
+                    username="alice_01",
+                    password="pbkdf2_sha256$stored-value",
+                    passwordMode="stored_value",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.code == "AUTH_INVALID_CREDENTIALS"
+
+
+def test_auth_login_rejects_stored_password_value_for_internal_provider(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    settings.auth.provider = "internal"
+    settings.auth.allow_stored_password_direct_login = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    asyncio.run(
+        _create_account(repo, username="alice_01", password_hash="pbkdf2_sha256$stored-value")
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.login(
+                LoginRequest(
+                    username="alice_01",
+                    password="pbkdf2_sha256$stored-value",
+                    passwordMode="stored_value",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.code == "AUTH_INVALID_CREDENTIALS"
+
+
+def test_auth_login_plain_mode_still_verifies_password(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    settings.auth.provider = "app01_mysql"
+    settings.auth.allow_stored_password_direct_login = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    password_hash = hash_password("password_123")
+    account = asyncio.run(
+        _create_account(repo, username="alice_01", password_hash=password_hash)
+    )
+
+    result = asyncio.run(
+        service.login(
+            LoginRequest(
+                username="alice_01",
+                password="password_123",
+                passwordMode="plain",
+            )
+        )
+    )
+
+    assert result.account.accountId == str(account.account_id)
 
 
 def test_auth_signup_policy_requires_contact(monkeypatch) -> None:

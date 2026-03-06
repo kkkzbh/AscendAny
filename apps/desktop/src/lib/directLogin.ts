@@ -30,6 +30,8 @@ const DIRECT_LOGIN_PARAM_KEYS = [
   "username",
   "user",
   "aa_username",
+  "storedPassword",
+  "aa_stored_password",
   "password",
   "pass",
   "aa_password",
@@ -42,6 +44,7 @@ const DIRECT_LOGIN_PARAM_KEYS = [
 export interface DirectLoginParams {
   username: string;
   password: string;
+  passwordMode: "plain" | "stored_value";
   deviceId?: string;
   autoLogin: boolean;
   rememberPassword: boolean;
@@ -62,11 +65,16 @@ export function extractDirectLoginParamsFromUrl(
     "user",
     "aa_username",
   ]);
-  const password = readParam(url.searchParams, [
+  const storedPassword = readParam(url.searchParams, [
+    "storedPassword",
+    "aa_stored_password",
+  ]);
+  const plainPassword = readParam(url.searchParams, [
     "password",
     "pass",
     "aa_password",
   ]);
+  const password = storedPassword || plainPassword;
   if (!username || !password) {
     return null;
   }
@@ -75,6 +83,7 @@ export function extractDirectLoginParamsFromUrl(
   return {
     username,
     password,
+    passwordMode: storedPassword ? "stored_value" : "plain",
     autoLogin: readBooleanParam(url.searchParams, "autoLogin", true),
     rememberPassword: readBooleanParam(
       url.searchParams,

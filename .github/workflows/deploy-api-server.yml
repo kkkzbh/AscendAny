@@ -219,6 +219,7 @@ jobs:
               printf 'ASCENDANY_API_PORT=%s\n' "\${SECONDARY_API_PORT}"
               printf 'ASCENDANY_API_LOG_LEVEL=%s\n' "\${SECONDARY_API_LOG_LEVEL}"
               printf 'ASCENDANY_AUTH_PROVIDER=%s\n' "\${SECONDARY_API_AUTH_PROVIDER}"
+              printf 'ASCENDANY_AUTH_ALLOW_STORED_PASSWORD_DIRECT_LOGIN=true\n'
             } | sudo tee "\${SECONDARY_API_ENV_FILE}" >/dev/null
 
             if [ -n "\${SECONDARY_APP01_DB_CONFIG_PATH}" ]; then

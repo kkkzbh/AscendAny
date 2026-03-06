@@ -554,6 +554,7 @@ export interface RegisterPayload {
 export interface LoginPayload {
   username: string;
   password: string;
+  passwordMode?: "plain" | "stored_value";
   deviceId?: string;
 }
 

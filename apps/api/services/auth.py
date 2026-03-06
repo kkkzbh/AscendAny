@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 import re
 import secrets
@@ -233,8 +234,26 @@ class AuthService:
                 message="Account is disabled.",
             )
 
-        pepper = self._load_password_pepper()
-        if not verify_password(payload.password, account.password_hash, pepper=pepper):
+        mode = payload.passwordMode or "plain"
+        authenticated = False
+        if mode == "stored_value":
+            if (
+                self._settings.auth.allow_stored_password_direct_login
+                and self._is_external_provider()
+            ):
+                authenticated = hmac.compare_digest(
+                    payload.password,
+                    account.password_hash,
+                )
+        else:
+            pepper = self._load_password_pepper()
+            authenticated = verify_password(
+                payload.password,
+                account.password_hash,
+                pepper=pepper,
+            )
+
+        if not authenticated:
             raise AppError(
                 status_code=401,
                 code="AUTH_INVALID_CREDENTIALS",

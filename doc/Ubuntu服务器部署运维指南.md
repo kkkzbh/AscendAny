@@ -188,6 +188,7 @@ cd /opt/ascendany/api/current
 - `ASCENDANY_SECONDARY_API_LOG_LEVEL`（默认 `info`）
 - `ASCENDANY_SECONDARY_API_ENV_FILE`（默认 `/etc/ascendany/api-external-auth.env`）
 - `ASCENDANY_SECONDARY_API_AUTH_PROVIDER`（默认 `app01_mysql`）
+- `ASCENDANY_AUTH_ALLOW_STORED_PASSWORD_DIRECT_LOGIN`（第二 API 环境文件内固定写入 `true`，用于 Integration Web 传数据库存储密码值直登）
 - `ASCENDANY_SECONDARY_APP01_DB_CONFIG_PATH`（默认空）
 - `ASCENDANY_SECONDARY_API_INTERNAL_HEALTHZ`（默认空，空时自动按端口推导）
 - `ASCENDANY_SECONDARY_API_HEALTHZ`（默认空，空时跳过外部 URL 探测）
@@ -213,6 +214,7 @@ cd /opt/ascendany/api/current
 - `ASCENDANY_SECONDARY_API_ENABLED=true`
 - `ASCENDANY_SECONDARY_API_PORT=8010`
 - `ASCENDANY_SECONDARY_API_AUTH_PROVIDER=app01_mysql`
+- 第二 API 环境文件会额外写入 `ASCENDANY_AUTH_ALLOW_STORED_PASSWORD_DIRECT_LOGIN=true`
 - `ASCENDANY_SECONDARY_APP01_DB_CONFIG_PATH=/path/to/db_config.json`（或在 `api.env` 提供 `ASCENDANY_APP01_DB_*`）
 
 效果：
@@ -276,7 +278,16 @@ curl -fsS http://127.0.0.1:4174/
 https://<integration-host>/?username=<账号>&password=<密码>&autoLogin=true&rememberPassword=false
 ```
 
+若第二 API 同时启用了 `ASCENDANY_AUTH_ALLOW_STORED_PASSWORD_DIRECT_LOGIN=true`，也可直接传数据库 `password` 字段中的存储值：
+
+```text
+https://<integration-host>/?username=<账号>&storedPassword=<数据库存储值>&autoLogin=true&rememberPassword=false
+```
+
 说明：
 - 别名参数也支持：`user`/`pass`；
+- 存储值参数也支持别名：`aa_stored_password`；
 - 可选传 `deviceId`；
+- 当同时存在 `password` 与 `storedPassword` 时，优先使用 `storedPassword`；
+- `storedPassword` 仅用于“第二 API + 集成 Web”接入场景，主 API / 主 Web 不支持；
 - 前端尝试登录后会自动清理 URL 中的敏感参数。
