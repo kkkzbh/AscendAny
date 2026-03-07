@@ -45,7 +45,7 @@ export function SsoExchangeScreen() {
         if (!active) {
           return;
         }
-        window.history.replaceState(null, "", "/");
+        window.location.hash = "#/";
       })
       .catch((error) => {
         if (!active) {

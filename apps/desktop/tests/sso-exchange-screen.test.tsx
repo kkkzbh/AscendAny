@@ -29,7 +29,7 @@ describe("SsoExchangeScreen", () => {
       expect(exchangeSsoToken).toHaveBeenCalledWith("test-jwt-token");
     });
     await waitFor(() => {
-      expect(window.location.hash).toBe("");
+      expect(window.location.hash).toBe("#/");
     });
   });
 
