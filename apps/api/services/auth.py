@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import re
 import secrets
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from ..core.config import Settings
 from ..core.errors import AppError
@@ -15,6 +17,7 @@ from ..core.security import (
     hash_password,
     hash_refresh_token,
     sign_access_token,
+    verify_hs256_token,
     verify_access_token,
     verify_password,
 )
@@ -22,6 +25,7 @@ from ..db.repository import AccountProfileRow, AccountRow, ApiRepository
 from ..schemas.auth import (
     AuthAccountResponse,
     AuthMeResponse,
+    LocalPasswordBootstrapRequest,
     AuthPolicyResponse,
     AuthProfileResponse,
     AuthProfileUpdateRequest,
@@ -30,6 +34,7 @@ from ..schemas.auth import (
     LogoutRequest,
     RefreshRequest,
     RegisterRequest,
+    SSOExchangeRequest,
     SignupPolicy,
 )
 
@@ -45,6 +50,19 @@ class AuthenticatedAccount:
     account_id: int
     username: str
     is_admin: bool = False
+
+
+@dataclass(slots=True)
+class SSOClaims:
+    provider: str
+    external_user_id: str
+    jti: str
+    username: str
+    student_id: str
+    display_name: str | None
+    pta_nickname: str | None
+    expires_at: datetime
+    raw_claims: dict[str, object]
 
 
 class AuthService:
@@ -246,6 +264,12 @@ class AuthService:
                     account.password_hash,
                 )
         else:
+            if not getattr(account, "local_password_enabled", True):
+                raise AppError(
+                    status_code=403,
+                    code="AUTH_LOCAL_LOGIN_DISABLED",
+                    message="Local password login is not enabled for this account.",
+                )
             pepper = self._load_password_pepper()
             authenticated = verify_password(
                 payload.password,
@@ -266,6 +290,85 @@ class AuthService:
             profile=profile,
             device_id=self._clean(payload.deviceId),
         )
+
+    async def exchange_sso(self, payload: SSOExchangeRequest) -> AuthTokensResponse:
+        self._ensure_enabled()
+        if not self._settings.sso.enabled:
+            raise AppError(
+                status_code=503,
+                code="AUTH_SSO_DISABLED",
+                message="SSO is disabled on this server.",
+            )
+
+        claims = self._verify_sso_token(payload.token)
+        await self._repository.cleanup_expired_sso_jtis()
+        consumed = await self._repository.consume_sso_jti(
+            provider=claims.provider,
+            jti=claims.jti,
+            external_user_id=claims.external_user_id,
+            expires_at=claims.expires_at,
+            account_id=None,
+        )
+        if not consumed:
+            raise AppError(
+                status_code=409,
+                code="AUTH_SSO_TOKEN_REPLAYED",
+                message="SSO token has already been consumed.",
+            )
+
+        account, profile = await self._resolve_sso_account(claims)
+        await self._repository.attach_consumed_sso_jti_account(
+            provider=claims.provider,
+            jti=claims.jti,
+            account_id=account.account_id,
+        )
+        return await self._issue_tokens(
+            account=account,
+            profile=profile,
+            device_id=f"sso:{claims.provider}",
+        )
+
+    async def bootstrap_local_password(
+        self,
+        current: AuthenticatedAccount,
+        payload: LocalPasswordBootstrapRequest,
+    ) -> dict[str, bool]:
+        self._ensure_enabled()
+        account = await self._repository.fetch_account_by_id(current.account_id)
+        if account is None:
+            raise AppError(
+                status_code=404,
+                code="AUTH_ACCOUNT_NOT_FOUND",
+                message="Account was not found.",
+            )
+        if getattr(account, "local_password_enabled", True):
+            raise AppError(
+                status_code=409,
+                code="AUTH_LOCAL_PASSWORD_ALREADY_ENABLED",
+                message="Local password login is already enabled for this account.",
+            )
+
+        password = payload.newPassword
+        if len(password.strip()) < 8:
+            raise AppError(
+                status_code=400,
+                code="AUTH_PASSWORD_TOO_SHORT",
+                message="Password must be at least 8 characters.",
+            )
+
+        pepper = self._load_password_pepper()
+        password_hash = hash_password(password, pepper=pepper)
+        updated = await self._repository.bootstrap_local_password(
+            account_id=current.account_id,
+            password_hash=password_hash,
+        )
+        if updated is None:
+            raise AppError(
+                status_code=404,
+                code="AUTH_ACCOUNT_NOT_FOUND",
+                message="Account was not found.",
+            )
+        return {"ok": True}
 
     async def refresh(self, payload: RefreshRequest) -> AuthTokensResponse:
         self._ensure_enabled()
@@ -544,6 +647,329 @@ class AuthService:
             is_admin=bool(payload.get("adm", False)),
         )
 
+    async def _resolve_sso_account(
+        self,
+        claims: SSOClaims,
+    ) -> tuple[AccountRow, AccountProfileRow | None]:
+        link = await self._repository.fetch_external_identity_link(
+            claims.provider,
+            claims.external_user_id,
+        )
+        if link is not None:
+            account = await self._repository.fetch_account_by_id(link.account_id)
+            if account is None:
+                raise AppError(
+                    status_code=404,
+                    code="AUTH_ACCOUNT_NOT_FOUND",
+                    message="Account was not found.",
+                )
+            profile = await self._repository.fetch_account_profile(account.account_id)
+            if profile is None or self._clean(profile.student_id) != claims.student_id:
+                raise AppError(
+                    status_code=409,
+                    code="AUTH_SSO_STUDENT_ID_MISMATCH",
+                    message="Linked SSO identity does not match the account student ID.",
+                )
+            profile = await self._sync_sso_profile(
+                account=account,
+                profile=profile,
+                claims=claims,
+                student_mismatch_code="AUTH_SSO_STUDENT_ID_MISMATCH",
+                pta_mismatch_code="AUTH_SSO_PTA_NICKNAME_MISMATCH",
+            )
+            await self._repository.update_external_identity_snapshot(
+                link_id=link.link_id,
+                external_username=claims.username,
+                external_display_name=claims.display_name,
+                student_id_snapshot=claims.student_id,
+                pta_nickname_snapshot=claims.pta_nickname,
+                raw_claims=claims.raw_claims,
+            )
+            return account, profile
+
+        account = await self._repository.fetch_account_by_student_id(claims.student_id)
+        if account is not None:
+            profile = await self._repository.fetch_account_profile(account.account_id)
+            profile = await self._sync_sso_profile(
+                account=account,
+                profile=profile,
+                claims=claims,
+                student_mismatch_code="AUTH_SSO_STUDENT_ID_MISMATCH",
+                pta_mismatch_code="AUTH_SSO_PTA_NICKNAME_MISMATCH",
+            )
+            created_link = await self._repository.create_external_identity_link(
+                provider=claims.provider,
+                external_user_id=claims.external_user_id,
+                account_id=account.account_id,
+                external_username=claims.username,
+                external_display_name=claims.display_name,
+                student_id_snapshot=claims.student_id,
+                pta_nickname_snapshot=claims.pta_nickname,
+                raw_claims=claims.raw_claims,
+            )
+            if created_link is None:
+                raise AppError(
+                    status_code=409,
+                    code="AUTH_SSO_TOKEN_REPLAYED",
+                    message="SSO identity is already linked by another request.",
+                )
+            return account, profile
+
+        username = self._normalize_username(claims.username)
+        existing = await self._fetch_account_by_username(username)
+        if existing is not None:
+            raise AppError(
+                status_code=409,
+                code="AUTH_SSO_USERNAME_CONFLICT",
+                message="Username is already in use.",
+            )
+
+        display_name = claims.display_name or username
+        pepper = self._load_password_pepper()
+        random_password_hash = hash_password(secrets.token_urlsafe(32), pepper=pepper)
+        account = None
+        for candidate_display_name in [display_name, username]:
+            if account is not None:
+                break
+            account = await self._repository.create_account(
+                username=username,
+                display_name=candidate_display_name,
+                password_hash=random_password_hash,
+                provision_source="external_sso",
+                local_password_enabled=False,
+                local_password_set_at=None,
+            )
+        if account is None:
+            raise AppError(
+                status_code=409,
+                code="AUTH_SSO_USERNAME_CONFLICT",
+                message="Username is already in use.",
+            )
+        try:
+            profile = await self._repository.upsert_account_profile(
+                account_id=account.account_id,
+                student_id=claims.student_id,
+                pta_nickname=None,
+            )
+            profile = await self._sync_sso_profile(
+                account=account,
+                profile=profile,
+                claims=claims,
+                student_mismatch_code="AUTH_SSO_STUDENT_ID_MISMATCH",
+                pta_mismatch_code="AUTH_SSO_PTA_NICKNAME_CONFLICT",
+            )
+            created_link = await self._repository.create_external_identity_link(
+                provider=claims.provider,
+                external_user_id=claims.external_user_id,
+                account_id=account.account_id,
+                external_username=claims.username,
+                external_display_name=claims.display_name,
+                student_id_snapshot=claims.student_id,
+                pta_nickname_snapshot=claims.pta_nickname,
+                raw_claims=claims.raw_claims,
+            )
+            if created_link is None:
+                raise AppError(
+                    status_code=409,
+                    code="AUTH_SSO_TOKEN_REPLAYED",
+                    message="SSO identity is already linked by another request.",
+                )
+            return account, profile
+        except Exception:
+            await self._repository.delete_account(account.account_id)
+            raise
+
+    async def _sync_sso_profile(
+        self,
+        account: AccountRow,
+        profile: AccountProfileRow | None,
+        claims: SSOClaims,
+        student_mismatch_code: str,
+        pta_mismatch_code: str,
+    ) -> AccountProfileRow:
+        current_student_id = self._clean(profile.student_id if profile else None)
+        if current_student_id is None:
+            profile = await self._repository.upsert_account_profile(
+                account_id=account.account_id,
+                student_id=claims.student_id,
+                pta_nickname=profile.pta_nickname if profile else None,
+            )
+            current_student_id = claims.student_id
+        if current_student_id != claims.student_id:
+            raise AppError(
+                status_code=409,
+                code=student_mismatch_code,
+                message="SSO payload does not match the linked student profile.",
+            )
+
+        next_pta_nickname = self._clean(profile.pta_nickname if profile else None)
+        incoming_pta_nickname = claims.pta_nickname
+        if (
+            next_pta_nickname is not None
+            and incoming_pta_nickname is not None
+            and next_pta_nickname != incoming_pta_nickname
+        ):
+            raise AppError(
+                status_code=409,
+                code=pta_mismatch_code,
+                message="SSO payload does not match the linked PTA nickname.",
+            )
+
+        student_entity_id = await self._repository.ensure_student_by_student_no(
+            student_no=claims.student_id,
+            student_name=incoming_pta_nickname,
+        )
+        if incoming_pta_nickname:
+            claimed = await self._repository.claim_student_nickname(
+                student_id=student_entity_id,
+                nickname=incoming_pta_nickname,
+                account_id=account.account_id,
+            )
+            if not claimed:
+                raise AppError(
+                    status_code=409,
+                    code="AUTH_SSO_PTA_NICKNAME_CONFLICT",
+                    message="ptaNickname is already claimed by another student.",
+                )
+            await self._repository.upsert_student_identity(
+                student_id=student_entity_id,
+                source="pta_nickname",
+                external_id=incoming_pta_nickname,
+                external_name=incoming_pta_nickname,
+            )
+            if next_pta_nickname != incoming_pta_nickname:
+                related_student_ids = await self._find_related_student_ids_by_nicknames(
+                    [incoming_pta_nickname]
+                )
+                await self._repository.reassign_submissions_by_nicknames(
+                    student_id=student_entity_id,
+                    nicknames=[incoming_pta_nickname],
+                    reason="sso_claim",
+                )
+                await self._merge_achievement_states_for_student(
+                    target_student_id=student_entity_id,
+                    source_student_ids=related_student_ids + [student_entity_id],
+                )
+                profile = await self._repository.upsert_account_profile(
+                    account_id=account.account_id,
+                    student_id=claims.student_id,
+                    pta_nickname=incoming_pta_nickname,
+                )
+        if profile is None:
+            profile = await self._repository.upsert_account_profile(
+                account_id=account.account_id,
+                student_id=claims.student_id,
+                pta_nickname=incoming_pta_nickname,
+            )
+        return profile
+
+    def _verify_sso_token(self, token: str) -> SSOClaims:
+        secret = self._load_sso_secret()
+        try:
+            _, payload = verify_hs256_token(token, secret=secret)
+        except ValueError as exc:
+            raise AppError(
+                status_code=401,
+                code="AUTH_SSO_TOKEN_INVALID",
+                message="SSO token is invalid.",
+            ) from exc
+
+        provider = self._settings.sso.provider.strip() or "external_app"
+        issuer = self._settings.sso.issuer.strip() or provider
+        audience = self._settings.sso.audience.strip()
+        clock_skew = max(0, self._settings.sso.clock_skew_seconds)
+        max_token_ttl = max(1, self._settings.sso.max_token_ttl_seconds)
+
+        iss = self._claim_as_string(payload, "iss")
+        aud = payload.get("aud")
+        if iss != issuer or not self._claim_matches_audience(aud, audience):
+            raise AppError(
+                status_code=401,
+                code="AUTH_SSO_TOKEN_INVALID",
+                message="SSO token is invalid.",
+            )
+
+        external_user_id = self._claim_as_string(payload, "sub")
+        jti = self._claim_as_string(payload, "jti")
+        username = self._claim_as_string(payload, "username")
+        student_id = self._claim_as_string(payload, "student_id")
+        display_name = self._optional_string_claim(payload, "display_name")
+        pta_nickname = self._optional_string_claim(payload, "pta_nickname")
+
+        iat = self._claim_as_int(payload, "iat")
+        exp = self._claim_as_int(payload, "exp")
+        if exp <= iat or exp - iat > max_token_ttl:
+            raise AppError(
+                status_code=401,
+                code="AUTH_SSO_TOKEN_INVALID",
+                message="SSO token is invalid.",
+            )
+
+        now = int(datetime.now(UTC).timestamp())
+        if iat > now + clock_skew:
+            raise AppError(
+                status_code=401,
+                code="AUTH_SSO_TOKEN_INVALID",
+                message="SSO token is invalid.",
+            )
+        if exp < now - clock_skew:
+            raise AppError(
+                status_code=401,
+                code="AUTH_SSO_TOKEN_EXPIRED",
+                message="SSO token has expired.",
+            )
+
+        raw_claims = json.loads(json.dumps(payload))
+        return SSOClaims(
+            provider=provider,
+            external_user_id=external_user_id,
+            jti=jti,
+            username=username,
+            student_id=student_id,
+            display_name=display_name,
+            pta_nickname=pta_nickname,
+            expires_at=datetime.fromtimestamp(exp, tz=UTC),
+            raw_claims=raw_claims,
+        )
+
+    @staticmethod
+    def _claim_matches_audience(value: Any, expected: str) -> bool:
+        if not expected:
+            return True
+        if isinstance(value, str):
+            return value == expected
+        if isinstance(value, list):
+            return any(isinstance(item, str) and item == expected for item in value)
+        return False
+
+    def _claim_as_string(self, payload: dict[str, Any], key: str) -> str:
+        value = self._clean(payload.get(key))
+        if value is None:
+            raise AppError(
+                status_code=401,
+                code="AUTH_SSO_TOKEN_INVALID",
+                message="SSO token is invalid.",
+            )
+        return value
+
+    @staticmethod
+    def _claim_as_int(payload: dict[str, Any], key: str) -> int:
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise AppError(
+                status_code=401,
+                code="AUTH_SSO_TOKEN_INVALID",
+                message="SSO token is invalid.",
+            )
+        return int(value)
+
+    def _optional_string_claim(
+        self,
+        payload: dict[str, Any],
+        key: str,
+    ) -> str | None:
+        return self._clean(payload.get(key))
+
     async def _issue_tokens(
         self,
         account: AccountRow,
@@ -597,6 +1023,10 @@ class AuthService:
             isAdmin=bool(getattr(account, "is_admin", False)),
             studentId=student_id,
             ptaNickname=pta_nickname,
+            provisionSource=str(getattr(account, "provision_source", "local")),
+            localPasswordEnabled=bool(
+                getattr(account, "local_password_enabled", True)
+            ),
         )
 
     def _ensure_enabled(self) -> None:
@@ -729,6 +1159,16 @@ class AuthService:
 
     def _load_password_pepper(self) -> str:
         return os.getenv(self._settings.auth.password_pepper_env, "").strip()
+
+    def _load_sso_secret(self) -> str:
+        secret = os.getenv(self._settings.sso.hs256_secret_env, "").strip()
+        if secret:
+            return secret
+        raise AppError(
+            status_code=503,
+            code="AUTH_CONFIG_ERROR",
+            message=f"Missing SSO secret env var: {self._settings.sso.hs256_secret_env}",
+        )
 
     async def _find_related_student_ids_by_nicknames(
         self,

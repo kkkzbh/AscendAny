@@ -1,19 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
+import json
 from datetime import UTC, datetime, timedelta
+import secrets
 
 import pytest
 
 from apps.api.core.config import Settings
 from apps.api.core.errors import AppError
 from apps.api.core.security import hash_password
-from apps.api.db.repository import AccountProfileRow, AccountRow, RefreshTokenRow
+from apps.api.db.repository import (
+    AccountProfileRow,
+    AccountRow,
+    ExternalIdentityLinkRow,
+    RefreshTokenRow,
+)
 from apps.api.schemas.auth import (
     AuthProfileUpdateRequest,
     LoginRequest,
+    LocalPasswordBootstrapRequest,
     RefreshRequest,
     RegisterRequest,
+    SSOExchangeRequest,
 )
 from apps.api.services.auth import AuthService
 
@@ -39,11 +51,45 @@ async def _create_account(repo: FakeAuthRepo, *, username: str, password_hash: s
     return account
 
 
+def _build_sso_request(
+    secret: str,
+    **overrides,
+) -> SSOExchangeRequest:
+    def _encode(data: dict[str, object]) -> str:
+        return base64.urlsafe_b64encode(
+            json.dumps(data, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).rstrip(b"=").decode("ascii")
+
+    now = int(datetime.now(UTC).timestamp())
+    payload = {
+        "iss": "external_app",
+        "aud": "ascendany_web",
+        "sub": "external-user-1",
+        "jti": secrets.token_hex(8),
+        "username": "alice_01",
+        "student_id": "20230001",
+        "display_name": "Alice",
+        "pta_nickname": "Alice",
+        "iat": now,
+        "exp": now + 30,
+    }
+    payload.update(overrides)
+    header = {"alg": "HS256", "typ": "JWT"}
+    signing_input = f"{_encode(header)}.{_encode(payload)}".encode("ascii")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    token = (
+        f"{signing_input.decode('ascii')}."
+        f"{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+    )
+    return SSOExchangeRequest(token=token)
+
+
 class FakeAuthRepo:
     def __init__(self) -> None:
         self._next_account_id = 1
         self._next_token_id = 1
         self._next_student_entity_id = 1
+        self._next_link_id = 1
         self.accounts_by_id: dict[int, AccountRow] = {}
         self.account_by_username_norm: dict[str, int] = {}
         self.account_by_display_name_norm: dict[str, int] = {}
@@ -56,9 +102,17 @@ class FakeAuthRepo:
         self.reassigned_calls: list[tuple[int, tuple[str, ...], str]] = []
         self.related_students_by_nickname: dict[str, set[int]] = {}
         self.achievement_merge_calls: list[tuple[int, tuple[int, ...]]] = []
+        self.external_links_by_key: dict[tuple[str, str], ExternalIdentityLinkRow] = {}
+        self.consumed_jtis: dict[tuple[str, str], dict[str, object]] = {}
 
     async def create_account(
-        self, username: str, display_name: str, password_hash: str
+        self,
+        username: str,
+        display_name: str,
+        password_hash: str,
+        provision_source: str = "local",
+        local_password_enabled: bool = True,
+        local_password_set_at: datetime | None = None,
     ) -> AccountRow | None:
         username_norm = username.strip().lower()
         display_name_norm = display_name.strip().lower()
@@ -75,6 +129,9 @@ class FakeAuthRepo:
             display_name=display_name.strip(),
             password_hash=password_hash,
             is_active=True,
+            provision_source=provision_source,
+            local_password_enabled=local_password_enabled,
+            local_password_set_at=local_password_set_at,
         )
         self.accounts_by_id[account_id] = row
         self.account_by_username_norm[username_norm] = account_id
@@ -117,6 +174,9 @@ class FakeAuthRepo:
             password_hash=row.password_hash,
             is_active=row.is_active,
             is_admin=row.is_admin,
+            provision_source=row.provision_source,
+            local_password_enabled=row.local_password_enabled,
+            local_password_set_at=row.local_password_set_at,
         )
         self.accounts_by_id[account_id] = updated
         self.account_by_display_name_norm[next_display_name_norm] = account_id
@@ -132,6 +192,9 @@ class FakeAuthRepo:
         self.account_by_username_norm.pop(row.username.lower(), None)
         self.account_by_display_name_norm.pop(row.display_name.lower(), None)
         self.profiles.pop(account_id, None)
+        for key, link in list(self.external_links_by_key.items()):
+            if link.account_id == account_id:
+                del self.external_links_by_key[key]
 
     async def fetch_account_profile(self, account_id: int) -> AccountProfileRow | None:
         return self.profiles.get(account_id)
@@ -146,6 +209,143 @@ class FakeAuthRepo:
         )
         self.profiles[account_id] = row
         return row
+
+    async def fetch_account_by_student_id(self, student_id: str) -> AccountRow | None:
+        normalized = student_id.strip()
+        for account_id, profile in sorted(self.profiles.items()):
+            if (profile.student_id or "").strip() == normalized:
+                return self.accounts_by_id.get(account_id)
+        return None
+
+    async def bootstrap_local_password(
+        self,
+        account_id: int,
+        password_hash: str,
+    ) -> AccountRow | None:
+        row = self.accounts_by_id.get(account_id)
+        if row is None:
+            return None
+        updated = AccountRow(
+            account_id=row.account_id,
+            username=row.username,
+            display_name=row.display_name,
+            password_hash=password_hash,
+            is_active=row.is_active,
+            is_admin=row.is_admin,
+            provision_source=row.provision_source,
+            local_password_enabled=True,
+            local_password_set_at=datetime.now(UTC),
+        )
+        self.accounts_by_id[account_id] = updated
+        return updated
+
+    async def fetch_external_identity_link(
+        self,
+        provider: str,
+        external_user_id: str,
+    ) -> ExternalIdentityLinkRow | None:
+        return self.external_links_by_key.get((provider, external_user_id))
+
+    async def create_external_identity_link(
+        self,
+        provider: str,
+        external_user_id: str,
+        account_id: int,
+        external_username: str,
+        external_display_name: str | None,
+        student_id_snapshot: str,
+        pta_nickname_snapshot: str | None,
+        raw_claims: dict[str, object],
+    ) -> ExternalIdentityLinkRow | None:
+        key = (provider, external_user_id)
+        if key in self.external_links_by_key:
+            return None
+        row = ExternalIdentityLinkRow(
+            link_id=self._next_link_id,
+            provider=provider,
+            external_user_id=external_user_id,
+            account_id=account_id,
+            external_username=external_username,
+            external_display_name=external_display_name,
+            student_id_snapshot=student_id_snapshot,
+            pta_nickname_snapshot=pta_nickname_snapshot,
+            raw_claims=dict(raw_claims),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            last_login_at=datetime.now(UTC),
+        )
+        self._next_link_id += 1
+        self.external_links_by_key[key] = row
+        return row
+
+    async def update_external_identity_snapshot(
+        self,
+        link_id: int,
+        external_username: str,
+        external_display_name: str | None,
+        student_id_snapshot: str,
+        pta_nickname_snapshot: str | None,
+        raw_claims: dict[str, object],
+    ) -> ExternalIdentityLinkRow | None:
+        for key, row in list(self.external_links_by_key.items()):
+            if row.link_id != link_id:
+                continue
+            updated = ExternalIdentityLinkRow(
+                link_id=row.link_id,
+                provider=row.provider,
+                external_user_id=row.external_user_id,
+                account_id=row.account_id,
+                external_username=external_username,
+                external_display_name=external_display_name,
+                student_id_snapshot=student_id_snapshot,
+                pta_nickname_snapshot=pta_nickname_snapshot,
+                raw_claims=dict(raw_claims),
+                created_at=row.created_at,
+                updated_at=datetime.now(UTC),
+                last_login_at=datetime.now(UTC),
+            )
+            self.external_links_by_key[key] = updated
+            return updated
+        return None
+
+    async def cleanup_expired_sso_jtis(self) -> int:
+        removed = 0
+        threshold = datetime.now(UTC) - timedelta(days=1)
+        for key, row in list(self.consumed_jtis.items()):
+            expires_at = row.get("expires_at")
+            if isinstance(expires_at, datetime) and expires_at < threshold:
+                del self.consumed_jtis[key]
+                removed += 1
+        return removed
+
+    async def consume_sso_jti(
+        self,
+        provider: str,
+        jti: str,
+        external_user_id: str,
+        expires_at: datetime,
+        account_id: int | None = None,
+    ) -> bool:
+        key = (provider, jti)
+        if key in self.consumed_jtis:
+            return False
+        self.consumed_jtis[key] = {
+            "external_user_id": external_user_id,
+            "account_id": account_id,
+            "expires_at": expires_at,
+            "consumed_at": datetime.now(UTC),
+        }
+        return True
+
+    async def attach_consumed_sso_jti_account(
+        self,
+        provider: str,
+        jti: str,
+        account_id: int,
+    ) -> None:
+        key = (provider, jti)
+        if key in self.consumed_jtis:
+            self.consumed_jtis[key]["account_id"] = account_id
 
     async def ensure_student_by_student_no(
         self,
@@ -619,6 +819,242 @@ def test_auth_login_plain_mode_still_verifies_password(monkeypatch) -> None:
     )
 
     assert result.account.accountId == str(account.account_id)
+
+
+def test_auth_sso_exchange_creates_new_account(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("ASCENDANY_SSO_EXTERNAL_APP_SECRET", "sso-secret")
+    settings = Settings()
+    settings.sso.enabled = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    result = asyncio.run(service.exchange_sso(_build_sso_request("sso-secret")))
+
+    assert result.account.username == "alice_01"
+    assert result.account.studentId == "20230001"
+    assert result.account.ptaNickname == "Alice"
+    assert result.account.provisionSource == "external_sso"
+    assert result.account.localPasswordEnabled is False
+    assert repo.external_links_by_key[("external_app", "external-user-1")].account_id == 1
+
+
+def test_auth_sso_exchange_auto_links_existing_student_id(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("ASCENDANY_SSO_EXTERNAL_APP_SECRET", "sso-secret")
+    settings = Settings()
+    settings.sso.enabled = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    account = asyncio.run(
+        repo.create_account(
+            username="existing_user",
+            display_name="existing_user",
+            password_hash=hash_password("password_123"),
+        )
+    )
+    assert account is not None
+    asyncio.run(
+        repo.upsert_account_profile(
+            account_id=account.account_id,
+            student_id="20230001",
+            pta_nickname=None,
+        )
+    )
+
+    result = asyncio.run(
+        service.exchange_sso(
+            _build_sso_request(
+                "sso-secret",
+                username="external_username",
+                pta_nickname="Alice",
+            )
+        )
+    )
+
+    assert result.account.accountId == str(account.account_id)
+    assert result.account.username == "existing_user"
+    assert result.account.ptaNickname == "Alice"
+    assert repo.external_links_by_key[("external_app", "external-user-1")].account_id == account.account_id
+
+
+def test_auth_sso_exchange_rejects_username_conflict(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("ASCENDANY_SSO_EXTERNAL_APP_SECRET", "sso-secret")
+    settings = Settings()
+    settings.sso.enabled = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    asyncio.run(
+        _create_account(repo, username="alice_01", password_hash=hash_password("password_123"))
+    )
+    asyncio.run(
+        repo.upsert_account_profile(
+            account_id=1,
+            student_id="20239999",
+            pta_nickname="Other",
+        )
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.exchange_sso(
+                _build_sso_request(
+                    "sso-secret",
+                    student_id="20230001",
+                    pta_nickname="Alice",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "AUTH_SSO_USERNAME_CONFLICT"
+
+
+def test_auth_sso_exchange_rejects_replayed_jti(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("ASCENDANY_SSO_EXTERNAL_APP_SECRET", "sso-secret")
+    settings = Settings()
+    settings.sso.enabled = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+    request = _build_sso_request("sso-secret", jti="same-jti")
+
+    first = asyncio.run(service.exchange_sso(request))
+    assert first.account.accountId == "1"
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(service.exchange_sso(request))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "AUTH_SSO_TOKEN_REPLAYED"
+
+
+def test_auth_sso_exchange_rejects_student_id_mismatch_for_link(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("ASCENDANY_SSO_EXTERNAL_APP_SECRET", "sso-secret")
+    settings = Settings()
+    settings.sso.enabled = True
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    account = asyncio.run(
+        repo.create_account(
+            username="alice_01",
+            display_name="alice_01",
+            password_hash=hash_password("password_123"),
+            provision_source="external_sso",
+            local_password_enabled=False,
+        )
+    )
+    assert account is not None
+    asyncio.run(
+        repo.upsert_account_profile(
+            account_id=account.account_id,
+            student_id="20230001",
+            pta_nickname="Alice",
+        )
+    )
+    asyncio.run(
+        repo.create_external_identity_link(
+            provider="external_app",
+            external_user_id="external-user-1",
+            account_id=account.account_id,
+            external_username="alice_01",
+            external_display_name="Alice",
+            student_id_snapshot="20230001",
+            pta_nickname_snapshot="Alice",
+            raw_claims={},
+        )
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.exchange_sso(
+                _build_sso_request("sso-secret", student_id="20239999")
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "AUTH_SSO_STUDENT_ID_MISMATCH"
+
+
+def test_auth_login_rejects_plain_password_when_local_password_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    asyncio.run(
+        repo.create_account(
+            username="alice_01",
+            display_name="alice_01",
+            password_hash=hash_password("password_123"),
+            provision_source="external_sso",
+            local_password_enabled=False,
+        )
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.login(
+                LoginRequest(
+                    username="alice_01",
+                    password="password_123",
+                    passwordMode="plain",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "AUTH_LOCAL_LOGIN_DISABLED"
+
+
+def test_auth_bootstrap_local_password_enables_plain_login(monkeypatch) -> None:
+    monkeypatch.setenv("ASCENDANY_AUTH_JWT_SECRET", "test-secret")
+    settings = Settings()
+    repo = FakeAuthRepo()
+    service = AuthService(settings=settings, repository=repo)
+
+    account = asyncio.run(
+        repo.create_account(
+            username="alice_01",
+            display_name="alice_01",
+            password_hash=hash_password("placeholder"),
+            provision_source="external_sso",
+            local_password_enabled=False,
+        )
+    )
+    assert account is not None
+
+    asyncio.run(
+        service.bootstrap_local_password(
+            service.authenticate_access_token(
+                asyncio.run(
+                    service._issue_tokens(
+                        account,
+                        None,
+                        device_id="test-device",
+                    )
+                ).accessToken
+            ),
+            LocalPasswordBootstrapRequest(newPassword="password_123"),
+        )
+    )
+
+    result = asyncio.run(
+        service.login(
+            LoginRequest(
+                username="alice_01",
+                password="password_123",
+                passwordMode="plain",
+            )
+        )
+    )
+
+    assert result.account.localPasswordEnabled is True
 
 
 def test_auth_signup_policy_requires_contact(monkeypatch) -> None:

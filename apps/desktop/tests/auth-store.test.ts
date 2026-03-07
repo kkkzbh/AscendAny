@@ -3,18 +3,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   fetchAuthMe,
   fetchAuthPolicy,
+  postBootstrapLocalPassword,
   postLogin,
   postLogout,
   postRefresh,
   postRegister,
+  postSsoExchange,
   putAuthProfile,
 } = vi.hoisted(() => ({
   fetchAuthMe: vi.fn(),
   fetchAuthPolicy: vi.fn(),
+  postBootstrapLocalPassword: vi.fn(),
   postLogin: vi.fn(),
   postLogout: vi.fn(),
   postRefresh: vi.fn(),
   postRegister: vi.fn(),
+  postSsoExchange: vi.fn(),
   putAuthProfile: vi.fn(),
 }));
 
@@ -28,10 +32,12 @@ vi.mock("@/lib/api", () => ({
   fetchAuthPolicy,
   getApiErrorMessage: (error: unknown, fallback: string) =>
     error instanceof Error ? error.message : fallback,
+  postBootstrapLocalPassword,
   postLogin,
   postLogout,
   postRefresh,
   postRegister,
+  postSsoExchange,
   putAuthProfile,
 }));
 
@@ -68,6 +74,8 @@ describe("authStore logout", () => {
         displayName: "Alice",
         studentId: "20230001",
         ptaNickname: "alice_pta",
+        provisionSource: "local",
+        localPasswordEnabled: true,
       },
       accessToken: "access-token",
       refreshToken: "refresh-token",
@@ -157,6 +165,8 @@ describe("authStore bootstrap", () => {
       displayName: "Alice",
       studentId: "20230001",
       ptaNickname: "alice_pta",
+      provisionSource: "local",
+      localPasswordEnabled: true,
     });
 
     const hasHydratedSpy = vi.spyOn(useAuthStore.persist, "hasHydrated").mockReturnValue(false);
@@ -209,6 +219,8 @@ describe("authStore bootstrap", () => {
       displayName: "Alice",
       studentId: "20230001",
       ptaNickname: "alice_pta",
+      provisionSource: "local",
+      localPasswordEnabled: true,
     });
 
     await useAuthStore.persist.rehydrate();

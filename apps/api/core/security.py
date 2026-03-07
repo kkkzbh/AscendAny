@@ -124,6 +124,16 @@ def sign_access_token(
 
 
 def verify_access_token(token: str, secret: str) -> dict[str, Any]:
+    _, payload = verify_hs256_token(token, secret=secret)
+    exp = payload.get("exp")
+    if not isinstance(exp, int):
+        raise ValueError("invalid_token_exp")
+    if exp < int(time.time()):
+        raise ValueError("token_expired")
+    return payload
+
+
+def verify_hs256_token(token: str, secret: str) -> tuple[dict[str, Any], dict[str, Any]]:
     parts = token.split(".")
     if len(parts) != 3:
         raise ValueError("invalid_token_format")
@@ -142,6 +152,16 @@ def verify_access_token(token: str, secret: str) -> dict[str, Any]:
         raise ValueError("invalid_token_signature")
 
     try:
+        header = json.loads(_b64url_decode(header_raw).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid_token_header") from exc
+
+    if not isinstance(header, dict):
+        raise ValueError("invalid_token_header")
+    if header.get("alg") != "HS256":
+        raise ValueError("invalid_token_algorithm")
+
+    try:
         payload = json.loads(_b64url_decode(payload_raw).decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid_token_payload") from exc
@@ -149,10 +169,4 @@ def verify_access_token(token: str, secret: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("invalid_token_payload")
 
-    exp = payload.get("exp")
-    if not isinstance(exp, int):
-        raise ValueError("invalid_token_exp")
-    if exp < int(time.time()):
-        raise ValueError("token_expired")
-
-    return payload
+    return header, payload

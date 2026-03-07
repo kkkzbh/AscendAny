@@ -159,6 +159,9 @@ class AccountRow:
     password_hash: str
     is_active: bool
     is_admin: bool = False
+    provision_source: str = "local"
+    local_password_enabled: bool = True
+    local_password_set_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -218,6 +221,22 @@ class RefreshTokenRow:
     device_id: str | None
 
 
+@dataclass(slots=True)
+class ExternalIdentityLinkRow:
+    link_id: int
+    provider: str
+    external_user_id: str
+    account_id: int
+    external_username: str
+    external_display_name: str | None
+    student_id_snapshot: str
+    pta_nickname_snapshot: str | None
+    raw_claims: dict[str, object]
+    created_at: datetime | None
+    updated_at: datetime | None
+    last_login_at: datetime | None
+
+
 class ApiRepository:
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
@@ -226,21 +245,8 @@ class ApiRepository:
     def _is_missing_relation_error(exc: Exception) -> bool:
         return getattr(exc, "sqlstate", None) == "42P01"
 
-    async def create_account(
-        self, username: str, display_name: str, password_hash: str
-    ) -> AccountRow | None:
-        query = """
-            INSERT INTO ascendany.user_accounts (username, display_name, password_hash)
-            VALUES (%s, %s, %s)
-            ON CONFLICT DO NOTHING
-            RETURNING account_id, username, display_name, password_hash, is_active, is_admin
-        """
-        async with self._pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cursor:
-                await cursor.execute(query, (username, display_name, password_hash))
-                row = await cursor.fetchone()
-        if not row:
-            return None
+    @staticmethod
+    def _row_to_account(row: dict[str, object]) -> AccountRow:
         return AccountRow(
             account_id=int(row["account_id"]),
             username=str(row["username"]),
@@ -248,7 +254,100 @@ class ApiRepository:
             password_hash=str(row["password_hash"]),
             is_active=bool(row["is_active"]),
             is_admin=bool(row.get("is_admin", False)),
+            provision_source=str(row.get("provision_source", "local") or "local"),
+            local_password_enabled=bool(
+                row.get("local_password_enabled", True)
+            ),
+            local_password_set_at=row.get("local_password_set_at")
+            if isinstance(row.get("local_password_set_at"), datetime)
+            else None,
         )
+
+    @staticmethod
+    def _row_to_external_identity_link(
+        row: dict[str, object],
+    ) -> ExternalIdentityLinkRow:
+        raw_claims = row.get("raw_claims")
+        normalized_claims: dict[str, object] = {}
+        if isinstance(raw_claims, dict):
+            normalized_claims = raw_claims
+        return ExternalIdentityLinkRow(
+            link_id=int(row["link_id"]),
+            provider=str(row["provider"]),
+            external_user_id=str(row["external_user_id"]),
+            account_id=int(row["account_id"]),
+            external_username=str(row["external_username"]),
+            external_display_name=(
+                str(row["external_display_name"])
+                if row.get("external_display_name") is not None
+                else None
+            ),
+            student_id_snapshot=str(row["student_id_snapshot"]),
+            pta_nickname_snapshot=(
+                str(row["pta_nickname_snapshot"])
+                if row.get("pta_nickname_snapshot") is not None
+                else None
+            ),
+            raw_claims=normalized_claims,
+            created_at=row.get("created_at")
+            if isinstance(row.get("created_at"), datetime)
+            else None,
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else None,
+            last_login_at=row.get("last_login_at")
+            if isinstance(row.get("last_login_at"), datetime)
+            else None,
+        )
+
+    async def create_account(
+        self,
+        username: str,
+        display_name: str,
+        password_hash: str,
+        provision_source: str = "local",
+        local_password_enabled: bool = True,
+        local_password_set_at: datetime | None = None,
+    ) -> AccountRow | None:
+        query = """
+            INSERT INTO ascendany.user_accounts (
+                username,
+                display_name,
+                password_hash,
+                provision_source,
+                local_password_enabled,
+                local_password_set_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            RETURNING
+                account_id,
+                username,
+                display_name,
+                password_hash,
+                is_active,
+                is_admin,
+                provision_source,
+                local_password_enabled,
+                local_password_set_at
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        username,
+                        display_name,
+                        password_hash,
+                        provision_source,
+                        local_password_enabled,
+                        local_password_set_at,
+                    ),
+                )
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_account(row)
 
     async def add_account_contact(
         self, account_id: int, contact_type: str, value: str
@@ -267,7 +366,16 @@ class ApiRepository:
 
     async def fetch_account_by_username(self, username: str) -> AccountRow | None:
         query = """
-            SELECT account_id, username, display_name, password_hash, is_active, is_admin
+            SELECT
+                account_id,
+                username,
+                display_name,
+                password_hash,
+                is_active,
+                is_admin,
+                provision_source,
+                local_password_enabled,
+                local_password_set_at
             FROM ascendany.user_accounts
             WHERE username_normalized = lower(BTRIM(%s))
             LIMIT 1
@@ -278,18 +386,20 @@ class ApiRepository:
                 row = await cursor.fetchone()
         if not row:
             return None
-        return AccountRow(
-            account_id=int(row["account_id"]),
-            username=str(row["username"]),
-            display_name=str(row["display_name"]),
-            password_hash=str(row["password_hash"]),
-            is_active=bool(row["is_active"]),
-            is_admin=bool(row.get("is_admin", False)),
-        )
+        return self._row_to_account(row)
 
     async def fetch_account_by_id(self, account_id: int) -> AccountRow | None:
         query = """
-            SELECT account_id, username, display_name, password_hash, is_active, is_admin
+            SELECT
+                account_id,
+                username,
+                display_name,
+                password_hash,
+                is_active,
+                is_admin,
+                provision_source,
+                local_password_enabled,
+                local_password_set_at
             FROM ascendany.user_accounts
             WHERE account_id = %s
             LIMIT 1
@@ -300,14 +410,7 @@ class ApiRepository:
                 row = await cursor.fetchone()
         if not row:
             return None
-        return AccountRow(
-            account_id=int(row["account_id"]),
-            username=str(row["username"]),
-            display_name=str(row["display_name"]),
-            password_hash=str(row["password_hash"]),
-            is_active=bool(row["is_active"]),
-            is_admin=bool(row.get("is_admin", False)),
-        )
+        return self._row_to_account(row)
 
     async def update_account_display_name(
         self, account_id: int, display_name: str
@@ -322,7 +425,16 @@ class ApiRepository:
                 WHERE ua.account_id <> %s
                   AND ua.display_name_normalized = lower(BTRIM(%s))
               )
-            RETURNING account_id, username, display_name, password_hash, is_active, is_admin
+            RETURNING
+                account_id,
+                username,
+                display_name,
+                password_hash,
+                is_active,
+                is_admin,
+                provision_source,
+                local_password_enabled,
+                local_password_set_at
         """
         async with self._pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
@@ -333,14 +445,7 @@ class ApiRepository:
                 row = await cursor.fetchone()
         if not row:
             return None
-        return AccountRow(
-            account_id=int(row["account_id"]),
-            username=str(row["username"]),
-            display_name=str(row["display_name"]),
-            password_hash=str(row["password_hash"]),
-            is_active=bool(row["is_active"]),
-            is_admin=bool(row.get("is_admin", False)),
-        )
+        return self._row_to_account(row)
 
     async def touch_account_login(self, account_id: int) -> None:
         query = """
@@ -382,6 +487,33 @@ class ApiRepository:
             else None,
         )
 
+    async def fetch_account_by_student_id(self, student_id: str) -> AccountRow | None:
+        query = """
+            SELECT
+                ua.account_id,
+                ua.username,
+                ua.display_name,
+                ua.password_hash,
+                ua.is_active,
+                ua.is_admin,
+                ua.provision_source,
+                ua.local_password_enabled,
+                ua.local_password_set_at
+            FROM ascendany.user_accounts AS ua
+            INNER JOIN ascendany.user_profiles AS up
+                ON up.account_id = ua.account_id
+            WHERE BTRIM(COALESCE(up.student_id, '')) = BTRIM(%s)
+            ORDER BY ua.account_id ASC
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (student_id,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_account(row)
+
     async def upsert_account_profile(
         self, account_id: int, student_id: str | None, pta_nickname: str | None
     ) -> AccountProfileRow:
@@ -410,6 +542,234 @@ class ApiRepository:
             if isinstance(row.get("updated_at"), datetime)
             else None,
         )
+
+    async def bootstrap_local_password(
+        self,
+        account_id: int,
+        password_hash: str,
+    ) -> AccountRow | None:
+        query = """
+            UPDATE ascendany.user_accounts
+            SET password_hash = %s,
+                local_password_enabled = TRUE,
+                local_password_set_at = now(),
+                updated_at = now()
+            WHERE account_id = %s
+            RETURNING
+                account_id,
+                username,
+                display_name,
+                password_hash,
+                is_active,
+                is_admin,
+                provision_source,
+                local_password_enabled,
+                local_password_set_at
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (password_hash, account_id))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_account(row)
+
+    async def fetch_external_identity_link(
+        self,
+        provider: str,
+        external_user_id: str,
+    ) -> ExternalIdentityLinkRow | None:
+        query = """
+            SELECT
+                link_id,
+                provider,
+                external_user_id,
+                account_id,
+                external_username,
+                external_display_name,
+                student_id_snapshot,
+                pta_nickname_snapshot,
+                raw_claims,
+                created_at,
+                updated_at,
+                last_login_at
+            FROM ascendany.external_identity_links
+            WHERE provider = %s
+              AND external_user_id = %s
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (provider, external_user_id))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_external_identity_link(row)
+
+    async def create_external_identity_link(
+        self,
+        provider: str,
+        external_user_id: str,
+        account_id: int,
+        external_username: str,
+        external_display_name: str | None,
+        student_id_snapshot: str,
+        pta_nickname_snapshot: str | None,
+        raw_claims: dict[str, object],
+    ) -> ExternalIdentityLinkRow | None:
+        query = """
+            INSERT INTO ascendany.external_identity_links (
+                provider,
+                external_user_id,
+                account_id,
+                external_username,
+                external_display_name,
+                student_id_snapshot,
+                pta_nickname_snapshot,
+                raw_claims,
+                last_login_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, now())
+            ON CONFLICT (provider, external_user_id) DO NOTHING
+            RETURNING
+                link_id,
+                provider,
+                external_user_id,
+                account_id,
+                external_username,
+                external_display_name,
+                student_id_snapshot,
+                pta_nickname_snapshot,
+                raw_claims,
+                created_at,
+                updated_at,
+                last_login_at
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        provider,
+                        external_user_id,
+                        account_id,
+                        external_username,
+                        external_display_name,
+                        student_id_snapshot,
+                        pta_nickname_snapshot,
+                        json.dumps(raw_claims),
+                    ),
+                )
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_external_identity_link(row)
+
+    async def update_external_identity_snapshot(
+        self,
+        link_id: int,
+        external_username: str,
+        external_display_name: str | None,
+        student_id_snapshot: str,
+        pta_nickname_snapshot: str | None,
+        raw_claims: dict[str, object],
+    ) -> ExternalIdentityLinkRow | None:
+        query = """
+            UPDATE ascendany.external_identity_links
+            SET external_username = %s,
+                external_display_name = %s,
+                student_id_snapshot = %s,
+                pta_nickname_snapshot = %s,
+                raw_claims = %s::jsonb,
+                updated_at = now(),
+                last_login_at = now()
+            WHERE link_id = %s
+            RETURNING
+                link_id,
+                provider,
+                external_user_id,
+                account_id,
+                external_username,
+                external_display_name,
+                student_id_snapshot,
+                pta_nickname_snapshot,
+                raw_claims,
+                created_at,
+                updated_at,
+                last_login_at
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        external_username,
+                        external_display_name,
+                        student_id_snapshot,
+                        pta_nickname_snapshot,
+                        json.dumps(raw_claims),
+                        link_id,
+                    ),
+                )
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_external_identity_link(row)
+
+    async def cleanup_expired_sso_jtis(self) -> int:
+        query = """
+            DELETE FROM ascendany.external_sso_jti_consumptions
+            WHERE expires_at < now() - interval '1 day'
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(query)
+                return cursor.rowcount or 0
+
+    async def consume_sso_jti(
+        self,
+        provider: str,
+        jti: str,
+        external_user_id: str,
+        expires_at: datetime,
+        account_id: int | None = None,
+    ) -> bool:
+        query = """
+            INSERT INTO ascendany.external_sso_jti_consumptions (
+                provider,
+                jti,
+                external_user_id,
+                account_id,
+                expires_at
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (provider, jti) DO NOTHING
+            RETURNING provider
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (provider, jti, external_user_id, account_id, expires_at),
+                )
+                row = await cursor.fetchone()
+        return row is not None
+
+    async def attach_consumed_sso_jti_account(
+        self,
+        provider: str,
+        jti: str,
+        account_id: int,
+    ) -> None:
+        query = """
+            UPDATE ascendany.external_sso_jti_consumptions
+            SET account_id = %s
+            WHERE provider = %s
+              AND jti = %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(query, (account_id, provider, jti))
 
     async def ensure_student_by_student_no(
         self,

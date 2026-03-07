@@ -67,3 +67,12 @@ auth:
   allow_stored_password_direct_login: false
   app01_db_config_path: null
   app01_db_config_path_env: ASCENDANY_APP01_DB_CONFIG_PATH
+
+sso:
+  enabled: false
+  provider: external_app
+  issuer: external_app
+  audience: ascendany_web
+  hs256_secret_env: ASCENDANY_SSO_EXTERNAL_APP_SECRET
+  clock_skew_seconds: 15
+  max_token_ttl_seconds: 60

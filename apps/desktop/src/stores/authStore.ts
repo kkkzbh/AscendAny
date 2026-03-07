@@ -4,10 +4,12 @@ import {
   fetchAuthMe,
   fetchAuthPolicy,
   getApiErrorMessage,
+  postBootstrapLocalPassword,
   postLogin,
   postLogout,
   postRefresh,
   postRegister,
+  postSsoExchange,
   putAuthProfile,
 } from "@/lib/api";
 import type { AuthAccount, AuthPolicy } from "@/types/auth";
@@ -52,8 +54,10 @@ interface AuthState {
   bootstrap: () => Promise<void>;
   refreshPolicy: () => Promise<void>;
   login: (input: LoginInput) => Promise<void>;
+  exchangeSsoToken: (token: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   logout: () => Promise<void>;
+  bootstrapLocalPassword: (newPassword: string) => Promise<void>;
   updateProfile: (payload: {
     displayName?: string | null;
     studentId?: string | null;
@@ -284,6 +288,34 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
+      exchangeSsoToken: async (token) => {
+        set({ error: null });
+        try {
+          const tokens = await postSsoExchange({ token });
+          await applySession({
+            account: tokens.account,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            autoLogin: true,
+            rememberPassword: false,
+            lastUsername: tokens.account.username,
+          });
+        } catch (error) {
+          set({
+            status: "anonymous",
+            account: null,
+            accessToken: null,
+            refreshToken: null,
+            autoLogin: true,
+            rememberPassword: false,
+            lastUsername: "",
+            error: getApiErrorMessage(error, "SSO 登录失败，请稍后重试。"),
+            initialized: true,
+          });
+          throw error;
+        }
+      },
+
       register: async (input) => {
         const username = input.username.trim();
         set({ error: null });
@@ -354,6 +386,30 @@ export const useAuthStore = create<AuthState>()(
           error: null,
           initialized: true,
         });
+      },
+
+      bootstrapLocalPassword: async (newPassword) => {
+        const accessToken = get().accessToken;
+        const account = get().account;
+        if (!accessToken || !account) {
+          throw new Error("not_authenticated");
+        }
+
+        set({ error: null });
+        try {
+          await postBootstrapLocalPassword({ newPassword }, accessToken);
+          set({
+            account: {
+              ...account,
+              localPasswordEnabled: true,
+            },
+          });
+        } catch (error) {
+          set({
+            error: getApiErrorMessage(error, "启用本地密码失败，请稍后重试。"),
+          });
+          throw error;
+        }
       },
 
       updateProfile: async (payload) => {

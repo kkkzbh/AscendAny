@@ -13,9 +13,12 @@ from ...schemas.auth import (
     AuthProfileUpdateRequest,
     AuthTokensResponse,
     LoginRequest,
+    LocalPasswordBootstrapRequest,
+    LocalPasswordBootstrapResponse,
     LogoutRequest,
     RefreshRequest,
     RegisterRequest,
+    SSOExchangeRequest,
 )
 
 router = APIRouter(tags=["auth"])
@@ -42,6 +45,14 @@ async def auth_login(
     auth_service=Depends(get_auth_service),
 ) -> AuthTokensResponse:
     return await auth_service.login(payload)
+
+
+@router.post("/auth/sso/exchange", response_model=AuthTokensResponse)
+async def auth_sso_exchange(
+    payload: SSOExchangeRequest,
+    auth_service=Depends(get_auth_service),
+) -> AuthTokensResponse:
+    return await auth_service.exchange_sso(payload)
 
 
 @router.post("/auth/refresh", response_model=AuthTokensResponse)
@@ -76,3 +87,17 @@ async def auth_update_profile(
     auth_service=Depends(get_auth_service),
 ) -> AuthProfileResponse:
     return await auth_service.update_profile(current_account, payload)
+
+
+@router.post(
+    "/auth/local-password/bootstrap",
+    response_model=LocalPasswordBootstrapResponse,
+)
+async def auth_bootstrap_local_password(
+    payload: LocalPasswordBootstrapRequest,
+    current_account=Depends(get_current_account),
+    auth_service=Depends(get_auth_service),
+) -> LocalPasswordBootstrapResponse:
+    return LocalPasswordBootstrapResponse(
+        **(await auth_service.bootstrap_local_password(current_account, payload))
+    )

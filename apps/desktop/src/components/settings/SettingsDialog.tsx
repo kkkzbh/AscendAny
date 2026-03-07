@@ -105,6 +105,7 @@ function GeneralSettingsPage() {
   const account = useAuthStore((s) => s.account);
   const authError = useAuthStore((s) => s.error);
   const profileSaving = useAuthStore((s) => s.profileSaving);
+  const bootstrapLocalPassword = useAuthStore((s) => s.bootstrapLocalPassword);
   const updateProfile = useAuthStore((s) => s.updateProfile);
   const clearAuthError = useAuthStore((s) => s.clearError);
   const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
@@ -117,6 +118,10 @@ function GeneralSettingsPage() {
   const [showCropper, setShowCropper] = useState(false);
   const [displayNameInput, setDisplayNameInput] = useState(account?.displayName ?? "");
   const [displayNameSaved, setDisplayNameSaved] = useState(false);
+  const [localPasswordInput, setLocalPasswordInput] = useState("");
+  const [localPasswordConfirmInput, setLocalPasswordConfirmInput] = useState("");
+  const [localPasswordSaving, setLocalPasswordSaving] = useState(false);
+  const [localPasswordSaved, setLocalPasswordSaved] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateStateSnapshot | null>(null);
   const [updateActionMessage, setUpdateActionMessage] = useState("");
 
@@ -124,6 +129,13 @@ function GeneralSettingsPage() {
     setDisplayNameInput(account?.displayName ?? "");
     setDisplayNameSaved(false);
   }, [account?.accountId, account?.displayName]);
+
+  useEffect(() => {
+    setLocalPasswordInput("");
+    setLocalPasswordConfirmInput("");
+    setLocalPasswordSaved(false);
+    setLocalPasswordSaving(false);
+  }, [account?.accountId, account?.localPasswordEnabled]);
 
   async function onAvatarCropConfirm(dataUrl: string) {
     if (account?.accountId) {
@@ -157,6 +169,35 @@ function GeneralSettingsPage() {
       setDisplayNameSaved(true);
     } catch {
       // Error text is from auth store.
+    }
+  }
+
+  const shouldShowLocalPasswordBootstrap =
+    account?.provisionSource === "external_sso" &&
+    !account.localPasswordEnabled;
+  const trimmedLocalPassword = localPasswordInput.trim();
+  const canBootstrapLocalPassword =
+    shouldShowLocalPasswordBootstrap &&
+    trimmedLocalPassword.length >= 8 &&
+    trimmedLocalPassword === localPasswordConfirmInput.trim() &&
+    !localPasswordSaving;
+
+  async function onBootstrapLocalPassword() {
+    if (!canBootstrapLocalPassword) {
+      return;
+    }
+    clearAuthError();
+    setLocalPasswordSaved(false);
+    setLocalPasswordSaving(true);
+    try {
+      await bootstrapLocalPassword(trimmedLocalPassword);
+      setLocalPasswordSaved(true);
+      setLocalPasswordInput("");
+      setLocalPasswordConfirmInput("");
+    } catch {
+      // Error text comes from auth store.
+    } finally {
+      setLocalPasswordSaving(false);
     }
   }
 
@@ -483,6 +524,73 @@ function GeneralSettingsPage() {
             </p>
           )}
         </div>
+
+        {shouldShowLocalPasswordBootstrap && (
+          <div className="settings-field">
+            <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
+              客户端登录密码
+            </label>
+            <div className="grid gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 px-5 py-5 sm:px-6 sm:py-5">
+              <p className="text-[13px] leading-6 text-[var(--text-soft)]">
+                当前账号来自外部单点登录。设置本地密码后，可直接在桌面客户端继续登录该账号。
+              </p>
+              <input
+                type="password"
+                value={localPasswordInput}
+                onChange={(event) => {
+                  setLocalPasswordInput(event.target.value);
+                  setLocalPasswordSaved(false);
+                  clearAuthError();
+                }}
+                className="settings-input"
+                placeholder="至少 8 位"
+                autoComplete="new-password"
+              />
+              <input
+                type="password"
+                value={localPasswordConfirmInput}
+                onChange={(event) => {
+                  setLocalPasswordConfirmInput(event.target.value);
+                  setLocalPasswordSaved(false);
+                  clearAuthError();
+                }}
+                className="settings-input"
+                placeholder="再次输入密码"
+                autoComplete="new-password"
+              />
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void onBootstrapLocalPassword()}
+                  disabled={!canBootstrapLocalPassword}
+                  className={`settings-provider-pill px-4 ${
+                    canBootstrapLocalPassword
+                      ? "bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)] hover:opacity-90"
+                      : "cursor-not-allowed bg-[var(--surface-soft)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]"
+                  }`}
+                >
+                  {localPasswordSaving ? "启用中..." : "设置本地密码"}
+                </button>
+                {localPasswordInput.trim() !== localPasswordConfirmInput.trim() &&
+                  localPasswordConfirmInput.trim() && (
+                    <span className="text-[11px] text-[var(--rating-negative)]">
+                      两次输入的密码不一致。
+                    </span>
+                  )}
+              </div>
+              {localPasswordSaved && (
+                <p className="text-[11px] text-[var(--rating-positive)]">
+                  已启用本地密码，可用于桌面客户端登录。
+                </p>
+              )}
+              {authError && (
+                <p className="text-[11px] text-[var(--rating-negative)]">
+                  {authError}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="settings-field">
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">

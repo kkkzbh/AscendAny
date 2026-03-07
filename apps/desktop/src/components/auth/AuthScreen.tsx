@@ -1,9 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  extractDirectLoginParamsFromUrl,
-  isDirectLoginEnabled,
-  scrubDirectLoginParams,
-} from "@/lib/directLogin";
+import { useEffect, useMemo, useState } from "react";
 import { useAuthStore } from "@/stores/authStore";
 
 function trimOrUndefined(value: string): string | undefined {
@@ -37,10 +32,6 @@ export function AuthScreen() {
   const clearError = useAuthStore((s) => s.clearError);
   const api = window.electronAPI;
   const isMac = api?.platform === "darwin";
-  const directLoginEnabled = isDirectLoginEnabled(
-    import.meta.env.VITE_DIRECT_LOGIN_ENABLED,
-  );
-  const directLoginAttemptedRef = useRef(false);
 
   const isContactPhoneRequired = policy?.requirePhone ?? false;
   const isContactEmailRequired = policy?.requireEmail ?? false;
@@ -88,44 +79,6 @@ export function AuthScreen() {
       }
     });
   }, [credentialAvailable, savedRememberPassword, lastUsername]);
-
-  useEffect(() => {
-    if (!directLoginEnabled || directLoginAttemptedRef.current) {
-      return;
-    }
-
-    const params = extractDirectLoginParamsFromUrl(new URL(window.location.href));
-    if (!params) {
-      return;
-    }
-
-    directLoginAttemptedRef.current = true;
-    setMode("login");
-    setUsername(params.username);
-    setPassword(params.password);
-    setAutoLogin(params.autoLogin);
-    setRememberPassword(params.rememberPassword);
-    setSubmitting(true);
-    setLocalError(null);
-    clearError();
-
-    void login({
-      username: params.username,
-      password: params.password,
-      passwordMode: params.passwordMode,
-      autoLogin: params.autoLogin,
-      rememberPassword: credentialAvailable ? params.rememberPassword : false,
-      deviceId: params.deviceId ?? "desktop-web-direct-login",
-    })
-      .catch(() => {
-        setLocalError("直登失败，请检查账号或密码。");
-      })
-      .finally(() => {
-        const cleanedPath = scrubDirectLoginParams(new URL(window.location.href));
-        window.history.replaceState(null, "", cleanedPath);
-        setSubmitting(false);
-      });
-  }, [clearError, credentialAvailable, directLoginEnabled, login]);
 
   async function saveCredentialIfNeeded(nextUsername: string, nextPassword: string) {
     const api = window.electronAPI;

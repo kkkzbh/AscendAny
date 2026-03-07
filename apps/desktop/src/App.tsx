@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { AuthScreen } from "@/components/auth/AuthScreen";
+import { SsoExchangeScreen } from "@/components/auth/SsoExchangeScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { FeedbackWindow } from "@/components/feedback/FeedbackWindow";
@@ -14,6 +15,7 @@ const THEME_TRANSITION_MS = 280;
 export default function App() {
   const themeTransitionTimerRef = useRef<number | null>(null);
   const isFeedbackMode = window.location.hash.startsWith("#/feedback");
+  const isSsoMode = window.location.hash.startsWith("#/sso");
   const theme = useSettingsStore((s) => s.theme);
   const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
   const setOpaqueWindowBackground = useSettingsStore((s) => s.setOpaqueWindowBackground);
@@ -103,14 +105,14 @@ export default function App() {
   }, [setOpaqueWindowBackground]);
 
   useEffect(() => {
-    if (isFeedbackMode) {
+    if (isFeedbackMode || isSsoMode) {
       return;
     }
     void bootstrap();
-  }, [bootstrap, isFeedbackMode]);
+  }, [bootstrap, isFeedbackMode, isSsoMode]);
 
   useEffect(() => {
-    if (isFeedbackMode) {
+    if (isFeedbackMode || isSsoMode) {
       return;
     }
     if (authStatus !== "authenticated") {
@@ -135,10 +137,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authStatus, isFeedbackMode, syncProviderOptions]);
+  }, [authStatus, isFeedbackMode, isSsoMode, syncProviderOptions]);
 
   if (isFeedbackMode) {
     return <FeedbackWindow />;
+  }
+
+  if (isSsoMode) {
+    return <SsoExchangeScreen />;
   }
 
   if (authStatus === "booting") {

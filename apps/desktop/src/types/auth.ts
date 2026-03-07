@@ -15,9 +15,13 @@ export interface AuthProfile {
   ptaNickname: string | null;
 }
 
+export type AuthProvisionSource = "local" | "external_sso";
+
 export interface AuthAccount extends AuthProfile {
   accountId: string;
   username: string;
+  provisionSource: AuthProvisionSource;
+  localPasswordEnabled: boolean;
 }
 
 export interface AuthTokens {

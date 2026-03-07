@@ -11,6 +11,7 @@ SignupPolicy = Literal[
     "require_phone_or_email",
     "require_phone_and_email",
 ]
+ProvisionSource = Literal["local", "external_sso"]
 
 
 class RegisterRequest(BaseModel):
@@ -47,6 +48,18 @@ class LogoutRequest(BaseModel):
     refreshToken: str | None = Field(default=None, max_length=512)
 
 
+class SSOExchangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=32, max_length=4096)
+
+
+class LocalPasswordBootstrapRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    newPassword: str = Field(min_length=8, max_length=128)
+
+
 class AuthPolicyResponse(BaseModel):
     signupPolicy: SignupPolicy
     requirePhone: bool
@@ -60,6 +73,8 @@ class AuthAccountResponse(BaseModel):
     isAdmin: bool = False
     studentId: str | None = None
     ptaNickname: str | None = None
+    provisionSource: ProvisionSource = "local"
+    localPasswordEnabled: bool = True
 
 
 class AuthTokensResponse(BaseModel):
@@ -86,3 +101,7 @@ class AuthProfileResponse(BaseModel):
     displayName: str | None = None
     studentId: str | None = None
     ptaNickname: str | None = None
+
+
+class LocalPasswordBootstrapResponse(BaseModel):
+    ok: bool

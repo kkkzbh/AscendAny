@@ -558,6 +558,10 @@ export interface LoginPayload {
   deviceId?: string;
 }
 
+export interface SSOExchangePayload {
+  token: string;
+}
+
 export interface RefreshPayload {
   refreshToken: string;
   deviceId?: string;
@@ -567,12 +571,19 @@ export interface LogoutPayload {
   refreshToken?: string;
 }
 
+export interface LocalPasswordBootstrapPayload {
+  newPassword: string;
+}
+
 interface AuthAccountPayload {
   accountId: string;
   username: string;
   displayName?: string | null;
+  isAdmin?: boolean;
   studentId?: string | null;
   ptaNickname?: string | null;
+  provisionSource?: "local" | "external_sso";
+  localPasswordEnabled?: boolean;
 }
 
 interface AuthTokensPayload {
@@ -600,6 +611,8 @@ function normalizeAccount(payload: AuthAccountPayload): AuthAccount {
     displayName: payload.displayName ?? payload.username,
     studentId: payload.studentId ?? null,
     ptaNickname: payload.ptaNickname ?? null,
+    provisionSource: payload.provisionSource ?? "local",
+    localPasswordEnabled: payload.localPasswordEnabled ?? true,
   };
 }
 
@@ -646,6 +659,19 @@ export async function postLogin(payload: LoginPayload): Promise<AuthTokens> {
   return normalizeTokens(response);
 }
 
+export async function postSsoExchange(
+  payload: SSOExchangePayload,
+): Promise<AuthTokens> {
+  const response = await requestJson<AuthTokensPayload>(
+    "/api/v1/auth/sso/exchange",
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
+  return normalizeTokens(response);
+}
+
 export async function postRefresh(payload: RefreshPayload): Promise<AuthTokens> {
   const response = await requestJson<AuthTokensPayload>("/api/v1/auth/refresh", {
     method: "POST",
@@ -686,6 +712,17 @@ export async function putAuthProfile(
     authToken,
   });
   return normalizeProfile(response);
+}
+
+export async function postBootstrapLocalPassword(
+  payload: LocalPasswordBootstrapPayload,
+  authToken: string,
+): Promise<{ ok: boolean }> {
+  return requestJson<{ ok: boolean }>("/api/v1/auth/local-password/bootstrap", {
+    method: "POST",
+    body: payload,
+    authToken,
+  });
 }
 
 export async function postAutoAnalysis(

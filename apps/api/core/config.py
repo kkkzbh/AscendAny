@@ -132,12 +132,24 @@ class AuthConfig:
 
 
 @dataclass(slots=True)
+class SSOConfig:
+    enabled: bool = False
+    provider: str = "external_app"
+    issuer: str = "external_app"
+    audience: str = "ascendany_web"
+    hs256_secret_env: str = "ASCENDANY_SSO_EXTERNAL_APP_SECRET"
+    clock_skew_seconds: int = 15
+    max_token_ttl_seconds: int = 60
+
+
+@dataclass(slots=True)
 class Settings:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
+    sso: SSOConfig = field(default_factory=SSOConfig)
 
 
 def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -210,6 +222,15 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "app01_db_config_path": settings.auth.app01_db_config_path,
             "app01_db_config_path_env": settings.auth.app01_db_config_path_env,
         },
+        "sso": {
+            "enabled": settings.sso.enabled,
+            "provider": settings.sso.provider,
+            "issuer": settings.sso.issuer,
+            "audience": settings.sso.audience,
+            "hs256_secret_env": settings.sso.hs256_secret_env,
+            "clock_skew_seconds": settings.sso.clock_skew_seconds,
+            "max_token_ttl_seconds": settings.sso.max_token_ttl_seconds,
+        },
     }
 
 
@@ -279,6 +300,7 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
     dashboard = raw.get("dashboard", {})
     llm = raw.get("llm", {})
     auth = raw.get("auth", {})
+    sso = raw.get("sso", {})
 
     providers = _build_provider_map(llm.get("providers", {}) or {})
     server_default = _build_server_default_config(llm, providers)
@@ -336,6 +358,21 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             app01_db_config_path_env=str(
                 auth.get("app01_db_config_path_env", "ASCENDANY_APP01_DB_CONFIG_PATH")
             ).strip(),
+        ),
+        sso=SSOConfig(
+            enabled=bool(sso.get("enabled", False)),
+            provider=str(sso.get("provider", "external_app")).strip()
+            or "external_app",
+            issuer=str(sso.get("issuer", "external_app")).strip()
+            or "external_app",
+            audience=str(sso.get("audience", "ascendany_web")).strip()
+            or "ascendany_web",
+            hs256_secret_env=str(
+                sso.get("hs256_secret_env", "ASCENDANY_SSO_EXTERNAL_APP_SECRET")
+            ).strip()
+            or "ASCENDANY_SSO_EXTERNAL_APP_SECRET",
+            clock_skew_seconds=max(0, int(sso.get("clock_skew_seconds", 15))),
+            max_token_ttl_seconds=max(1, int(sso.get("max_token_ttl_seconds", 60))),
         ),
     )
 
@@ -418,6 +455,29 @@ def _apply_env_overrides(settings: Settings) -> None:
     env_app01_cfg = os.getenv(settings.auth.app01_db_config_path_env, "").strip()
     if env_app01_cfg:
         settings.auth.app01_db_config_path = env_app01_cfg
+    env_sso_enabled = os.getenv("ASCENDANY_SSO_ENABLED", "").strip().lower()
+    if env_sso_enabled in {"0", "false", "no"}:
+        settings.sso.enabled = False
+    elif env_sso_enabled in {"1", "true", "yes"}:
+        settings.sso.enabled = True
+    env_sso_provider = os.getenv("ASCENDANY_SSO_PROVIDER", "").strip()
+    if env_sso_provider:
+        settings.sso.provider = env_sso_provider
+    env_sso_issuer = os.getenv("ASCENDANY_SSO_ISSUER", "").strip()
+    if env_sso_issuer:
+        settings.sso.issuer = env_sso_issuer
+    env_sso_audience = os.getenv("ASCENDANY_SSO_AUDIENCE", "").strip()
+    if env_sso_audience:
+        settings.sso.audience = env_sso_audience
+    env_sso_secret_env = os.getenv("ASCENDANY_SSO_HS256_SECRET_ENV", "").strip()
+    if env_sso_secret_env:
+        settings.sso.hs256_secret_env = env_sso_secret_env
+    env_sso_clock_skew = os.getenv("ASCENDANY_SSO_CLOCK_SKEW_SECONDS", "").strip()
+    if env_sso_clock_skew:
+        settings.sso.clock_skew_seconds = max(0, int(env_sso_clock_skew))
+    env_sso_max_ttl = os.getenv("ASCENDANY_SSO_MAX_TOKEN_TTL_SECONDS", "").strip()
+    if env_sso_max_ttl:
+        settings.sso.max_token_ttl_seconds = max(1, int(env_sso_max_ttl))
 
 
 def load_settings(config_path: Path | None = None) -> Settings:
