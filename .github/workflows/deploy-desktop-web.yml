@@ -120,7 +120,12 @@ jobs:
       - name: Restart desktop web service
         run: |
           set -euo pipefail
-          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "\
+            DEPLOY_DESKTOP_WEB_DIR='${DEPLOY_DESKTOP_WEB_DIR}' \
+            DEPLOY_DESKTOP_WEB_SERVICE='${DEPLOY_DESKTOP_WEB_SERVICE}' \
+            DEPLOY_DESKTOP_WEB_PORT='${DEPLOY_DESKTOP_WEB_PORT}' \
+            DEPLOY_USER='${DEPLOY_USER}' \
+            bash -s" <<'EOF'
           set -euo pipefail
 
           WEB_DIR="${DEPLOY_DESKTOP_WEB_DIR}"

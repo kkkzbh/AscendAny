@@ -83,7 +83,20 @@ jobs:
       - name: Deploy on server
         run: |
           set -euo pipefail
-          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "\
+            DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' \
+            DEPLOY_API_VENV='${DEPLOY_API_VENV}' \
+            DEPLOY_API_SERVICE='${DEPLOY_API_SERVICE}' \
+            DEPLOY_API_ENV_FILE='${DEPLOY_API_ENV_FILE}' \
+            DEPLOY_INTERNAL_HEALTHZ_URL='${DEPLOY_INTERNAL_HEALTHZ_URL}' \
+            DEPLOY_DB_HOST='${DEPLOY_DB_HOST}' \
+            DEPLOY_DB_PORT='${DEPLOY_DB_PORT}' \
+            DEPLOY_DB_NAME='${DEPLOY_DB_NAME}' \
+            DEPLOY_DB_USER='${DEPLOY_DB_USER}' \
+            DEPLOY_DB_ENV_FILE='${DEPLOY_DB_ENV_FILE}' \
+            DEPLOY_REF='${DEPLOY_REF}' \
+            DEPLOY_SHA='${DEPLOY_SHA}' \
+            bash -s" <<'EOF'
           set -euo pipefail
 
           APP_DIR="${DEPLOY_APP_DIR}"
