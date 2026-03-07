@@ -19,7 +19,7 @@ describe("SsoExchangeScreen", () => {
     window.history.replaceState(null, "", "/");
   });
 
-  it("exchanges hash token and clears the callback hash", async () => {
+  it("exchanges hash token and performs hard redirect to hash root", async () => {
     exchangeSsoToken.mockResolvedValue(undefined);
     window.history.replaceState(null, "", "/#/sso?token=test-jwt-token");
 
@@ -29,7 +29,7 @@ describe("SsoExchangeScreen", () => {
       expect(exchangeSsoToken).toHaveBeenCalledWith("test-jwt-token");
     });
     await waitFor(() => {
-      expect(window.location.hash).toBe("");
+      expect(window.location.href).toContain("/#/");
     });
   });
 
