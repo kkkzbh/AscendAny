@@ -43,16 +43,6 @@ jobs:
       DEPLOY_DB_NAME: ${{ vars.ASCENDANY_DB_NAME || 'AscendAny' }}
       DEPLOY_DB_USER: ${{ vars.ASCENDANY_DB_USER || 'AscendAny' }}
       DEPLOY_DB_ENV_FILE: ${{ vars.ASCENDANY_DB_ENV_FILE || '/opt/ascendany/infra/.env' }}
-      DEPLOY_SECONDARY_API_ENABLED: ${{ vars.ASCENDANY_SECONDARY_API_ENABLED || 'false' }}
-      DEPLOY_SECONDARY_API_SERVICE: ${{ vars.ASCENDANY_SECONDARY_API_SERVICE || 'ascendany-api-external-auth' }}
-      DEPLOY_SECONDARY_API_HOST: ${{ vars.ASCENDANY_SECONDARY_API_HOST || '0.0.0.0' }}
-      DEPLOY_SECONDARY_API_PORT: ${{ vars.ASCENDANY_SECONDARY_API_PORT || '8010' }}
-      DEPLOY_SECONDARY_API_LOG_LEVEL: ${{ vars.ASCENDANY_SECONDARY_API_LOG_LEVEL || 'info' }}
-      DEPLOY_SECONDARY_API_ENV_FILE: ${{ vars.ASCENDANY_SECONDARY_API_ENV_FILE || '/etc/ascendany/api-external-auth.env' }}
-      DEPLOY_SECONDARY_API_AUTH_PROVIDER: ${{ vars.ASCENDANY_SECONDARY_API_AUTH_PROVIDER || 'app01_mysql' }}
-      DEPLOY_SECONDARY_APP01_DB_CONFIG_PATH: ${{ vars.ASCENDANY_SECONDARY_APP01_DB_CONFIG_PATH || '' }}
-      DEPLOY_SECONDARY_INTERNAL_HEALTHZ_URL: ${{ vars.ASCENDANY_SECONDARY_API_INTERNAL_HEALTHZ || '' }}
-      DEPLOY_SECONDARY_HEALTHZ_URL: ${{ vars.ASCENDANY_SECONDARY_API_HEALTHZ || '' }}
       DEPLOY_REF: ${{ github.event.inputs.deploy_ref || github.ref_name }}
       DEPLOY_SHA: ${{ github.sha }}
     steps:
@@ -109,212 +99,93 @@ jobs:
           DEPLOY_REF="${DEPLOY_REF}"
           EXPECTED_SHA="${DEPLOY_SHA}"
 
-          SECONDARY_API_ENABLED="${DEPLOY_SECONDARY_API_ENABLED}"
-          SECONDARY_API_SERVICE="${DEPLOY_SECONDARY_API_SERVICE}"
-          SECONDARY_API_HOST="${DEPLOY_SECONDARY_API_HOST}"
-          SECONDARY_API_PORT="${DEPLOY_SECONDARY_API_PORT}"
-          SECONDARY_API_LOG_LEVEL="${DEPLOY_SECONDARY_API_LOG_LEVEL}"
-          SECONDARY_API_ENV_FILE="${DEPLOY_SECONDARY_API_ENV_FILE}"
-          SECONDARY_API_AUTH_PROVIDER="${DEPLOY_SECONDARY_API_AUTH_PROVIDER}"
-          SECONDARY_APP01_DB_CONFIG_PATH="${DEPLOY_SECONDARY_APP01_DB_CONFIG_PATH}"
-          SECONDARY_INTERNAL_HEALTHZ_URL="${DEPLOY_SECONDARY_INTERNAL_HEALTHZ_URL}"
-          SERVICE_USER="${DEPLOY_USER}"
-
-          is_true() {
-            case "\$(printf '%s' "\$1" | tr '[:upper:]' '[:lower:]')" in
-              1|true|yes|on) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          cd "\${APP_DIR}"
+          cd "${APP_DIR}"
           git fetch --prune origin
 
-          if git show-ref --verify --quiet "refs/heads/\${DEPLOY_REF}"; then
-            git checkout "\${DEPLOY_REF}"
+          if git show-ref --verify --quiet "refs/heads/${DEPLOY_REF}"; then
+            git checkout "${DEPLOY_REF}"
           else
-            git checkout -b "\${DEPLOY_REF}" "origin/\${DEPLOY_REF}"
+            git checkout -b "${DEPLOY_REF}" "origin/${DEPLOY_REF}"
           fi
 
-          # Force the working tree to match origin branch exactly.
-          # This avoids deployment failure when server has local tracked/untracked changes.
-          git reset --hard "origin/\${DEPLOY_REF}"
+          git reset --hard "origin/${DEPLOY_REF}"
           git clean -fd
 
-          ACTUAL_SHA="\$(git rev-parse HEAD)"
-          if [ "\${ACTUAL_SHA}" != "\${EXPECTED_SHA}" ]; then
-            echo "Expected SHA \${EXPECTED_SHA}, but deployed \${ACTUAL_SHA}" >&2
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
+            echo "Expected SHA ${EXPECTED_SHA}, but deployed ${ACTUAL_SHA}" >&2
             exit 1
           fi
 
-          PIP_BIN="\${API_VENV}/bin/pip"
-          if [ ! -x "\${PIP_BIN}" ]; then
-            echo "pip not found: \${PIP_BIN}" >&2
+          PIP_BIN="${API_VENV}/bin/pip"
+          if [ ! -x "${PIP_BIN}" ]; then
+            echo "pip not found: ${PIP_BIN}" >&2
             exit 1
           fi
 
-          "\${PIP_BIN}" install -r apps/api/requirements.txt
-          "\${PIP_BIN}" install -r preprocess/requirements.txt
+          "${PIP_BIN}" install -r apps/api/requirements.txt
+          "${PIP_BIN}" install -r preprocess/requirements.txt
 
           if ! command -v psql >/dev/null 2>&1; then
             echo "psql is not installed on deploy target" >&2
             exit 1
           fi
 
-          # Keep DB schema synchronized with deployed code (idempotent DDL).
-          if [ -r "\${HOME}/.pgpass" ] && grep -q "^\${DB_HOST}:\${DB_PORT}:\${DB_NAME}:\${DB_USER}:" "\${HOME}/.pgpass"; then
+          if [ -r "${HOME}/.pgpass" ] && grep -q "^${DB_HOST}:${DB_PORT}:${DB_NAME}:${DB_USER}:" "${HOME}/.pgpass"; then
             for f in db/schema/*.sql; do
-              psql -w -v ON_ERROR_STOP=1 -h "\${DB_HOST}" -p "\${DB_PORT}" -U "\${DB_USER}" -d "\${DB_NAME}" -f "\${f}"
+              psql -w -v ON_ERROR_STOP=1 -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f "${f}"
             done
           else
             DB_PASSWORD=""
-            if [ -r "\${DB_ENV_FILE}" ]; then
-              DB_PASSWORD="\$(sed -n 's/^DB_PASSWORD=//p' "\${DB_ENV_FILE}" | tail -n1)"
-            elif sudo test -r "\${DB_ENV_FILE}"; then
-              DB_PASSWORD="\$(sudo sed -n 's/^DB_PASSWORD=//p' "\${DB_ENV_FILE}" | tail -n1)"
+            if [ -r "${DB_ENV_FILE}" ]; then
+              DB_PASSWORD="$(sed -n 's/^DB_PASSWORD=//p' "${DB_ENV_FILE}" | tail -n1)"
+            elif sudo test -r "${DB_ENV_FILE}"; then
+              DB_PASSWORD="$(sudo sed -n 's/^DB_PASSWORD=//p' "${DB_ENV_FILE}" | tail -n1)"
             fi
 
-            if [ -z "\${DB_PASSWORD}" ]; then
-              echo "Unable to load DB_PASSWORD from \${DB_ENV_FILE}" >&2
+            if [ -z "${DB_PASSWORD}" ]; then
+              echo "Unable to load DB_PASSWORD from ${DB_ENV_FILE}" >&2
               exit 1
             fi
 
             for f in db/schema/*.sql; do
-              PGPASSWORD="\${DB_PASSWORD}" psql -v ON_ERROR_STOP=1 -h "\${DB_HOST}" -p "\${DB_PORT}" -U "\${DB_USER}" -d "\${DB_NAME}" -f "\${f}"
+              PGPASSWORD="${DB_PASSWORD}" psql -v ON_ERROR_STOP=1 -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f "${f}"
             done
           fi
 
-          sudo systemctl restart "\${API_SERVICE}"
-          sudo systemctl is-active --quiet "\${API_SERVICE}"
+          sudo systemctl restart "${API_SERVICE}"
+          sudo systemctl is-active --quiet "${API_SERVICE}"
 
-          # Wait until the local API endpoint is ready after restart.
-          for attempt in \$(seq 1 20); do
-            if curl -fsS "\${INTERNAL_HEALTHZ_URL}" >/dev/null; then
-              echo "Local health check passed on attempt \${attempt}"
+          for attempt in $(seq 1 20); do
+            if curl -fsS "${INTERNAL_HEALTHZ_URL}" >/dev/null; then
+              echo "Local health check passed on attempt ${attempt}"
               break
             fi
-            if [ "\${attempt}" -eq 20 ]; then
-              echo "Local health check failed: \${INTERNAL_HEALTHZ_URL}" >&2
-              sudo systemctl status "\${API_SERVICE}" --no-pager || true
-              sudo journalctl -u "\${API_SERVICE}" -n 120 --no-pager || true
+            if [ "${attempt}" -eq 20 ]; then
+              echo "Local health check failed: ${INTERNAL_HEALTHZ_URL}" >&2
+              sudo systemctl status "${API_SERVICE}" --no-pager || true
+              sudo journalctl -u "${API_SERVICE}" -n 120 --no-pager || true
               exit 1
             fi
             sleep 2
           done
-
-          if is_true "\${SECONDARY_API_ENABLED}"; then
-            if [ -z "\${SECONDARY_INTERNAL_HEALTHZ_URL}" ]; then
-              SECONDARY_INTERNAL_HEALTHZ_URL="http://127.0.0.1:\${SECONDARY_API_PORT}/api/v1/healthz"
-            fi
-
-            PYTHON_BIN="\${API_VENV}/bin/python"
-            if [ ! -x "\${PYTHON_BIN}" ]; then
-              echo "python not found: \${PYTHON_BIN}" >&2
-              exit 1
-            fi
-
-            sudo mkdir -p "\$(dirname "\${SECONDARY_API_ENV_FILE}")"
-            {
-              printf 'ASCENDANY_API_HOST=%s\n' "\${SECONDARY_API_HOST}"
-              printf 'ASCENDANY_API_PORT=%s\n' "\${SECONDARY_API_PORT}"
-              printf 'ASCENDANY_API_LOG_LEVEL=%s\n' "\${SECONDARY_API_LOG_LEVEL}"
-              printf 'ASCENDANY_AUTH_PROVIDER=%s\n' "\${SECONDARY_API_AUTH_PROVIDER}"
-              printf 'ASCENDANY_AUTH_ALLOW_STORED_PASSWORD_DIRECT_LOGIN=true\n'
-            } | sudo tee "\${SECONDARY_API_ENV_FILE}" >/dev/null
-
-            if [ -n "\${SECONDARY_APP01_DB_CONFIG_PATH}" ]; then
-              printf 'ASCENDANY_APP01_DB_CONFIG_PATH=%s\n' "\${SECONDARY_APP01_DB_CONFIG_PATH}" | sudo tee -a "\${SECONDARY_API_ENV_FILE}" >/dev/null
-            else
-              echo "SECONDARY_APP01_DB_CONFIG_PATH is empty. Expecting ASCENDANY_APP01_DB_* vars from \${API_ENV_FILE} or system env."
-            fi
-
-            sudo chmod 600 "\${SECONDARY_API_ENV_FILE}" || true
-
-            {
-              printf '[Unit]\n'
-              printf 'Description=AscendAny API (External Auth)\n'
-              printf 'After=network.target\n\n'
-              printf '[Service]\n'
-              printf 'Type=simple\n'
-              printf 'User=%s\n' "\${SERVICE_USER}"
-              printf 'WorkingDirectory=%s\n' "\${APP_DIR}"
-              printf 'Environment=PYTHONPATH=%s\n' "\${APP_DIR}"
-              printf 'EnvironmentFile=-%s\n' "\${API_ENV_FILE}"
-              printf 'EnvironmentFile=-%s\n' "\${SECONDARY_API_ENV_FILE}"
-              printf 'ExecStart=%s %s/run_api_local.py\n' "\${PYTHON_BIN}" "\${APP_DIR}"
-              printf 'Restart=always\n'
-              printf 'RestartSec=2\n\n'
-              printf '[Install]\n'
-              printf 'WantedBy=multi-user.target\n'
-            } | sudo tee "/etc/systemd/system/\${SECONDARY_API_SERVICE}.service" >/dev/null
-
-            sudo systemctl daemon-reload
-            sudo systemctl enable --now "\${SECONDARY_API_SERVICE}"
-            sudo systemctl restart "\${SECONDARY_API_SERVICE}"
-            sudo systemctl is-active --quiet "\${SECONDARY_API_SERVICE}"
-
-            if command -v ufw >/dev/null 2>&1; then
-              sudo ufw allow "\${SECONDARY_API_PORT}/tcp" || true
-            fi
-
-            for attempt in \$(seq 1 20); do
-              if curl -fsS "\${SECONDARY_INTERNAL_HEALTHZ_URL}" >/dev/null; then
-                echo "Secondary local health check passed on attempt \${attempt}"
-                break
-              fi
-              if [ "\${attempt}" -eq 20 ]; then
-                echo "Secondary local health check failed: \${SECONDARY_INTERNAL_HEALTHZ_URL}" >&2
-                sudo systemctl status "\${SECONDARY_API_SERVICE}" --no-pager || true
-                sudo journalctl -u "\${SECONDARY_API_SERVICE}" -n 120 --no-pager || true
-                exit 1
-              fi
-              sleep 2
-            done
-          else
-            echo "Skip secondary API deploy: ASCENDANY_SECONDARY_API_ENABLED=\${SECONDARY_API_ENABLED}"
-          fi
           EOF
 
-      - name: Verify health endpoints
+      - name: Verify health endpoint
         run: |
           set -euo pipefail
-
-          is_true() {
-            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-              1|true|yes|on) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          verify_url() {
-            local label="$1"
-            local url="$2"
-            local required="$3"
-            if [ -z "${url}" ]; then
-              if [ "${required}" = "required" ]; then
-                echo "${label} URL is required but empty." >&2
-                return 1
-              fi
-              echo "Skip ${label} external health check: URL is not configured."
-              return 0
-            fi
-            for attempt in $(seq 1 12); do
-              if curl -fsS "${url}" >/dev/null; then
-                echo "${label} external health check passed on attempt ${attempt}"
-                return 0
-              fi
-              if [ "${attempt}" -eq 12 ]; then
-                echo "${label} external health check failed after retries: ${url}" >&2
-                return 1
-              fi
-              sleep 5
-            done
-          }
-
-          verify_url "Primary API" "${DEPLOY_HEALTHZ_URL}" "required"
-
-          if is_true "${DEPLOY_SECONDARY_API_ENABLED}"; then
-            verify_url "Secondary API" "${DEPLOY_SECONDARY_HEALTHZ_URL}" "optional"
-          else
-            echo "Skip secondary API external health check: ASCENDANY_SECONDARY_API_ENABLED=${DEPLOY_SECONDARY_API_ENABLED}"
+          if [ -z "${DEPLOY_HEALTHZ_URL}" ]; then
+            echo "Primary API URL is required but empty." >&2
+            exit 1
           fi
+          for attempt in $(seq 1 12); do
+            if curl -fsS "${DEPLOY_HEALTHZ_URL}" >/dev/null; then
+              echo "Primary API external health check passed on attempt ${attempt}"
+              exit 0
+            fi
+            if [ "${attempt}" -eq 12 ]; then
+              echo "Primary API external health check failed after retries: ${DEPLOY_HEALTHZ_URL}" >&2
+              exit 1
+            fi
+            sleep 5
+          done

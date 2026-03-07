@@ -42,40 +42,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build primary desktop web
+      - name: Build desktop web
         env:
           VITE_API_BASE_URL: ${{ vars.DESKTOP_WEB_API_BASE_URL || vars.DESKTOP_API_BASE_URL || 'https://ascendany.kkkzbh.cn' }}
-          VITE_DIRECT_LOGIN_ENABLED: ${{ vars.DESKTOP_WEB_DIRECT_LOGIN_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           pnpm --filter @ascendany/desktop web:build
-          rm -rf /tmp/desktop-web-primary
-          mkdir -p /tmp/desktop-web-primary
-          cp -a apps/desktop/dist/. /tmp/desktop-web-primary/
+          rm -rf /tmp/desktop-web-dist
+          mkdir -p /tmp/desktop-web-dist
+          cp -a apps/desktop/dist/. /tmp/desktop-web-dist/
 
-      - name: Build integration desktop web
-        env:
-          VITE_API_BASE_URL: ${{ vars.DESKTOP_WEB_INTEGRATION_API_BASE_URL || vars.DESKTOP_WEB_API_BASE_URL || vars.DESKTOP_API_BASE_URL || 'https://ascendany.kkkzbh.cn' }}
-          VITE_DIRECT_LOGIN_ENABLED: ${{ vars.DESKTOP_WEB_INTEGRATION_DIRECT_LOGIN_ENABLED || 'true' }}
-        run: |
-          set -euo pipefail
-          pnpm --filter @ascendany/desktop web:build
-          rm -rf /tmp/desktop-web-integration
-          mkdir -p /tmp/desktop-web-integration
-          cp -a apps/desktop/dist/. /tmp/desktop-web-integration/
-
-      - name: Upload primary build artifact
+      - name: Upload desktop web artifact
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-web-dist-primary
-          path: /tmp/desktop-web-primary
-          if-no-files-found: error
-
-      - name: Upload integration build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-web-dist-integration
-          path: /tmp/desktop-web-integration
+          name: desktop-web-dist
+          path: /tmp/desktop-web-dist
           if-no-files-found: error
 
   deploy:
@@ -90,11 +71,6 @@ jobs:
       DEPLOY_DESKTOP_WEB_SERVICE: ${{ vars.ASCENDANY_DESKTOP_WEB_SERVICE || 'ascendany-desktop-web' }}
       DEPLOY_DESKTOP_WEB_PORT: ${{ vars.ASCENDANY_DESKTOP_WEB_PORT || '4173' }}
       DEPLOY_DESKTOP_WEB_URL: ${{ vars.ASCENDANY_DESKTOP_WEB_URL || '' }}
-      DEPLOY_INTEGRATION_WEB_ENABLED: ${{ vars.ASCENDANY_DESKTOP_WEB_INTEGRATION_ENABLED || 'false' }}
-      DEPLOY_INTEGRATION_WEB_DIR: ${{ vars.ASCENDANY_DESKTOP_WEB_INTEGRATION_DIR || '/opt/ascendany/desktop-web-integration' }}
-      DEPLOY_INTEGRATION_WEB_SERVICE: ${{ vars.ASCENDANY_DESKTOP_WEB_INTEGRATION_SERVICE || 'ascendany-desktop-web-integration' }}
-      DEPLOY_INTEGRATION_WEB_PORT: ${{ vars.ASCENDANY_DESKTOP_WEB_INTEGRATION_PORT || '4174' }}
-      DEPLOY_INTEGRATION_WEB_URL: ${{ vars.ASCENDANY_DESKTOP_WEB_INTEGRATION_URL || '' }}
     steps:
       - name: Validate required secrets
         run: |
@@ -108,17 +84,11 @@ jobs:
             exit 1
           fi
 
-      - name: Download primary build artifact
+      - name: Download desktop web artifact
         uses: actions/download-artifact@v4
         with:
-          name: desktop-web-dist-primary
-          path: dist-primary
-
-      - name: Download integration build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: desktop-web-dist-integration
-          path: dist-integration
+          name: desktop-web-dist
+          path: dist
 
       - name: Setup SSH key
         uses: webfactory/ssh-agent@v0.9.0
@@ -142,29 +112,12 @@ jobs:
       - name: Sync desktop web files
         run: |
           set -euo pipefail
-
-          is_true() {
-            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-              1|true|yes|on) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          test -f dist-primary/index.html
+          test -f dist/index.html
           ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_DESKTOP_WEB_DIR}'"
-          rsync -az --delete -e "ssh -p ${DEPLOY_PORT}" dist-primary/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DESKTOP_WEB_DIR}/"
+          rsync -az --delete -e "ssh -p ${DEPLOY_PORT}" dist/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DESKTOP_WEB_DIR}/"
           ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "test -f '${DEPLOY_DESKTOP_WEB_DIR}/index.html'"
 
-          if is_true "${DEPLOY_INTEGRATION_WEB_ENABLED}"; then
-            test -f dist-integration/index.html
-            ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_INTEGRATION_WEB_DIR}'"
-            rsync -az --delete -e "ssh -p ${DEPLOY_PORT}" dist-integration/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_INTEGRATION_WEB_DIR}/"
-            ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "test -f '${DEPLOY_INTEGRATION_WEB_DIR}/index.html'"
-          else
-            echo "Skip integration web sync: ASCENDANY_DESKTOP_WEB_INTEGRATION_ENABLED=${DEPLOY_INTEGRATION_WEB_ENABLED}"
-          fi
-
-      - name: Restart desktop web services and open ports
+      - name: Restart desktop web service
         run: |
           set -euo pipefail
           ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
@@ -173,114 +126,65 @@ jobs:
           WEB_DIR="${DEPLOY_DESKTOP_WEB_DIR}"
           WEB_SERVICE="${DEPLOY_DESKTOP_WEB_SERVICE}"
           WEB_PORT="${DEPLOY_DESKTOP_WEB_PORT}"
-
-          INTEGRATION_WEB_ENABLED="${DEPLOY_INTEGRATION_WEB_ENABLED}"
-          INTEGRATION_WEB_DIR="${DEPLOY_INTEGRATION_WEB_DIR}"
-          INTEGRATION_WEB_SERVICE="${DEPLOY_INTEGRATION_WEB_SERVICE}"
-          INTEGRATION_WEB_PORT="${DEPLOY_INTEGRATION_WEB_PORT}"
           SERVICE_USER="${DEPLOY_USER}"
 
-          is_true() {
-            case "\$(printf '%s' "\$1" | tr '[:upper:]' '[:lower:]')" in
-              1|true|yes|on) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
+          sudo mkdir -p "${WEB_DIR}"
+          sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${WEB_DIR}"
 
-          deploy_web_service() {
-            local web_dir="\$1"
-            local web_service="\$2"
-            local web_port="\$3"
-            local description="\$4"
+          {
+            printf '[Unit]\n'
+            printf 'Description=AscendAny Desktop Web\n'
+            printf 'After=network.target\n\n'
+            printf '[Service]\n'
+            printf 'Type=simple\n'
+            printf 'User=%s\n' "${SERVICE_USER}"
+            printf 'WorkingDirectory=%s\n' "${WEB_DIR}"
+            printf 'ExecStart=/usr/bin/python3 -m http.server %s --bind 0.0.0.0 --directory %s\n' "${WEB_PORT}" "${WEB_DIR}"
+            printf 'Restart=always\n'
+            printf 'RestartSec=2\n\n'
+            printf '[Install]\n'
+            printf 'WantedBy=multi-user.target\n'
+          } | sudo tee "/etc/systemd/system/${WEB_SERVICE}.service" >/dev/null
 
-            sudo mkdir -p "\${web_dir}"
-            sudo chown -R "\${SERVICE_USER}:\${SERVICE_USER}" "\${web_dir}"
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now "${WEB_SERVICE}"
+          sudo systemctl restart "${WEB_SERVICE}"
+          sudo systemctl is-active --quiet "${WEB_SERVICE}"
 
-            {
-              printf '[Unit]\n'
-              printf 'Description=%s\n' "\${description}"
-              printf 'After=network.target\n\n'
-              printf '[Service]\n'
-              printf 'Type=simple\n'
-              printf 'User=%s\n' "\${SERVICE_USER}"
-              printf 'WorkingDirectory=%s\n' "\${web_dir}"
-              printf 'ExecStart=/usr/bin/python3 -m http.server %s --bind 0.0.0.0 --directory %s\n' "\${web_port}" "\${web_dir}"
-              printf 'Restart=always\n'
-              printf 'RestartSec=2\n\n'
-              printf '[Install]\n'
-              printf 'WantedBy=multi-user.target\n'
-            } | sudo tee "/etc/systemd/system/\${web_service}.service" >/dev/null
-
-            sudo systemctl daemon-reload
-            sudo systemctl enable --now "\${web_service}"
-            sudo systemctl restart "\${web_service}"
-            sudo systemctl is-active --quiet "\${web_service}"
-
-            if command -v ufw >/dev/null 2>&1; then
-              sudo ufw allow "\${web_port}/tcp" || true
-            fi
-
-            for attempt in \$(seq 1 20); do
-              if curl -fsS "http://127.0.0.1:\${web_port}/" >/dev/null; then
-                echo "Desktop web local check passed on attempt \${attempt}: \${web_service}"
-                break
-              fi
-              if [ "\${attempt}" -eq 20 ]; then
-                echo "Desktop web local check failed on port \${web_port} (\${web_service})" >&2
-                sudo systemctl status "\${web_service}" --no-pager || true
-                sudo journalctl -u "\${web_service}" -n 120 --no-pager || true
-                exit 1
-              fi
-              sleep 2
-            done
-          }
-
-          deploy_web_service "\${WEB_DIR}" "\${WEB_SERVICE}" "\${WEB_PORT}" "AscendAny Desktop Web"
-
-          if is_true "\${INTEGRATION_WEB_ENABLED}"; then
-            deploy_web_service "\${INTEGRATION_WEB_DIR}" "\${INTEGRATION_WEB_SERVICE}" "\${INTEGRATION_WEB_PORT}" "AscendAny Desktop Web Integration"
-          else
-            echo "Skip integration web service restart: ASCENDANY_DESKTOP_WEB_INTEGRATION_ENABLED=\${INTEGRATION_WEB_ENABLED}"
+          if command -v ufw >/dev/null 2>&1; then
+            sudo ufw allow "${WEB_PORT}/tcp" || true
           fi
+
+          for attempt in $(seq 1 20); do
+            if curl -fsS "http://127.0.0.1:${WEB_PORT}/" >/dev/null; then
+              echo "Desktop web local check passed on attempt ${attempt}"
+              break
+            fi
+            if [ "${attempt}" -eq 20 ]; then
+              echo "Desktop web local check failed on port ${WEB_PORT}" >&2
+              sudo systemctl status "${WEB_SERVICE}" --no-pager || true
+              sudo journalctl -u "${WEB_SERVICE}" -n 120 --no-pager || true
+              exit 1
+            fi
+            sleep 2
+          done
           EOF
 
-      - name: Verify desktop web URLs
+      - name: Verify desktop web URL
         run: |
           set -euo pipefail
-
-          is_true() {
-            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-              1|true|yes|on) return 0 ;;
-              *) return 1 ;;
-            esac
-          }
-
-          verify_url() {
-            local label="$1"
-            local url="$2"
-            local default_port="$3"
-            if [ -z "${url}" ]; then
-              echo "Skip ${label} URL check: URL is not configured."
-              echo "${label} is already verified via server-local check on 127.0.0.1:${default_port}."
-              return 0
-            fi
-            for attempt in $(seq 1 12); do
-              if curl --connect-timeout 5 --max-time 10 -fsS "${url}" >/dev/null; then
-                echo "${label} check passed on attempt ${attempt}: ${url}"
-                return 0
-              fi
-              if [ "${attempt}" -eq 12 ]; then
-                echo "${label} check failed after retries: ${url}" >&2
-                return 1
-              fi
-              sleep 5
-            done
-          }
-
-          verify_url "Primary desktop web" "${DEPLOY_DESKTOP_WEB_URL}" "${DEPLOY_DESKTOP_WEB_PORT}"
-
-          if is_true "${DEPLOY_INTEGRATION_WEB_ENABLED}"; then
-            verify_url "Integration desktop web" "${DEPLOY_INTEGRATION_WEB_URL}" "${DEPLOY_INTEGRATION_WEB_PORT}"
-          else
-            echo "Skip integration web external URL check: ASCENDANY_DESKTOP_WEB_INTEGRATION_ENABLED=${DEPLOY_INTEGRATION_WEB_ENABLED}"
+          if [ -z "${DEPLOY_DESKTOP_WEB_URL}" ]; then
+            echo "Skip external URL check: URL is not configured."
+            exit 0
           fi
+          for attempt in $(seq 1 12); do
+            if curl --connect-timeout 5 --max-time 10 -fsS "${DEPLOY_DESKTOP_WEB_URL}" >/dev/null; then
+              echo "Desktop web check passed on attempt ${attempt}: ${DEPLOY_DESKTOP_WEB_URL}"
+              exit 0
+            fi
+            if [ "${attempt}" -eq 12 ]; then
+              echo "Desktop web check failed after retries: ${DEPLOY_DESKTOP_WEB_URL}" >&2
+              exit 1
+            fi
+            sleep 5
+          done
