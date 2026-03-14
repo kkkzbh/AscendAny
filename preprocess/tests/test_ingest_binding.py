@@ -4,7 +4,7 @@ from datetime import datetime
 
 from preprocess.config import Settings
 from preprocess.load.ingest_service import IngestService
-from preprocess.models import SubmissionRow
+from preprocess.models import ParticipantRow, SubmissionRow
 
 
 class _FakeRepo:
@@ -38,6 +38,27 @@ def _build_submission(
     )
 
 
+def _build_participant(
+    identity_source: str,
+    external_id: str,
+    student_id: int,
+) -> ParticipantRow:
+    return ParticipantRow(
+        identity_source=identity_source,
+        external_id=external_id,
+        display_name="Student",
+        user_group=None,
+        rank=1,
+        total_score=100.0,
+        time_used_seconds=60,
+        solved_count=1,
+        absent=False,
+        problem_stats={},
+        raw={},
+        student_id=student_id,
+    )
+
+
 def test_bind_submission_claims_marks_bound_and_pending() -> None:
     settings = Settings()
     service = IngestService(repo=_FakeRepo(claims={"alice": 101}), settings=settings)
@@ -63,3 +84,33 @@ def test_bind_submission_claims_marks_bound_and_pending() -> None:
     assert rows[0].raw["linking"]["status"] == "bound_by_claim"
     assert rows[1].student_id is None
     assert rows[1].raw["linking"]["status"] == "pending_claim"
+
+
+def test_bind_submission_claims_binds_matching_student_no_identity() -> None:
+    settings = Settings()
+    service = IngestService(repo=_FakeRepo(claims={}), settings=settings)
+    rows = [
+        _build_submission(
+            actor_source="datastructure_student_no",
+            actor_external_id="20251202099",
+            actor_name="常根全",
+        )
+    ]
+    participants = [
+        _build_participant(
+            identity_source="datastructure_student_no",
+            external_id="20251202099",
+            student_id=101,
+        )
+    ]
+
+    bound, pending, conflicts = service._bind_submission_claims(
+        rows,
+        participants=participants,
+    )
+
+    assert bound == 1
+    assert pending == 0
+    assert conflicts == 0
+    assert rows[0].student_id == 101
+    assert rows[0].raw["linking"]["status"] == "bound_by_identity"

@@ -17,6 +17,34 @@ _DATETIME_FORMATS = (
     "%Y-%m-%dT%H:%M:%S",
 )
 
+_VERDICT_ALIASES = {
+    "accepted": "答案正确",
+    "答案正确": "答案正确",
+    "correct": "答案正确",
+    "ac": "答案正确",
+    "wrong answer": "答案错误",
+    "答案错误": "答案错误",
+    "partially accepted": "部分正确",
+    "partial accepted": "部分正确",
+    "部分正确": "部分正确",
+    "compile error": "编译错误",
+    "编译错误": "编译错误",
+    "time limit exceeded": "运行超时",
+    "运行超时": "运行超时",
+    "memory limit exceeded": "内存超限",
+    "内存超限": "内存超限",
+    "runtime error": "运行错误",
+    "运行错误": "运行错误",
+    "presentation error": "格式错误",
+    "格式错误": "格式错误",
+    "segmentation fault": "段错误",
+    "段错误": "段错误",
+    "non-zero exit code": "非零退出",
+    "非零退出": "非零退出",
+    "multiple errors": "多个错误",
+    "多个错误": "多个错误",
+}
+
 
 def clean_text(value: Any) -> str:
     if value is None:
@@ -25,6 +53,14 @@ def clean_text(value: Any) -> str:
         return ""
     text = str(value).replace("\u00a0", " ").replace("\ufeff", "")
     return text.strip().rstrip("\t").strip()
+
+
+def normalize_verdict(value: Any) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    folded = re.sub(r"\s+", " ", text).strip().casefold()
+    return _VERDICT_ALIASES.get(folded, text)
 
 
 def parse_optional_int(value: Any) -> int | None:

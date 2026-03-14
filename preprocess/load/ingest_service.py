@@ -195,7 +195,8 @@ class IngestService:
                         self.repo.upsert_exam_participant(exam_id, participant)
 
                     bound_count, pending_count, conflict_count = self._bind_submission_claims(
-                        bundle.submissions
+                        bundle.submissions,
+                        participants=participants,
                     )
                     submissions_bound += bound_count
                     submissions_pending_claim += pending_count
@@ -451,7 +452,11 @@ class IngestService:
             )
         return timeline
 
-    def _bind_submission_claims(self, submissions: list[Any]) -> tuple[int, int, int]:
+    def _bind_submission_claims(
+        self,
+        submissions: list[Any],
+        participants: list[ParticipantRow] | None = None,
+    ) -> tuple[int, int, int]:
         if not submissions:
             return 0, 0, 0
 
@@ -459,8 +464,21 @@ class IngestService:
         if not self.settings.mapping.auto_bind_on_ingest:
             return 0, 0, 0
 
+        student_identity_map: dict[tuple[str, str], int] = {}
+        for participant in participants or []:
+            student_id = participant.student_id
+            identity_source = clean_text(participant.identity_source)
+            external_id = clean_text(participant.external_id)
+            if student_id is None or not identity_source or not external_id:
+                continue
+            student_identity_map[(identity_source, external_id)] = student_id
+
         nickname_values = []
         for row in submissions:
+            actor_source = clean_text(getattr(row, "actor_source", ""))
+            actor_external_id = clean_text(getattr(row, "actor_external_id", ""))
+            if actor_source.endswith("_student_no") and actor_external_id:
+                continue
             if not self._source_allowed(getattr(row, "actor_source", ""), actor_sources):
                 continue
             nickname = self._resolve_submission_nickname(row)
@@ -472,6 +490,29 @@ class IngestService:
         pending = 0
 
         for row in submissions:
+            actor_source = clean_text(getattr(row, "actor_source", ""))
+            actor_external_id = clean_text(getattr(row, "actor_external_id", ""))
+            if actor_source.endswith("_student_no") and actor_external_id:
+                student_id = student_identity_map.get((actor_source, actor_external_id))
+                if student_id is None:
+                    row.student_id = None
+                    row.raw["linking"] = self._build_linking_payload(
+                        status="pending_identity",
+                        reason="no_matching_student_no_identity",
+                        row=row,
+                        student_id=None,
+                    )
+                    pending += 1
+                    continue
+                row.student_id = student_id
+                row.raw["linking"] = self._build_linking_payload(
+                    status="bound_by_identity",
+                    reason="matching_student_no_identity",
+                    row=row,
+                    student_id=student_id,
+                )
+                bound += 1
+                continue
             if not self._source_allowed(getattr(row, "actor_source", ""), actor_sources):
                 continue
             nickname = self._resolve_submission_nickname(row)
