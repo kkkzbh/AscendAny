@@ -192,6 +192,61 @@ class AutoAnalysisCandidateRow:
 
 
 @dataclass(slots=True)
+class ExamAutoAnalysisCacheRow:
+    exam_id: int
+    student_id: int
+    role_id: str
+    status: str
+    provider_type: str | None
+    reply: str
+    source: str
+    error_message: str | None
+    generated_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(slots=True)
+class ExamAnalysisExamRow:
+    exam_id: int
+    exam_name: str
+    exam_type: str
+    exam_date: datetime | None
+    participant_count: int
+    generated_count: int
+    failed_count: int
+    missing_count: int
+
+
+@dataclass(slots=True)
+class ExamAnalysisStudentRow:
+    student_entity_id: int
+    student_no: str | None
+    student_name: str | None
+    rank: int | None
+    total_score: Decimal | float | int | None
+    solved_count: int | None
+    rating_delta: int | None
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+    analysis_status: str
+    analysis_reply: str
+    generated_at: datetime | None
+    error_message: str | None
+
+
+@dataclass(slots=True)
+class ExamAnalysisTargetRow:
+    student_entity_id: int
+    student_no: str | None
+    student_name: str | None
+    pta_nickname: str | None
+    analysis_status: str | None
+
+
+@dataclass(slots=True)
 class AchievementDefinitionRow:
     achievement_code: str
     title: str
@@ -1322,6 +1377,142 @@ class ApiRepository:
             for row in rows
         ]
 
+    async def fetch_exam_auto_analysis_cache(
+        self,
+        exam_id: int,
+        student_id: int,
+        role_id: str,
+    ) -> ExamAutoAnalysisCacheRow | None:
+        query = """
+            SELECT
+                exam_id,
+                student_id,
+                role_id,
+                status,
+                provider_type,
+                reply,
+                source,
+                error_message,
+                generated_at,
+                updated_at
+            FROM ascendany.exam_auto_analysis_cache
+            WHERE exam_id = %s
+              AND student_id = %s
+              AND role_id = %s
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (exam_id, student_id, role_id))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        return ExamAutoAnalysisCacheRow(
+            exam_id=int(row["exam_id"]),
+            student_id=int(row["student_id"]),
+            role_id=str(row["role_id"]),
+            status=str(row["status"]),
+            provider_type=str(row["provider_type"])
+            if row.get("provider_type")
+            else None,
+            reply=str(row["reply"]) if row.get("reply") else "",
+            source=str(row["source"]) if row.get("source") else "teacher_exam",
+            error_message=str(row["error_message"])
+            if row.get("error_message")
+            else None,
+            generated_at=row.get("generated_at")
+            if isinstance(row.get("generated_at"), datetime)
+            else None,
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else None,
+        )
+
+    async def upsert_exam_auto_analysis_cache(
+        self,
+        exam_id: int,
+        student_id: int,
+        role_id: str,
+        status: str,
+        provider_type: str | None,
+        reply: str,
+        source: str,
+        error_message: str | None,
+    ) -> ExamAutoAnalysisCacheRow:
+        query = """
+            INSERT INTO ascendany.exam_auto_analysis_cache (
+                exam_id,
+                student_id,
+                role_id,
+                status,
+                provider_type,
+                reply,
+                source,
+                error_message,
+                generated_at,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            ON CONFLICT (exam_id, student_id, role_id)
+            DO UPDATE SET
+                status = EXCLUDED.status,
+                provider_type = EXCLUDED.provider_type,
+                reply = EXCLUDED.reply,
+                source = EXCLUDED.source,
+                error_message = EXCLUDED.error_message,
+                generated_at = now(),
+                updated_at = now()
+            RETURNING
+                exam_id,
+                student_id,
+                role_id,
+                status,
+                provider_type,
+                reply,
+                source,
+                error_message,
+                generated_at,
+                updated_at
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        exam_id,
+                        student_id,
+                        role_id,
+                        status,
+                        provider_type,
+                        reply,
+                        source,
+                        error_message,
+                    ),
+                )
+                row = await cursor.fetchone()
+        if not row:
+            raise RuntimeError("Failed to upsert exam auto-analysis cache row")
+        return ExamAutoAnalysisCacheRow(
+            exam_id=int(row["exam_id"]),
+            student_id=int(row["student_id"]),
+            role_id=str(row["role_id"]),
+            status=str(row["status"]),
+            provider_type=str(row["provider_type"])
+            if row.get("provider_type")
+            else None,
+            reply=str(row["reply"]) if row.get("reply") else "",
+            source=str(row["source"]) if row.get("source") else "teacher_exam",
+            error_message=str(row["error_message"])
+            if row.get("error_message")
+            else None,
+            generated_at=row.get("generated_at")
+            if isinstance(row.get("generated_at"), datetime)
+            else None,
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else None,
+        )
+
     async def insert_refresh_token(
         self,
         account_id: int,
@@ -1455,6 +1646,7 @@ class ApiRepository:
                     SELECT COUNT(*)
                     FROM ascendany.exam_participants ep2
                     WHERE ep2.exam_id = e.exam_id
+                      AND ep2.absent = FALSE
                 ) AS participant_count
             FROM ascendany.exams AS e
             WHERE e.exam_id = %s
@@ -1480,6 +1672,253 @@ class ApiRepository:
             problem_count=int(row.get("problem_count", 0)),
             participant_count=int(row.get("participant_count", 0)),
         )
+
+    async def list_exam_analysis_exams(
+        self,
+        role_id: str = "xiaoD",
+    ) -> list[ExamAnalysisExamRow]:
+        query = """
+            WITH participant_stats AS (
+                SELECT
+                    ep.exam_id,
+                    COUNT(*) FILTER (WHERE ep.absent = FALSE) AS participant_count
+                FROM ascendany.exam_participants AS ep
+                GROUP BY ep.exam_id
+            ),
+            cache_stats AS (
+                SELECT
+                    c.exam_id,
+                    COUNT(*) FILTER (WHERE c.status = 'success') AS generated_count,
+                    COUNT(*) FILTER (WHERE c.status = 'failed') AS failed_count
+                FROM ascendany.exam_auto_analysis_cache AS c
+                WHERE c.role_id = %s
+                GROUP BY c.exam_id
+            )
+            SELECT
+                e.exam_id,
+                COALESCE(NULLIF(BTRIM(e.title), ''), e.source_path) AS exam_name,
+                e.exam_type,
+                e.starts_at AS exam_date,
+                COALESCE(ps.participant_count, 0) AS participant_count,
+                COALESCE(cs.generated_count, 0) AS generated_count,
+                COALESCE(cs.failed_count, 0) AS failed_count,
+                GREATEST(
+                    COALESCE(ps.participant_count, 0)
+                    - COALESCE(cs.generated_count, 0)
+                    - COALESCE(cs.failed_count, 0),
+                    0
+                ) AS missing_count
+            FROM ascendany.exams AS e
+            LEFT JOIN participant_stats AS ps
+              ON ps.exam_id = e.exam_id
+            LEFT JOIN cache_stats AS cs
+              ON cs.exam_id = e.exam_id
+            WHERE COALESCE(ps.participant_count, 0) > 0
+            ORDER BY COALESCE(e.starts_at, e.created_at) DESC, e.exam_id DESC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (role_id,))
+                rows = await cursor.fetchall()
+        return [
+            ExamAnalysisExamRow(
+                exam_id=int(row["exam_id"]),
+                exam_name=str(row["exam_name"]),
+                exam_type=str(row["exam_type"]),
+                exam_date=row.get("exam_date")
+                if isinstance(row.get("exam_date"), datetime)
+                else None,
+                participant_count=int(row.get("participant_count", 0)),
+                generated_count=int(row.get("generated_count", 0)),
+                failed_count=int(row.get("failed_count", 0)),
+                missing_count=int(row.get("missing_count", 0)),
+            )
+            for row in rows
+        ]
+
+    async def fetch_exam_analysis_rows(
+        self,
+        exam_id: int,
+        role_id: str = "xiaoD",
+    ) -> list[ExamAnalysisStudentRow]:
+        query = """
+            SELECT
+                ep.student_id AS student_entity_id,
+                NULLIF(BTRIM(student_no.external_id), '') AS student_no,
+                COALESCE(
+                    NULLIF(BTRIM(s.canonical_name), ''),
+                    NULLIF(BTRIM(active_nickname.nickname), ''),
+                    NULLIF(BTRIM(latest_name.external_name), '')
+                ) AS student_name,
+                ep.rank,
+                ep.total_score,
+                ep.solved_count,
+                rh.delta AS rating_delta,
+                esm.knowledge,
+                esm.accuracy,
+                esm.quality,
+                esm.flexibility,
+                esm.proficiency,
+                COALESCE(cache.status, 'missing') AS analysis_status,
+                COALESCE(cache.reply, '') AS analysis_reply,
+                cache.generated_at,
+                cache.error_message
+            FROM ascendany.exam_participants AS ep
+            JOIN ascendany.students AS s
+              ON s.student_id = ep.student_id
+            LEFT JOIN ascendany.exam_student_metrics AS esm
+              ON esm.exam_id = ep.exam_id
+             AND esm.student_id = ep.student_id
+            LEFT JOIN ascendany.rating_history AS rh
+              ON rh.exam_id = ep.exam_id
+             AND rh.student_id = ep.student_id
+            LEFT JOIN ascendany.exam_auto_analysis_cache AS cache
+              ON cache.exam_id = ep.exam_id
+             AND cache.student_id = ep.student_id
+             AND cache.role_id = %s
+            LEFT JOIN LATERAL (
+                SELECT si.external_id
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = ep.student_id
+                  AND si.source LIKE %s
+                ORDER BY si.identity_id ASC
+                LIMIT 1
+            ) AS student_no ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT snc.nickname
+                FROM ascendany.student_nickname_claims AS snc
+                WHERE snc.student_id = ep.student_id
+                  AND snc.is_active = TRUE
+                ORDER BY snc.claimed_from DESC, snc.claim_id DESC
+                LIMIT 1
+            ) AS active_nickname ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT si.external_name
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = ep.student_id
+                  AND si.external_name IS NOT NULL
+                  AND BTRIM(si.external_name) <> ''
+                ORDER BY si.identity_id DESC
+                LIMIT 1
+            ) AS latest_name ON TRUE
+            WHERE ep.exam_id = %s
+              AND ep.absent = FALSE
+            ORDER BY ep.rank ASC NULLS LAST, ep.total_score DESC NULLS LAST, ep.student_id ASC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (role_id, "%student_no", exam_id))
+                rows = await cursor.fetchall()
+        return [
+            ExamAnalysisStudentRow(
+                student_entity_id=int(row["student_entity_id"]),
+                student_no=str(row["student_no"]) if row.get("student_no") else None,
+                student_name=str(row["student_name"])
+                if row.get("student_name")
+                else None,
+                rank=int(row["rank"]) if row.get("rank") is not None else None,
+                total_score=row.get("total_score"),
+                solved_count=int(row["solved_count"])
+                if row.get("solved_count") is not None
+                else None,
+                rating_delta=int(row["rating_delta"])
+                if row.get("rating_delta") is not None
+                else None,
+                knowledge=row.get("knowledge"),
+                accuracy=row.get("accuracy"),
+                quality=row.get("quality"),
+                flexibility=row.get("flexibility"),
+                proficiency=row.get("proficiency"),
+                analysis_status=str(row["analysis_status"]),
+                analysis_reply=str(row["analysis_reply"])
+                if row.get("analysis_reply")
+                else "",
+                generated_at=row.get("generated_at")
+                if isinstance(row.get("generated_at"), datetime)
+                else None,
+                error_message=str(row["error_message"])
+                if row.get("error_message")
+                else None,
+            )
+            for row in rows
+        ]
+
+    async def fetch_exam_analysis_targets(
+        self,
+        exam_id: int,
+        role_id: str = "xiaoD",
+    ) -> list[ExamAnalysisTargetRow]:
+        query = """
+            SELECT
+                ep.student_id AS student_entity_id,
+                NULLIF(BTRIM(student_no.external_id), '') AS student_no,
+                COALESCE(
+                    NULLIF(BTRIM(s.canonical_name), ''),
+                    NULLIF(BTRIM(active_nickname.nickname), ''),
+                    NULLIF(BTRIM(latest_name.external_name), '')
+                ) AS student_name,
+                COALESCE(
+                    NULLIF(BTRIM(active_nickname.nickname), ''),
+                    NULLIF(BTRIM(latest_name.external_name), ''),
+                    NULLIF(BTRIM(s.canonical_name), '')
+                ) AS pta_nickname,
+                cache.status AS analysis_status
+            FROM ascendany.exam_participants AS ep
+            JOIN ascendany.students AS s
+              ON s.student_id = ep.student_id
+            LEFT JOIN ascendany.exam_auto_analysis_cache AS cache
+              ON cache.exam_id = ep.exam_id
+             AND cache.student_id = ep.student_id
+             AND cache.role_id = %s
+            LEFT JOIN LATERAL (
+                SELECT si.external_id
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = ep.student_id
+                  AND si.source LIKE %s
+                ORDER BY si.identity_id ASC
+                LIMIT 1
+            ) AS student_no ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT snc.nickname
+                FROM ascendany.student_nickname_claims AS snc
+                WHERE snc.student_id = ep.student_id
+                  AND snc.is_active = TRUE
+                ORDER BY snc.claimed_from DESC, snc.claim_id DESC
+                LIMIT 1
+            ) AS active_nickname ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT si.external_name
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = ep.student_id
+                  AND si.external_name IS NOT NULL
+                  AND BTRIM(si.external_name) <> ''
+                ORDER BY si.identity_id DESC
+                LIMIT 1
+            ) AS latest_name ON TRUE
+            WHERE ep.exam_id = %s
+              AND ep.absent = FALSE
+            ORDER BY ep.rank ASC NULLS LAST, ep.total_score DESC NULLS LAST, ep.student_id ASC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (role_id, "%student_no", exam_id))
+                rows = await cursor.fetchall()
+        return [
+            ExamAnalysisTargetRow(
+                student_entity_id=int(row["student_entity_id"]),
+                student_no=str(row["student_no"]) if row.get("student_no") else None,
+                student_name=str(row["student_name"])
+                if row.get("student_name")
+                else None,
+                pta_nickname=str(row["pta_nickname"])
+                if row.get("pta_nickname")
+                else None,
+                analysis_status=str(row["analysis_status"])
+                if row.get("analysis_status")
+                else None,
+            )
+            for row in rows
+        ]
 
     async def fetch_exam_submissions_for_student(
         self, exam_id: int, student_id: int, limit: int = 100

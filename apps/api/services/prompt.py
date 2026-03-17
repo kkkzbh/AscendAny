@@ -111,6 +111,31 @@ _PROACTIVE_ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """\
 - 指标展示时严格区分 0 分与缺失值：0 分显示为 0；仅在字段缺失时标注“缺失/N/A”。\
 """
 
+_TARGET_EXAM_ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """\
+你是一位专业的编程学习分析助手，名叫「{role_name}」。
+
+## 指定考试分析模式
+当前任务是“分析指定考试表现”，目标考试 ID 为 `{target_exam_id}`。这不是普通闲聊，也不是“最近一场考试”分析。
+
+## 分析流程（必须执行）
+1. 优先使用系统已提供的“指定考试上下文”，明确分析对象就是目标考试。
+2. 必要时调用工具补充核对该学生在目标考试中的能力、提交与排名信息。
+3. 说明该场考试的 Rating 变化、五大指标表现，以及与上一场可比考试的关键变化。
+4. 给出 2-3 条可执行、可落地的改进建议，优先针对本场退步项或短板项。
+5. 结尾给出一句适合教师查看的总结，不要追加面向学生的追问。
+
+## 工具使用规则
+- 需要的数据通过工具获取，禁止编造。
+- 不要把分析对象误判为“最新考试”；若工具返回多场历史，必须锁定目标考试 ID。
+- 工具调用是后台行为，不向用户暴露函数调用过程或任何调用标记。
+
+## 输出约束
+- 始终使用简体中文。
+- 结构化输出，内容聚焦“结论 + 依据 + 行动”。
+- 面向教师阅读，语气专业克制，不使用聊天式追问。
+- 指标展示时严格区分 0 分与缺失值：0 分显示为 0；仅在字段缺失时标注“缺失/N/A”。\
+"""
+
 # ---------------------------------------------------------------------------
 # Layer 2 – Algorithm knowledge
 # ---------------------------------------------------------------------------
@@ -160,6 +185,27 @@ _LAYER_3_TEMPLATE = """\
 
 ### 最近一场考试的指标变化
 {metric_delta_text}\
+"""
+
+_TARGET_EXAM_CONTEXT_TEMPLATE = """\
+## 当前学生信息
+
+- **学号**: {student_id}
+- **昵称**: {pta_nickname}
+
+### 综合能力档案（当前）
+- Rating: **{rating}**
+- 知识: {knowledge} / 100
+- 准确: {accuracy} / 100
+- 质量: {quality} / 100
+- 灵活: {flexibility} / 100
+- 熟练: {proficiency} / 100
+
+### 指定考试上下文
+{target_exam_text}
+
+### 近期考试 Rating 变化
+{rating_history_text}\
 """
 
 _NO_STUDENT_CONTEXT = """\
@@ -226,6 +272,91 @@ def _build_metric_delta_text(
     return "\n".join(lines)
 
 
+def _build_target_exam_text(
+    target_exam_id: int,
+    rating_rows: list[RatingHistoryRow],
+    exam_metric_rows: list[ExamMetricHistoryRow],
+) -> str:
+    target_rating_idx = next(
+        (idx for idx, row in enumerate(rating_rows) if row.exam_id == target_exam_id),
+        None,
+    )
+    target_metric_idx = next(
+        (idx for idx, row in enumerate(exam_metric_rows) if row.exam_id == target_exam_id),
+        None,
+    )
+    target_rating = (
+        rating_rows[target_rating_idx]
+        if target_rating_idx is not None and target_rating_idx < len(rating_rows)
+        else None
+    )
+    target_metric = (
+        exam_metric_rows[target_metric_idx]
+        if target_metric_idx is not None and target_metric_idx < len(exam_metric_rows)
+        else None
+    )
+    previous_rating = (
+        rating_rows[target_rating_idx + 1]
+        if target_rating_idx is not None and target_rating_idx + 1 < len(rating_rows)
+        else None
+    )
+    previous_metric = (
+        exam_metric_rows[target_metric_idx + 1]
+        if target_metric_idx is not None and target_metric_idx + 1 < len(exam_metric_rows)
+        else None
+    )
+
+    exam_name = (
+        target_metric.exam_name
+        if target_metric is not None
+        else (target_rating.exam_name if target_rating is not None else f"考试 {target_exam_id}")
+    )
+    exam_time = (
+        target_metric.exam_time
+        if target_metric is not None
+        else (target_rating.exam_time if target_rating is not None else None)
+    )
+    exam_date = exam_time.strftime("%Y-%m-%d") if exam_time is not None else "未知日期"
+
+    lines = [f"目标考试: {exam_name}（{exam_date}，ID={target_exam_id}）"]
+
+    if target_rating is not None:
+        sign = "+" if target_rating.delta >= 0 else ""
+        lines.append(
+            f"- Rating: {target_rating.old_rating} → {target_rating.new_rating}（{sign}{target_rating.delta}）"
+        )
+        if previous_rating is not None:
+            lines.append(
+                f"- 上一场 Rating 参考: {previous_rating.exam_name}（{previous_rating.exam_time.strftime('%Y-%m-%d')}）"
+            )
+        else:
+            lines.append("- 上一场 Rating 参考: 无（可视为首场或缺少更早记录）")
+    else:
+        lines.append("- Rating: 该场暂无可用记录")
+
+    if target_metric is None:
+        lines.append("- 五维指标: 该场暂无可用记录")
+        return "\n".join(lines)
+
+    for key, cn_name in METRIC_NAMES.items():
+        cur_val = getattr(target_metric, key)
+        cur_str = _format_metric(cur_val)
+        if previous_metric is not None:
+            prev_val = getattr(previous_metric, key)
+            if cur_val is not None and prev_val is not None:
+                delta = round(float(cur_val)) - round(float(prev_val))
+                sign = "+" if delta >= 0 else ""
+                lines.append(
+                    f"- {cn_name}: {cur_str}（{sign}{delta}，上一场: {_format_metric(prev_val)}）"
+                )
+            else:
+                lines.append(f"- {cn_name}: {cur_str}")
+        else:
+            lines.append(f"- {cn_name}: {cur_str}（首场考试或无上一场指标）")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # PromptService
 # ---------------------------------------------------------------------------
@@ -275,6 +406,31 @@ class PromptService:
             custom_role_style_prompt=custom_role_style_prompt,
         )
 
+    async def build_exam_analysis_system_prompt(
+        self,
+        identity: ResolvedIdentity | None,
+        target_exam_id: int,
+        role_id: str = "xiaoD",
+        role_name: str = "小D",
+        custom_role_style_prompt: str = "",
+    ) -> str:
+        base_prompt = "\n\n".join(
+            [
+                _TARGET_EXAM_ANALYSIS_SYSTEM_PROMPT_TEMPLATE.format(
+                    role_name=role_name,
+                    target_exam_id=target_exam_id,
+                ),
+                LAYER_2_ALGORITHM,
+            ]
+        )
+        return await self._build_prompt_by_mode(
+            base_prompt=base_prompt,
+            identity=identity,
+            role_id=role_id,
+            custom_role_style_prompt=custom_role_style_prompt,
+            target_exam_id=target_exam_id,
+        )
+
     def build_auto_analysis_user_message(self) -> str:
         """Hidden trigger for proactive analysis requests."""
         return "请按系统提示执行主动分析任务，并直接输出最终分析结论。"
@@ -285,10 +441,16 @@ class PromptService:
         identity: ResolvedIdentity | None,
         role_id: str,
         custom_role_style_prompt: str = "",
+        target_exam_id: int | None = None,
     ) -> str:
         sections: list[str] = [base_prompt]
         if identity is not None and not identity.no_submission_records:
-            sections.append(await self._build_student_context(identity))
+            sections.append(
+                await self._build_student_context(
+                    identity,
+                    target_exam_id=target_exam_id,
+                )
+            )
         else:
             sections.append(_NO_STUDENT_CONTEXT)
         style = ROLE_STYLE_PROMPTS.get(role_id, "")
@@ -299,7 +461,11 @@ class PromptService:
             sections.append(custom_style)
         return "\n\n".join(sections)
 
-    async def _build_student_context(self, identity: ResolvedIdentity) -> str:
+    async def _build_student_context(
+        self,
+        identity: ResolvedIdentity,
+        target_exam_id: int | None = None,
+    ) -> str:
         student_entity_ids = identity.student_entity_ids or (
             identity.student_entity_id,
         )
@@ -308,8 +474,16 @@ class PromptService:
         metrics_rows: list[DashboardMetricsRow] = []
         rating_rows: list[RatingHistoryRow] = []
         exam_metric_rows: list[ExamMetricHistoryRow] = []
-        per_student_rating_limit = max(10, 10 * len(student_entity_ids))
-        per_student_exam_metric_limit = max(5, 5 * len(student_entity_ids))
+        per_student_rating_limit = (
+            max(50, 20 * len(student_entity_ids))
+            if target_exam_id is not None
+            else max(10, 10 * len(student_entity_ids))
+        )
+        per_student_exam_metric_limit = (
+            max(50, 20 * len(student_entity_ids))
+            if target_exam_id is not None
+            else max(5, 5 * len(student_entity_ids))
+        )
 
         for sid in student_entity_ids:
             cm = await self._repository.fetch_current_metrics(sid)
@@ -328,8 +502,14 @@ class PromptService:
                 )
             )
 
-        rating_rows = merge_rating_history_rows(rating_rows, limit=10)
-        exam_metric_rows = merge_exam_metric_rows(exam_metric_rows, limit=5)
+        rating_rows = merge_rating_history_rows(
+            rating_rows,
+            limit=50 if target_exam_id is not None else 10,
+        )
+        exam_metric_rows = merge_exam_metric_rows(
+            exam_metric_rows,
+            limit=50 if target_exam_id is not None else 5,
+        )
 
         latest_metrics = latest_metrics_row(metrics_rows)
         rating = latest_metrics.rating if latest_metrics else 800
@@ -338,6 +518,24 @@ class PromptService:
         quality = _format_metric(metric_from_rows(metrics_rows, "quality"))
         flexibility = _format_metric(metric_from_rows(metrics_rows, "flexibility"))
         proficiency = _format_metric(metric_from_rows(metrics_rows, "proficiency"))
+
+        if target_exam_id is not None:
+            return _TARGET_EXAM_CONTEXT_TEMPLATE.format(
+                student_id=identity.student_id,
+                pta_nickname=identity.pta_nickname or "未设置",
+                rating=rating,
+                knowledge=knowledge,
+                accuracy=accuracy,
+                quality=quality,
+                flexibility=flexibility,
+                proficiency=proficiency,
+                target_exam_text=_build_target_exam_text(
+                    target_exam_id=target_exam_id,
+                    rating_rows=rating_rows,
+                    exam_metric_rows=exam_metric_rows,
+                ),
+                rating_history_text=_build_rating_history_text(rating_rows),
+            )
 
         return _LAYER_3_TEMPLATE.format(
             student_id=identity.student_id,

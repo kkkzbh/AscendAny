@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from .api.routes import (
     auth_router,
     chat_router,
+    exam_analysis_router,
     health_router,
     import_router,
     meta_router,
@@ -136,6 +137,7 @@ def create_app(
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(students_router, prefix="/api/v1")
     app.include_router(chat_router, prefix="/api/v1")
+    app.include_router(exam_analysis_router, prefix="/api/v1")
     app.include_router(model_router, prefix="/api/v1")
     app.include_router(import_router, prefix="/api/v1")
 

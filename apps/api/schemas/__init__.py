@@ -11,6 +11,12 @@ from .auth import (
 )
 from .chat import ChatReplyRequest, ChatReplyResponse
 from .common import ErrorResponse, HealthzResponse
+from .exam_analysis import (
+    ExamAnalysisExamDetailResponse,
+    ExamAnalysisExamListResponse,
+    ExamAnalysisGenerateRequest,
+    ExamAnalysisGenerateResponse,
+)
 from .meta import LatestExamImportedAtResponse
 from .model import ModelProvidersResponse
 from .students import (
@@ -28,6 +34,10 @@ __all__ = [
     "ChatReplyRequest",
     "ChatReplyResponse",
     "ErrorResponse",
+    "ExamAnalysisExamDetailResponse",
+    "ExamAnalysisExamListResponse",
+    "ExamAnalysisGenerateRequest",
+    "ExamAnalysisGenerateResponse",
     "HealthzResponse",
     "LoginRequest",
     "LatestExamImportedAtResponse",

@@ -9,6 +9,7 @@ import {
   type UploadResponse,
   type IngestHistoryItem,
 } from "../api/import";
+import { AdminHeader } from "../components/AdminHeader";
 import { HelpDrawer } from "../components/HelpDrawer";
 
 /* ── Exam type display mapping ────────────────────────── */
@@ -200,20 +201,12 @@ export function ConsolePage({ account, onLogout }: Props) {
 
   return (
     <div className="console-page">
-      {/* ── Top Bar ── */}
-      <header className="topbar">
-        <div className="topbar-left">
-          <span className="topbar-logo">🔧</span>
-          <h1>AscendAny 数据导入控制台</h1>
-        </div>
-        <div className="topbar-right">
-          <button className="btn btn-ghost" onClick={() => setHelpOpen(true)} title="帮助">
-            ❓ 帮助
-          </button>
-          <span className="topbar-user">👤 {account?.username ?? "admin"}</span>
-          <button className="btn btn-ghost" onClick={onLogout}>退出</button>
-        </div>
-      </header>
+      <AdminHeader
+        account={account}
+        title="AscendAny 管理控制台"
+        onLogout={onLogout}
+        onOpenHelp={() => setHelpOpen(true)}
+      />
 
       <div className="console-body">
         {/* ── Left Panel: Upload ── */}

@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
 import { LoginPage } from "./pages/LoginPage";
 import { ConsolePage } from "./pages/ConsolePage";
+import { ExamAnalysisPage } from "./pages/ExamAnalysisPage";
 
 export function App() {
   const { token, account, login, logout } = useAuth();
@@ -31,6 +32,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/" element={<ConsolePage account={account} onLogout={logout} />} />
+      <Route path="/exam-analysis" element={<ExamAnalysisPage account={account} onLogout={logout} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
