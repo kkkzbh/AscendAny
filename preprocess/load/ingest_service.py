@@ -448,6 +448,7 @@ class IngestService:
                     "problem_code": row.problem_code,
                     "verdict": row.verdict,
                     "score": row.score,
+                    "time_ms": row.time_ms,
                 }
             )
         return timeline

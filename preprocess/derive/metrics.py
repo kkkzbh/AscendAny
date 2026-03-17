@@ -52,15 +52,71 @@ def _percentile_scores(
     return result
 
 
-def _problem_runtime_medians(participants: list[ParticipantRow]) -> dict[str, float]:
+def _accepted_runtime_ms_by_student_problem(
+    timeline_by_student: dict[int, list[dict[str, Any]]] | None,
+) -> dict[int, dict[str, int]]:
+    if not timeline_by_student:
+        return {}
+    result: dict[int, dict[str, int]] = {}
+    for student_id, events in timeline_by_student.items():
+        accepted_by_problem: dict[str, int] = {}
+        for event in events:
+            problem_code = clean_text(event.get("problem_code"))
+            if not problem_code or not _is_accepted(event.get("verdict")):
+                continue
+            raw_time_ms = event.get("time_ms")
+            if raw_time_ms is None:
+                continue
+            try:
+                time_ms = int(raw_time_ms)
+            except (TypeError, ValueError):
+                continue
+            current = accepted_by_problem.get(problem_code)
+            if current is None or time_ms < current:
+                accepted_by_problem[problem_code] = time_ms
+        if accepted_by_problem:
+            result[int(student_id)] = accepted_by_problem
+    return result
+
+
+def _resolved_quality_runtime_ms(
+    student_id: int | None,
+    problem_code: str,
+    stats: dict[str, Any],
+    accepted_runtime_by_student_problem: dict[int, dict[str, int]],
+) -> int | None:
+    if not stats.get("solved"):
+        return None
+    raw_runtime_ms = stats.get("runtime_ms")
+    if raw_runtime_ms is not None:
+        try:
+            return int(raw_runtime_ms)
+        except (TypeError, ValueError):
+            return None
+    if student_id is None:
+        return None
+    return accepted_runtime_by_student_problem.get(student_id, {}).get(
+        clean_text(problem_code)
+    )
+
+
+def _problem_runtime_medians(
+    participants: list[ParticipantRow],
+    accepted_runtime_by_student_problem: dict[int, dict[str, int]] | None = None,
+) -> dict[str, float]:
     bucket: dict[str, list[int]] = {}
+    runtime_fallbacks = accepted_runtime_by_student_problem or {}
     for participant in participants:
         if participant.absent:
             continue
         for problem_code, stats in participant.problem_stats.items():
-            runtime_ms = stats.get("runtime_ms")
-            solved = stats.get("solved")
-            if runtime_ms is None or not solved:
+            runtime_ms = _resolved_quality_runtime_ms(
+                student_id=participant.student_id,
+                problem_code=problem_code,
+                stats=stats,
+                accepted_runtime_by_student_problem=runtime_fallbacks,
+            )
+            if runtime_ms is None:
                 continue
             bucket.setdefault(problem_code, []).append(int(runtime_ms))
     medians: dict[str, float] = {}
@@ -422,7 +478,13 @@ def compute_exam_metrics(
     random_exam_missing_drawn_set_policy: str = "max_passed_fill_unanswered",
     problem_kind_by_code: dict[str, str] | None = None,
 ) -> list[StudentMetricResult]:
-    runtime_medians = _problem_runtime_medians(participants)
+    accepted_runtime_by_student_problem = _accepted_runtime_ms_by_student_problem(
+        timeline_by_student
+    )
+    runtime_medians = _problem_runtime_medians(
+        participants,
+        accepted_runtime_by_student_problem=accepted_runtime_by_student_problem,
+    )
     included_kind_set = {
         clean_text(item) for item in (included_problem_kinds or []) if clean_text(item)
     }
@@ -533,8 +595,13 @@ def compute_exam_metrics(
 
         runtime_ratios: list[float] = []
         for problem_code, stats in participant.problem_stats.items():
-            runtime_ms = stats.get("runtime_ms")
-            if runtime_ms is None or not stats.get("solved"):
+            runtime_ms = _resolved_quality_runtime_ms(
+                student_id=participant.student_id,
+                problem_code=problem_code,
+                stats=stats,
+                accepted_runtime_by_student_problem=accepted_runtime_by_student_problem,
+            )
+            if runtime_ms is None:
                 continue
             median_runtime = runtime_medians.get(problem_code)
             if median_runtime is None or median_runtime <= 0:
