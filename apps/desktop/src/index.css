@@ -613,31 +613,72 @@ body {
 }
 
 .ui-window-traffic {
+  --window-traffic-color: #f6c344;
   width: 16px;
   height: 16px;
+  position: relative;
+  isolation: isolate;
   border-radius: 9999px;
   margin-inline: 5px;
   border: 1px solid rgba(0, 0, 0, 0.2);
+  background: var(--window-traffic-color);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  transition: transform 0.15s var(--ease-out-expo), filter 0.15s var(--ease-out-expo);
+  transition:
+    transform 0.16s var(--ease-out-expo),
+    filter 0.16s var(--ease-out-expo),
+    box-shadow 0.16s var(--ease-out-expo);
+}
+
+.ui-window-traffic::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--window-traffic-color) 54%, transparent);
+  opacity: 0;
+  transform: scale(0.78);
+  filter: blur(7px);
+  z-index: -1;
+  pointer-events: none;
+  transition:
+    opacity 0.16s var(--ease-out-expo),
+    transform 0.16s var(--ease-out-expo);
 }
 
 .ui-window-traffic:hover {
-  transform: scale(1.06);
-  filter: brightness(0.96);
-  background: initial;
+  transform: scale(1.12);
+  filter: brightness(1.04) saturate(1.05);
+  background: var(--window-traffic-color);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--window-traffic-color) 40%, rgba(255, 255, 255, 0.2)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.ui-window-traffic:hover::after {
+  opacity: 0.68;
+  transform: scale(1.08);
+}
+
+.ui-window-traffic:active {
+  transform: scale(0.92);
+  filter: brightness(0.94);
+}
+
+.ui-window-traffic:active::after {
+  opacity: 0.32;
+  transform: scale(0.92);
 }
 
 .ui-window-minimize {
-  background: #f6c344;
+  --window-traffic-color: #f6c344;
 }
 
 .ui-window-maximize {
-  background: #35c759;
+  --window-traffic-color: #35c759;
 }
 
 .ui-window-close {
-  background: #ff5f57;
+  --window-traffic-color: #ff5f57;
 }
 
 .ui-window-dot-symbol {
@@ -656,7 +697,7 @@ body {
 
 .ui-window-close:hover {
   color: inherit;
-  background: #ff5f57;
+  background: var(--window-traffic-color);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -674,6 +715,12 @@ body {
   }
 
   .ui-theme-toggle-icon {
+    transition: none;
+  }
+
+  .ui-window-traffic,
+  .ui-window-traffic::after,
+  .ui-window-dot-symbol {
     transition: none;
   }
 }
