@@ -27,6 +27,32 @@ const EXAM_TYPE_LABELS: Record<string, string> = {
   pta_icpc: "PTA ICPC",
   pta_ioi: "PTA IOI",
 };
+const EXAM_ANALYSIS_RUN_STORAGE_PREFIX = "ascendany.exam-analysis.run.";
+
+function examAnalysisRunStorageKey(examId: string): string {
+  return `${EXAM_ANALYSIS_RUN_STORAGE_PREFIX}${examId}`;
+}
+
+function getStoredExamAnalysisRunId(examId: string): string | null {
+  if (typeof window === "undefined" || !examId) {
+    return null;
+  }
+  return window.sessionStorage.getItem(examAnalysisRunStorageKey(examId));
+}
+
+function setStoredExamAnalysisRunId(examId: string, runId: string): void {
+  if (typeof window === "undefined" || !examId || !runId) {
+    return;
+  }
+  window.sessionStorage.setItem(examAnalysisRunStorageKey(examId), runId);
+}
+
+function clearStoredExamAnalysisRunId(examId: string | null): void {
+  if (typeof window === "undefined" || !examId) {
+    return;
+  }
+  window.sessionStorage.removeItem(examAnalysisRunStorageKey(examId));
+}
 
 function formatDateTime(value: string | null): string {
   if (!value) return "未记录";
@@ -164,6 +190,8 @@ export function ExamAnalysisPage({ account, onLogout }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [taskBusy, setTaskBusy] = useState(false);
   const handledStreamStatusRef = useRef<string>("idle");
+  const activeRunExamIdRef = useRef<string | null>(null);
+  const restoredRunIdRef = useRef<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const stream = useSSEStream();
 
@@ -229,18 +257,41 @@ export function ExamAnalysisPage({ account, onLogout }: Props) {
   }, [stream.logs]);
 
   useEffect(() => {
+    if (!selectedExamId || stream.status !== "idle") {
+      return;
+    }
+    const storedRunId = getStoredExamAnalysisRunId(selectedExamId);
+    if (!storedRunId || restoredRunIdRef.current === storedRunId) {
+      return;
+    }
+    restoredRunIdRef.current = storedRunId;
+    activeRunExamIdRef.current = selectedExamId;
+    setTaskBusy(true);
+    handledStreamStatusRef.current = "idle";
+    setError(null);
+    stream.clearLogs();
+    stream.connect(storedRunId, "/api/v1/exam-analysis/runs/{run_id}/stream");
+  }, [selectedExamId, stream, stream.status]);
+
+  useEffect(() => {
     if (handledStreamStatusRef.current === stream.status) {
       return;
     }
     handledStreamStatusRef.current = stream.status;
     if (stream.status === "done") {
       setTaskBusy(false);
+      clearStoredExamAnalysisRunId(activeRunExamIdRef.current);
+      activeRunExamIdRef.current = null;
+      restoredRunIdRef.current = null;
       void loadExamList();
       if (selectedExamId) {
         void loadExamDetail(selectedExamId);
       }
     } else if (stream.status === "error") {
       setTaskBusy(false);
+      clearStoredExamAnalysisRunId(activeRunExamIdRef.current);
+      activeRunExamIdRef.current = null;
+      restoredRunIdRef.current = null;
     }
   }, [loadExamDetail, loadExamList, selectedExamId, stream.status]);
 
@@ -280,6 +331,9 @@ export function ExamAnalysisPage({ account, onLogout }: Props) {
       stream.clearLogs();
       try {
         const response = await generateExamAnalysis(selectedExamId, { force });
+        activeRunExamIdRef.current = selectedExamId;
+        restoredRunIdRef.current = response.runId;
+        setStoredExamAnalysisRunId(selectedExamId, response.runId);
         stream.connect(response.runId, "/api/v1/exam-analysis/runs/{run_id}/stream");
       } catch (runError) {
         setTaskBusy(false);

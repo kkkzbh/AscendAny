@@ -1,0 +1,73 @@
+version = 1
+name = "AscendAny"
+
+[setup]
+script = ""
+
+[[actions]]
+name = "启动本地客户端"
+icon = "run"
+command = '''bash -lc '
+set -euo pipefail
+
+for tool in uv pnpm curl; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "[AscendAny] Missing command: $tool" >&2
+    exit 1
+  fi
+done
+
+if [ ! -x .venv/bin/python ]; then
+  echo "[AscendAny] Missing .venv/bin/python. Run: uv venv .venv && uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt" >&2
+  exit 1
+fi
+
+if [ ! -d node_modules ] || [ ! -d apps/desktop/node_modules ]; then
+  echo "[AscendAny] Node dependencies missing. Run: pnpm install" >&2
+  exit 1
+fi
+
+api_host="${ASCENDANY_LOCAL_API_HOST:-127.0.0.1}"
+api_port="${ASCENDANY_LOCAL_API_PORT:-8000}"
+api_url="http://${api_host}:${api_port}"
+api_health="${api_url}/api/v1/healthz"
+api_pid=""
+
+cleanup() {
+  if [ -n "${api_pid:-}" ] && kill -0 "$api_pid" 2>/dev/null; then
+    kill "$api_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+if curl -fsS "$api_health" >/dev/null 2>&1; then
+  echo "[AscendAny] API already running at $api_url"
+else
+  echo "[AscendAny] Starting API at $api_url"
+  uv run --python .venv/bin/python uvicorn apps.api.main:app --host "$api_host" --port "$api_port" --reload &
+  api_pid=$!
+
+  for _ in $(seq 1 60); do
+    if curl -fsS "$api_health" >/dev/null 2>&1; then
+      break
+    fi
+    if ! kill -0 "$api_pid" 2>/dev/null; then
+      echo "[AscendAny] API process exited before becoming healthy" >&2
+      wait "$api_pid"
+    fi
+    sleep 1
+  done
+
+  if ! curl -fsS "$api_health" >/dev/null 2>&1; then
+    echo "[AscendAny] API did not become healthy: $api_health" >&2
+    exit 1
+  fi
+fi
+
+echo "[AscendAny] Starting desktop against $api_url"
+VITE_API_BASE_URL="$api_url" \
+ASCENDANY_LINUX_GPU_MODE="${ASCENDANY_LINUX_GPU_MODE:-off}" \
+ASCENDANY_LINUX_IME_MODE="${ASCENDANY_LINUX_IME_MODE:-auto}" \
+pnpm --filter @ascendany/desktop dev
+'
+'''

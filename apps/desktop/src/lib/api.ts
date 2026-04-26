@@ -30,9 +30,41 @@ import type {
   StudentAchievementsData,
 } from "@/types/achievements";
 
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL;
+const DEFAULT_API_BASE_URL = __ASCENDANY_WEB_BUILD__
+  ? ""
+  : "http://127.0.0.1:8000";
+
+type RuntimeLocation = {
+  origin?: string;
+  protocol?: string;
+};
+
+type RuntimeWindow = {
+  location?: RuntimeLocation;
+  electronAPI?: Window["electronAPI"];
+};
+
+export function resolveApiBaseUrl(
+  runtimeWindow: RuntimeWindow | undefined =
+    typeof window === "undefined" ? undefined : window,
+): string {
+  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+
+  const runtimeOrigin = runtimeWindow?.location?.origin?.trim() ?? "";
+  const runtimeProtocol = runtimeWindow?.location?.protocol ?? "";
+  const isWebOrigin = runtimeProtocol === "http:" || runtimeProtocol === "https:";
+
+  if (!runtimeWindow?.electronAPI && isWebOrigin && runtimeOrigin) {
+    return runtimeOrigin;
+  }
+
+  return DEFAULT_API_BASE_URL;
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 type QueryValue = string | number | boolean | null | undefined;
 
@@ -162,7 +194,9 @@ export class ApiError extends Error {
 function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   const base = API_BASE_URL.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const url = new URL(`${base}${normalizedPath}`);
+  const url = base
+    ? new URL(`${base}${normalizedPath}`)
+    : new URL(normalizedPath, window.location.origin);
 
   if (query) {
     for (const [key, value] of Object.entries(query)) {

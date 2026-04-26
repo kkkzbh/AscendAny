@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
 export default defineConfig({
+  define: {
+    __ASCENDANY_WEB_BUILD__: JSON.stringify(false),
+  },
   plugins: [react()],
   resolve: {
     alias: {

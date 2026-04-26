@@ -6,6 +6,9 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 export default defineConfig({
+  define: {
+    __ASCENDANY_WEB_BUILD__: JSON.stringify(false),
+  },
   plugins: [
     react(),
     tailwindcss(),

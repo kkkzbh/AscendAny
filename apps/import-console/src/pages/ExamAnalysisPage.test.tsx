@@ -130,6 +130,7 @@ describe("ExamAnalysisPage", () => {
     apiMocks.listExamAnalysisExams.mockReset();
     apiMocks.getExamAnalysisDetail.mockReset();
     apiMocks.generateExamAnalysis.mockReset();
+    window.sessionStorage.clear();
     streamState.logs = [];
     streamState.progress = null;
     streamState.status = "idle";
@@ -205,6 +206,7 @@ describe("ExamAnalysisPage", () => {
       expect(apiMocks.generateExamAnalysis).toHaveBeenCalledWith("11", { force: false });
       expect(streamState.clearLogs).toHaveBeenCalled();
       expect(streamState.connect).toHaveBeenCalledWith("run-11", "/api/v1/exam-analysis/runs/{run_id}/stream");
+      expect(window.sessionStorage.getItem("ascendany.exam-analysis.run.11")).toBe("run-11");
     });
 
     streamState.status = "done";
@@ -235,6 +237,22 @@ describe("ExamAnalysisPage", () => {
       expect(apiMocks.getExamAnalysisDetail).toHaveBeenCalledTimes(2);
       expect(screen.getByText("成功 1")).toBeInTheDocument();
       expect(screen.getByText("Bob generated text")).toBeInTheDocument();
+      expect(window.sessionStorage.getItem("ascendany.exam-analysis.run.11")).toBeNull();
+    });
+  });
+
+  it("reconnects to a stored run after page reload", async () => {
+    apiMocks.listExamAnalysisExams.mockResolvedValue(EXAM_LIST);
+    apiMocks.getExamAnalysisDetail.mockResolvedValue(DETAIL_MISSING);
+    window.sessionStorage.setItem("ascendany.exam-analysis.run.11", "run-11");
+
+    renderPage();
+
+    await screen.findAllByText("Contest 11");
+
+    await waitFor(() => {
+      expect(streamState.clearLogs).toHaveBeenCalled();
+      expect(streamState.connect).toHaveBeenCalledWith("run-11", "/api/v1/exam-analysis/runs/{run_id}/stream");
     });
   });
 });

@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __ASCENDANY_WEB_BUILD__: boolean;
+
 type UpdateStatus =
   | "idle"
   | "checking"
