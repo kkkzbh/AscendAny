@@ -13,13 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .api.routes import (
+    admin_router,
     auth_router,
     chat_router,
     exam_analysis_router,
     health_router,
     import_router,
     meta_router,
-    model_router,
     students_router,
 )
 from .core.config import Settings, load_settings
@@ -138,8 +138,8 @@ def create_app(
     app.include_router(students_router, prefix="/api/v1")
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(exam_analysis_router, prefix="/api/v1")
-    app.include_router(model_router, prefix="/api/v1")
     app.include_router(import_router, prefix="/api/v1")
+    app.include_router(admin_router, prefix="/api/v1")
 
     return app
 

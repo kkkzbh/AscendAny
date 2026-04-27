@@ -18,33 +18,15 @@ def _build_service(settings: Settings) -> LLMService:
     )
 
 
-def test_list_provider_options_includes_server_default_metadata() -> None:
-    settings = Settings()
-    service = _build_service(settings)
-
-    payload = service.list_provider_options()
-
-    assert payload.defaultProvider == "server_default"
-    assert payload.serverDefaultTarget == "server_default"
-    assert payload.serverDefaultTargetLabel is None
-    assert payload.serverDefaultModel is None
-    assert any(
-        option.type == "server_default" and option.usesServerConfig
-        for option in payload.providers
-    )
-
-
 def test_server_default_provider_uses_dedicated_config(monkeypatch) -> None:
     settings = Settings()
     settings.llm.server_default.base_url = "https://llm.example.com/v1"
     settings.llm.server_default.model = "server-default-model"
     settings.llm.server_default.api_key_env = "SERVER_DEFAULT_TEST_KEY"
-    settings.llm.providers["openai"].base_url = "https://api.openai.com/v1"
-    settings.llm.providers["openai"].model = "provider-model"
     monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "secret")
     service = _build_service(settings)
 
-    provider = service._resolve_provider("server_default", None)
+    provider = service._resolve_server_default_provider()
 
     assert provider.base_url == "https://llm.example.com/v1"
     assert provider.model == "server-default-model"
@@ -124,7 +106,6 @@ def test_openai_path_executes_textual_dsml_tool_calls(monkeypatch) -> None:
                 ChatReplyRequest(
                     messages=[ChatMessageRequest(role="user", content="我第几名？")],
                     summary="",
-                    providerType="server_default",
                 ),
                 system_prompt="test prompt",
                 tool_executor=tool_executor,  # type: ignore[arg-type]
@@ -154,61 +135,8 @@ def test_openai_path_executes_textual_dsml_tool_calls(monkeypatch) -> None:
     )
 
 
-def test_default_mode_gemini() -> None:
-    assert LLMService._default_mode("gemini") == "gemini"
-
-
-def test_default_mode_anthropic() -> None:
-    assert LLMService._default_mode("anthropic") == "anthropic"
-
-
-def test_default_mode_openai_compatible() -> None:
-    assert LLMService._default_mode("openai") == "openai_compatible"
-    assert LLMService._default_mode("deepseek") == "openai_compatible"
-
-
-def test_resolve_provider_gemini_client_config(monkeypatch) -> None:
-    """Client-supplied gemini provider config resolves with mode=gemini."""
-    settings = Settings()
-    service = _build_service(settings)
-
-    from apps.api.schemas.chat import ClientProviderConfig
-
-    config = ClientProviderConfig(
-        baseUrl="https://generativelanguage.googleapis.com/v1beta",
-        model="gemini-2.0-flash",
-        apiKey="test-gemini-key",
-        mode="gemini",
-    )
-    provider = service._resolve_provider("gemini", config)
-
-    assert provider.mode == "gemini"
-    assert provider.base_url == "https://generativelanguage.googleapis.com/v1beta"
-    assert provider.model == "gemini-2.0-flash"
-    assert provider.api_key == "test-gemini-key"
-    assert not provider.uses_server_config
-
-
-def test_resolve_provider_gemini_infers_mode() -> None:
-    """When mode is None for gemini provider type, _default_mode infers gemini."""
-    settings = Settings()
-    service = _build_service(settings)
-
-    from apps.api.schemas.chat import ClientProviderConfig
-
-    config = ClientProviderConfig(
-        baseUrl="https://generativelanguage.googleapis.com/v1beta",
-        model="gemini-2.0-flash",
-        apiKey="test-key",
-        mode=None,
-    )
-    provider = service._resolve_provider("gemini", config)
-
-    assert provider.mode == "gemini"
-
-
 def test_gemini_path_executes_tool_call(monkeypatch) -> None:
-    """Gemini path: function call round-trip produces final text reply."""
+    """Server-default Gemini path: function call round-trip produces final text reply."""
     requests_payload: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -256,9 +184,11 @@ def test_gemini_path_executes_tool_call(monkeypatch) -> None:
 
     transport = httpx.MockTransport(handler)
     settings = Settings()
-    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "secret")
-
-    from apps.api.schemas.chat import ClientProviderConfig
+    settings.llm.server_default.mode = "gemini"
+    settings.llm.server_default.base_url = "https://generativelanguage.googleapis.com/v1beta"
+    settings.llm.server_default.model = "gemini-2.0-flash"
+    settings.llm.server_default.api_key_env = "SERVER_DEFAULT_TEST_KEY"
+    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "test-key")
 
     async def run_case() -> tuple[str, FakeToolExecutor]:
         async with httpx.AsyncClient(transport=transport) as client:
@@ -268,13 +198,6 @@ def test_gemini_path_executes_tool_call(monkeypatch) -> None:
                 ChatReplyRequest(
                     messages=[ChatMessageRequest(role="user", content="我的能力评分是多少？")],
                     summary="",
-                    providerType="gemini",
-                    providerConfig=ClientProviderConfig(
-                        baseUrl="https://generativelanguage.googleapis.com/v1beta",
-                        model="gemini-2.0-flash",
-                        apiKey="test-key",
-                        mode="gemini",
-                    ),
                 ),
                 system_prompt="test system prompt",
                 tool_executor=tool_executor,  # type: ignore[arg-type]

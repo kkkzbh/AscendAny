@@ -147,8 +147,6 @@ class ExamAnalysisService:
                         )
                     ],
                     summary="",
-                    providerType="server_default",
-                    providerConfig=None,
                     roleId=role_id,
                     roleName=_ROLE_NAMES.get(role_id, _ROLE_NAMES[_DEFAULT_ROLE_ID]),
                     roleSystemPrompt=None,

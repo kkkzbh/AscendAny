@@ -247,6 +247,74 @@ class ExamAnalysisTargetRow:
 
 
 @dataclass(slots=True)
+class AdminStudentSummaryRow:
+    student_entity_id: int
+    student_no: str | None
+    student_name: str | None
+    username: str | None
+    rating: int
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+    latest_exam_at: datetime | None
+    exam_count: int
+    generated_reports: int
+    failed_reports: int
+    missing_reports: int
+
+
+@dataclass(slots=True)
+class AdminStudentExamReportRow:
+    exam_id: int
+    exam_name: str
+    exam_type: str
+    exam_date: datetime | None
+    rank: int | None
+    total_score: Decimal | float | int | None
+    solved_count: int | None
+    rating_delta: int | None
+    old_rating: int | None
+    new_rating: int | None
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+    analysis_status: str
+    analysis_reply: str
+    generated_at: datetime | None
+    error_message: str | None
+
+
+@dataclass(slots=True)
+class AdminAccountSummaryRow:
+    account_id: int
+    username: str
+    display_name: str
+    is_active: bool
+    is_admin: bool
+    provision_source: str
+    student_id: str | None
+    pta_nickname: str | None
+    created_at: datetime | None
+    updated_at: datetime | None
+    last_login_at: datetime | None
+
+
+@dataclass(slots=True)
+class AdminAuditLogRow:
+    row_id: str
+    kind: str
+    status: str
+    title: str
+    detail: str
+    created_at: datetime
+    payload: dict[str, object]
+
+
+@dataclass(slots=True)
 class AchievementDefinitionRow:
     achievement_code: str
     title: str
@@ -1919,6 +1987,354 @@ class ApiRepository:
             )
             for row in rows
         ]
+
+    async def fetch_admin_student_summaries(
+        self,
+        search: str | None = None,
+        limit: int = 200,
+        role_id: str = "xiaoD",
+    ) -> list[AdminStudentSummaryRow]:
+        normalized_search = (search or "").strip()
+        where_clause = ""
+        params: list[object] = [role_id]
+        if normalized_search:
+            where_clause = """
+                WHERE (
+                    student_no.external_id ILIKE %s
+                    OR s.canonical_name ILIKE %s
+                    OR active_nickname.nickname ILIKE %s
+                    OR account_match.username ILIKE %s
+                )
+            """
+            pattern = f"%{normalized_search}%"
+            params.extend([pattern, pattern, pattern, pattern])
+        params.append(limit)
+
+        query = f"""
+            WITH exam_counts AS (
+                SELECT
+                    ep.student_id,
+                    COUNT(*) FILTER (WHERE ep.absent = FALSE) AS exam_count,
+                    MAX(COALESCE(e.starts_at, e.created_at)) AS latest_exam_at
+                FROM ascendany.exam_participants AS ep
+                JOIN ascendany.exams AS e ON e.exam_id = ep.exam_id
+                GROUP BY ep.student_id
+            ),
+            report_counts AS (
+                SELECT
+                    ep.student_id,
+                    COUNT(*) FILTER (
+                        WHERE ep.absent = FALSE AND c.status = 'success'
+                    ) AS generated_reports,
+                    COUNT(*) FILTER (
+                        WHERE ep.absent = FALSE AND c.status = 'failed'
+                    ) AS failed_reports
+                FROM ascendany.exam_participants AS ep
+                LEFT JOIN ascendany.exam_auto_analysis_cache AS c
+                  ON c.exam_id = ep.exam_id
+                 AND c.student_id = ep.student_id
+                 AND c.role_id = %s
+                GROUP BY ep.student_id
+            )
+            SELECT
+                s.student_id,
+                NULLIF(BTRIM(student_no.external_id), '') AS student_no,
+                COALESCE(
+                    NULLIF(BTRIM(s.canonical_name), ''),
+                    NULLIF(BTRIM(active_nickname.nickname), ''),
+                    NULLIF(BTRIM(latest_name.external_name), '')
+                ) AS student_name,
+                account_match.username,
+                COALESCE(cm.rating, 800) AS rating,
+                cm.knowledge,
+                cm.accuracy,
+                cm.quality,
+                cm.flexibility,
+                cm.proficiency,
+                ec.latest_exam_at,
+                COALESCE(ec.exam_count, 0) AS exam_count,
+                COALESCE(rc.generated_reports, 0) AS generated_reports,
+                COALESCE(rc.failed_reports, 0) AS failed_reports,
+                GREATEST(
+                    COALESCE(ec.exam_count, 0)
+                    - COALESCE(rc.generated_reports, 0)
+                    - COALESCE(rc.failed_reports, 0),
+                    0
+                ) AS missing_reports
+            FROM ascendany.students AS s
+            LEFT JOIN ascendany.student_current_metrics AS cm
+              ON cm.student_id = s.student_id
+            LEFT JOIN exam_counts AS ec
+              ON ec.student_id = s.student_id
+            LEFT JOIN report_counts AS rc
+              ON rc.student_id = s.student_id
+            LEFT JOIN LATERAL (
+                SELECT si.external_id
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = s.student_id
+                  AND si.source LIKE %s
+                ORDER BY si.identity_id ASC
+                LIMIT 1
+            ) AS student_no ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT snc.nickname
+                FROM ascendany.student_nickname_claims AS snc
+                WHERE snc.student_id = s.student_id
+                  AND snc.is_active = TRUE
+                ORDER BY snc.claimed_from DESC, snc.claim_id DESC
+                LIMIT 1
+            ) AS active_nickname ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT si.external_name
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = s.student_id
+                  AND si.external_name IS NOT NULL
+                  AND BTRIM(si.external_name) <> ''
+                ORDER BY si.identity_id DESC
+                LIMIT 1
+            ) AS latest_name ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT ua.username
+                FROM ascendany.user_profiles AS up
+                JOIN ascendany.user_accounts AS ua ON ua.account_id = up.account_id
+                WHERE BTRIM(COALESCE(up.student_id, '')) = BTRIM(student_no.external_id)
+                   OR BTRIM(COALESCE(up.pta_nickname, '')) = BTRIM(active_nickname.nickname)
+                ORDER BY ua.account_id ASC
+                LIMIT 1
+            ) AS account_match ON TRUE
+            {where_clause}
+            ORDER BY ec.latest_exam_at DESC NULLS LAST, cm.rating DESC NULLS LAST, s.student_id ASC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (role_id, "%student_no", *params[1:]))
+                rows = await cursor.fetchall()
+        return [
+            AdminStudentSummaryRow(
+                student_entity_id=int(row["student_id"]),
+                student_no=str(row["student_no"]) if row.get("student_no") else None,
+                student_name=str(row["student_name"])
+                if row.get("student_name")
+                else None,
+                username=str(row["username"]) if row.get("username") else None,
+                rating=int(row.get("rating", 800)),
+                knowledge=row.get("knowledge"),
+                accuracy=row.get("accuracy"),
+                quality=row.get("quality"),
+                flexibility=row.get("flexibility"),
+                proficiency=row.get("proficiency"),
+                latest_exam_at=row.get("latest_exam_at")
+                if isinstance(row.get("latest_exam_at"), datetime)
+                else None,
+                exam_count=int(row.get("exam_count", 0)),
+                generated_reports=int(row.get("generated_reports", 0)),
+                failed_reports=int(row.get("failed_reports", 0)),
+                missing_reports=int(row.get("missing_reports", 0)),
+            )
+            for row in rows
+        ]
+
+    async def fetch_admin_student_exam_reports(
+        self,
+        student_id: int,
+        role_id: str = "xiaoD",
+    ) -> list[AdminStudentExamReportRow]:
+        query = """
+            SELECT
+                e.exam_id,
+                COALESCE(NULLIF(BTRIM(e.title), ''), e.source_path) AS exam_name,
+                e.exam_type,
+                e.starts_at AS exam_date,
+                ep.rank,
+                ep.total_score,
+                ep.solved_count,
+                rh.delta AS rating_delta,
+                rh.old_rating,
+                rh.new_rating,
+                esm.knowledge,
+                esm.accuracy,
+                esm.quality,
+                esm.flexibility,
+                esm.proficiency,
+                COALESCE(cache.status, 'missing') AS analysis_status,
+                COALESCE(cache.reply, '') AS analysis_reply,
+                cache.generated_at,
+                cache.error_message
+            FROM ascendany.exam_participants AS ep
+            JOIN ascendany.exams AS e ON e.exam_id = ep.exam_id
+            LEFT JOIN ascendany.exam_student_metrics AS esm
+              ON esm.exam_id = ep.exam_id
+             AND esm.student_id = ep.student_id
+            LEFT JOIN ascendany.rating_history AS rh
+              ON rh.exam_id = ep.exam_id
+             AND rh.student_id = ep.student_id
+            LEFT JOIN ascendany.exam_auto_analysis_cache AS cache
+              ON cache.exam_id = ep.exam_id
+             AND cache.student_id = ep.student_id
+             AND cache.role_id = %s
+            WHERE ep.student_id = %s
+              AND ep.absent = FALSE
+            ORDER BY COALESCE(e.starts_at, e.created_at) DESC, e.exam_id DESC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (role_id, student_id))
+                rows = await cursor.fetchall()
+        return [
+            AdminStudentExamReportRow(
+                exam_id=int(row["exam_id"]),
+                exam_name=str(row["exam_name"]),
+                exam_type=str(row["exam_type"]),
+                exam_date=row.get("exam_date")
+                if isinstance(row.get("exam_date"), datetime)
+                else None,
+                rank=int(row["rank"]) if row.get("rank") is not None else None,
+                total_score=row.get("total_score"),
+                solved_count=int(row["solved_count"])
+                if row.get("solved_count") is not None
+                else None,
+                rating_delta=int(row["rating_delta"])
+                if row.get("rating_delta") is not None
+                else None,
+                old_rating=int(row["old_rating"])
+                if row.get("old_rating") is not None
+                else None,
+                new_rating=int(row["new_rating"])
+                if row.get("new_rating") is not None
+                else None,
+                knowledge=row.get("knowledge"),
+                accuracy=row.get("accuracy"),
+                quality=row.get("quality"),
+                flexibility=row.get("flexibility"),
+                proficiency=row.get("proficiency"),
+                analysis_status=str(row["analysis_status"]),
+                analysis_reply=str(row["analysis_reply"])
+                if row.get("analysis_reply")
+                else "",
+                generated_at=row.get("generated_at")
+                if isinstance(row.get("generated_at"), datetime)
+                else None,
+                error_message=str(row["error_message"])
+                if row.get("error_message")
+                else None,
+            )
+            for row in rows
+        ]
+
+    async def fetch_admin_account_summaries(
+        self,
+        limit: int = 200,
+    ) -> list[AdminAccountSummaryRow]:
+        query = """
+            SELECT
+                ua.account_id,
+                ua.username,
+                ua.display_name,
+                ua.is_active,
+                ua.is_admin,
+                ua.provision_source,
+                up.student_id,
+                up.pta_nickname,
+                ua.created_at,
+                ua.updated_at,
+                ua.last_login_at
+            FROM ascendany.user_accounts AS ua
+            LEFT JOIN ascendany.user_profiles AS up
+              ON up.account_id = ua.account_id
+            ORDER BY ua.is_admin DESC, ua.last_login_at DESC NULLS LAST, ua.account_id ASC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (limit,))
+                rows = await cursor.fetchall()
+        return [
+            AdminAccountSummaryRow(
+                account_id=int(row["account_id"]),
+                username=str(row["username"]),
+                display_name=str(row["display_name"]),
+                is_active=bool(row["is_active"]),
+                is_admin=bool(row["is_admin"]),
+                provision_source=str(row.get("provision_source") or "local"),
+                student_id=str(row["student_id"]) if row.get("student_id") else None,
+                pta_nickname=str(row["pta_nickname"])
+                if row.get("pta_nickname")
+                else None,
+                created_at=row.get("created_at")
+                if isinstance(row.get("created_at"), datetime)
+                else None,
+                updated_at=row.get("updated_at")
+                if isinstance(row.get("updated_at"), datetime)
+                else None,
+                last_login_at=row.get("last_login_at")
+                if isinstance(row.get("last_login_at"), datetime)
+                else None,
+            )
+            for row in rows
+        ]
+
+    async def fetch_admin_audit_logs(self, limit: int = 100) -> list[AdminAuditLogRow]:
+        query = """
+            SELECT *
+            FROM (
+                SELECT
+                    'ingest:' || ir.ingest_run_id::text AS row_id,
+                    'ingest_run' AS kind,
+                    ir.status AS status,
+                    '导入运行 #' || ir.ingest_run_id::text AS title,
+                    COALESCE(ir.meta::text, '{}') AS detail,
+                    ir.started_at AS created_at,
+                    ir.meta AS payload
+                FROM ascendany.ingest_runs AS ir
+                UNION ALL
+                SELECT
+                    'task:' || it.run_id AS row_id,
+                    it.task_type AS kind,
+                    it.status AS status,
+                    '任务 ' || it.run_id AS title,
+                    COALESCE(it.result::text, '{}') AS detail,
+                    it.created_at AS created_at,
+                    it.result AS payload
+                FROM ascendany.import_tasks AS it
+                UNION ALL
+                SELECT
+                    'event:' || ite.event_id::text AS row_id,
+                    'task_event:' || ite.event_type AS kind,
+                    ite.event_type AS status,
+                    '任务事件 ' || ite.run_id AS title,
+                    COALESCE(ite.data::text, '{}') AS detail,
+                    ite.created_at AS created_at,
+                    ite.data AS payload
+                FROM ascendany.import_task_events AS ite
+            ) AS audit
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (limit,))
+                rows = await cursor.fetchall()
+        normalized: list[AdminAuditLogRow] = []
+        for row in rows:
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+            created_at = row.get("created_at")
+            if not isinstance(created_at, datetime):
+                continue
+            normalized.append(
+                AdminAuditLogRow(
+                    row_id=str(row["row_id"]),
+                    kind=str(row["kind"]),
+                    status=str(row["status"]),
+                    title=str(row["title"]),
+                    detail=str(row["detail"])[:1000],
+                    created_at=created_at,
+                    payload=payload,
+                )
+            )
+        return normalized
 
     async def fetch_exam_submissions_for_student(
         self, exam_id: int, student_id: int, limit: int = 100

@@ -4,10 +4,7 @@ import { useMetricsStore } from "@/stores/metricsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { storage } from "@/lib/storage";
-import {
-  postAutoAnalysis,
-  type ClientProviderConfigPayload,
-} from "@/lib/api";
+import { postAutoAnalysis } from "@/lib/api";
 import { findRole } from "@/types/role";
 
 /**
@@ -27,8 +24,6 @@ export function useAutoAnalysis(params: {
   const accessToken = useAuthStore((s) => s.accessToken);
   const status = useAuthStore((s) => s.status);
   const rating = useMetricsStore((s) => s.rating);
-  const activeProvider = useSettingsStore((s) => s.activeProvider);
-  const providers = useSettingsStore((s) => s.providers);
   const activeRole = useSettingsStore((s) => s.activeRole);
   const customRoles = useCustomRoleStore((s) => s.customRoles);
 
@@ -49,36 +44,12 @@ export function useAutoAnalysis(params: {
       const roleAtRequest = findRole(roleIdAtRequest, customRoles);
       let taskId: string | undefined;
       try {
-        // Build provider config for non-server-config providers
-        const provider = providers[activeProvider];
-        let providerConfig: ClientProviderConfigPayload | undefined;
-        if (provider && !provider.usesServerConfig) {
-          const baseUrl = provider.baseUrl.trim();
-          const model = provider.model.trim();
-          const apiKey = provider.apiKey.trim();
-          if (!baseUrl || !model || !apiKey) {
-            return;
-          }
-          providerConfig = {
-            baseUrl,
-            model,
-            apiKey,
-            mode:
-              activeProvider === "anthropic"
-                ? "anthropic"
-                : activeProvider === "gemini"
-                  ? "gemini"
-                  : "openai_compatible",
-          };
-        }
         taskId = onWorkStart?.();
 
         const response = await postAutoAnalysis(
           {
             studentId: account.studentId ?? undefined,
             ptaNickname: account.ptaNickname ?? undefined,
-            providerType: activeProvider,
-            providerConfig,
             roleId: roleIdAtRequest,
             roleName: roleAtRequest.name,
             roleSystemPrompt: roleAtRequest.systemPromptExtra || undefined,
@@ -105,8 +76,6 @@ export function useAutoAnalysis(params: {
     account,
     accessToken,
     rating,
-    activeProvider,
-    providers,
     activeRole,
     customRoles,
     onReply,

@@ -3,9 +3,15 @@ import { persist } from "zustand/middleware";
 import type { ChatMessage, ChatSession } from "@/types/chat";
 
 interface ChatState {
-  session: ChatSession;
+  sessions: ChatSession[];
+  activeSessionId: string;
   aiWorkTaskIds: string[];
   isAiWorking: boolean;
+  resetForAccount: () => void;
+  createSession: () => string;
+  selectSession: (sessionId: string) => void;
+  deleteSession: (sessionId: string) => void;
+  getActiveSession: () => ChatSession;
   addMessage: (
     role: ChatMessage["role"],
     content: string,
@@ -17,12 +23,23 @@ interface ChatState {
   finishAiWork: (taskId: string) => void;
 }
 
-function createEmptySession(): ChatSession {
+const DEFAULT_SESSION_TITLE = "新对话";
+
+let _sessionCounter = 0;
+function generateSessionId(): string {
+  _sessionCounter += 1;
+  return `session_${Date.now()}_${_sessionCounter}`;
+}
+
+function createEmptySession(title = DEFAULT_SESSION_TITLE): ChatSession {
+  const now = Date.now();
   return {
+    id: generateSessionId(),
+    title,
     messages: [],
     summary: "",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -38,46 +55,205 @@ function generateWorkId(source: "manual" | "auto"): string {
   return `work_${source}_${Date.now()}_${_workCounter}`;
 }
 
+function formatSessionTitle(messages: ChatMessage[]): string {
+  const firstUserMessage = messages.find((message) => message.role === "user");
+  const content = firstUserMessage?.content.replace(/\s+/g, " ").trim() ?? "";
+  if (!content) {
+    return DEFAULT_SESSION_TITLE;
+  }
+  return content.length > 18 ? `${content.slice(0, 18)}...` : content;
+}
+
+function normalizeMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((message): message is Partial<ChatMessage> =>
+      Boolean(message) && typeof message === "object",
+    )
+    .map((message) => ({
+      id:
+        typeof message.id === "string" && message.id.trim()
+          ? message.id
+          : generateId(),
+      role:
+        message.role === "user" ||
+        message.role === "assistant" ||
+        message.role === "system"
+          ? message.role
+          : "system",
+      content: typeof message.content === "string" ? message.content : "",
+      timestamp:
+        typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+          ? message.timestamp
+          : Date.now(),
+      roleId: typeof message.roleId === "string" ? message.roleId : undefined,
+    }));
+}
+
+function normalizeSession(value: unknown): ChatSession {
+  const candidate =
+    value && typeof value === "object" ? (value as Partial<ChatSession>) : {};
+  const messages = normalizeMessages(candidate.messages);
+  const createdAt =
+    typeof candidate.createdAt === "number" && Number.isFinite(candidate.createdAt)
+      ? candidate.createdAt
+      : Date.now();
+  const updatedAt =
+    typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
+      ? candidate.updatedAt
+      : createdAt;
+  const title =
+    typeof candidate.title === "string" && candidate.title.trim()
+      ? candidate.title.trim()
+      : formatSessionTitle(messages);
+
+  return {
+    id:
+      typeof candidate.id === "string" && candidate.id.trim()
+        ? candidate.id
+        : generateSessionId(),
+    title,
+    messages,
+    summary: typeof candidate.summary === "string" ? candidate.summary : "",
+    createdAt,
+    updatedAt,
+  };
+}
+
+function getActiveSessionFromState(state: Pick<ChatState, "sessions" | "activeSessionId">): ChatSession {
+  return (
+    state.sessions.find((session) => session.id === state.activeSessionId) ??
+    state.sessions[0] ??
+    createEmptySession()
+  );
+}
+
 export const useChatStore = create<ChatState>()(
   persist(
-    (set) => ({
-      session: createEmptySession(),
+    (set, get) => {
+      const initialSession = createEmptySession();
+      return {
+      sessions: [initialSession],
+      activeSessionId: initialSession.id,
       aiWorkTaskIds: [],
       isAiWorking: false,
 
-      addMessage: (role, content, options) =>
-        set((state) => ({
-          session: {
-            ...state.session,
-            messages: [
-              ...state.session.messages,
-              {
-                id: generateId(),
-                role,
-                content,
-                timestamp: Date.now(),
-                roleId: role === "assistant" ? options?.roleId : undefined,
-              },
-            ],
-            updatedAt: Date.now(),
-          },
-        })),
-
-      clearContext: () =>
-        set(() => ({
-          session: createEmptySession(),
+      resetForAccount: () => {
+        const session = createEmptySession();
+        set({
+          sessions: [session],
+          activeSessionId: session.id,
           aiWorkTaskIds: [],
           isAiWorking: false,
-        })),
+        });
+      },
+
+      createSession: () => {
+        const session = createEmptySession();
+        set((state) => ({
+          sessions: [session, ...state.sessions],
+          activeSessionId: session.id,
+          aiWorkTaskIds: [],
+          isAiWorking: false,
+        }));
+        return session.id;
+      },
+
+      selectSession: (sessionId) =>
+        set((state) => {
+          if (!state.sessions.some((session) => session.id === sessionId)) {
+            return state;
+          }
+          return {
+            activeSessionId: sessionId,
+          };
+        }),
+
+      deleteSession: (sessionId) =>
+        set((state) => {
+          const nextSessions = state.sessions.filter((session) => session.id !== sessionId);
+          if (nextSessions.length === 0) {
+            const replacement = createEmptySession();
+            return {
+              sessions: [replacement],
+              activeSessionId: replacement.id,
+              aiWorkTaskIds: [],
+              isAiWorking: false,
+            };
+          }
+          const wasActive = state.activeSessionId === sessionId;
+          return {
+            sessions: nextSessions,
+            activeSessionId: wasActive ? nextSessions[0]!.id : state.activeSessionId,
+            aiWorkTaskIds: wasActive ? [] : state.aiWorkTaskIds,
+            isAiWorking: wasActive ? false : state.isAiWorking,
+          };
+        }),
+
+      getActiveSession: () => getActiveSessionFromState(get()),
+
+      addMessage: (role, content, options) =>
+        set((state) => {
+          const activeSession = getActiveSessionFromState(state);
+          const nextMessage: ChatMessage = {
+            id: generateId(),
+            role,
+            content,
+            timestamp: Date.now(),
+            roleId: role === "assistant" ? options?.roleId : undefined,
+          };
+          const nextSessions = state.sessions.map((session) => {
+            if (session.id !== activeSession.id) {
+              return session;
+            }
+            const messages = [...session.messages, nextMessage];
+            return {
+              ...session,
+              messages,
+              title: session.title === DEFAULT_SESSION_TITLE ? formatSessionTitle(messages) : session.title,
+              updatedAt: Date.now(),
+            };
+          });
+          return {
+            sessions: nextSessions,
+            activeSessionId: activeSession.id,
+          };
+        }),
+
+      clearContext: () =>
+        set((state) => {
+          const activeSession = getActiveSessionFromState(state);
+          const replacement = {
+            ...createEmptySession(DEFAULT_SESSION_TITLE),
+            id: activeSession.id,
+          };
+          return {
+            sessions: state.sessions.map((session) =>
+              session.id === activeSession.id ? replacement : session,
+            ),
+            activeSessionId: activeSession.id,
+            aiWorkTaskIds: [],
+            isAiWorking: false,
+          };
+        }),
 
       setSummary: (summary) =>
-        set((state) => ({
-          session: {
-            ...state.session,
-            summary,
-            updatedAt: Date.now(),
-          },
-        })),
+        set((state) => {
+          const activeSession = getActiveSessionFromState(state);
+          return {
+            sessions: state.sessions.map((session) =>
+              session.id === activeSession.id
+                ? {
+                    ...session,
+                    summary,
+                    updatedAt: Date.now(),
+                  }
+                : session,
+            ),
+          };
+        }),
 
       startAiWork: (source) => {
         const taskId = generateWorkId(source);
@@ -96,12 +272,37 @@ export const useChatStore = create<ChatState>()(
             isAiWorking: nextTaskIds.length > 0,
           };
         }),
-    }),
+      };
+    },
     {
       name: "ascendany_chat_guest",
       partialize: (state) => ({
-        session: state.session,
+        sessions: state.sessions,
+        activeSessionId: state.activeSessionId,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<
+          ChatState & { session?: unknown }
+        >;
+        const sessions = Array.isArray(persisted.sessions)
+          ? persisted.sessions.map((session) => normalizeSession(session))
+          : persisted.session
+            ? [normalizeSession(persisted.session)]
+            : currentState.sessions;
+        const safeSessions = sessions.length > 0 ? sessions : [createEmptySession()];
+        const activeSessionId =
+          typeof persisted.activeSessionId === "string" &&
+          safeSessions.some((session) => session.id === persisted.activeSessionId)
+            ? persisted.activeSessionId
+            : safeSessions[0]!.id;
+        return {
+          ...currentState,
+          sessions: safeSessions,
+          activeSessionId,
+          aiWorkTaskIds: [],
+          isAiWorking: false,
+        };
+      },
     },
   ),
 );

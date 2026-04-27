@@ -4,7 +4,12 @@ import { MessageBubble } from "./MessageBubble";
 import { AssistantWorkingCard } from "./AssistantWorkingCard";
 
 export function MessageList() {
-  const messages = useChatStore((s) => s.session.messages);
+  const messages = useChatStore((s) => {
+    const activeSession =
+      s.sessions.find((session) => session.id === s.activeSessionId) ??
+      s.sessions[0];
+    return activeSession?.messages ?? [];
+  });
   const isAiWorking = useChatStore((s) => s.isAiWorking);
   const containerRef = useRef<HTMLDivElement>(null);
 

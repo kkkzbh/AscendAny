@@ -28,8 +28,8 @@ export function LoginPage({ onLogin }: Props) {
     <div className="login-page">
       <div className="login-card">
         <div className="login-header">
-          <h1>🔧 AscendAny</h1>
-          <h2>数据导入控制台</h2>
+          <h1>AscendAny</h1>
+          <h2>管理员控制平台</h2>
           <p className="login-subtitle">管理员登录</p>
         </div>
 

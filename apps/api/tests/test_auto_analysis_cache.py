@@ -125,16 +125,13 @@ class FakeLLM:
         self.calls = 0
         self.system_prompts: list[str] = []
 
-    def list_provider_options(self):
-        return None
-
     async def generate_reply(self, payload, system_prompt=None, tool_executor=None):
         self.calls += 1
         self.system_prompts.append(system_prompt or "")
         return ChatReplyResponse(
             reply="这是一条自动分析缓存。",
             summary="",
-            provider=payload.providerType,
+            provider="server_default",
         )
 
 
@@ -154,7 +151,6 @@ def test_auto_analysis_delivered_only_once_per_latest_exam() -> None:
         payload = {
             "studentId": "20231202047",
             "ptaNickname": "王浩然",
-            "providerType": "server_default",
             "roleId": "xiaoD",
             "latestExamId": "9",
         }
@@ -191,7 +187,6 @@ def test_auto_analysis_uses_cached_reply_before_llm() -> None:
             json={
                 "studentId": "20231202047",
                 "ptaNickname": "王浩然",
-                "providerType": "server_default",
                 "roleId": "xiaoD",
                 "latestExamId": "9",
             },
@@ -212,7 +207,6 @@ def test_auto_analysis_uses_proactive_prompt_mode() -> None:
             json={
                 "studentId": "20231202047",
                 "ptaNickname": "王浩然",
-                "providerType": "server_default",
                 "roleId": "xiaoD",
                 "latestExamId": "9",
             },
@@ -221,6 +215,31 @@ def test_auto_analysis_uses_proactive_prompt_mode() -> None:
     assert response.status_code == 200
     assert llm.calls == 1
     assert any("## 主动分析模式" in prompt for prompt in llm.system_prompts)
+
+
+def test_auto_analysis_rejects_legacy_client_provider_config() -> None:
+    repo = FakeRepo()
+    llm = FakeLLM()
+    with _build_client(repo, llm) as client:
+        response = client.post(
+            "/api/v1/chat/auto-analysis",
+            json={
+                "studentId": "20231202047",
+                "ptaNickname": "王浩然",
+                "providerType": "gemini",
+                "providerConfig": {
+                    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                    "model": "gemini-2.0-flash",
+                    "apiKey": "secret",
+                    "mode": "gemini",
+                },
+                "roleId": "xiaoD",
+                "latestExamId": "9",
+            },
+        )
+
+    assert response.status_code == 422
+    assert llm.calls == 0
 
 
 def test_auto_analysis_precompute_uses_same_proactive_prompt_mode(monkeypatch) -> None:

@@ -3,7 +3,6 @@ import logoImage from "../../../image/LOGO.png";
 import desktopScreenshot from "../../../image/主界面.png";
 import loginScreenshot from "../../../image/登录界面.png";
 import abilityPanelScreenshot from "../../../image/能力面板.png";
-import customRouteScreenshot from "../../../image/自定义路由模型.png";
 import roleSwitchScreenshot from "../../../image/角色切换.png";
 import "./styles.css";
 
@@ -297,12 +296,6 @@ const screenPreviews: [ScreenPreviewItem, ...ScreenPreviewItem[]] = [
     desc: "这张面板像成绩解说员，强项直接夸，短板当场点名。",
     image: abilityPanelScreenshot,
     alt: "AscendAny 能力面板",
-  },
-  {
-    title: "自定义路由模型",
-    desc: "默认不够用？路由规则自己配，想怎么走就怎么走。",
-    image: customRouteScreenshot,
-    alt: "AscendAny 自定义路由模型配置界面",
   },
 ];
 
@@ -671,7 +664,7 @@ export default function App() {
               <SectionHeader
                 label="界面预览"
                 title="核心功能界面一览"
-                desc="覆盖登录、主界面、角色切换、能力分析与自定义路由等关键页面。"
+                desc="覆盖登录、主界面、角色切换与能力分析等关键页面。"
               />
               <div className="screen-carousel">
                 <div className="screen-current-info">

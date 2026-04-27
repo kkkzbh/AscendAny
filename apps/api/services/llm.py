@@ -14,10 +14,7 @@ from ..core.errors import AppError
 from ..schemas.chat import (
     ChatReplyRequest,
     ChatReplyResponse,
-    ClientProviderConfig,
-    ProviderType,
 )
-from ..schemas.model import ModelProvidersResponse, ProviderOptionResponse
 from .tools import TOOL_DEFINITIONS, ToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -46,32 +43,6 @@ class LLMService:
         self._settings = settings
         self._http_client = http_client
 
-    def list_provider_options(self) -> ModelProvidersResponse:
-        options = [
-            ProviderOptionResponse(
-                type="server_default",
-                label="默认",
-                usesServerConfig=True,
-                enabled=True,
-            )
-        ]
-        for provider_type, provider_config in self._settings.llm.providers.items():
-            options.append(
-                ProviderOptionResponse(
-                    type=provider_type,
-                    label=provider_config.label,
-                    usesServerConfig=False,
-                    enabled=provider_config.enabled,
-                )
-            )
-        return ModelProvidersResponse(
-            defaultProvider="server_default",
-            serverDefaultTarget="server_default",
-            serverDefaultTargetLabel=None,
-            serverDefaultModel=None,
-            providers=options,
-        )
-
     async def generate_reply(
         self,
         request: ChatReplyRequest,
@@ -79,7 +50,7 @@ class LLMService:
         tool_executor: ToolExecutor | None = None,
     ) -> ChatReplyResponse:
         prepared_messages = self._prepare_messages(request, system_prompt=system_prompt)
-        provider = self._resolve_provider(request.providerType, request.providerConfig)
+        provider = self._resolve_server_default_provider()
 
         if provider.mode == "openai_compatible":
             reply = await self._openai_with_tools(
@@ -110,7 +81,7 @@ class LLMService:
         return ChatReplyResponse(
             reply=reply,
             summary=request.summary,
-            provider=request.providerType,
+            provider="server_default",
         )
 
     # ------------------------------------------------------------------
@@ -614,29 +585,8 @@ class LLMService:
         return ""
 
     # ------------------------------------------------------------------
-    # Provider resolution (unchanged)
+    # Provider resolution
     # ------------------------------------------------------------------
-
-    def _resolve_provider(
-        self,
-        provider_type: ProviderType,
-        provider_config: ClientProviderConfig | None,
-    ) -> RuntimeProvider:
-        if provider_type == "server_default":
-            return self._resolve_server_default_provider()
-
-        if provider_config is not None:
-            mode = provider_config.mode or self._default_mode(provider_type)
-            return RuntimeProvider(
-                key=provider_type,
-                mode=mode,
-                base_url=provider_config.baseUrl.strip(),
-                model=provider_config.model.strip(),
-                api_key=provider_config.apiKey.strip(),
-                uses_server_config=False,
-            )
-
-        return self._resolve_server_provider(provider_type)
 
     def _resolve_server_default_provider(self) -> RuntimeProvider:
         config = self._settings.llm.server_default
@@ -655,48 +605,6 @@ class LLMService:
             api_key=api_key,
             uses_server_config=True,
         )
-
-    def _resolve_server_provider(self, provider_type: str) -> RuntimeProvider:
-        config = self._settings.llm.providers.get(provider_type)
-        if config is None:
-            raise AppError(
-                status_code=503,
-                code="SERVER_DEFAULT_PROVIDER_NOT_FOUND",
-                message=f"Provider not found in server config: {provider_type}",
-            )
-        if not config.enabled:
-            raise AppError(
-                status_code=503,
-                code="SERVER_DEFAULT_PROVIDER_DISABLED",
-                message=f"Provider disabled in server config: {provider_type}",
-            )
-        api_key = os.getenv(config.api_key_env, "").strip()
-        if not api_key:
-            raise AppError(
-                status_code=503,
-                code="SERVER_DEFAULT_PROVIDER_KEY_MISSING",
-                message=f"Missing API key env var: {config.api_key_env}",
-            )
-        if provider_type in {"openai", "anthropic", "deepseek", "gemini"}:
-            provider_key = provider_type
-        else:
-            provider_key = "openai"
-        return RuntimeProvider(
-            key=provider_key,
-            mode=config.mode,
-            base_url=config.base_url,
-            model=config.model,
-            api_key=api_key,
-            uses_server_config=True,
-        )
-
-    @staticmethod
-    def _default_mode(provider_type: ProviderType) -> str:
-        if provider_type == "anthropic":
-            return "anthropic"
-        if provider_type == "gemini":
-            return "gemini"
-        return "openai_compatible"
 
     # ------------------------------------------------------------------
     # HTTP & text helpers

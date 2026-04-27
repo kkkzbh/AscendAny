@@ -3,13 +3,11 @@ import {
   getApiErrorMessage,
   postChatReply,
   type ChatMessagePayload,
-  type ClientProviderConfigPayload,
 } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
-import type { ProviderType } from "@/types/settings";
 import { findRole } from "@/types/role";
 
 export interface ChatInputProps {
@@ -23,16 +21,8 @@ function normalizeIdentifier(value: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function resolveProviderMode(
-  providerType: ProviderType,
-): ClientProviderConfigPayload["mode"] {
-  if (providerType === "anthropic") return "anthropic";
-  if (providerType === "gemini") return "gemini";
-  return "openai_compatible";
-}
-
 export function ChatInput({
-  showClearButton = true,
+  showClearButton = false,
   sendVariant = "icon",
   sendLabel = "发送",
 }: ChatInputProps = {}) {
@@ -49,8 +39,6 @@ export function ChatInput({
 
   const account = useAuthStore((s) => s.account);
   const accessToken = useAuthStore((s) => s.accessToken);
-  const activeProvider = useSettingsStore((s) => s.activeProvider);
-  const providers = useSettingsStore((s) => s.providers);
   const activeRole = useSettingsStore((s) => s.activeRole);
   const customRoles = useCustomRoleStore((s) => s.customRoles);
 
@@ -59,38 +47,6 @@ export function ChatInput({
     if (!trimmed || isSending || isAiWorking) return;
     const roleIdAtSend = activeRole;
     const roleAtSend = findRole(roleIdAtSend, customRoles);
-
-    const provider = providers[activeProvider];
-    if (!provider) {
-      addMessage("system", "当前模型配置不可用，请在设置里重新选择提供商。");
-      return;
-    }
-    if (!provider.enabled) {
-      addMessage("system", "当前模型提供商已被服务器禁用，请在设置中切换到可用选项。");
-      return;
-    }
-
-    let providerConfig: ClientProviderConfigPayload | undefined;
-    if (!provider.usesServerConfig) {
-      const baseUrl = provider.baseUrl.trim();
-      const model = provider.model.trim();
-      const apiKey = provider.apiKey.trim();
-
-      if (!baseUrl || !model || !apiKey) {
-        addMessage(
-          "system",
-          "请先在设置中完善当前模型的 Base URL、模型名称和 API Key。",
-        );
-        return;
-      }
-
-      providerConfig = {
-        baseUrl,
-        model,
-        apiKey,
-        mode: resolveProviderMode(activeProvider),
-      };
-    }
 
     setIsSending(true);
     const workTaskId = startAiWork("manual");
@@ -103,7 +59,7 @@ export function ChatInput({
     }
 
     try {
-      const latestSession = useChatStore.getState().session;
+      const latestSession = useChatStore.getState().getActiveSession();
       const messages: ChatMessagePayload[] = latestSession.messages
         .filter((message) => message.role !== "system")
         .map((message) => ({
@@ -117,8 +73,6 @@ export function ChatInput({
         ptaNickname: normalizeIdentifier(account?.ptaNickname ?? ""),
         messages,
         summary: latestSession.summary,
-        providerType: activeProvider,
-        providerConfig,
         roleId: roleIdAtSend,
         roleName: roleAtSend.name,
         roleSystemPrompt: roleAtSend.systemPromptExtra || undefined,
@@ -141,8 +95,6 @@ export function ChatInput({
     text,
     isSending,
     isAiWorking,
-    providers,
-    activeProvider,
     activeRole,
     customRoles,
     addMessage,

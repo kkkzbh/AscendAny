@@ -26,10 +26,16 @@ export function useAutoCompact(options?: {
   keepRecent?: number;
 }) {
   const { maxTokens = 4000, keepRecent = 6 } = options ?? {};
-  const session = useChatStore((s) => s.session);
+  const session = useChatStore((s) => {
+    return (
+      s.sessions.find((item) => item.id === s.activeSessionId) ??
+      s.sessions[0]
+    );
+  });
   const setSummary = useChatStore((s) => s.setSummary);
 
   const checkAndCompact = useCallback(() => {
+    if (!session) return false;
     const totalTokens = session.messages.reduce(
       (sum, m) => sum + estimateTokens(m.content),
       0,

@@ -50,58 +50,11 @@ class DashboardConfig:
 
 
 @dataclass(slots=True)
-class LLMProviderConfig:
-    label: str
-    mode: str
-    base_url: str
-    model: str
-    api_key_env: str
-    enabled: bool = True
-
-
-@dataclass(slots=True)
 class LLMServerDefaultConfig:
     mode: str = "openai_compatible"
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-chat"
     api_key_env: str = "DEFAULT_API_KEY"
-
-
-def _default_providers() -> dict[str, LLMProviderConfig]:
-    return {
-        "openai": LLMProviderConfig(
-            label="OpenAI",
-            mode="openai_compatible",
-            base_url="https://api.openai.com/v1",
-            model="gpt-4o-mini",
-            api_key_env="OPENAI_API_KEY",
-            enabled=True,
-        ),
-        "anthropic": LLMProviderConfig(
-            label="Anthropic",
-            mode="anthropic",
-            base_url="https://api.anthropic.com",
-            model="claude-sonnet-4-20250514",
-            api_key_env="ANTHROPIC_API_KEY",
-            enabled=False,
-        ),
-        "deepseek": LLMProviderConfig(
-            label="DeepSeek",
-            mode="openai_compatible",
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-chat",
-            api_key_env="DEEPSEEK_API_KEY",
-            enabled=False,
-        ),
-        "gemini": LLMProviderConfig(
-            label="Gemini",
-            mode="gemini",
-            base_url="https://generativelanguage.googleapis.com/v1beta",
-            model="gemini-2.0-flash",
-            api_key_env="GEMINI_API_KEY",
-            enabled=False,
-        ),
-    }
 
 
 @dataclass(slots=True)
@@ -110,7 +63,6 @@ class LLMConfig:
         default_factory=LLMServerDefaultConfig
     )
     request_timeout_seconds: float = 60.0
-    providers: dict[str, LLMProviderConfig] = field(default_factory=_default_providers)
 
 
 @dataclass(slots=True)
@@ -162,22 +114,6 @@ def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
-def _providers_to_dict(
-    providers: dict[str, LLMProviderConfig],
-) -> dict[str, dict[str, Any]]:
-    return {
-        key: {
-            "label": value.label,
-            "mode": value.mode,
-            "base_url": value.base_url,
-            "model": value.model,
-            "api_key_env": value.api_key_env,
-            "enabled": value.enabled,
-        }
-        for key, value in providers.items()
-    }
-
-
 def _as_dict(settings: Settings) -> dict[str, Any]:
     return {
         "db": {
@@ -207,7 +143,6 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
                 "api_key_env": settings.llm.server_default.api_key_env,
             },
             "request_timeout_seconds": settings.llm.request_timeout_seconds,
-            "providers": _providers_to_dict(settings.llm.providers),
         },
         "auth": {
             "enabled": settings.auth.enabled,
@@ -234,40 +169,8 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _build_provider_map(provider_data: dict[str, Any]) -> dict[str, LLMProviderConfig]:
-    defaults = _default_providers()
-    ordered_keys = [
-        *defaults.keys(),
-        *[item for item in provider_data.keys() if item not in defaults],
-    ]
-    providers: dict[str, LLMProviderConfig] = {}
-    for key in ordered_keys:
-        loaded = provider_data.get(key, {}) or {}
-        baseline = defaults.get(
-            key,
-            LLMProviderConfig(
-                label=key,
-                mode="openai_compatible",
-                base_url="",
-                model="",
-                api_key_env="",
-                enabled=False,
-            ),
-        )
-        providers[key] = LLMProviderConfig(
-            label=str(loaded.get("label", baseline.label)),
-            mode=str(loaded.get("mode", baseline.mode)),
-            base_url=str(loaded.get("base_url", baseline.base_url)),
-            model=str(loaded.get("model", baseline.model)),
-            api_key_env=str(loaded.get("api_key_env", baseline.api_key_env)),
-            enabled=bool(loaded.get("enabled", baseline.enabled)),
-        )
-    return providers
-
-
 def _build_server_default_config(
     llm_data: dict[str, Any],
-    providers: dict[str, LLMProviderConfig],
 ) -> LLMServerDefaultConfig:
     baseline = LLMServerDefaultConfig()
     loaded = llm_data.get("server_default", {}) or {}
@@ -278,18 +181,6 @@ def _build_server_default_config(
             model=str(loaded.get("model", baseline.model)),
             api_key_env=str(loaded.get("api_key_env", baseline.api_key_env)),
         )
-
-    # Legacy compatibility: if old default_provider exists, project it into server_default.
-    legacy_provider_key = str(llm_data.get("default_provider", "")).strip()
-    if legacy_provider_key:
-        legacy = providers.get(legacy_provider_key)
-        if legacy is not None:
-            return LLMServerDefaultConfig(
-                mode=legacy.mode,
-                base_url=legacy.base_url,
-                model=legacy.model,
-                api_key_env=legacy.api_key_env,
-            )
 
     return baseline
 
@@ -302,8 +193,7 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
     auth = raw.get("auth", {})
     sso = raw.get("sso", {})
 
-    providers = _build_provider_map(llm.get("providers", {}) or {})
-    server_default = _build_server_default_config(llm, providers)
+    server_default = _build_server_default_config(llm)
 
     return Settings(
         db=DatabaseConfig(
@@ -328,7 +218,6 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
         llm=LLMConfig(
             server_default=server_default,
             request_timeout_seconds=float(llm.get("request_timeout_seconds", 60.0)),
-            providers=providers,
         ),
         auth=AuthConfig(
             enabled=bool(auth.get("enabled", True)),

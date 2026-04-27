@@ -53,7 +53,7 @@ export async function switchAccountNamespace(accountId: string | null): Promise<
   });
 
   if (!hasPersistedChat) {
-    chatStore.getState().clearContext();
+    chatStore.getState().resetForAccount();
   }
 
   await chatStore.persist.rehydrate();

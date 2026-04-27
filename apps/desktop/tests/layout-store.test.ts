@@ -11,17 +11,21 @@ describe("layoutStore", () => {
     await useLayoutStore.persist.rehydrate();
   });
 
-  it("persists split ratio and metrics panel visibility", async () => {
+  it("persists student layout state", async () => {
+    useLayoutStore.getState().toggleLeftSidebar();
     useLayoutStore.getState().setSplitRatio(0.37);
     useLayoutStore.getState().toggleMetricsPanel();
+    useLayoutStore.getState().setActiveRightPanelTab("history");
     useLayoutStore.getState().setActiveFullscreenView("achievements");
 
     await useLayoutStore.persist.rehydrate();
     const persistedRaw = localStorage.getItem("ascendany_layout_guest");
     const persisted = persistedRaw ? JSON.parse(persistedRaw) : {};
 
+    expect(persisted?.state?.isLeftSidebarCollapsed).toBe(true);
     expect(persisted?.state?.splitRatio).toBe(0.37);
     expect(persisted?.state?.isMetricsPanelVisible).toBe(false);
+    expect(persisted?.state?.activeRightPanelTab).toBe("history");
     expect(persisted?.state?.activeFullscreenView).toBeUndefined();
   });
 
@@ -35,6 +39,8 @@ describe("layoutStore", () => {
         state: {
           splitRatio: "bad-data",
           isMetricsPanelVisible: "bad-data",
+          isLeftSidebarCollapsed: "bad-data",
+          activeRightPanelTab: "bad-data",
         },
         version: 0,
       }),
@@ -44,6 +50,8 @@ describe("layoutStore", () => {
     const state = useLayoutStore.getState();
     expect(state.splitRatio).toBe(0.55);
     expect(state.isMetricsPanelVisible).toBe(true);
+    expect(state.isLeftSidebarCollapsed).toBe(false);
+    expect(state.activeRightPanelTab).toBe("ability");
   });
 
   it("can open and close fullscreen achievement view", () => {

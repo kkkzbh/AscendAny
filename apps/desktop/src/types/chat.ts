@@ -10,6 +10,8 @@ export interface ChatMessage {
 }
 
 export interface ChatSession {
+  id: string;
+  title: string;
   messages: ChatMessage[];
   summary: string;
   createdAt: number;

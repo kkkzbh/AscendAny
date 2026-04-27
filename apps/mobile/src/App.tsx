@@ -12,7 +12,6 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { findRole } from "@/types/role";
-import { fetchModelProviders } from "@/lib/api";
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() => {
@@ -67,7 +66,7 @@ function MobilePortraitLayout() {
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
   const openSettings = useSettingsStore((s) => s.openSettings);
   const clearContext = useChatStore((s) => s.clearContext);
-  const messageCount = useChatStore((s) => s.session.messages.length);
+  const messageCount = useChatStore((s) => s.getActiveSession().messages.length);
   const [tab, setTab] = useState<"chat" | "metrics">("chat");
 
   const handleClearContext = () => {
@@ -158,7 +157,7 @@ function TabletLandscapeLayout() {
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
   const openSettings = useSettingsStore((s) => s.openSettings);
   const clearContext = useChatStore((s) => s.clearContext);
-  const messageCount = useChatStore((s) => s.session.messages.length);
+  const messageCount = useChatStore((s) => s.getActiveSession().messages.length);
 
   const handleClearContext = () => {
     if (messageCount === 0) return;
@@ -210,7 +209,6 @@ export default function App() {
   const theme = useSettingsStore((s) => s.theme);
   const authStatus = useAuthStore((s) => s.status);
   const bootstrap = useAuthStore((s) => s.bootstrap);
-  const syncProviderOptions = useSettingsStore((s) => s.syncProviderOptions);
   const isTabletLandscape = useMediaQuery("(min-width: 960px) and (orientation: landscape)");
 
   useEffect(() => {
@@ -222,19 +220,6 @@ export default function App() {
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
-
-  useEffect(() => {
-    if (authStatus !== "authenticated") return;
-    let cancelled = false;
-    void fetchModelProviders().then((payload) => {
-      if (!cancelled) syncProviderOptions(payload);
-    }).catch((error) => {
-      console.warn("[AscendAny Mobile] Failed to load model providers:", error);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [authStatus, syncProviderOptions]);
 
   const content = useMemo(() => {
     if (authStatus === "booting") {

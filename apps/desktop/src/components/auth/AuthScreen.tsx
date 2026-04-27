@@ -234,8 +234,8 @@ export function AuthScreen() {
               <p className="auth-highlight-desc">左侧输入问题即可获得基于你学习数据的分析建议。</p>
             </article>
             <article className="auth-highlight-card">
-              <p className="auth-highlight-title">4. 调整模型与上下文</p>
-              <p className="auth-highlight-desc">在设置中切换模型，必要时可一键清空当前对话上下文。</p>
+              <p className="auth-highlight-title">4. 管理角色与上下文</p>
+              <p className="auth-highlight-desc">在设置中调整角色，必要时可一键清空当前对话上下文。</p>
             </article>
           </div>
         </section>

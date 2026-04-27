@@ -43,31 +43,38 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     );
   }
 
-  return (
-    <div
-      className={`message-row flex w-full items-start gap-2.5 py-1.5 ${isUser ? "justify-end" : "justify-start"}`}
-    >
-      {!isUser && (
+  if (!isUser) {
+    return (
+      <div className="message-row assistant-message-row flex w-full items-start gap-3 py-3">
         <img
           src={role.avatarUrl}
           alt={role.name}
-          className="mt-1 h-7 w-7 shrink-0 rounded-full object-cover shadow-[0_8px_20px_rgba(3,105,161,0.24)]"
+          className="assistant-avatar mt-0.5 h-8 w-8 shrink-0 rounded-full object-cover"
         />
-      )}
+        <div className="assistant-message-body flex min-w-0 max-w-[78%] flex-col gap-1">
+          <div className="assistant-message-meta flex items-center gap-2 text-[10px] text-[var(--text-soft)]">
+            <span>{role.name}</span>
+            <time
+              dateTime={!Number.isNaN(messageDate.getTime()) ? messageDate.toISOString() : undefined}
+            >
+              {timeStr}
+            </time>
+          </div>
+          <div className="assistant-message-text chat-markdown chat-markdown-assistant break-words leading-6">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
+  return (
+    <div className="message-row user-message-row flex w-full items-start justify-end gap-2.5 py-2">
       <div className="flex max-w-[72%] flex-col gap-1">
-        <div
-          className={`message-bubble rounded-[18px] text-[13px] leading-relaxed ${
-            isUser
-              ? "message-bubble-user text-white"
-              : "bg-[var(--surface-raised)] text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)]"
-          }`}
-        >
-          <div
-            className={`chat-markdown break-words leading-6 ${
-              isUser ? "chat-markdown-user" : "chat-markdown-assistant"
-            }`}
-          >
+        <div className="message-bubble message-bubble-user rounded-[18px] text-[13px] leading-relaxed text-white">
+          <div className="chat-markdown chat-markdown-user break-words leading-6">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {message.content}
             </ReactMarkdown>
@@ -75,24 +82,20 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         </div>
         <time
           dateTime={!Number.isNaN(messageDate.getTime()) ? messageDate.toISOString() : undefined}
-          className={`px-1 text-[10px] leading-none ${
-            isUser ? "text-right text-[var(--text-soft)]" : "text-left text-[var(--text-soft)]"
-          }`}
+          className="px-1 text-right text-[10px] leading-none text-[var(--text-soft)]"
         >
           {timeStr}
         </time>
       </div>
 
-      {isUser && (
-        <div className="mt-1">
-          <AvatarDisplay
-            size={28}
-            avatarUrl={avatarUrl}
-            username={account?.username ?? ""}
-            className="ring-1 ring-[var(--border-subtle)]"
-          />
-        </div>
-      )}
+      <div className="mt-1">
+        <AvatarDisplay
+          size={30}
+          avatarUrl={avatarUrl}
+          username={account?.username ?? ""}
+          className="ring-1 ring-[var(--border-subtle)]"
+        />
+      </div>
     </div>
   );
 }

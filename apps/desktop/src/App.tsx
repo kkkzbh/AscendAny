@@ -5,7 +5,6 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { FeedbackWindow } from "@/components/feedback/FeedbackWindow";
 import { UpdateFlowDialog } from "@/components/updater/UpdateFlowDialog";
-import { fetchModelProviders } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -20,7 +19,6 @@ export default function App() {
   const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
   const setOpaqueWindowBackground = useSettingsStore((s) => s.setOpaqueWindowBackground);
   const zoomPercent = useSettingsStore((s) => s.zoomPercent);
-  const syncProviderOptions = useSettingsStore((s) => s.syncProviderOptions);
   const authStatus = useAuthStore((s) => s.status);
   const bootstrap = useAuthStore((s) => s.bootstrap);
 
@@ -110,34 +108,6 @@ export default function App() {
     }
     void bootstrap();
   }, [bootstrap, isFeedbackMode, isSsoMode]);
-
-  useEffect(() => {
-    if (isFeedbackMode || isSsoMode) {
-      return;
-    }
-    if (authStatus !== "authenticated") {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadProviderOptions() {
-      try {
-        const payload = await fetchModelProviders();
-        if (cancelled) {
-          return;
-        }
-        syncProviderOptions(payload);
-      } catch (error) {
-        console.warn("[AscendAny] Failed to load model provider options:", error);
-      }
-    }
-
-    void loadProviderOptions();
-    return () => {
-      cancelled = true;
-    };
-  }, [authStatus, isFeedbackMode, isSsoMode, syncProviderOptions]);
 
   if (isFeedbackMode) {
     return <FeedbackWindow />;

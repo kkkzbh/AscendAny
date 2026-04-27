@@ -4,7 +4,7 @@ import { AchievementFullscreen } from "@/components/achievements/AchievementFull
 import { useAuthStore } from "@/stores/authStore";
 import { useAchievementsStore } from "@/stores/achievementsStore";
 import { TitleBar } from "./TitleBar";
-import { SplitPanel } from "./SplitPanel";
+import { StudentSidebar } from "./StudentSidebar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { MetricsPanel } from "@/components/metrics/MetricsPanel";
 import { useAvatarSync } from "@/hooks/useAvatar";
@@ -13,8 +13,6 @@ import { useLayoutStore } from "@/stores/layoutStore";
 export function AppLayout() {
   useAvatarSync();
   const isMetricsPanelVisible = useLayoutStore((s) => s.isMetricsPanelVisible);
-  const splitRatio = useLayoutStore((s) => s.splitRatio);
-  const setSplitRatio = useLayoutStore((s) => s.setSplitRatio);
   const activeFullscreenView = useLayoutStore((s) => s.activeFullscreenView);
   const closeFullscreenView = useLayoutStore((s) => s.closeFullscreenView);
   const isAchievementOpen = activeFullscreenView === "achievements";
@@ -50,19 +48,19 @@ export function AppLayout() {
   ]);
 
   return (
-    <div className="app-shell flex h-screen w-screen flex-col overflow-hidden">
-      <TitleBar />
-      <main className="flex-1 overflow-hidden px-[var(--app-gutter-x)] pb-[var(--app-gutter-y)] pt-3 max-[960px]:pt-2">
-        <div className="h-full">
-          <SplitPanel
-            left={<ChatPanel />}
-            right={<MetricsPanel />}
-            defaultRatio={0.55}
-            minRatio={0.3}
-            ratio={splitRatio}
-            onRatioChange={setSplitRatio}
-            showRightPanel={isMetricsPanelVisible}
-          />
+    <div className="app-shell student-app h-screen w-screen overflow-hidden">
+      <StudentSidebar />
+      <main className="student-main">
+        <TitleBar />
+        <div className={`student-workspace ${isMetricsPanelVisible ? "" : "is-right-collapsed"}`}>
+          <section className="student-chat-surface">
+            <ChatPanel showClearButton={false} />
+          </section>
+          {isMetricsPanelVisible ? (
+            <aside className="student-right-surface">
+              <MetricsPanel />
+            </aside>
+          ) : null}
         </div>
       </main>
       <AchievementFullscreen

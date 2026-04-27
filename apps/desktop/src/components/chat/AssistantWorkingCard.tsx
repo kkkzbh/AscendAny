@@ -39,11 +39,11 @@ export function AssistantWorkingCard() {
       <img
         src={role.avatarUrl}
         alt={role.name}
-        className="mt-1 h-7 w-7 shrink-0 rounded-full object-cover shadow-[0_8px_20px_rgba(3,105,161,0.24)]"
+        className="assistant-avatar mt-1 h-8 w-8 shrink-0 rounded-full object-cover"
       />
 
       <div
-        className={`assistant-working-card assistant-working-card--${workingCard.variant} max-w-[72%] rounded-[18px]`}
+        className={`assistant-working-card assistant-working-card--${workingCard.variant} max-w-[72%]`}
       >
         <p className="assistant-working-title">
           {title}

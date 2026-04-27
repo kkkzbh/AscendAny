@@ -14,7 +14,6 @@ from apps.api.db.repository import (
 )
 from apps.api.main import create_app
 from apps.api.schemas.chat import ChatReplyResponse
-from apps.api.schemas.model import ModelProvidersResponse, ProviderOptionResponse
 
 
 class FakeRepo:
@@ -160,20 +159,6 @@ class FakeRepo:
 class FakeLLM:
     def __init__(self) -> None:
         self.calls = 0
-
-    def list_provider_options(self) -> ModelProvidersResponse:
-        return ModelProvidersResponse(
-            defaultProvider="server_default",
-            serverDefaultTarget="server_default",
-            providers=[
-                ProviderOptionResponse(
-                    type="server_default",
-                    label="默认",
-                    usesServerConfig=True,
-                    enabled=True,
-                )
-            ],
-        )
 
     async def generate_reply(self, payload, system_prompt=None, tool_executor=None) -> ChatReplyResponse:
         self.calls += 1
@@ -349,7 +334,6 @@ def test_chat_reply_hello_still_goes_to_llm() -> None:
                 "studentId": "20230001",
                 "messages": [{"role": "user", "content": "你好"}],
                 "summary": "",
-                "providerType": "server_default",
             },
         )
 
@@ -358,3 +342,28 @@ def test_chat_reply_hello_still_goes_to_llm() -> None:
     assert payload["reply"] == "ok"
     assert llm.calls == 1
     assert repo.ai_counter_calls == [(1,)]
+
+
+def test_chat_reply_rejects_legacy_client_provider_config() -> None:
+    repo = FakeRepo()
+    llm = FakeLLM()
+    app = create_app(repository=repo, llm_service=llm)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat/reply",
+            json={
+                "studentId": "20230001",
+                "messages": [{"role": "user", "content": "你好"}],
+                "summary": "",
+                "providerType": "deepseek",
+                "providerConfig": {
+                    "baseUrl": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                    "apiKey": "secret",
+                    "mode": "openai_compatible",
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert llm.calls == 0

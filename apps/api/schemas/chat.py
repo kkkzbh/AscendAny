@@ -6,19 +6,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ChatRole = Literal["user", "assistant", "system"]
-ProviderType = Literal["server_default", "openai", "anthropic", "deepseek", "gemini"]
+ProviderType = Literal["server_default"]
 
 
 class ChatMessageRequest(BaseModel):
     role: ChatRole
     content: str = Field(min_length=1)
-
-
-class ClientProviderConfig(BaseModel):
-    baseUrl: str = Field(min_length=1)
-    model: str = Field(min_length=1)
-    apiKey: str = Field(min_length=1)
-    mode: Literal["openai_compatible", "anthropic", "gemini"] | None = None
 
 
 class ChatReplyRequest(BaseModel):
@@ -28,8 +21,6 @@ class ChatReplyRequest(BaseModel):
     ptaNickname: str | None = None
     messages: list[ChatMessageRequest] = Field(default_factory=list)
     summary: str = ""
-    providerType: ProviderType = "server_default"
-    providerConfig: ClientProviderConfig | None = None
     roleId: str | None = None
     roleName: str | None = None
     roleSystemPrompt: str | None = None
@@ -47,8 +38,6 @@ class AutoAnalysisRequest(BaseModel):
     studentId: str | None = None
     ptaNickname: str | None = None
     latestExamId: str | None = None
-    providerType: ProviderType = "server_default"
-    providerConfig: ClientProviderConfig | None = None
     roleId: str | None = None
     roleName: str | None = None
     roleSystemPrompt: str | None = None

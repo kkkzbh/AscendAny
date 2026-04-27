@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ChangeEvent } from "react";
 import {
   DEFAULT_ZOOM_PERCENT,
-  PROVIDER_ORDER,
-  type ProviderType,
   ZOOM_PERCENT_MAX,
   ZOOM_PERCENT_MIN,
   ZOOM_PERCENT_STEP,
@@ -18,18 +16,13 @@ import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import { AvatarCropper } from "@/components/settings/AvatarCropper";
 
-type SettingsPage = "general" | "model" | "role";
+type SettingsPage = "general" | "role";
 
 const NAV_ITEMS: { key: SettingsPage; label: string; icon: string }[] = [
   {
     key: "general",
     label: "通用",
     icon: "M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4",
-  },
-  {
-    key: "model",
-    label: "模型",
-    icon: "M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z",
   },
   {
     key: "role",
@@ -628,149 +621,6 @@ function GeneralSettingsPage() {
   );
 }
 
-function ModelSettingsPage() {
-  const activeProvider = useSettingsStore((s) => s.activeProvider);
-  const providers = useSettingsStore((s) => s.providers);
-  const setActiveProvider = useSettingsStore((s) => s.setActiveProvider);
-  const updateProvider = useSettingsStore((s) => s.updateProvider);
-  const [pendingProvider, setPendingProvider] = useState<ProviderType | null>(null);
-  const selectedProvider: ProviderType = pendingProvider ?? activeProvider;
-  const selectedProviderConfig = providers[selectedProvider];
-  const isSelectedServerDefault = selectedProviderConfig?.usesServerConfig;
-  const canApplyPendingProvider = Boolean(
-    pendingProvider &&
-      pendingProvider !== activeProvider &&
-      !providers[pendingProvider].usesServerConfig,
-  );
-
-  function onProviderSelect(providerType: ProviderType) {
-    const provider = providers[providerType];
-    const isTemporarilyUnlocked =
-      providerType === "anthropic" || providerType === "deepseek" || providerType === "gemini";
-    if (!provider?.enabled && !isTemporarilyUnlocked) {
-      return;
-    }
-    if (provider.usesServerConfig) {
-      setActiveProvider(providerType);
-      setPendingProvider(null);
-      return;
-    }
-    if (providerType === activeProvider) {
-      setPendingProvider(null);
-      return;
-    }
-    setPendingProvider(providerType);
-  }
-
-  function applyPendingProvider() {
-    if (!pendingProvider || !canApplyPendingProvider) {
-      return;
-    }
-    setActiveProvider(pendingProvider);
-    setPendingProvider(null);
-  }
-
-  return (
-    <div className="settings-page animate-fade-in">
-      <h2 className="settings-page-title text-lg font-semibold text-[var(--text-strong)]">模型配置</h2>
-
-      <div className="settings-field">
-        <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
-          模型提供商
-        </label>
-        <div className="settings-provider-list">
-          {PROVIDER_ORDER.map((providerType) => {
-            const provider = providers[providerType];
-            const isTemporarilyUnlocked =
-              providerType === "anthropic" || providerType === "deepseek" || providerType === "gemini";
-            const isDisabled = !provider.enabled && !isTemporarilyUnlocked;
-            const isSelected = selectedProvider === providerType;
-            return (
-              <button
-                key={providerType}
-                onClick={() => onProviderSelect(providerType)}
-                disabled={isDisabled}
-                className={`settings-provider-pill transition-all duration-200 ${
-                  isSelected
-                    ? "bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)]"
-                    : "bg-[var(--surface-soft)] text-[var(--text-muted)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
-                } ${isDisabled ? "cursor-not-allowed opacity-45 hover:bg-[var(--surface-soft)]" : ""}`}
-              >
-                {provider.label}
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-2 text-[11px] text-[var(--text-soft)]">
-          如果对默认模型不满意，可切换至自定义模型。
-        </p>
-      </div>
-
-      {selectedProviderConfig && !isSelectedServerDefault && (
-        <div className="settings-group animate-fade-in">
-          <div className="settings-field">
-            <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
-              Base URL
-            </label>
-            <input
-              type="text"
-              value={selectedProviderConfig.baseUrl}
-              onChange={(e) =>
-                updateProvider(selectedProvider, { baseUrl: e.target.value })
-              }
-              className="settings-input"
-            />
-          </div>
-
-          <div className="settings-field">
-            <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
-              模型名称
-            </label>
-            <input
-              type="text"
-              value={selectedProviderConfig.model}
-              onChange={(e) =>
-                updateProvider(selectedProvider, { model: e.target.value })
-              }
-              className="settings-input"
-            />
-          </div>
-
-          <div className="settings-field">
-            <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
-              API Key
-            </label>
-            <input
-              type="password"
-              value={selectedProviderConfig.apiKey}
-              onChange={(e) =>
-                updateProvider(selectedProvider, { apiKey: e.target.value })
-              }
-              placeholder="sk-..."
-              className="settings-input"
-            />
-            <p className="text-[11px] text-[var(--text-soft)]">
-              密钥仅存储在本地，不会上传
-            </p>
-          </div>
-
-          {canApplyPendingProvider && (
-            <div className="mt-1">
-              <button
-                type="button"
-                onClick={applyPendingProvider}
-                className="settings-provider-pill bg-[var(--accent-600)] font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)] transition-opacity hover:opacity-90"
-              >
-                确认切换到 {selectedProviderConfig.label}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function RoleSettingsPage({
   onCustomRoleDialogVisibilityChange,
 }: {
@@ -1212,23 +1062,28 @@ export function SettingsDialog() {
       >
         <SettingsSidebar active={activePage} onSelect={setActivePage} />
 
-        <div className="settings-content flex-1 overflow-y-auto">
-          {activePage === "general" && <GeneralSettingsPage />}
-          {activePage === "model" && <ModelSettingsPage />}
-          {activePage === "role" && (
-            <RoleSettingsPage onCustomRoleDialogVisibilityChange={setIsCustomRoleDialogOpen} />
+        <div className="settings-main flex min-w-0 flex-1">
+          <div className="settings-content flex-1 overflow-y-auto">
+            <div className="settings-content-inner">
+              {activePage === "general" && <GeneralSettingsPage />}
+              {activePage === "role" && (
+                <RoleSettingsPage onCustomRoleDialogVisibilityChange={setIsCustomRoleDialogOpen} />
+              )}
+            </div>
+          </div>
+
+          {!isCustomRoleDialogOpen && (
+            <div className="settings-dialog-controls">
+              <button
+                onClick={closeSettings}
+                className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic"
+                aria-label="关闭设置"
+              >
+                <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+              </button>
+            </div>
           )}
         </div>
-
-        {!isCustomRoleDialogOpen && (
-          <button
-            onClick={closeSettings}
-            className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic absolute right-5 top-5"
-            aria-label="关闭设置"
-          >
-            <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
-          </button>
-        )}
       </div>
     </div>
   );

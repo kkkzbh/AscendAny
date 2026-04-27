@@ -119,20 +119,11 @@ export interface ChatMessagePayload {
   content: string;
 }
 
-export interface ClientProviderConfigPayload {
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  mode: "openai_compatible" | "anthropic" | "gemini";
-}
-
 export interface ChatReplyRequestPayload {
   studentId?: string;
   ptaNickname?: string;
   messages: ChatMessagePayload[];
   summary: string;
-  providerType: ProviderType;
-  providerConfig?: ClientProviderConfigPayload;
   roleId?: string;
   roleName?: string;
   roleSystemPrompt?: string;
@@ -141,8 +132,6 @@ export interface ChatReplyRequestPayload {
 export interface AutoAnalysisRequestPayload {
   studentId?: string;
   ptaNickname?: string;
-  providerType: ProviderType;
-  providerConfig?: ClientProviderConfigPayload;
   roleId?: string;
   roleName?: string;
   roleSystemPrompt?: string;
@@ -162,21 +151,6 @@ export interface ChatReplyResponsePayload {
   reply: string;
   summary: string;
   provider: ProviderType;
-}
-
-export interface ModelProviderOptionPayload {
-  type: string;
-  label: string;
-  usesServerConfig: boolean;
-  enabled: boolean;
-}
-
-export interface ModelProvidersResponsePayload {
-  defaultProvider: string;
-  serverDefaultTarget: string;
-  serverDefaultTargetLabel?: string;
-  serverDefaultModel?: string;
-  providers: ModelProviderOptionPayload[];
 }
 
 export class ApiError extends Error {
@@ -558,10 +532,6 @@ export async function postChatReply(
     body: payload,
     authToken,
   });
-}
-
-export async function fetchModelProviders(): Promise<ModelProvidersResponsePayload> {
-  return requestJson<ModelProvidersResponsePayload>("/api/v1/model/providers");
 }
 
 export type SignupPolicy =

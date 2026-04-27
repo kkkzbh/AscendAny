@@ -38,7 +38,6 @@ _ROLE_NAMES: dict[str, str] = {
 }
 
 _DEFAULT_ROLE_ID = "xiaoD"
-_SUPPORTED_PROVIDERS = {"server_default", "openai", "anthropic", "deepseek"}
 
 
 def _resolve_role_name(role_id: str, role_name: str | None) -> str:
@@ -113,14 +112,6 @@ async def _mark_auto_analysis_delivered(
     if not callable(marker):
         return
     await marker(account_id=account_id, exam_id=exam_id, role_id=role_id)
-
-
-def _safe_provider(provider: str | None, fallback: str) -> str:
-    if provider in _SUPPORTED_PROVIDERS:
-        return provider
-    if fallback in _SUPPORTED_PROVIDERS:
-        return fallback
-    return "server_default"
 
 
 async def _increment_ai_dialogue_counter(repository: Any, identity: Any) -> None:
@@ -248,21 +239,21 @@ async def chat_auto_analysis(
     if identity is None or identity.no_submission_records:
         return AutoAnalysisResponse(
             reply="",
-            provider=payload.providerType,
+            provider="server_default",
         )
 
     latest_exam_id = await _resolve_latest_exam_id(repository, identity)
     if latest_exam_id is None:
         return AutoAnalysisResponse(
             reply="",
-            provider=payload.providerType,
+            provider="server_default",
         )
     latest_exam_id_str = str(latest_exam_id)
     expected_latest_exam_id = (payload.latestExamId or "").strip()
     if expected_latest_exam_id and expected_latest_exam_id != latest_exam_id_str:
         return AutoAnalysisResponse(
             reply="",
-            provider=payload.providerType,
+            provider="server_default",
         )
 
     # ── 2. Build dedicated proactive-analysis prompt ──
@@ -279,9 +270,7 @@ async def chat_auto_analysis(
     if cache_row is not None and getattr(cache_row, "delivered_at", None) is not None:
         return AutoAnalysisResponse(
             reply="",
-            provider=_safe_provider(
-                getattr(cache_row, "provider_type", None), payload.providerType
-            ),
+            provider="server_default",
         )
     cached_reply = (
         str(getattr(cache_row, "reply", "")).strip() if cache_row is not None else ""
@@ -296,9 +285,7 @@ async def chat_auto_analysis(
         )
         return AutoAnalysisResponse(
             reply=cached_reply,
-            provider=_safe_provider(
-                getattr(cache_row, "provider_type", None), payload.providerType
-            ),
+            provider="server_default",
         )
 
     prompt_service = PromptService(repository)
@@ -318,8 +305,6 @@ async def chat_auto_analysis(
         ptaNickname=pta_nickname,
         messages=[ChatMessageRequest(role="user", content=user_message)],
         summary="",
-        providerType=payload.providerType,
-        providerConfig=payload.providerConfig,
         roleId=role_id,
         roleName=role_name,
         roleSystemPrompt=role_system_prompt,
@@ -339,7 +324,7 @@ async def chat_auto_analysis(
             account_id=current_account.account_id,
             exam_id=latest_exam_id,
             role_id=role_id,
-            provider_type=result.provider,
+            provider_type="server_default",
             reply=reply,
             source="online",
         )
@@ -444,8 +429,6 @@ async def chat_auto_analysis_precompute_exam(
                 ptaNickname=pta_nickname,
                 messages=[ChatMessageRequest(role="user", content=user_message)],
                 summary="",
-                providerType="server_default",
-                providerConfig=None,
                 roleId=role_id,
             )
             tool_executor = ToolExecutor(repository=repository, identity=identity)
@@ -463,7 +446,7 @@ async def chat_auto_analysis_precompute_exam(
                 account_id=int(account_id),
                 exam_id=payload.examId,
                 role_id=role_id,
-                provider_type=result.provider,
+                provider_type="server_default",
                 reply=reply,
                 source="prewarm",
             )

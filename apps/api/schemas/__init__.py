@@ -18,7 +18,6 @@ from .exam_analysis import (
     ExamAnalysisGenerateResponse,
 )
 from .meta import LatestExamImportedAtResponse
-from .model import ModelProvidersResponse
 from .students import (
     StudentAchievementsResponse,
     StudentDashboardResponse,
@@ -41,7 +40,6 @@ __all__ = [
     "HealthzResponse",
     "LoginRequest",
     "LatestExamImportedAtResponse",
-    "ModelProvidersResponse",
     "LogoutRequest",
     "RefreshRequest",
     "RegisterRequest",

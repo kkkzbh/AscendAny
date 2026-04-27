@@ -53,33 +53,6 @@ describe("settingsStore zoom", () => {
     expect(useSettingsStore.getState().zoomPercent).toBe(DEFAULT_ZOOM_PERCENT);
   });
 
-  it("forces anthropic and deepseek enabled after server sync", () => {
-    useSettingsStore.getState().syncProviderOptions({
-      defaultProvider: "server_default",
-      serverDefaultTarget: "openai",
-      serverDefaultTargetLabel: "OpenAI",
-      serverDefaultModel: "gpt-4o",
-      providers: [
-        {
-          type: "anthropic",
-          label: "Anthropic",
-          usesServerConfig: false,
-          enabled: false,
-        },
-        {
-          type: "deepseek",
-          label: "DeepSeek",
-          usesServerConfig: false,
-          enabled: false,
-        },
-      ],
-    });
-
-    const state = useSettingsStore.getState();
-    expect(state.providers.anthropic.enabled).toBe(true);
-    expect(state.providers.deepseek.enabled).toBe(true);
-  });
-
   it("allows custom role id as active role", () => {
     useSettingsStore.getState().setActiveRole("custom_role_test");
     expect(useSettingsStore.getState().activeRole).toBe("custom_role_test");
