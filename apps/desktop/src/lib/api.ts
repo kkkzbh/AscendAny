@@ -141,6 +141,8 @@ export interface AutoAnalysisRequestPayload {
 export interface AutoAnalysisResponsePayload {
   reply: string;
   provider: ProviderType;
+  model?: string;
+  requestMode?: string;
 }
 
 export interface LatestExamImportedAtPayload {
@@ -151,7 +153,17 @@ export interface ChatReplyResponsePayload {
   reply: string;
   summary: string;
   provider: ProviderType;
+  model?: string;
+  requestMode?: string;
 }
+
+export type ChatStreamEvent =
+  | { type: "meta"; provider?: string; model?: string; requestMode?: string; summary?: string }
+  | { type: "delta"; text: string }
+  | { type: "tool_start" }
+  | { type: "tool_done" }
+  | { type: "done"; reply: string; summary?: string; provider?: string; model?: string; requestMode?: string }
+  | { type: "error"; code?: string; message: string };
 
 export class ApiError extends Error {
   status: number;
@@ -534,6 +546,120 @@ export async function postChatReply(
   });
 }
 
+async function streamJsonEvents(
+  path: string,
+  payload: unknown,
+  authToken: string | undefined,
+  onEvent: (event: ChatStreamEvent) => void,
+): Promise<void> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  };
+  if (authToken?.trim()) {
+    headers.Authorization = `Bearer ${authToken.trim()}`;
+  }
+  const response = await fetch(buildUrl(path), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = (await response.json()) as unknown;
+      const { code, message } = extractError(body);
+      if (response.status === 404 && path.endsWith("/stream")) {
+        throw new ApiError(
+          "后端缺少流式聊天接口，请重启 API 服务后重试。",
+          response.status,
+          "STREAM_ENDPOINT_NOT_FOUND",
+        );
+      }
+      throw new ApiError(message ?? `请求失败（${response.status}）`, response.status, code);
+    }
+    const text = (await response.text()).trim();
+    if (response.status === 404 && path.endsWith("/stream")) {
+      throw new ApiError(
+        "后端缺少流式聊天接口，请重启 API 服务后重试。",
+        response.status,
+        "STREAM_ENDPOINT_NOT_FOUND",
+      );
+    }
+    throw new ApiError(text || `请求失败（${response.status}）`, response.status);
+  }
+  if (!response.body) {
+    throw new ApiError("后端没有返回可读取的流", response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const dispatchBlock = (block: string) => {
+    const lines = block.split(/\r?\n/);
+    let eventType = "message";
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        eventType = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (!dataLines.length) return;
+    const raw = dataLines.join("\n");
+    let parsed: Partial<ChatStreamEvent> & Record<string, unknown>;
+    try {
+      parsed = JSON.parse(raw) as Partial<ChatStreamEvent> & Record<string, unknown>;
+    } catch {
+      // Ignore malformed keepalive/event blocks.
+      return;
+    }
+    const type = typeof parsed.type === "string" ? parsed.type : eventType;
+    if (type === "delta") {
+      onEvent({ type: "delta", text: String(parsed.text ?? "") });
+    } else if (type === "done") {
+      onEvent({ type: "done", reply: String(parsed.reply ?? ""), summary: typeof parsed.summary === "string" ? parsed.summary : undefined, provider: typeof parsed.provider === "string" ? parsed.provider : undefined, model: typeof parsed.model === "string" ? parsed.model : undefined, requestMode: typeof parsed.requestMode === "string" ? parsed.requestMode : undefined });
+    } else if (type === "error") {
+      throw new ApiError(
+        String(parsed.message ?? "流式请求失败"),
+        response.status,
+        typeof parsed.code === "string" ? parsed.code : undefined,
+      );
+    } else if (type === "tool_start" || type === "tool_done") {
+      onEvent({ type });
+    } else {
+      onEvent({ type: "meta", provider: typeof parsed.provider === "string" ? parsed.provider : undefined, model: typeof parsed.model === "string" ? parsed.model : undefined, requestMode: typeof parsed.requestMode === "string" ? parsed.requestMode : undefined, summary: typeof parsed.summary === "string" ? parsed.summary : undefined });
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let splitIndex = buffer.search(/\r?\n\r?\n/);
+    while (splitIndex >= 0) {
+      const block = buffer.slice(0, splitIndex);
+      const match = buffer.slice(splitIndex).match(/^\r?\n\r?\n/);
+      buffer = buffer.slice(splitIndex + (match?.[0].length ?? 2));
+      dispatchBlock(block);
+      splitIndex = buffer.search(/\r?\n\r?\n/);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    dispatchBlock(buffer);
+  }
+}
+
+export function streamChatReply(
+  payload: ChatReplyRequestPayload,
+  authToken: string | undefined,
+  onEvent: (event: ChatStreamEvent) => void,
+): Promise<void> {
+  return streamJsonEvents("/api/v1/chat/reply/stream", payload, authToken, onEvent);
+}
+
 export type SignupPolicy =
   | "username_password_only"
   | "require_phone_or_email"
@@ -738,6 +864,14 @@ export async function postAutoAnalysis(
     body: payload,
     authToken,
   });
+}
+
+export function streamAutoAnalysis(
+  payload: AutoAnalysisRequestPayload,
+  authToken: string | undefined,
+  onEvent: (event: ChatStreamEvent) => void,
+): Promise<void> {
+  return streamJsonEvents("/api/v1/chat/auto-analysis/stream", payload, authToken, onEvent);
 }
 
 export async function fetchLatestExamImportedAt(): Promise<LatestExamImportedAtPayload> {

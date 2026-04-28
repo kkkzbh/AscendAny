@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import cast
-
 import httpx
 
-from apps.api.core.config import Settings
+from apps.api.core.config import LLMProviderConfig, Settings
 from apps.api.schemas.chat import ChatMessageRequest, ChatReplyRequest
 from apps.api.services.llm import LLMService
 
@@ -14,22 +12,27 @@ from apps.api.services.llm import LLMService
 def _build_service(settings: Settings) -> LLMService:
     return LLMService(
         settings=settings,
-        http_client=cast(httpx.AsyncClient, object()),
+        http_client=httpx.AsyncClient(),
     )
 
 
-def test_server_default_provider_uses_dedicated_config(monkeypatch) -> None:
+def test_active_provider_uses_provider_config(monkeypatch) -> None:
     settings = Settings()
-    settings.llm.server_default.base_url = "https://llm.example.com/v1"
-    settings.llm.server_default.model = "server-default-model"
-    settings.llm.server_default.api_key_env = "SERVER_DEFAULT_TEST_KEY"
+    settings.llm.active_provider = "openai"
+    settings.llm.providers["openai"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="openai/gpt-5.4-high-thinking",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
     monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "secret")
     service = _build_service(settings)
 
-    provider = service._resolve_server_default_provider()
+    provider = service._resolve_active_profile()
 
     assert provider.base_url == "https://llm.example.com/v1"
-    assert provider.model == "server-default-model"
+    assert provider.model == "openai/gpt-5.4-high-thinking"
+    assert provider.transport_model == "gpt-5.4-high-thinking"
     assert provider.api_key == "secret"
 
 
@@ -93,9 +96,13 @@ def test_openai_path_executes_textual_dsml_tool_calls(monkeypatch) -> None:
 
     transport = httpx.MockTransport(handler)
     settings = Settings()
-    settings.llm.server_default.base_url = "https://llm.example.com/v1"
-    settings.llm.server_default.model = "mock-model"
-    settings.llm.server_default.api_key_env = "SERVER_DEFAULT_TEST_KEY"
+    settings.llm.active_provider = "deepseek"
+    settings.llm.providers["deepseek"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="deepseek-v4-flash",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
     monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "secret")
 
     async def run_case() -> tuple[str, FakeToolExecutor]:
@@ -133,33 +140,34 @@ def test_openai_path_executes_textual_dsml_tool_calls(monkeypatch) -> None:
         and "工具结果" in str(item.get("content"))
         for item in second_messages
     )
-
-
-def test_gemini_path_executes_tool_call(monkeypatch) -> None:
-    """Server-default Gemini path: function call round-trip produces final text reply."""
+def test_openai_path_executes_standard_tool_call(monkeypatch) -> None:
     requests_payload: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))
         requests_payload.append(payload)
         if len(requests_payload) == 1:
-            # First response: model requests a function call
             return httpx.Response(
                 200,
                 json={
-                    "candidates": [
+                    "choices": [
                         {
-                            "content": {
-                                "role": "model",
-                                "parts": [
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
                                     {
-                                        "functionCall": {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {
                                             "name": "get_student_ability_scores",
-                                            "args": {
-                                                "exam_id": 32,
-                                                "student_id": "20231202019",
-                                            },
-                                        }
+                                            "arguments": json.dumps(
+                                                {
+                                                    "exam_id": 32,
+                                                    "student_id": "20231202019",
+                                                }
+                                            ),
+                                        },
                                     }
                                 ],
                             }
@@ -171,11 +179,11 @@ def test_gemini_path_executes_tool_call(monkeypatch) -> None:
         return httpx.Response(
             200,
             json={
-                "candidates": [
+                "choices": [
                     {
-                        "content": {
-                            "role": "model",
-                            "parts": [{"text": "你的综合能力评分为 85 分。"}],
+                        "message": {
+                            "role": "assistant",
+                            "content": "你的综合能力评分为 85 分。",
                         }
                     }
                 ]
@@ -184,10 +192,13 @@ def test_gemini_path_executes_tool_call(monkeypatch) -> None:
 
     transport = httpx.MockTransport(handler)
     settings = Settings()
-    settings.llm.server_default.mode = "gemini"
-    settings.llm.server_default.base_url = "https://generativelanguage.googleapis.com/v1beta"
-    settings.llm.server_default.model = "gemini-2.0-flash"
-    settings.llm.server_default.api_key_env = "SERVER_DEFAULT_TEST_KEY"
+    settings.llm.active_provider = "deepseek"
+    settings.llm.providers["deepseek"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="deepseek-v4-flash",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
     monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "test-key")
 
     async def run_case() -> tuple[str, FakeToolExecutor]:
@@ -211,18 +222,14 @@ def test_gemini_path_executes_tool_call(monkeypatch) -> None:
     assert tool_executor.calls[0][0] == "get_student_ability_scores"
     assert len(requests_payload) == 2
 
-    # First request must include systemInstruction and tools
     first = requests_payload[0]
-    assert "systemInstruction" in first
     assert "tools" in first
 
-    # Second request must include function response in contents
-    second_contents = requests_payload[1].get("contents")
-    assert isinstance(second_contents, list)
-    # Last user turn should have functionResponse parts
-    user_turns = [c for c in second_contents if c.get("role") == "user"]
+    second_messages = requests_payload[1].get("messages")
+    assert isinstance(second_messages, list)
     assert any(
-        isinstance(turn.get("parts"), list)
-        and any("functionResponse" in p for p in turn["parts"])
-        for turn in user_turns
+        isinstance(message, dict)
+        and message.get("role") == "tool"
+        and message.get("tool_call_id") == "call_1"
+        for message in second_messages
     )

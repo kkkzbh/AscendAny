@@ -6,6 +6,7 @@ import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { memo } from "react";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -20,7 +21,7 @@ function formatMessageTime(date: Date): string {
   return `${month}.${day} ${hour}:${minute}`;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+function MessageBubbleComponent({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const account = useAuthStore((s) => s.account);
@@ -61,9 +62,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             </time>
           </div>
           <div className="assistant-message-text chat-markdown chat-markdown-assistant break-words leading-6">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {message.content}
-            </ReactMarkdown>
+            {message.streaming ? (
+              <div className="streaming-message-text">
+                {message.content}
+                <span className="streaming-caret" aria-hidden="true" />
+              </div>
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
+            )}
           </div>
         </div>
       </div>
@@ -99,3 +107,5 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     </div>
   );
 }
+
+export const MessageBubble = memo(MessageBubbleComponent);

@@ -17,6 +17,10 @@ interface ChatState {
     content: string,
     options?: { roleId?: string },
   ) => void;
+  createAssistantDraft: (roleId: string) => string;
+  appendMessageContent: (messageId: string, contentDelta: string) => void;
+  finalizeMessage: (messageId: string) => void;
+  removeMessage: (messageId: string) => void;
   clearContext: () => void;
   setSummary: (summary: string) => void;
   startAiWork: (source: "manual" | "auto") => string;
@@ -89,6 +93,7 @@ function normalizeMessages(value: unknown): ChatMessage[] {
           ? message.timestamp
           : Date.now(),
       roleId: typeof message.roleId === "string" ? message.roleId : undefined,
+      streaming: false,
     }));
 }
 
@@ -203,6 +208,7 @@ export const useChatStore = create<ChatState>()(
             content,
             timestamp: Date.now(),
             roleId: role === "assistant" ? options?.roleId : undefined,
+            streaming: false,
           };
           const nextSessions = state.sessions.map((session) => {
             if (session.id !== activeSession.id) {
@@ -221,6 +227,79 @@ export const useChatStore = create<ChatState>()(
             activeSessionId: activeSession.id,
           };
         }),
+
+      createAssistantDraft: (roleId) => {
+        const messageId = generateId();
+        set((state) => {
+          const activeSession = getActiveSessionFromState(state);
+          const nextMessage: ChatMessage = {
+            id: messageId,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            roleId,
+            streaming: true,
+          };
+          return {
+            sessions: state.sessions.map((session) => {
+              if (session.id !== activeSession.id) return session;
+              const messages = [...session.messages, nextMessage];
+              return {
+                ...session,
+                messages,
+                title: session.title === DEFAULT_SESSION_TITLE ? formatSessionTitle(messages) : session.title,
+                updatedAt: Date.now(),
+              };
+            }),
+            activeSessionId: activeSession.id,
+          };
+        });
+        return messageId;
+      },
+
+      appendMessageContent: (messageId, contentDelta) => {
+        if (!contentDelta) return;
+        set((state) => ({
+          sessions: state.sessions.map((session) => ({
+            ...session,
+            messages: session.messages.map((message) =>
+              message.id === messageId
+                ? { ...message, content: message.content + contentDelta }
+                : message,
+            ),
+            updatedAt: session.messages.some((message) => message.id === messageId)
+              ? Date.now()
+              : session.updatedAt,
+          })),
+        }));
+      },
+
+      finalizeMessage: (messageId) =>
+        set((state) => ({
+          sessions: state.sessions.map((session) => ({
+            ...session,
+            messages: session.messages.map((message) =>
+              message.id === messageId ? { ...message, streaming: false } : message,
+            ),
+            updatedAt: session.messages.some((message) => message.id === messageId)
+              ? Date.now()
+              : session.updatedAt,
+          })),
+        })),
+
+      removeMessage: (messageId) =>
+        set((state) => ({
+          sessions: state.sessions.map((session) => {
+            if (!session.messages.some((message) => message.id === messageId)) {
+              return session;
+            }
+            return {
+              ...session,
+              messages: session.messages.filter((message) => message.id !== messageId),
+              updatedAt: Date.now(),
+            };
+          }),
+        })),
 
       clearContext: () =>
         set((state) => {

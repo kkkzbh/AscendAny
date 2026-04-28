@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-AdminModelTabId = Literal["siliconflow", "openai", "copilot", "deepseek"]
+AdminModelProviderId = Literal["siliconflow", "openai", "copilot", "deepseek"]
 AdminModelRequestMode = Literal["chat_completions", "responses"]
 AdminModelListSource = Literal["dynamic", "static"]
 
@@ -19,11 +19,12 @@ class AdminModelOption(BaseModel):
     disabledReason: str | None = None
 
 
-class AdminModelTabConfig(BaseModel):
-    id: AdminModelTabId
+class AdminModelProviderConfig(BaseModel):
+    id: AdminModelProviderId
     title: str
     provider: str
     strategyId: str
+    adapter: str
     baseUrl: str
     model: str
     transportModel: str
@@ -46,35 +47,39 @@ class AdminModelServerDefault(BaseModel):
 class AdminModelConfigResponse(BaseModel):
     configPath: str
     envFilePath: str
-    activeTab: AdminModelTabId
-    tabs: list[AdminModelTabConfig]
-    serverDefault: AdminModelServerDefault
+    activeProvider: AdminModelProviderId
+    providers: list[AdminModelProviderConfig]
+    activeRuntime: AdminModelServerDefault
 
 
-class AdminModelTabPatch(BaseModel):
+class AdminModelProviderPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: AdminModelTabId
+    id: AdminModelProviderId
+    adapter: str | None = None
     baseUrl: str | None = None
     model: str | None = None
     apiKeyEnv: str | None = None
+    requestMode: AdminModelRequestMode | None = None
     apiKey: str | None = Field(default=None, max_length=10000)
 
 
 class AdminModelConfigPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    activeTab: AdminModelTabId | None = None
-    tab: AdminModelTabPatch | None = None
+    activeProvider: AdminModelProviderId | None = None
+    provider: AdminModelProviderPatch | None = None
 
 
 class AdminModelConnectionTestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tabId: AdminModelTabId
+    providerId: AdminModelProviderId
+    adapter: str | None = None
     baseUrl: str
     model: str
     apiKeyEnv: str
+    requestMode: AdminModelRequestMode | None = None
     apiKey: str | None = Field(default=None, max_length=10000)
 
 
@@ -90,8 +95,12 @@ class AdminModelConnectionTestResponse(BaseModel):
 class AdminDeepSeekModelsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    providerId: AdminModelProviderId = "deepseek"
+    adapter: str | None = None
     baseUrl: str
+    model: str | None = None
     apiKeyEnv: str
+    requestMode: AdminModelRequestMode | None = None
     apiKey: str | None = Field(default=None, max_length=10000)
 
 

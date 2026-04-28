@@ -1,13 +1,13 @@
-import type { AdminModelTabId } from "./api/admin";
+import type { AdminModelProviderId } from "./api/admin";
 
-export const MODEL_TAB_IDS: AdminModelTabId[] = [
+export const MODEL_PROVIDER_IDS: AdminModelProviderId[] = [
   "siliconflow",
   "openai",
   "copilot",
   "deepseek",
 ];
 
-export const MODEL_TAB_LABELS: Record<AdminModelTabId, string> = {
+export const MODEL_PROVIDER_LABELS: Record<AdminModelProviderId, string> = {
   siliconflow: "硅基流动",
   openai: "OpenAI",
   copilot: "GitHub Copilot",

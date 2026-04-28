@@ -61,4 +61,25 @@ describe("chatStore sessions", () => {
     expect(state.sessions[0].title).toBe("旧会话第一句");
     expect(state.sessions[0].summary).toBe("legacy summary");
   });
+
+  it("streams assistant drafts without leaking transient state into reload", async () => {
+    const draftId = useChatStore.getState().createAssistantDraft("sakiko");
+    useChatStore.getState().appendMessageContent(draftId, "第一段");
+    useChatStore.getState().appendMessageContent(draftId, "第二段");
+
+    let message = useChatStore.getState().getActiveSession().messages[0];
+    expect(message?.content).toBe("第一段第二段");
+    expect(message?.streaming).toBe(true);
+    expect(message?.roleId).toBe("sakiko");
+
+    useChatStore.getState().finalizeMessage(draftId);
+    message = useChatStore.getState().getActiveSession().messages[0];
+    expect(message?.streaming).toBe(false);
+
+    const emptyDraftId = useChatStore.getState().createAssistantDraft("xiaoD");
+    useChatStore.getState().removeMessage(emptyDraftId);
+    expect(
+      useChatStore.getState().getActiveSession().messages.some((item) => item.id === emptyDraftId),
+    ).toBe(false);
+  });
 });

@@ -4,7 +4,7 @@ import { useMetricsStore } from "@/stores/metricsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { storage } from "@/lib/storage";
-import { postAutoAnalysis } from "@/lib/api";
+import { streamAutoAnalysis } from "@/lib/api";
 import { findRole } from "@/types/role";
 
 /**
@@ -14,10 +14,14 @@ import { findRole } from "@/types/role";
  */
 export function useAutoAnalysis(params: {
   onReply: (reply: string, roleId: string) => void;
+  onStreamStart?: (roleId: string) => string;
+  onStreamDelta?: (messageId: string, delta: string) => void;
+  onStreamDone?: (messageId: string, reply: string) => void;
+  onStreamEmpty?: (messageId: string) => void;
   onWorkStart?: () => string;
   onWorkEnd?: (taskId: string | undefined) => void;
 }) {
-  const { onReply, onWorkStart, onWorkEnd } = params;
+  const { onReply, onStreamStart, onStreamDelta, onStreamDone, onStreamEmpty, onWorkStart, onWorkEnd } = params;
   const inFlightExamIdRef = useRef<string | null>(null);
 
   const account = useAuthStore((s) => s.account);
@@ -46,7 +50,18 @@ export function useAutoAnalysis(params: {
       try {
         taskId = onWorkStart?.();
 
-        const response = await postAutoAnalysis(
+        let draftMessageId: string | null = null;
+        let bufferedText = "";
+        let rafId = 0;
+        const flush = () => {
+          rafId = 0;
+          if (!draftMessageId || !bufferedText) return;
+          const next = bufferedText;
+          bufferedText = "";
+          onStreamDelta?.(draftMessageId, next);
+        };
+
+        await streamAutoAnalysis(
           {
             studentId: account.studentId ?? undefined,
             ptaNickname: account.ptaNickname ?? undefined,
@@ -56,14 +71,45 @@ export function useAutoAnalysis(params: {
             latestExamId,
           },
           accessToken,
+          (event) => {
+            if (event.type === "delta" && event.text) {
+              if (!draftMessageId) {
+                draftMessageId = onStreamStart?.(roleIdAtRequest) ?? null;
+                onWorkEnd?.(taskId);
+                taskId = undefined;
+              }
+              if (draftMessageId) {
+                bufferedText += event.text;
+                if (!rafId) {
+                  rafId = window.requestAnimationFrame(flush);
+                }
+              }
+              return;
+            }
+            if (event.type === "done") {
+              if (rafId) {
+                window.cancelAnimationFrame(rafId);
+                flush();
+              }
+              const reply = event.reply.trim();
+              if (draftMessageId) {
+                if (reply) {
+                  onStreamDone?.(draftMessageId, reply);
+                } else {
+                  onStreamEmpty?.(draftMessageId);
+                }
+              } else if (reply) {
+                onReply(reply, roleIdAtRequest);
+              }
+              return;
+            }
+            if (event.type === "error") {
+              throw new Error(event.message);
+            }
+          },
         );
 
         storage.set(examStorageKey, latestExamId);
-
-        const reply = response.reply.trim();
-        if (reply) {
-          onReply(reply, roleIdAtRequest);
-        }
       } catch {
         // Auto-analysis is best-effort; silently ignore errors.
       } finally {
@@ -79,6 +125,10 @@ export function useAutoAnalysis(params: {
     activeRole,
     customRoles,
     onReply,
+    onStreamStart,
+    onStreamDelta,
+    onStreamDone,
+    onStreamEmpty,
     onWorkStart,
     onWorkEnd,
   ]);

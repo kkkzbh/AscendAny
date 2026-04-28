@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { useAuthStore } from "@/stores/authStore";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { useLeaderboardStore } from "@/stores/leaderboardStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const STUDENT_CSS = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
@@ -33,6 +34,7 @@ describe("TitleBar student controls", () => {
   beforeEach(() => {
     useLayoutStore.getState().resetForAccount();
     useSettingsStore.getState().resetForAccount();
+    useLeaderboardStore.getState().closeLeaderboard();
     useAuthStore.setState({
       status: "authenticated",
       account: {
@@ -111,9 +113,9 @@ describe("TitleBar student controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开成就页面" }));
     expect(useLayoutStore.getState().activeFullscreenView).toBe("achievements");
 
-    expect(screen.queryByText("排行榜")).toBeNull();
+    expect(useLeaderboardStore.getState().isOpen).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "打开排行榜" }));
-    expect(screen.getByText("排行榜")).toBeTruthy();
+    expect(useLeaderboardStore.getState().isOpen).toBe(true);
   });
 
   it("keeps theme and feedback actions functional", () => {

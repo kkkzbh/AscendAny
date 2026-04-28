@@ -1,12 +1,10 @@
-import { useState } from "react";
-
-import { LeaderboardDialog } from "@/components/leaderboard/LeaderboardDialog";
 import { useAuthStore } from "@/stores/authStore";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { useLeaderboardStore } from "@/stores/leaderboardStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export function TitleBar() {
-  const [isLeaderboardOpen, setIsLeaderboardOpen] = useState(false);
+  const openLeaderboard = useLeaderboardStore((s) => s.openLeaderboard);
   const theme = useSettingsStore((s) => s.theme);
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
   const logout = useAuthStore((s) => s.logout);
@@ -20,8 +18,7 @@ export function TitleBar() {
   const nextThemeLabel = theme === "light" ? "切换到暗色主题" : "切换到亮色主题";
 
   return (
-    <>
-      <header className="student-titlebar drag-region">
+    <header className="student-titlebar drag-region">
         {isLeftSidebarCollapsed ? (
           <button
             type="button"
@@ -51,7 +48,7 @@ export function TitleBar() {
           <button
             type="button"
             className="student-titlebar-button"
-            onClick={() => setIsLeaderboardOpen(true)}
+            onClick={openLeaderboard}
             title="排行榜"
             aria-label="打开排行榜"
           >
@@ -239,11 +236,6 @@ export function TitleBar() {
             </button>
           </div>
         </div>
-      </header>
-      <LeaderboardDialog
-        isOpen={isLeaderboardOpen}
-        onClose={() => setIsLeaderboardOpen(false)}
-      />
-    </>
+    </header>
   );
 }

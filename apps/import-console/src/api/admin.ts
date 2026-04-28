@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 
-export type AdminModelTabId = "siliconflow" | "openai" | "copilot" | "deepseek";
+export type AdminModelProviderId = "siliconflow" | "openai" | "copilot" | "deepseek";
 export type AdminModelRequestMode = "chat_completions" | "responses";
 export type AdminModelListSource = "dynamic" | "static";
 
@@ -13,11 +13,12 @@ export interface AdminModelOption {
   disabledReason: string | null;
 }
 
-export interface AdminModelTabConfig {
-  id: AdminModelTabId;
+export interface AdminModelProviderConfig {
+  id: AdminModelProviderId;
   title: string;
   provider: string;
   strategyId: string;
+  adapter: string;
   baseUrl: string;
   model: string;
   transportModel: string;
@@ -33,9 +34,9 @@ export interface AdminModelTabConfig {
 export interface AdminModelConfigResponse {
   configPath: string;
   envFilePath: string;
-  activeTab: AdminModelTabId;
-  tabs: AdminModelTabConfig[];
-  serverDefault: {
+  activeProvider: AdminModelProviderId;
+  providers: AdminModelProviderConfig[];
+  activeRuntime: {
     mode: string;
     baseUrl: string;
     model: string;
@@ -44,12 +45,14 @@ export interface AdminModelConfigResponse {
 }
 
 export interface AdminModelConfigPatch {
-  activeTab?: AdminModelTabId;
-  tab?: {
-    id: AdminModelTabId;
+  activeProvider?: AdminModelProviderId;
+  provider?: {
+    id: AdminModelProviderId;
+    adapter?: string;
     baseUrl?: string;
     model?: string;
     apiKeyEnv?: string;
+    requestMode?: AdminModelRequestMode;
     apiKey?: string;
   };
 }
@@ -241,10 +244,12 @@ export function patchAdminModelConfig(payload: AdminModelConfigPatch): Promise<A
 }
 
 export function testAdminModelConnection(payload: {
-  tabId: AdminModelTabId;
+  providerId: AdminModelProviderId;
+  adapter?: string;
   baseUrl: string;
   model: string;
   apiKeyEnv: string;
+  requestMode?: AdminModelRequestMode;
   apiKey?: string;
 }): Promise<AdminModelConnectionTestResponse> {
   return apiFetch("/api/v1/admin/model-config/test", {
@@ -254,11 +259,16 @@ export function testAdminModelConnection(payload: {
 }
 
 export function listAdminDeepSeekModels(payload: {
+  providerId?: AdminModelProviderId;
+  adapter?: string;
   baseUrl: string;
+  model?: string;
   apiKeyEnv: string;
+  requestMode?: AdminModelRequestMode;
   apiKey?: string;
 }): Promise<AdminDeepSeekModelsResponse> {
-  return apiFetch("/api/v1/admin/model-config/deepseek/models", {
+  const providerId = payload.providerId ?? "deepseek";
+  return apiFetch(`/api/v1/admin/model-config/${providerId}/models`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

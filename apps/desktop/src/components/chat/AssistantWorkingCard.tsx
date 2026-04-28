@@ -1,38 +1,17 @@
-import { useEffect, useState } from "react";
 import { findRole, resolveAnyRoleWorkingCard } from "@/types/role";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
-
-const STAGE_SWITCH_INTERVAL_MS = 5000;
 
 export function AssistantWorkingCard() {
   const activeRole = useSettingsStore((s) => s.activeRole);
   const customRoles = useCustomRoleStore((s) => s.customRoles);
   const role = findRole(activeRole, customRoles);
   const workingCard = resolveAnyRoleWorkingCard(activeRole, customRoles);
-  const title = role.id === "sakiko" ? "小祥输入中" : `${role.name} 正在工作`;
-
-  const stages = workingCard.stages.length > 0 ? workingCard.stages : ["正在处理请求"];
-  const [stageIndex, setStageIndex] = useState(0);
-  const stageKey = stages.join("|");
-
-  useEffect(() => {
-    setStageIndex(0);
-  }, [activeRole, stageKey]);
-
-  useEffect(() => {
-    if (stages.length <= 1) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      setStageIndex((prev) => (prev + 1) % stages.length);
-    }, STAGE_SWITCH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [stageKey, stages.length]);
+  const title = role.id === "sakiko"
+    ? "小祥整理中"
+    : role.id === "xiaoD"
+      ? "小D分析中"
+      : `${role.name}思考中`;
 
   return (
     <div className="message-row assistant-working-row flex w-full items-start gap-2.5 py-1.5">
@@ -48,7 +27,6 @@ export function AssistantWorkingCard() {
         <p className="assistant-working-title">
           {title}
         </p>
-        <p className="assistant-working-stage">{stages[stageIndex]}</p>
         <div className="assistant-working-dots" aria-hidden="true">
           <span />
           <span />

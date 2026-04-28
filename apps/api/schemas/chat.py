@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ChatRole = Literal["user", "assistant", "system"]
-ProviderType = Literal["server_default"]
+ProviderType = str
 
 
 class ChatMessageRequest(BaseModel):
@@ -30,6 +30,8 @@ class ChatReplyResponse(BaseModel):
     reply: str
     summary: str
     provider: ProviderType
+    model: str = ""
+    requestMode: str = "chat_completions"
 
 
 class AutoAnalysisRequest(BaseModel):
@@ -46,6 +48,8 @@ class AutoAnalysisRequest(BaseModel):
 class AutoAnalysisResponse(BaseModel):
     reply: str
     provider: ProviderType
+    model: str = ""
+    requestMode: str = "chat_completions"
 
 
 class AutoAnalysisPrecomputeRequest(BaseModel):

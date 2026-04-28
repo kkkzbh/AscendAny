@@ -16,29 +16,32 @@ dashboard:
   default_metric: 0
   rating_history_limit: 50
 llm:
-  server_default:
-    mode: openai_compatible
-    base_url: https://api.deepseek.com
-    model: deepseek-v4-flash
-    api_key_env: ASCENDANY_LLM_DEEPSEEK_API_KEY
-  active_tab: deepseek
-  tabs:
+  active_provider: deepseek
+  providers:
     siliconflow:
+      adapter: openai_compatible
       base_url: https://api.siliconflow.cn/v1
       model: Pro/moonshotai/Kimi-K2.5
       api_key_env: ASCENDANY_LLM_SILICONFLOW_API_KEY
+      request_mode: chat_completions
     openai:
+      adapter: openai_compatible
       base_url: https://shell.wyzai.top/v1
       model: openai/gpt-5.4-medium-thinking
       api_key_env: ASCENDANY_LLM_OPENAI_API_KEY
+      request_mode: chat_completions
     copilot:
+      adapter: openai_compatible
       base_url: http://127.0.0.1:5140/api/internal/copilot/v1
       model: openai/gpt-5-mini
       api_key_env: ASCENDANY_LLM_COPILOT_API_KEY
+      request_mode: chat_completions
     deepseek:
+      adapter: openai_compatible
       base_url: https://api.deepseek.com
       model: deepseek-v4-flash
       api_key_env: ASCENDANY_LLM_DEEPSEEK_API_KEY
+      request_mode: chat_completions
   request_timeout_seconds: 60
 auth:
   enabled: true

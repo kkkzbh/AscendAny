@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header
+from fastapi.responses import StreamingResponse
 
 from ..deps import (
     get_current_account_optional,
@@ -38,6 +40,11 @@ _ROLE_NAMES: dict[str, str] = {
 }
 
 _DEFAULT_ROLE_ID = "xiaoD"
+
+
+def _sse(event_type: str, data: dict[str, Any]) -> str:
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event_type}\ndata: {payload}\n\n"
 
 
 def _resolve_role_name(role_id: str, role_name: str | None) -> str:
@@ -135,6 +142,56 @@ async def _increment_ai_dialogue_counter(repository: Any, identity: Any) -> None
     await incrementer(student_ids, delta=1)
 
 
+async def _prepare_chat_runtime(
+    payload: ChatReplyRequest,
+    repository: Any,
+    current_account: Any,
+) -> tuple[ChatReplyRequest, Any, str, ToolExecutor]:
+    effective_payload = payload
+    student_id = payload.studentId
+    pta_nickname = payload.ptaNickname
+
+    if (
+        (student_id is None or not student_id.strip())
+        and (pta_nickname is None or not pta_nickname.strip())
+        and current_account is not None
+    ):
+        profile = await repository.fetch_account_profile(current_account.account_id)
+        if profile is not None:
+            student_id = profile.student_id
+            pta_nickname = profile.pta_nickname
+            effective_payload = payload.model_copy(
+                update={
+                    "studentId": student_id,
+                    "ptaNickname": pta_nickname,
+                }
+            )
+
+    role_id = payload.roleId or _DEFAULT_ROLE_ID
+    role_name = _resolve_role_name(role_id, payload.roleName)
+    role_system_prompt = _resolve_role_system_prompt(payload.roleSystemPrompt)
+
+    identity = None
+    if student_id or pta_nickname:
+        try:
+            identity_service = StudentIdentityService(repository)
+            identity = await identity_service.resolve(student_id, pta_nickname)
+        except Exception:
+            logger.debug(
+                "Student identity resolution failed for chat prompt", exc_info=True
+            )
+
+    prompt_service = PromptService(repository)
+    system_prompt = await prompt_service.build_system_prompt(
+        identity=identity,
+        role_id=role_id,
+        role_name=role_name,
+        custom_role_style_prompt=role_system_prompt,
+    )
+    tool_executor = ToolExecutor(repository=repository, identity=identity)
+    return effective_payload, identity, system_prompt, tool_executor
+
+
 @router.post("/chat/reply", response_model=ChatReplyResponse)
 async def chat_reply(
     payload: ChatReplyRequest,
@@ -200,6 +257,43 @@ async def chat_reply(
     )
     await _increment_ai_dialogue_counter(repository, identity)
     return result
+
+
+@router.post("/chat/reply/stream")
+async def chat_reply_stream(
+    payload: ChatReplyRequest,
+    repository=Depends(get_repository),
+    current_account=Depends(get_current_account_optional),
+    llm_service=Depends(get_llm_service),
+) -> StreamingResponse:
+    async def generate():
+        identity = None
+        try:
+            effective_payload, identity, system_prompt, tool_executor = (
+                await _prepare_chat_runtime(payload, repository, current_account)
+            )
+            async for event in llm_service.stream_reply(
+                effective_payload,
+                system_prompt=system_prompt,
+                tool_executor=tool_executor,
+            ):
+                event_type = str(event.get("type", "delta"))
+                yield _sse(event_type, event)
+            await _increment_ai_dialogue_counter(repository, identity)
+        except AppError as exc:
+            yield _sse("error", {"type": "error", "code": exc.code, "message": exc.message})
+        except Exception as exc:
+            logger.warning("Chat stream failed", exc_info=True)
+            yield _sse(
+                "error",
+                {
+                    "type": "error",
+                    "code": "CHAT_STREAM_FAILED",
+                    "message": str(exc) or "Chat stream failed.",
+                },
+            )
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.post("/chat/auto-analysis", response_model=AutoAnalysisResponse)
@@ -339,7 +433,152 @@ async def chat_auto_analysis(
     return AutoAnalysisResponse(
         reply=reply,
         provider=result.provider,
+        model=result.model,
+        requestMode=result.requestMode,
     )
+
+
+@router.post("/chat/auto-analysis/stream")
+async def chat_auto_analysis_stream(
+    payload: AutoAnalysisRequest,
+    repository=Depends(get_repository),
+    current_account=Depends(get_current_account),
+    llm_service=Depends(get_llm_service),
+) -> StreamingResponse:
+    async def generate():
+        identity = None
+        try:
+            student_id = payload.studentId
+            pta_nickname = payload.ptaNickname
+            if (student_id is None or not student_id.strip()) and (
+                pta_nickname is None or not pta_nickname.strip()
+            ):
+                profile = await repository.fetch_account_profile(current_account.account_id)
+                if profile is not None:
+                    student_id = profile.student_id
+                    pta_nickname = profile.pta_nickname
+
+            if student_id or pta_nickname:
+                try:
+                    identity_service = StudentIdentityService(repository)
+                    identity = await identity_service.resolve(student_id, pta_nickname)
+                except Exception:
+                    logger.debug(
+                        "Student identity resolution failed for auto-analysis stream",
+                        exc_info=True,
+                    )
+
+            if identity is None or identity.no_submission_records:
+                yield _sse("done", {"type": "done", "reply": "", "provider": "none"})
+                return
+
+            latest_exam_id = await _resolve_latest_exam_id(repository, identity)
+            if latest_exam_id is None:
+                yield _sse("done", {"type": "done", "reply": "", "provider": "none"})
+                return
+            latest_exam_id_str = str(latest_exam_id)
+            expected_latest_exam_id = (payload.latestExamId or "").strip()
+            if expected_latest_exam_id and expected_latest_exam_id != latest_exam_id_str:
+                yield _sse("done", {"type": "done", "reply": "", "provider": "none"})
+                return
+
+            role_id = payload.roleId or _DEFAULT_ROLE_ID
+            role_name = _resolve_role_name(role_id, payload.roleName)
+            role_system_prompt = _resolve_role_system_prompt(payload.roleSystemPrompt)
+            cache_row = await _fetch_auto_analysis_cache(
+                repository=repository,
+                account_id=current_account.account_id,
+                exam_id=latest_exam_id,
+                role_id=role_id,
+            )
+            if cache_row is not None and getattr(cache_row, "delivered_at", None) is not None:
+                yield _sse("done", {"type": "done", "reply": "", "provider": "none"})
+                return
+            cached_reply = (
+                str(getattr(cache_row, "reply", "")).strip()
+                if cache_row is not None
+                else ""
+            )
+            if cached_reply:
+                await _mark_auto_analysis_delivered(
+                    repository=repository,
+                    account_id=current_account.account_id,
+                    exam_id=latest_exam_id,
+                    role_id=role_id,
+                )
+                await _increment_ai_dialogue_counter(repository, identity)
+                yield _sse("meta", {"type": "meta", "provider": "cache"})
+                yield _sse("delta", {"type": "delta", "text": cached_reply})
+                yield _sse(
+                    "done",
+                    {"type": "done", "reply": cached_reply, "provider": "cache"},
+                )
+                return
+
+            prompt_service = PromptService(repository)
+            system_prompt = await prompt_service.build_proactive_analysis_system_prompt(
+                identity=identity,
+                role_id=role_id,
+                role_name=role_name,
+                custom_role_style_prompt=role_system_prompt,
+            )
+            synthetic_request = ChatReplyRequest(
+                studentId=student_id,
+                ptaNickname=pta_nickname,
+                messages=[
+                    ChatMessageRequest(
+                        role="user",
+                        content=prompt_service.build_auto_analysis_user_message(),
+                    )
+                ],
+                summary="",
+                roleId=role_id,
+                roleName=role_name,
+                roleSystemPrompt=role_system_prompt,
+            )
+            tool_executor = ToolExecutor(repository=repository, identity=identity)
+            final_reply = ""
+            final_provider = "server_default"
+            async for event in llm_service.stream_reply(
+                synthetic_request,
+                system_prompt=system_prompt,
+                tool_executor=tool_executor,
+            ):
+                if event.get("type") == "done":
+                    final_reply = str(event.get("reply", "")).strip()
+                    final_provider = str(event.get("provider", "server_default"))
+                yield _sse(str(event.get("type", "delta")), event)
+            if final_reply:
+                await _upsert_auto_analysis_cache(
+                    repository=repository,
+                    account_id=current_account.account_id,
+                    exam_id=latest_exam_id,
+                    role_id=role_id,
+                    provider_type=final_provider,
+                    reply=final_reply,
+                    source="online",
+                )
+                await _mark_auto_analysis_delivered(
+                    repository=repository,
+                    account_id=current_account.account_id,
+                    exam_id=latest_exam_id,
+                    role_id=role_id,
+                )
+                await _increment_ai_dialogue_counter(repository, identity)
+        except AppError as exc:
+            yield _sse("error", {"type": "error", "code": exc.code, "message": exc.message})
+        except Exception as exc:
+            logger.warning("Auto-analysis stream failed", exc_info=True)
+            yield _sse(
+                "error",
+                {
+                    "type": "error",
+                    "code": "AUTO_ANALYSIS_STREAM_FAILED",
+                    "message": str(exc) or "Auto-analysis stream failed.",
+                },
+            )
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.post(

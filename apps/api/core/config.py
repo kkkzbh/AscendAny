@@ -8,6 +8,8 @@ from typing import Any
 import yaml
 
 DEFAULT_CONFIG_PATH = Path("apps/api/config/default.yaml")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_LOCAL_ENV_PATH = PROJECT_ROOT / ".env.local"
 
 
 @dataclass(slots=True)
@@ -50,38 +52,36 @@ class DashboardConfig:
 
 
 @dataclass(slots=True)
-class LLMServerDefaultConfig:
-    mode: str = "openai_compatible"
-    base_url: str = "https://api.deepseek.com"
-    model: str = "deepseek-v4-flash"
-    api_key_env: str = "DEFAULT_API_KEY"
-
-
-@dataclass(slots=True)
-class LLMModelTabConfig:
+class LLMProviderConfig:
+    adapter: str
     base_url: str
     model: str
     api_key_env: str
+    request_mode: str = "chat_completions"
 
 
-def _default_llm_tabs() -> dict[str, LLMModelTabConfig]:
+def _default_llm_providers() -> dict[str, LLMProviderConfig]:
     return {
-        "siliconflow": LLMModelTabConfig(
+        "siliconflow": LLMProviderConfig(
+            adapter="openai_compatible",
             base_url="https://api.siliconflow.cn/v1",
             model="Pro/moonshotai/Kimi-K2.5",
             api_key_env="ASCENDANY_LLM_SILICONFLOW_API_KEY",
         ),
-        "openai": LLMModelTabConfig(
+        "openai": LLMProviderConfig(
+            adapter="openai_compatible",
             base_url="https://shell.wyzai.top/v1",
             model="openai/gpt-5.4-medium-thinking",
             api_key_env="ASCENDANY_LLM_OPENAI_API_KEY",
         ),
-        "copilot": LLMModelTabConfig(
+        "copilot": LLMProviderConfig(
+            adapter="openai_compatible",
             base_url="http://127.0.0.1:5140/api/internal/copilot/v1",
             model="openai/gpt-5-mini",
             api_key_env="ASCENDANY_LLM_COPILOT_API_KEY",
         ),
-        "deepseek": LLMModelTabConfig(
+        "deepseek": LLMProviderConfig(
+            adapter="openai_compatible",
             base_url="https://api.deepseek.com",
             model="deepseek-v4-flash",
             api_key_env="ASCENDANY_LLM_DEEPSEEK_API_KEY",
@@ -91,11 +91,8 @@ def _default_llm_tabs() -> dict[str, LLMModelTabConfig]:
 
 @dataclass(slots=True)
 class LLMConfig:
-    server_default: LLMServerDefaultConfig = field(
-        default_factory=LLMServerDefaultConfig
-    )
-    active_tab: str = "deepseek"
-    tabs: dict[str, LLMModelTabConfig] = field(default_factory=_default_llm_tabs)
+    active_provider: str = "deepseek"
+    providers: dict[str, LLMProviderConfig] = field(default_factory=_default_llm_providers)
     request_timeout_seconds: float = 60.0
 
 
@@ -148,6 +145,37 @@ def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def _unquote_env_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _load_local_env_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key.startswith("export "):
+            key = key.removeprefix("export ").strip()
+        if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
+            continue
+        os.environ.setdefault(key, _unquote_env_value(value))
+
+
+def _load_local_env() -> None:
+    raw_path = os.getenv("ASCENDANY_ADMIN_ENV_FILE", "").strip()
+    env_path = Path(raw_path) if raw_path else DEFAULT_LOCAL_ENV_PATH
+    if not env_path.is_absolute():
+        env_path = (PROJECT_ROOT / env_path).resolve()
+    _load_local_env_file(env_path)
+
+
 def _as_dict(settings: Settings) -> dict[str, Any]:
     return {
         "db": {
@@ -170,20 +198,16 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "rating_history_limit": settings.dashboard.rating_history_limit,
         },
         "llm": {
-            "server_default": {
-                "mode": settings.llm.server_default.mode,
-                "base_url": settings.llm.server_default.base_url,
-                "model": settings.llm.server_default.model,
-                "api_key_env": settings.llm.server_default.api_key_env,
-            },
-            "active_tab": settings.llm.active_tab,
-            "tabs": {
+            "active_provider": settings.llm.active_provider,
+            "providers": {
                 key: {
-                    "base_url": tab.base_url,
-                    "model": tab.model,
-                    "api_key_env": tab.api_key_env,
+                    "adapter": provider.adapter,
+                    "base_url": provider.base_url,
+                    "model": provider.model,
+                    "api_key_env": provider.api_key_env,
+                    "request_mode": provider.request_mode,
                 }
-                for key, tab in settings.llm.tabs.items()
+                for key, provider in settings.llm.providers.items()
             },
             "request_timeout_seconds": settings.llm.request_timeout_seconds,
         },
@@ -212,38 +236,24 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _build_server_default_config(
-    llm_data: dict[str, Any],
-) -> LLMServerDefaultConfig:
-    baseline = LLMServerDefaultConfig()
-    loaded = llm_data.get("server_default", {}) or {}
-    if isinstance(loaded, dict) and loaded:
-        return LLMServerDefaultConfig(
-            mode=str(loaded.get("mode", baseline.mode)),
-            base_url=str(loaded.get("base_url", baseline.base_url)),
-            model=str(loaded.get("model", baseline.model)),
-            api_key_env=str(loaded.get("api_key_env", baseline.api_key_env)),
-        )
-
-    return baseline
-
-
-def _build_llm_tab_configs(llm_data: dict[str, Any]) -> dict[str, LLMModelTabConfig]:
-    tabs = _default_llm_tabs()
-    loaded = llm_data.get("tabs", {}) or {}
+def _build_llm_provider_configs(llm_data: dict[str, Any]) -> dict[str, LLMProviderConfig]:
+    providers = _default_llm_providers()
+    loaded = llm_data.get("providers", {}) or {}
     if not isinstance(loaded, dict):
-        return tabs
+        return providers
 
-    for tab_id, baseline in list(tabs.items()):
-        raw_tab = loaded.get(tab_id, {}) or {}
-        if not isinstance(raw_tab, dict):
+    for provider_id, baseline in list(providers.items()):
+        raw_provider = loaded.get(provider_id, {}) or {}
+        if not isinstance(raw_provider, dict):
             continue
-        tabs[tab_id] = LLMModelTabConfig(
-            base_url=str(raw_tab.get("base_url", baseline.base_url)),
-            model=str(raw_tab.get("model", baseline.model)),
-            api_key_env=str(raw_tab.get("api_key_env", baseline.api_key_env)),
+        providers[provider_id] = LLMProviderConfig(
+            adapter=str(raw_provider.get("adapter", baseline.adapter)),
+            base_url=str(raw_provider.get("base_url", baseline.base_url)),
+            model=str(raw_provider.get("model", baseline.model)),
+            api_key_env=str(raw_provider.get("api_key_env", baseline.api_key_env)),
+            request_mode=str(raw_provider.get("request_mode", baseline.request_mode)),
         )
-    return tabs
+    return providers
 
 
 def _from_dict(raw: dict[str, Any]) -> Settings:
@@ -254,11 +264,10 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
     auth = raw.get("auth", {})
     sso = raw.get("sso", {})
 
-    server_default = _build_server_default_config(llm)
-    llm_tabs = _build_llm_tab_configs(llm)
-    active_tab = str(llm.get("active_tab", "deepseek")).strip() or "deepseek"
-    if active_tab not in llm_tabs:
-        active_tab = "deepseek"
+    llm_providers = _build_llm_provider_configs(llm)
+    active_provider = str(llm.get("active_provider", "deepseek")).strip() or "deepseek"
+    if active_provider not in llm_providers:
+        active_provider = "deepseek"
 
     return Settings(
         db=DatabaseConfig(
@@ -281,9 +290,8 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             rating_history_limit=max(1, int(dashboard.get("rating_history_limit", 50))),
         ),
         llm=LLMConfig(
-            server_default=server_default,
-            active_tab=active_tab,
-            tabs=llm_tabs,
+            active_provider=active_provider,
+            providers=llm_providers,
             request_timeout_seconds=float(llm.get("request_timeout_seconds", 60.0)),
         ),
         auth=AuthConfig(
@@ -349,24 +357,9 @@ def _apply_env_overrides(settings: Settings) -> None:
     env_user = os.getenv("ASCENDANY_DB_USER", "").strip()
     if env_user:
         settings.db.user = env_user
-    env_server_default_mode = os.getenv("ASCENDANY_LLM_SERVER_DEFAULT_MODE", "").strip()
-    if env_server_default_mode:
-        settings.llm.server_default.mode = env_server_default_mode
-    env_server_default_base_url = os.getenv(
-        "ASCENDANY_LLM_SERVER_DEFAULT_BASE_URL", ""
-    ).strip()
-    if env_server_default_base_url:
-        settings.llm.server_default.base_url = env_server_default_base_url
-    env_server_default_model = os.getenv(
-        "ASCENDANY_LLM_SERVER_DEFAULT_MODEL", ""
-    ).strip()
-    if env_server_default_model:
-        settings.llm.server_default.model = env_server_default_model
-    env_server_default_api_key_env = os.getenv(
-        "ASCENDANY_LLM_SERVER_DEFAULT_API_KEY_ENV", ""
-    ).strip()
-    if env_server_default_api_key_env:
-        settings.llm.server_default.api_key_env = env_server_default_api_key_env
+    env_active_provider = os.getenv("ASCENDANY_LLM_ACTIVE_PROVIDER", "").strip()
+    if env_active_provider and env_active_provider in settings.llm.providers:
+        settings.llm.active_provider = env_active_provider
     env_default_rating = os.getenv("ASCENDANY_DASHBOARD_DEFAULT_RATING", "").strip()
     if env_default_rating:
         settings.dashboard.default_rating = int(env_default_rating)
@@ -437,6 +430,8 @@ def _apply_env_overrides(settings: Settings) -> None:
 
 
 def load_settings(config_path: Path | None = None) -> Settings:
+    _load_local_env()
+
     path = config_path
     if path is None:
         raw_path = os.getenv("ASCENDANY_API_CONFIG", "").strip()

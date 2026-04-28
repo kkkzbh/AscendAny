@@ -7,9 +7,11 @@ import { TitleBar } from "./TitleBar";
 import { StudentSidebar } from "./StudentSidebar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { MetricsPanel } from "@/components/metrics/MetricsPanel";
+import { LeaderboardWorkspace } from "@/components/leaderboard/LeaderboardWorkspace";
 import { SettingsWorkspace } from "@/components/settings/SettingsDialog";
 import { useAvatarSync } from "@/hooks/useAvatar";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { useLeaderboardStore } from "@/stores/leaderboardStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export function AppLayout() {
@@ -18,6 +20,7 @@ export function AppLayout() {
   const activeFullscreenView = useLayoutStore((s) => s.activeFullscreenView);
   const closeFullscreenView = useLayoutStore((s) => s.closeFullscreenView);
   const isSettingsOpen = useSettingsStore((s) => s.isOpen);
+  const isLeaderboardOpen = useLeaderboardStore((s) => s.isOpen);
   const isAchievementOpen = activeFullscreenView === "achievements";
 
   const account = useAuthStore((s) => s.account);
@@ -54,6 +57,8 @@ export function AppLayout() {
     <div className="app-shell student-app h-screen w-screen overflow-hidden">
       {isSettingsOpen ? (
         <SettingsWorkspace />
+      ) : isLeaderboardOpen ? (
+        <LeaderboardWorkspace />
       ) : (
         <>
           <StudentSidebar />

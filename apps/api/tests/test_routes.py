@@ -168,6 +168,26 @@ class FakeLLM:
             provider="server_default",
         )
 
+    async def stream_reply(self, payload, system_prompt=None, tool_executor=None):
+        self.calls += 1
+        yield {
+            "type": "meta",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "requestMode": "chat_completions",
+            "summary": payload.summary,
+        }
+        yield {"type": "delta", "text": "o"}
+        yield {"type": "delta", "text": "k"}
+        yield {
+            "type": "done",
+            "reply": "ok",
+            "summary": payload.summary,
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+            "requestMode": "chat_completions",
+        }
+
 
 def test_healthz_route() -> None:
     app = create_app(repository=FakeRepo(), llm_service=FakeLLM())
@@ -340,6 +360,30 @@ def test_chat_reply_hello_still_goes_to_llm() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["reply"] == "ok"
+    assert llm.calls == 1
+    assert repo.ai_counter_calls == [(1,)]
+
+
+def test_chat_reply_stream_emits_meta_delta_done() -> None:
+    repo = FakeRepo()
+    llm = FakeLLM()
+    app = create_app(repository=repo, llm_service=llm)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat/reply/stream",
+            json={
+                "studentId": "20230001",
+                "messages": [{"role": "user", "content": "你好"}],
+                "summary": "",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "event: meta" in body
+    assert 'data: {"type":"delta","text":"o"}' in body
+    assert "event: done" in body
+    assert '"reply":"ok"' in body
     assert llm.calls == 1
     assert repo.ai_counter_calls == [(1,)]
 

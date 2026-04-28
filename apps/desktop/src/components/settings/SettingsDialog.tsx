@@ -450,7 +450,7 @@ function GeneralSettingsPage() {
           <div className="flex items-center gap-2">
             <div className="settings-input flex cursor-default items-center justify-between gap-3">
               <span className="text-[13px] font-medium text-[var(--text-strong)]">
-                {updateState?.currentVersion ?? "未知"}
+                当前版本：{updateState?.currentVersion ?? "未知"}
               </span>
               <span className="text-[12px] text-[var(--text-soft)]">
                 状态：{UPDATE_STATUS_LABEL[updateState?.status ?? "disabled"]}

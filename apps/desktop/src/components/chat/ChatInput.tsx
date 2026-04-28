@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import {
   getApiErrorMessage,
-  postChatReply,
+  streamChatReply,
   type ChatMessagePayload,
 } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
@@ -31,6 +31,10 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const addMessage = useChatStore((s) => s.addMessage);
+  const createAssistantDraft = useChatStore((s) => s.createAssistantDraft);
+  const appendMessageContent = useChatStore((s) => s.appendMessageContent);
+  const finalizeMessage = useChatStore((s) => s.finalizeMessage);
+  const removeMessage = useChatStore((s) => s.removeMessage);
   const clearContext = useChatStore((s) => s.clearContext);
   const setSummary = useChatStore((s) => s.setSummary);
   const isAiWorking = useChatStore((s) => s.isAiWorking);
@@ -68,20 +72,73 @@ export function ChatInput({
         }))
         .filter((message) => message.content.length > 0);
 
-      const response = await postChatReply({
-        studentId: normalizeIdentifier(account?.studentId ?? ""),
-        ptaNickname: normalizeIdentifier(account?.ptaNickname ?? ""),
-        messages,
-        summary: latestSession.summary,
-        roleId: roleIdAtSend,
-        roleName: roleAtSend.name,
-        roleSystemPrompt: roleAtSend.systemPromptExtra || undefined,
-      }, accessToken ?? undefined);
+      let draftMessageId: string | null = null;
+      let workFinishedForOutput = false;
+      let bufferedText = "";
+      let rafId = 0;
+      const flush = () => {
+        rafId = 0;
+        if (!draftMessageId || !bufferedText) return;
+        const next = bufferedText;
+        bufferedText = "";
+        appendMessageContent(draftMessageId, next);
+      };
+      const ensureDraft = () => {
+        if (!draftMessageId) {
+          draftMessageId = createAssistantDraft(roleIdAtSend);
+        }
+        if (!workFinishedForOutput) {
+          finishAiWork(workTaskId);
+          workFinishedForOutput = true;
+        }
+        return draftMessageId;
+      };
 
-      addMessage("assistant", response.reply, { roleId: roleIdAtSend });
-      if (response.summary !== latestSession.summary) {
-        setSummary(response.summary);
-      }
+      await streamChatReply({
+          studentId: normalizeIdentifier(account?.studentId ?? ""),
+          ptaNickname: normalizeIdentifier(account?.ptaNickname ?? ""),
+          messages,
+          summary: latestSession.summary,
+          roleId: roleIdAtSend,
+          roleName: roleAtSend.name,
+          roleSystemPrompt: roleAtSend.systemPromptExtra || undefined,
+        },
+        accessToken ?? undefined,
+        (event) => {
+          if (event.type === "delta" && event.text) {
+            ensureDraft();
+            bufferedText += event.text;
+            if (!rafId) {
+              rafId = window.requestAnimationFrame(flush);
+            }
+            return;
+          }
+          if (event.type === "done") {
+            if (rafId) {
+              window.cancelAnimationFrame(rafId);
+              flush();
+            }
+            if (event.summary !== undefined && event.summary !== latestSession.summary) {
+              setSummary(event.summary);
+            }
+            if (draftMessageId) {
+              if (!event.reply.trim()) {
+                removeMessage(draftMessageId);
+              } else {
+                finalizeMessage(draftMessageId);
+              }
+            } else if (event.reply.trim()) {
+              const id = createAssistantDraft(roleIdAtSend);
+              appendMessageContent(id, event.reply);
+              finalizeMessage(id);
+            }
+            return;
+          }
+          if (event.type === "error") {
+            throw new Error(event.message);
+          }
+        },
+      );
     } catch (error) {
       addMessage(
         "system",
@@ -98,6 +155,10 @@ export function ChatInput({
     activeRole,
     customRoles,
     addMessage,
+    createAssistantDraft,
+    appendMessageContent,
+    finalizeMessage,
+    removeMessage,
     account?.studentId,
     account?.ptaNickname,
     accessToken,

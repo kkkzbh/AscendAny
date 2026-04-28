@@ -94,29 +94,32 @@ def _write_configs(tmp_path: Path, monkeypatch) -> None:
     api_config.write_text(
         """
 llm:
-  server_default:
-    mode: openai_compatible
-    base_url: https://api.deepseek.com
-    model: deepseek-v4-flash
-    api_key_env: TEST_DEEPSEEK_KEY
-  active_tab: deepseek
-  tabs:
+  active_provider: deepseek
+  providers:
     siliconflow:
+      adapter: openai_compatible
       base_url: https://api.siliconflow.cn/v1
       model: Pro/moonshotai/Kimi-K2.5
       api_key_env: TEST_SILICONFLOW_KEY
+      request_mode: chat_completions
     openai:
+      adapter: openai_compatible
       base_url: https://shell.wyzai.top/v1
       model: openai/gpt-5.4-medium-thinking
       api_key_env: TEST_OPENAI_KEY
+      request_mode: chat_completions
     copilot:
+      adapter: openai_compatible
       base_url: http://127.0.0.1:5140/api/internal/copilot/v1
       model: openai/gpt-5-mini
       api_key_env: TEST_COPILOT_KEY
+      request_mode: chat_completions
     deepseek:
+      adapter: openai_compatible
       base_url: https://api.deepseek.com
       model: deepseek-v4-flash
       api_key_env: TEST_DEEPSEEK_KEY
+      request_mode: chat_completions
   request_timeout_seconds: 60
 """,
         encoding="utf-8",
@@ -158,15 +161,15 @@ def test_admin_model_config_does_not_expose_plaintext_key_and_saves_runtime(
         initial = client.get("/api/v1/admin/model-config")
         assert initial.status_code == 200
         payload = initial.json()
-        assert payload["activeTab"] == "deepseek"
+        assert payload["activeProvider"] == "deepseek"
         assert "sk-secret-value" not in str(payload)
-        assert payload["serverDefault"]["model"] == "deepseek-v4-flash"
+        assert payload["activeRuntime"]["model"] == "deepseek-v4-flash"
 
         patched = client.patch(
             "/api/v1/admin/model-config",
             json={
-                "activeTab": "openai",
-                "tab": {
+                "activeProvider": "openai",
+                "provider": {
                     "id": "openai",
                     "baseUrl": "https://new.example.com/v1",
                     "model": "openai/gpt-5.4-high-thinking",
@@ -178,39 +181,43 @@ def test_admin_model_config_does_not_expose_plaintext_key_and_saves_runtime(
 
         assert patched.status_code == 200
         patched_payload = patched.json()
-        assert patched_payload["activeTab"] == "openai"
-        assert patched_payload["serverDefault"]["model"] == "gpt-5.4-high-thinking"
-        assert patched_payload["serverDefault"]["apiKeyEnv"] == "NEW_OPENAI_KEY"
+        assert patched_payload["activeProvider"] == "openai"
+        assert patched_payload["activeRuntime"]["model"] == "gpt-5.4-high-thinking"
+        assert patched_payload["activeRuntime"]["apiKeyEnv"] == "NEW_OPENAI_KEY"
         assert "sk-secret-value" not in str(patched_payload)
         assert (tmp_path / ".env.local").read_text(encoding="utf-8").count(
             "sk-secret-value"
         ) == 1
-        assert client.app.state.settings.llm.server_default.base_url == (
+        assert client.app.state.settings.llm.providers["openai"].base_url == (
             "https://new.example.com/v1"
         )
-        assert client.app.state.settings.llm.server_default.model == (
-            "gpt-5.4-high-thinking"
+        assert client.app.state.settings.llm.providers["openai"].model == (
+            "openai/gpt-5.4-high-thinking"
         )
 
 
-def test_admin_model_config_rejects_responses_only_copilot_model(
+def test_admin_model_config_accepts_responses_copilot_model_as_responses_adapter(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     with _build_client(tmp_path, monkeypatch) as client:
         response = client.patch(
-            "/api/v1/admin/model-config",
-            json={
-                "activeTab": "copilot",
-                "tab": {
+                "/api/v1/admin/model-config",
+                json={
+                "activeProvider": "copilot",
+                "provider": {
                     "id": "copilot",
                     "model": "openai/gpt-5.4-mini",
                 },
             },
         )
 
-    assert response.status_code == 422
-    assert "Responses-only" in response.json()["error"]["message"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["activeProvider"] == "copilot"
+    copilot = next(item for item in payload["providers"] if item["id"] == "copilot")
+    assert copilot["adapter"] == "responses"
+    assert copilot["requestMode"] == "responses"
 
 
 def test_admin_model_connection_test_and_deepseek_static_fallback(
@@ -250,7 +257,7 @@ def test_admin_model_connection_test_and_deepseek_static_fallback(
         result = client.post(
             "/api/v1/admin/model-config/test",
             json={
-                "tabId": "openai",
+                "providerId": "openai",
                 "baseUrl": "https://new.example.com/v1",
                 "model": "openai/gpt-5.4-medium-thinking",
                 "apiKeyEnv": "TEST_OPENAI_KEY",

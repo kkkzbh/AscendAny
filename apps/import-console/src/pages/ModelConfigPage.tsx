@@ -6,30 +6,39 @@ import {
   testAdminModelConnection,
   type AdminModelConfigResponse,
   type AdminModelOption,
-  type AdminModelTabConfig,
-  type AdminModelTabId,
+  type AdminModelProviderConfig,
+  type AdminModelProviderId,
 } from "../api/admin";
 import { Alert, Field, PageHeader } from "../components/ui";
-import { MODEL_TAB_IDS, MODEL_TAB_LABELS } from "../modelTabs";
+import { MODEL_PROVIDER_IDS, MODEL_PROVIDER_LABELS } from "../modelTabs";
 
-type ModelDraft = Pick<AdminModelTabConfig, "id" | "baseUrl" | "model" | "apiKeyEnv">;
-type DraftMap = Partial<Record<AdminModelTabId, ModelDraft>>;
-type ApiKeyMap = Partial<Record<AdminModelTabId, string>>;
+type ModelDraft = Pick<AdminModelProviderConfig, "id" | "adapter" | "baseUrl" | "model" | "apiKeyEnv" | "requestMode">;
+type DraftMap = Partial<Record<AdminModelProviderId, ModelDraft>>;
+type ApiKeyMap = Partial<Record<AdminModelProviderId, string>>;
 type DeepSeekModelState = {
   options: AdminModelOption[];
   source: "dynamic" | "static";
   error: string | null;
 };
 
+function getProviderList(config: AdminModelConfigResponse): AdminModelProviderConfig[] {
+  if (!Array.isArray(config.providers)) {
+    throw new Error("模型配置接口返回旧结构或异常结构，请重启 API 服务后刷新页面。");
+  }
+  return config.providers;
+}
+
 function draftsFromConfig(config: AdminModelConfigResponse): DraftMap {
   return Object.fromEntries(
-    config.tabs.map((tab) => [
-      tab.id,
+    getProviderList(config).map((provider) => [
+      provider.id,
       {
-        id: tab.id,
-        baseUrl: tab.baseUrl,
-        model: tab.model,
-        apiKeyEnv: tab.apiKeyEnv,
+        id: provider.id,
+        adapter: provider.adapter,
+        baseUrl: provider.baseUrl,
+        model: provider.model,
+        apiKeyEnv: provider.apiKeyEnv,
+        requestMode: provider.requestMode,
       },
     ]),
   ) as DraftMap;
@@ -37,11 +46,11 @@ function draftsFromConfig(config: AdminModelConfigResponse): DraftMap {
 
 function sameDraft(a?: ModelDraft, b?: ModelDraft): boolean {
   if (!a || !b) return false;
-  return a.baseUrl === b.baseUrl && a.model === b.model && a.apiKeyEnv === b.apiKeyEnv;
+  return a.adapter === b.adapter && a.baseUrl === b.baseUrl && a.model === b.model && a.apiKeyEnv === b.apiKeyEnv && a.requestMode === b.requestMode;
 }
 
 function makeEmptyKeyMap(): ApiKeyMap {
-  return MODEL_TAB_IDS.reduce<ApiKeyMap>((acc, id) => {
+  return MODEL_PROVIDER_IDS.reduce<ApiKeyMap>((acc, id) => {
     acc[id] = "";
     return acc;
   }, {});
@@ -67,8 +76,8 @@ export function ModelConfigPage() {
   const [originalDrafts, setOriginalDrafts] = useState<DraftMap>({});
   const [drafts, setDrafts] = useState<DraftMap>({});
   const [apiKeys, setApiKeys] = useState<ApiKeyMap>(makeEmptyKeyMap);
-  const [activeTab, setActiveTab] = useState<AdminModelTabId>("deepseek");
-  const [originalActiveTab, setOriginalActiveTab] = useState<AdminModelTabId>("deepseek");
+  const [activeProvider, setActiveProvider] = useState<AdminModelProviderId>("deepseek");
+  const [originalActiveProvider, setOriginalActiveProvider] = useState<AdminModelProviderId>("deepseek");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -90,10 +99,10 @@ export function ModelConfigPage() {
         setConfig(response);
         setOriginalDrafts(nextDrafts);
         setDrafts(nextDrafts);
-        setActiveTab(response.activeTab);
-        setOriginalActiveTab(response.activeTab);
+        setActiveProvider(response.activeProvider);
+        setOriginalActiveProvider(response.activeProvider);
         setApiKeys(makeEmptyKeyMap());
-        const deepseekTab = response.tabs.find((tab) => tab.id === "deepseek");
+        const deepseekTab = response.providers.find((provider) => provider.id === "deepseek");
         if (deepseekTab) {
           setDeepSeekState({
             options: deepseekTab.modelOptions,
@@ -112,37 +121,39 @@ export function ModelConfigPage() {
     };
   }, []);
 
-  const tabById = useMemo(() => {
-    const map = new Map<AdminModelTabId, AdminModelTabConfig>();
-    config?.tabs.forEach((tab) => map.set(tab.id, tab));
+  const providerById = useMemo(() => {
+    const map = new Map<AdminModelProviderId, AdminModelProviderConfig>();
+    if (Array.isArray(config?.providers)) {
+      config.providers.forEach((provider) => map.set(provider.id, provider));
+    }
     return map;
   }, [config]);
 
-  const currentTab = tabById.get(activeTab);
-  const currentDraft = drafts[activeTab];
-  const currentApiKey = apiKeys[activeTab] ?? "";
+  const currentProvider = providerById.get(activeProvider);
+  const currentDraft = drafts[activeProvider];
+  const currentApiKey = apiKeys[activeProvider] ?? "";
 
-  const dirtyTabIds = MODEL_TAB_IDS.filter((tabId) => {
-    const keyChanged = Boolean((apiKeys[tabId] ?? "").trim());
-    return keyChanged || !sameDraft(drafts[tabId], originalDrafts[tabId]);
+  const dirtyProviderIds = MODEL_PROVIDER_IDS.filter((providerId) => {
+    const keyChanged = Boolean((apiKeys[providerId] ?? "").trim());
+    return keyChanged || !sameDraft(drafts[providerId], originalDrafts[providerId]);
   });
-  const hasDirty = dirtyTabIds.length > 0 || activeTab !== originalActiveTab;
+  const hasDirty = dirtyProviderIds.length > 0 || activeProvider !== originalActiveProvider;
 
   const currentOptions = useMemo(() => {
-    if (!currentTab || !currentDraft) return [];
-    const options = activeTab === "deepseek" && deepSeekState
+    if (!currentProvider || !currentDraft) return [];
+    const options = activeProvider === "deepseek" && deepSeekState
       ? deepSeekState.options
-      : currentTab.modelOptions;
+      : currentProvider.modelOptions;
     return optionWithCurrent(options, currentDraft.model);
-  }, [activeTab, currentDraft, currentTab, deepSeekState]);
+  }, [activeProvider, currentDraft, currentProvider, deepSeekState]);
 
   const updateDraft = (patch: Partial<ModelDraft>) => {
     setDrafts((prev) => {
-      const current = prev[activeTab];
+      const current = prev[activeProvider];
       if (!current) return prev;
       return {
         ...prev,
-        [activeTab]: { ...current, ...patch },
+        [activeProvider]: { ...current, ...patch },
       };
     });
   };
@@ -152,10 +163,10 @@ export function ModelConfigPage() {
     setConfig(response);
     setOriginalDrafts(nextDrafts);
     setDrafts(nextDrafts);
-    setActiveTab(response.activeTab);
-    setOriginalActiveTab(response.activeTab);
+    setActiveProvider(response.activeProvider);
+    setOriginalActiveProvider(response.activeProvider);
     setApiKeys(makeEmptyKeyMap());
-    const deepseekTab = response.tabs.find((tab) => tab.id === "deepseek");
+    const deepseekTab = response.providers.find((provider) => provider.id === "deepseek");
     if (deepseekTab) {
       setDeepSeekState((prev) => ({
         options: prev?.source === "dynamic" ? prev.options : deepseekTab.modelOptions,
@@ -172,20 +183,22 @@ export function ModelConfigPage() {
     setTestResult(null);
     try {
       let response: AdminModelConfigResponse | null = null;
-      if (dirtyTabIds.length === 0) {
-        response = await patchAdminModelConfig({ activeTab });
+      if (dirtyProviderIds.length === 0) {
+        response = await patchAdminModelConfig({ activeProvider });
       } else {
-        for (const tabId of dirtyTabIds) {
-          const draft = drafts[tabId];
+        for (const providerId of dirtyProviderIds) {
+          const draft = drafts[providerId];
           if (!draft) continue;
           response = await patchAdminModelConfig({
-            activeTab,
-            tab: {
-              id: tabId,
+            activeProvider,
+            provider: {
+              id: providerId,
               baseUrl: draft.baseUrl,
               model: draft.model,
               apiKeyEnv: draft.apiKeyEnv,
-              apiKey: (apiKeys[tabId] ?? "").trim() || undefined,
+              adapter: draft.adapter,
+              requestMode: draft.requestMode,
+              apiKey: (apiKeys[providerId] ?? "").trim() || undefined,
             },
           });
         }
@@ -208,10 +221,12 @@ export function ModelConfigPage() {
     setTestResult(null);
     try {
       const result = await testAdminModelConnection({
-        tabId: activeTab,
+        providerId: activeProvider,
         baseUrl: currentDraft.baseUrl,
         model: currentDraft.model,
         apiKeyEnv: currentDraft.apiKeyEnv,
+        adapter: currentDraft.adapter,
+        requestMode: currentDraft.requestMode,
         apiKey: currentApiKey.trim() || undefined,
       });
       setTestResult(`${result.ok ? "成功" : "失败"}：${result.message}（${result.elapsedMs}ms）`);
@@ -230,7 +245,10 @@ export function ModelConfigPage() {
     try {
       const response = await listAdminDeepSeekModels({
         baseUrl: deepseekDraft.baseUrl,
+        model: deepseekDraft.model,
         apiKeyEnv: deepseekDraft.apiKeyEnv,
+        adapter: deepseekDraft.adapter,
+        requestMode: deepseekDraft.requestMode,
         apiKey: (apiKeys.deepseek ?? "").trim() || undefined,
       });
       setDeepSeekState({
@@ -246,7 +264,7 @@ export function ModelConfigPage() {
     }
   };
 
-  if (!currentTab || !currentDraft) {
+  if (!currentProvider || !currentDraft) {
     return (
       <div className="page">
         <PageHeader title="模型配置" description="加载管理员全局模型配置。" />
@@ -279,20 +297,20 @@ export function ModelConfigPage() {
 
       <section className="panel model-config-panel">
         <div className="model-tab-row" role="tablist" aria-label="模型 Provider">
-          {MODEL_TAB_IDS.map((tabId) => {
-            const tab = tabById.get(tabId);
-            const dirty = dirtyTabIds.includes(tabId);
+          {MODEL_PROVIDER_IDS.map((providerId) => {
+            const provider = providerById.get(providerId);
+            const dirty = dirtyProviderIds.includes(providerId);
             return (
               <button
-                key={tabId}
+                key={providerId}
                 type="button"
                 role="tab"
-                aria-selected={activeTab === tabId}
-                className={`model-tab${activeTab === tabId ? " is-active" : ""}${dirty ? " is-dirty" : ""}`}
-                onClick={() => setActiveTab(tabId)}
+                aria-selected={activeProvider === providerId}
+                className={`model-tab${activeProvider === providerId ? " is-active" : ""}${dirty ? " is-dirty" : ""}`}
+                onClick={() => setActiveProvider(providerId)}
               >
-                <span>{tab?.title ?? MODEL_TAB_LABELS[tabId]}</span>
-                {tab?.active ? <b>当前</b> : null}
+                <span>{provider?.title ?? MODEL_PROVIDER_LABELS[providerId]}</span>
+                {provider?.active ? <b>当前</b> : null}
                 {dirty ? <i aria-label="未保存" /> : null}
               </button>
             );
@@ -302,10 +320,10 @@ export function ModelConfigPage() {
         <div className="model-config-body">
           <div className="model-config-form">
             <div className="model-badges">
-              <span className="status status-neutral">{currentTab.provider}</span>
-              <span className="status status-neutral">{currentTab.strategyId}</span>
-              <span className="status status-neutral">chat/completions</span>
-              {activeTab === config?.activeTab ? (
+              <span className="status status-neutral">{currentProvider.provider}</span>
+              <span className="status status-neutral">{currentProvider.strategyId}</span>
+              <span className="status status-neutral">{currentProvider.requestMode === "responses" ? "responses" : "chat/completions"}</span>
+              {activeProvider === config?.activeProvider ? (
                 <span className="status status-success">当前使用</span>
               ) : (
                 <span className="status status-warning">保存后启用</span>
@@ -316,8 +334,20 @@ export function ModelConfigPage() {
               <Field label="Base URL">
                 <input value={currentDraft.baseUrl} onChange={(event) => updateDraft({ baseUrl: event.target.value })} />
               </Field>
-              <Field label="默认模型" hint={currentTab.modelHint}>
-                <select value={currentDraft.model} onChange={(event) => updateDraft({ model: event.target.value })}>
+              <Field label="默认模型" hint={currentProvider.modelHint}>
+                <select
+                  value={currentDraft.model}
+                  onChange={(event) => {
+                    const model = event.target.value;
+                    const option = currentOptions.find((item) => item.modelId === model);
+                    const requestMode = option?.requestMode ?? "chat_completions";
+                    updateDraft({
+                      model,
+                      requestMode,
+                      adapter: requestMode === "responses" ? "responses" : "openai_compatible",
+                    });
+                  }}
+                >
                   {currentOptions.map((option) => (
                     <option key={option.modelId} value={option.modelId} disabled={option.disabled}>
                       {option.label}{option.disabledReason ? ` - ${option.disabledReason}` : ""}
@@ -330,18 +360,18 @@ export function ModelConfigPage() {
               </Field>
               <Field
                 label="API Key"
-                hint={currentTab.apiKeyConfigured ? "已配置，留空不变。" : "尚未配置；输入后写入本地 .env 文件。"}
+                hint={currentProvider.apiKeyConfigured ? "已配置，留空不变。" : "尚未配置；输入后写入本地 .env 文件。"}
               >
                 <input
                   type="password"
                   value={currentApiKey}
-                  placeholder={currentTab.apiKeyConfigured ? "已配置，留空不变" : "输入 API Key"}
-                  onChange={(event) => setApiKeys((prev) => ({ ...prev, [activeTab]: event.target.value }))}
+                  placeholder={currentProvider.apiKeyConfigured ? "已配置，留空不变" : "输入 API Key"}
+                  onChange={(event) => setApiKeys((prev) => ({ ...prev, [activeProvider]: event.target.value }))}
                 />
               </Field>
             </div>
 
-            {activeTab === "deepseek" ? (
+            {activeProvider === "deepseek" ? (
               <div className="model-secondary-action">
                 <button className="button" type="button" onClick={refreshDeepSeekModels} disabled={refreshingModels}>
                   {refreshingModels ? "刷新中" : "刷新 DeepSeek 模型列表"}
@@ -362,11 +392,11 @@ export function ModelConfigPage() {
               <dt>本地 Env 文件</dt>
               <dd>{config?.envFilePath ?? "-"}</dd>
               <dt>Server Default</dt>
-              <dd>{config?.serverDefault.model ?? "-"} · {config?.serverDefault.apiKeyEnv ?? "-"}</dd>
+              <dd>{config?.activeRuntime.model ?? "-"} · {config?.activeRuntime.apiKeyEnv ?? "-"}</dd>
               <dt>Provider 说明</dt>
-              <dd>{currentTab.description}</dd>
+              <dd>{currentProvider.description}</dd>
               <dt>Transport Model</dt>
-              <dd>{currentTab.transportModel}</dd>
+              <dd>{currentProvider.transportModel}</dd>
             </dl>
           </aside>
         </div>

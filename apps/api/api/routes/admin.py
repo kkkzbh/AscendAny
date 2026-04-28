@@ -14,7 +14,7 @@ import yaml
 from fastapi import APIRouter, Depends, Query, Request
 
 from ..deps import get_admin_account, get_repository
-from ...core.config import LLMModelTabConfig, LLMServerDefaultConfig
+from ...core.config import LLMProviderConfig
 from ...core.errors import AppError
 from ...schemas.admin import (
     AdminAccountSummary,
@@ -32,8 +32,8 @@ from ...schemas.admin import (
     AdminModelConnectionTestRequest,
     AdminModelConnectionTestResponse,
     AdminModelOption,
-    AdminModelTabId,
-    AdminModelTabConfig,
+    AdminModelProviderId,
+    AdminModelProviderConfig,
     AdminMetricsConfig,
     AdminPreprocessConfig,
     AdminRatingConfig,
@@ -44,6 +44,19 @@ from ...schemas.admin import (
     AdminStudentSummary,
     AdminWarmupConfig,
 )
+from ...services.llm_providers.registry import (
+    PROVIDER_DEFINITIONS,
+    PROVIDER_ORDER,
+    build_provider_profile,
+    get_adapter,
+    model_option_request_mode,
+    normalize_adapter,
+    normalize_model,
+    normalize_request_mode,
+    provider_config_to_raw,
+    transport_model,
+)
+from ...services.llm_providers.types import ProviderModelOption
 
 router = APIRouter(tags=["admin"], prefix="/admin")
 
@@ -52,82 +65,7 @@ _PREPROCESS_CONFIG_ENV = "ASCENDANY_PREPROCESS_CONFIG"
 _API_CONFIG_ENV = "ASCENDANY_API_CONFIG"
 _ADMIN_ENV_FILE_ENV = "ASCENDANY_ADMIN_ENV_FILE"
 _AUDIT_LIMIT = 200
-_MODEL_TAB_ORDER: tuple[AdminModelTabId, ...] = (
-    "siliconflow",
-    "openai",
-    "copilot",
-    "deepseek",
-)
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_OPENAI_GPT54_MODEL_OPTIONS = [
-    ("openai/gpt-5.4", "GPT-5.4 (default thinking)"),
-    ("openai/gpt-5.4-non-thinking", "GPT-5.4 (non-thinking)"),
-    ("openai/gpt-5.4-minimal-thinking", "GPT-5.4 (minimal thinking)"),
-    ("openai/gpt-5.4-low-thinking", "GPT-5.4 (low thinking)"),
-    ("openai/gpt-5.4-medium-thinking", "GPT-5.4 (medium thinking)"),
-    ("openai/gpt-5.4-high-thinking", "GPT-5.4 (high thinking)"),
-    ("openai/gpt-5.4-xhigh-thinking", "GPT-5.4 (xhigh thinking)"),
-    ("openai/gpt-5.4-thinking", "GPT-5.4 (thinking)"),
-]
-_COPILOT_MODEL_OPTIONS = [
-    ("gpt-5.4", "GPT-5.4 (1x)", "responses", False),
-    ("gpt-5.4-mini", "GPT-5.4 mini (0.33x)", "responses", False),
-    ("gpt-5-mini", "GPT-5 mini (0x)", "chat_completions", False),
-    ("gpt-4.1", "GPT-4.1 (0x)", "chat_completions", False),
-    ("gpt-4o", "GPT-4o (0x, 可能弃用)", "chat_completions", True),
-    ("claude-haiku-4.5", "Claude Haiku 4.5 (0.33x)", "chat_completions", False),
-    ("claude-sonnet-4.5", "Claude Sonnet 4.5 (1x)", "chat_completions", False),
-    ("gemini-3-flash-preview", "Gemini 3 Flash (0.33x)", "chat_completions", False),
-    ("gemini-3.1-pro-preview", "Gemini 3.1 Pro (1x)", "chat_completions", False),
-]
-_DEEPSEEK_MODEL_OPTIONS = [
-    ("deepseek-v4-flash", "deepseek-v4-flash", False),
-    ("deepseek-v4-pro", "deepseek-v4-pro", False),
-    ("deepseek-chat", "deepseek-chat (deprecated 2026-07-24)", True),
-    ("deepseek-reasoner", "deepseek-reasoner (deprecated 2026-07-24)", True),
-]
-_MODEL_TAB_DEFAULTS: dict[AdminModelTabId, dict[str, str]] = {
-    "siliconflow": {
-        "title": "硅基流动",
-        "provider": "siliconflow",
-        "strategyId": "siliconflow-kimi-main-chat",
-        "baseUrl": "https://api.siliconflow.cn/v1",
-        "model": "Pro/moonshotai/Kimi-K2.5",
-        "apiKeyEnv": "ASCENDANY_LLM_SILICONFLOW_API_KEY",
-        "description": "固定走硅基流动 OpenAI 兼容接口，默认使用 Kimi-K2.5。",
-        "modelHint": "当前仅支持 Pro/moonshotai/Kimi-K2.5。",
-    },
-    "openai": {
-        "title": "OpenAI",
-        "provider": "openai",
-        "strategyId": "openai-gpt54-main-chat",
-        "baseUrl": "https://shell.wyzai.top/v1",
-        "model": "openai/gpt-5.4-medium-thinking",
-        "apiKeyEnv": "ASCENDANY_LLM_OPENAI_API_KEY",
-        "description": "按 OpenAI 兼容接口处理，默认预填 wyzai 与 GPT-5.4 medium thinking。",
-        "modelHint": "推荐 openai/gpt-5.4-medium-thinking；运行时发送不带 openai/ 前缀的模型 ID。",
-    },
-    "copilot": {
-        "title": "GitHub Copilot",
-        "provider": "openai",
-        "strategyId": "copilot-github-oauth-main-chat",
-        "baseUrl": "http://127.0.0.1:5140/api/internal/copilot/v1",
-        "model": "openai/gpt-5-mini",
-        "apiKeyEnv": "ASCENDANY_LLM_COPILOT_API_KEY",
-        "description": "通过本地 Copilot bridge 暴露的 OpenAI 兼容接口接入。",
-        "modelHint": "第一版只启用 chat/completions 模型；Responses-only 模型暂不可选。",
-    },
-    "deepseek": {
-        "title": "DeepSeek",
-        "provider": "deepseek",
-        "strategyId": "deepseek-official-main-chat",
-        "baseUrl": "https://api.deepseek.com",
-        "model": "deepseek-v4-flash",
-        "apiKeyEnv": "ASCENDANY_LLM_DEEPSEEK_API_KEY",
-        "description": "按 DeepSeek 官方 OpenAI 兼容接口接入，模型列表优先从官方 /models 刷新。",
-        "modelHint": "运行时发送 DeepSeek 官方原始模型 ID。",
-    },
-}
 
 
 def _resolve_api_config_path() -> Path:
@@ -227,265 +165,118 @@ def _validate_env_name(value: str) -> str:
     return normalized
 
 
-def _normalize_siliconflow_model(model: str) -> str:
-    value = model.strip()
-    if re.fullmatch(r"siliconflow/pro/moonshotai/kimi-k2\.5", value, re.I):
-        return "Pro/moonshotai/Kimi-K2.5"
-    if re.fullmatch(r"pro/moonshotai/kimi-k2\.5", value, re.I):
-        return "Pro/moonshotai/Kimi-K2.5"
-    raise AppError(
-        status_code=422,
-        code="INVALID_MODEL_CONFIG",
-        message="硅基流动 Tab 仅支持 Pro/moonshotai/Kimi-K2.5。",
-    )
-
-
-def _normalize_openai_model(model: str) -> str:
-    value = model.strip()
-    if not value:
-        raise AppError(
-            status_code=422,
-            code="INVALID_MODEL_CONFIG",
-            message="OpenAI Tab 默认模型不能为空。",
-        )
-    if "/" not in value:
-        value = f"openai/{value}"
-    if not value.startswith("openai/"):
-        raise AppError(
-            status_code=422,
-            code="INVALID_MODEL_CONFIG",
-            message="OpenAI Tab 仅支持 openai/gpt-5.4 系列。",
-        )
-    raw_model = value.removeprefix("openai/")
-    if not re.fullmatch(
-        r"gpt-5\.4(?:-(?:non|minimal|low|medium|high|xhigh)-thinking|-thinking)?",
-        raw_model,
-        re.I,
-    ):
-        raise AppError(
-            status_code=422,
-            code="INVALID_MODEL_CONFIG",
-            message="OpenAI Tab 仅支持 openai/gpt-5.4 系列。",
-        )
-    return f"openai/{raw_model}"
-
-
-def _normalize_copilot_model_id(model: str) -> str:
-    value = model.strip()
-    if value.startswith("openai/"):
-        value = value.removeprefix("openai/").strip()
-    elif value.startswith("github-copilot/"):
-        value = value.removeprefix("github-copilot/").strip()
-    return value
-
-
-def _normalize_copilot_model(model: str) -> str:
-    model_id = _normalize_copilot_model_id(model)
-    option = next(
-        (item for item in _COPILOT_MODEL_OPTIONS if item[0] == model_id),
-        None,
-    )
-    if option is None:
-        raise AppError(
-            status_code=422,
-            code="INVALID_MODEL_CONFIG",
-            message="GitHub Copilot Tab 只能从内置 Copilot 模型列表选择。",
-        )
-    if option[2] != "chat_completions":
-        raise AppError(
-            status_code=422,
-            code="INVALID_MODEL_CONFIG",
-            message="AscendAny 第一版暂不支持 Copilot Responses-only 模型。",
-        )
-    return f"openai/{model_id}"
-
-
-def _normalize_deepseek_model_id(model: str) -> str:
-    value = model.strip()
-    if value.startswith("deepseek/"):
-        value = value.removeprefix("deepseek/").strip()
-    if not value or "/" in value or not re.fullmatch(r"[A-Za-z0-9_.:-]+", value):
-        raise AppError(
-            status_code=422,
-            code="INVALID_MODEL_CONFIG",
-            message="DeepSeek Tab 模型必须是官方原始模型 ID。",
-        )
-    return value
-
-
-def _normalize_model(tab_id: AdminModelTabId, model: str) -> str:
-    if tab_id == "siliconflow":
-        return _normalize_siliconflow_model(model)
-    if tab_id == "openai":
-        return _normalize_openai_model(model)
-    if tab_id == "copilot":
-        return _normalize_copilot_model(model)
-    return _normalize_deepseek_model_id(model)
-
-
-def _transport_model(tab_id: AdminModelTabId, model: str) -> str:
-    if tab_id in {"openai", "copilot"}:
-        if model.startswith("openai/"):
-            return model.removeprefix("openai/").strip()
-        if model.startswith("github-copilot/"):
-            return model.removeprefix("github-copilot/").strip()
-    if tab_id == "deepseek":
-        return _normalize_deepseek_model_id(model)
-    return model.strip()
-
-
-def _model_options(tab_id: AdminModelTabId) -> list[AdminModelOption]:
-    if tab_id == "siliconflow":
-        return [
-            AdminModelOption(
-                modelId="Pro/moonshotai/Kimi-K2.5",
-                label="Pro/moonshotai/Kimi-K2.5",
-            )
-        ]
-    if tab_id == "openai":
-        return [
-            AdminModelOption(modelId=model_id, label=label)
-            for model_id, label in _OPENAI_GPT54_MODEL_OPTIONS
-        ]
-    if tab_id == "copilot":
-        return [
-            AdminModelOption(
-                modelId=f"openai/{model_id}",
-                label=label,
-                requestMode=request_mode,  # type: ignore[arg-type]
-                deprecated=deprecated,
-                disabled=request_mode != "chat_completions",
-                disabledReason=(
-                    "AscendAny 第一版暂不支持 Responses API"
-                    if request_mode != "chat_completions"
-                    else None
-                ),
-            )
-            for model_id, label, request_mode, deprecated in _COPILOT_MODEL_OPTIONS
-        ]
+def _admin_model_options(options: list[ProviderModelOption]) -> list[AdminModelOption]:
     return [
-        AdminModelOption(modelId=model_id, label=label, deprecated=deprecated)
-        for model_id, label, deprecated in _DEEPSEEK_MODEL_OPTIONS
+        AdminModelOption(
+            modelId=option.model_id,
+            label=option.label,
+            requestMode=option.request_mode,
+            deprecated=option.deprecated,
+            disabled=option.disabled,
+            disabledReason=option.disabled_reason,
+        )
+        for option in options
     ]
 
 
-def _infer_active_tab_from_server_default(server_default: dict[str, Any]) -> AdminModelTabId:
-    base_url = str(server_default.get("base_url", "")).lower()
-    model = str(server_default.get("model", "")).lower()
-    if "siliconflow" in base_url or "kimi-k2.5" in model:
-        return "siliconflow"
-    if "copilot" in base_url:
-        return "copilot"
-    if "deepseek" in base_url or model.startswith("deepseek"):
-        return "deepseek"
-    return "openai"
-
-
-def _coerce_tab_id(value: object, default: AdminModelTabId = "deepseek") -> AdminModelTabId:
+def _coerce_provider_id(
+    value: object,
+    default: AdminModelProviderId = "deepseek",
+) -> AdminModelProviderId:
     raw = str(value or "").strip()
-    if raw in _MODEL_TAB_ORDER:
+    if raw in PROVIDER_ORDER:
         return raw  # type: ignore[return-value]
     return default
 
 
-def _default_tab_state() -> dict[AdminModelTabId, dict[str, str]]:
+def _default_provider_state() -> dict[AdminModelProviderId, LLMProviderConfig]:
     return {
-        tab_id: {
-            "baseUrl": defaults["baseUrl"],
-            "model": defaults["model"],
-            "apiKeyEnv": defaults["apiKeyEnv"],
-        }
-        for tab_id, defaults in _MODEL_TAB_DEFAULTS.items()
-    }
+        provider_id: LLMProviderConfig(
+            adapter=definition.adapter,
+            base_url=definition.default_base_url,
+            model=definition.default_model,
+            api_key_env=definition.default_api_key_env,
+            request_mode=definition.default_request_mode,
+        )
+        for provider_id, definition in PROVIDER_DEFINITIONS.items()
+    }  # type: ignore[return-value]
 
 
 def _load_model_config_from_raw(
     raw: dict[str, Any],
-) -> tuple[AdminModelTabId, dict[AdminModelTabId, dict[str, str]]]:
+) -> tuple[AdminModelProviderId, dict[AdminModelProviderId, LLMProviderConfig]]:
     llm = raw.get("llm", {}) or {}
     if not isinstance(llm, dict):
         llm = {}
-
-    tabs = _default_tab_state()
-    raw_tabs = llm.get("tabs", {}) or {}
-    has_tabs = isinstance(raw_tabs, dict) and bool(raw_tabs)
-    if isinstance(raw_tabs, dict):
-        for tab_id in _MODEL_TAB_ORDER:
-            raw_tab = raw_tabs.get(tab_id, {}) or {}
-            if not isinstance(raw_tab, dict):
+    providers = _default_provider_state()
+    raw_providers = llm.get("providers", {}) or {}
+    if isinstance(raw_providers, dict):
+        for provider_id in PROVIDER_ORDER:
+            raw_provider = raw_providers.get(provider_id, {}) or {}
+            if not isinstance(raw_provider, dict):
                 continue
-            tabs[tab_id] = {
-                "baseUrl": str(raw_tab.get("base_url", tabs[tab_id]["baseUrl"])),
-                "model": str(raw_tab.get("model", tabs[tab_id]["model"])),
-                "apiKeyEnv": str(
-                    raw_tab.get("api_key_env", tabs[tab_id]["apiKeyEnv"])
+            baseline = providers[provider_id]  # type: ignore[index]
+            providers[provider_id] = LLMProviderConfig(
+                adapter=str(raw_provider.get("adapter", baseline.adapter)),
+                base_url=str(raw_provider.get("base_url", baseline.base_url)),
+                model=str(raw_provider.get("model", baseline.model)),
+                api_key_env=str(
+                    raw_provider.get("api_key_env", baseline.api_key_env)
                 ),
-            }
-
-    server_default = llm.get("server_default", {}) or {}
-    if not isinstance(server_default, dict):
-        server_default = {}
-    active_tab = _coerce_tab_id(llm.get("active_tab"))
-    if not has_tabs and server_default:
-        active_tab = _infer_active_tab_from_server_default(server_default)
-        tabs[active_tab] = {
-            "baseUrl": str(server_default.get("base_url", tabs[active_tab]["baseUrl"])),
-            "model": str(server_default.get("model", tabs[active_tab]["model"])),
-            "apiKeyEnv": str(
-                server_default.get("api_key_env", tabs[active_tab]["apiKeyEnv"])
-            ),
-        }
-    return active_tab, tabs
+                request_mode=str(
+                    raw_provider.get("request_mode", baseline.request_mode)
+                ),
+            )
+    active_provider = _coerce_provider_id(llm.get("active_provider"))
+    return active_provider, providers
 
 
 def _build_model_config_response_from_raw(raw: dict[str, Any]) -> AdminModelConfigResponse:
-    active_tab, tabs = _load_model_config_from_raw(raw)
-    tab_items: list[AdminModelTabConfig] = []
-    for tab_id in _MODEL_TAB_ORDER:
-        defaults = _MODEL_TAB_DEFAULTS[tab_id]
-        tab = tabs[tab_id]
-        api_key_env = tab["apiKeyEnv"].strip()
-        model = tab["model"].strip()
+    active_provider, providers = _load_model_config_from_raw(raw)
+    settings = getattr(_build_model_config_response_from_raw, "_settings", None)
+    provider_items: list[AdminModelProviderConfig] = []
+    for provider_id in PROVIDER_ORDER:
+        definition = PROVIDER_DEFINITIONS[provider_id]
+        provider = providers[provider_id]  # type: ignore[index]
+        model = provider.model.strip()
         try:
-            transport_model = _transport_model(tab_id, model)
+            transport = transport_model(provider_id, normalize_model(provider_id, model))
         except AppError:
-            transport_model = model
-        tab_items.append(
-            AdminModelTabConfig(
-                id=tab_id,
-                title=defaults["title"],
-                provider=defaults["provider"],
-                strategyId=defaults["strategyId"],
-                baseUrl=tab["baseUrl"],
+            transport = model
+        provider_items.append(
+            AdminModelProviderConfig(
+                id=provider_id,  # type: ignore[arg-type]
+                title=definition.title,
+                provider=definition.provider,
+                strategyId=definition.strategy_id,
+                adapter=provider.adapter,
+                baseUrl=provider.base_url,
                 model=model,
-                transportModel=transport_model,
-                apiKeyEnv=api_key_env,
-                apiKeyConfigured=bool(os.getenv(api_key_env, "").strip()),
-                active=tab_id == active_tab,
-                requestMode="chat_completions",
-                modelOptions=_model_options(tab_id),
-                description=defaults["description"],
-                modelHint=defaults["modelHint"],
+                transportModel=transport,
+                apiKeyEnv=provider.api_key_env.strip(),
+                apiKeyConfigured=bool(os.getenv(provider.api_key_env.strip(), "").strip()),
+                active=provider_id == active_provider,
+                requestMode=normalize_request_mode(provider.request_mode),
+                modelOptions=_admin_model_options(definition.model_options),
+                description=definition.description,
+                modelHint=definition.model_hint,
             )
         )
 
-    active_config = tabs[active_tab]
-    try:
-        active_transport_model = _transport_model(active_tab, active_config["model"])
-    except AppError:
-        active_transport_model = active_config["model"].strip()
-    server_default = AdminModelServerDefault(
-        mode="openai_compatible",
-        baseUrl=active_config["baseUrl"],
-        model=active_transport_model,
-        apiKeyEnv=active_config["apiKeyEnv"],
+    active = providers[active_provider]
+    active_runtime = AdminModelServerDefault(
+        mode=active.adapter,
+        baseUrl=active.base_url,
+        model=transport_model(active_provider, normalize_model(active_provider, active.model)),
+        apiKeyEnv=active.api_key_env,
     )
+    _ = settings
     return AdminModelConfigResponse(
         configPath=str(_resolve_api_config_path()),
         envFilePath=str(_resolve_admin_env_file_path()),
-        activeTab=active_tab,
-        tabs=tab_items,
-        serverDefault=server_default,
+        activeProvider=active_provider,
+        providers=provider_items,
+        activeRuntime=active_runtime,
     )
 
 
@@ -516,26 +307,14 @@ def _write_env_value(path: Path, key: str, value: str) -> None:
 
 def _patch_runtime_model_settings(
     request: Request,
-    active_tab: AdminModelTabId,
-    tabs: dict[AdminModelTabId, dict[str, str]],
+    active_provider: AdminModelProviderId,
+    providers: dict[AdminModelProviderId, LLMProviderConfig],
 ) -> None:
     settings = getattr(request.app.state, "settings", None)
     if settings is None:
         return
-    settings.llm.active_tab = active_tab
-    for tab_id, tab in tabs.items():
-        settings.llm.tabs[tab_id] = LLMModelTabConfig(
-            base_url=tab["baseUrl"],
-            model=tab["model"],
-            api_key_env=tab["apiKeyEnv"],
-        )
-    active = tabs[active_tab]
-    settings.llm.server_default = LLMServerDefaultConfig(
-        mode="openai_compatible",
-        base_url=active["baseUrl"],
-        model=_transport_model(active_tab, active["model"]),
-        api_key_env=active["apiKeyEnv"],
-    )
+    settings.llm.active_provider = active_provider
+    settings.llm.providers = dict(providers)
     llm_service = getattr(request.app.state, "llm_service", None)
     if hasattr(llm_service, "_settings"):
         llm_service._settings = settings
@@ -780,86 +559,140 @@ async def patch_admin_model_config(
 ) -> AdminModelConfigResponse:
     config_path = _resolve_api_config_path()
     raw = _read_yaml(config_path)
-    active_tab, tabs = _load_model_config_from_raw(raw)
+    active_provider, providers = _load_model_config_from_raw(raw)
 
-    if payload.activeTab is not None:
-        active_tab = payload.activeTab
+    if payload.activeProvider is not None:
+        active_provider = payload.activeProvider
 
     api_key_changed = False
-    changed_tab_id: AdminModelTabId | None = None
-    if payload.tab is not None:
-        tab_patch = payload.tab
-        changed_tab_id = tab_patch.id
-        current = dict(tabs[tab_patch.id])
-        if tab_patch.baseUrl is not None:
-            current["baseUrl"] = _validate_url(tab_patch.baseUrl)
-        if tab_patch.model is not None:
-            current["model"] = _normalize_model(tab_patch.id, tab_patch.model)
+    changed_provider_id: AdminModelProviderId | None = None
+    if payload.provider is not None:
+        provider_patch = payload.provider
+        changed_provider_id = provider_patch.id
+        current = providers[provider_patch.id]
+        base_url = current.base_url
+        model = current.model
+        api_key_env = current.api_key_env
+        adapter = current.adapter
+        request_mode = current.request_mode
+        if provider_patch.baseUrl is not None:
+            base_url = _validate_url(provider_patch.baseUrl)
+        if provider_patch.model is not None:
+            model = normalize_model(provider_patch.id, provider_patch.model)
         else:
-            current["model"] = _normalize_model(tab_patch.id, current["model"])
-        if tab_patch.apiKeyEnv is not None:
-            current["apiKeyEnv"] = _validate_env_name(tab_patch.apiKeyEnv)
+            model = normalize_model(provider_patch.id, model)
+        if provider_patch.apiKeyEnv is not None:
+            api_key_env = _validate_env_name(provider_patch.apiKeyEnv)
         else:
-            current["apiKeyEnv"] = _validate_env_name(current["apiKeyEnv"])
+            api_key_env = _validate_env_name(api_key_env)
+        if provider_patch.requestMode is not None:
+            request_mode = provider_patch.requestMode
+        else:
+            request_mode = model_option_request_mode(provider_patch.id, model)
+        if provider_patch.adapter is not None:
+            adapter = normalize_adapter(provider_patch.adapter)
+        elif request_mode == "responses":
+            adapter = "responses"
 
-        api_key = tab_patch.apiKey.strip() if tab_patch.apiKey is not None else ""
+        api_key = (
+            provider_patch.apiKey.strip() if provider_patch.apiKey is not None else ""
+        )
         if api_key:
             _write_env_value(
                 _resolve_admin_env_file_path(),
-                current["apiKeyEnv"],
+                api_key_env,
                 api_key,
             )
-            os.environ[current["apiKeyEnv"]] = api_key
+            os.environ[api_key_env] = api_key
             api_key_changed = True
-        tabs[tab_patch.id] = current
+        providers[provider_patch.id] = LLMProviderConfig(
+            adapter=adapter,
+            base_url=base_url,
+            model=model,
+            api_key_env=api_key_env,
+            request_mode=request_mode,
+        )
 
-    active = tabs[active_tab]
-    active["baseUrl"] = _validate_url(active["baseUrl"])
-    active["model"] = _normalize_model(active_tab, active["model"])
-    active["apiKeyEnv"] = _validate_env_name(active["apiKeyEnv"])
-    tabs[active_tab] = active
+    active = providers[active_provider]
+    providers[active_provider] = LLMProviderConfig(
+        adapter=normalize_adapter(active.adapter),
+        base_url=_validate_url(active.base_url),
+        model=normalize_model(active_provider, active.model),
+        api_key_env=_validate_env_name(active.api_key_env),
+        request_mode=normalize_request_mode(active.request_mode),
+    )
 
     llm = raw.setdefault("llm", {})
     if not isinstance(llm, dict):
         llm = {}
         raw["llm"] = llm
-    raw_tabs = llm.setdefault("tabs", {})
-    if not isinstance(raw_tabs, dict):
-        raw_tabs = {}
-        llm["tabs"] = raw_tabs
-    for tab_id in _MODEL_TAB_ORDER:
-        tab = tabs[tab_id]
-        raw_tabs[tab_id] = {
-            "base_url": tab["baseUrl"],
-            "model": tab["model"],
-            "api_key_env": tab["apiKeyEnv"],
-        }
-    llm["active_tab"] = active_tab
-    llm["server_default"] = {
-        "mode": "openai_compatible",
-        "base_url": active["baseUrl"],
-        "model": _transport_model(active_tab, active["model"]),
-        "api_key_env": active["apiKeyEnv"],
-    }
+    raw_providers = {}
+    for provider_id in PROVIDER_ORDER:
+        raw_providers[provider_id] = provider_config_to_raw(providers[provider_id])  # type: ignore[index]
+    llm["active_provider"] = active_provider
+    llm["providers"] = raw_providers
+    llm.pop("active_tab", None)
+    llm.pop("tabs", None)
+    llm.pop("server_default", None)
     _write_yaml(config_path, raw)
-    _patch_runtime_model_settings(request, active_tab, tabs)
+    _patch_runtime_model_settings(request, active_provider, providers)
 
+    active = providers[active_provider]
     _remember_audit_event(
         request,
         kind="model_config_update",
         status="success",
         title="模型配置已保存",
-        detail=f"当前模型 Tab：{_MODEL_TAB_DEFAULTS[active_tab]['title']}",
+        detail=f"当前 Provider：{PROVIDER_DEFINITIONS[active_provider].title}",
         payload={
-            "activeTab": active_tab,
-            "changedTab": changed_tab_id,
-            "baseUrl": active["baseUrl"],
-            "model": active["model"],
-            "apiKeyEnv": active["apiKeyEnv"],
+            "activeProvider": active_provider,
+            "changedProvider": changed_provider_id,
+            "baseUrl": active.base_url,
+            "model": active.model,
+            "apiKeyEnv": active.api_key_env,
+            "requestMode": active.request_mode,
             "apiKeyChanged": api_key_changed,
         },
     )
     return _build_model_config_response_from_raw(raw)
+
+
+def _profile_from_admin_payload(
+    provider_id: AdminModelProviderId,
+    *,
+    base_url: str,
+    model: str,
+    api_key_env: str,
+    request_mode: str | None,
+    adapter: str | None,
+    api_key: str | None,
+):
+    settings = getattr(_profile_from_admin_payload, "_settings", None)
+    _ = settings
+    definition = PROVIDER_DEFINITIONS[provider_id]
+    normalized_model = normalize_model(provider_id, model)
+    normalized_request_mode = (
+        normalize_request_mode(request_mode)
+        if request_mode
+        else model_option_request_mode(provider_id, normalized_model)
+    )
+    normalized_adapter = normalize_adapter(adapter or definition.adapter)
+    if normalized_request_mode == "responses":
+        normalized_adapter = "responses"
+    temp_settings = type("_TempSettings", (), {})()
+    temp_llm = type("_TempLLM", (), {})()
+    temp_settings.llm = temp_llm
+    temp_llm.active_provider = provider_id
+    temp_llm.providers = {
+        provider_id: LLMProviderConfig(
+            adapter=normalized_adapter,
+            base_url=_validate_url(base_url),
+            model=normalized_model,
+            api_key_env=_validate_env_name(api_key_env),
+            request_mode=normalized_request_mode,
+        )
+    }
+    return build_provider_profile(temp_settings, provider_id, api_key_override=api_key)  # type: ignore[arg-type]
 
 
 @router.post("/model-config/test", response_model=AdminModelConnectionTestResponse)
@@ -868,150 +701,69 @@ async def test_admin_model_config(
     request: Request,
     _admin=Depends(get_admin_account),
 ) -> AdminModelConnectionTestResponse:
-    base_url = _validate_url(payload.baseUrl)
-    api_key_env = _validate_env_name(payload.apiKeyEnv)
-    canonical_model = _normalize_model(payload.tabId, payload.model)
-    model = _transport_model(payload.tabId, canonical_model)
-    api_key = (payload.apiKey or "").strip() or os.getenv(api_key_env, "").strip()
-    started = time.perf_counter()
-    if not api_key:
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return AdminModelConnectionTestResponse(
-            ok=False,
-            status="missing_key",
-            message=f"未配置 API Key：{api_key_env}",
-            provider=_MODEL_TAB_DEFAULTS[payload.tabId]["title"],
-            model=model,
-            elapsedMs=elapsed_ms,
-        )
-
-    url = f"{base_url}/chat/completions"
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": "Connection test."},
-                        {"role": "user", "content": "Reply with ok."},
-                    ],
-                    "temperature": 0,
-                    "max_tokens": 8,
-                },
-            )
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        if response.status_code >= 400:
-            message = response.text.strip()[:500] or f"HTTP {response.status_code}"
-            _remember_audit_event(
-                request,
-                kind="model_connection_test",
-                status="failed",
-                title="模型连接测试失败",
-                detail=f"{_MODEL_TAB_DEFAULTS[payload.tabId]['title']} 返回 {response.status_code}",
-                payload={"tabId": payload.tabId, "model": canonical_model},
-            )
-            return AdminModelConnectionTestResponse(
-                ok=False,
-                status="upstream_error",
-                message=message,
-                provider=_MODEL_TAB_DEFAULTS[payload.tabId]["title"],
-                model=model,
-                elapsedMs=elapsed_ms,
-            )
-        _remember_audit_event(
-            request,
-            kind="model_connection_test",
-            status="success",
-            title="模型连接测试成功",
-            detail=f"{_MODEL_TAB_DEFAULTS[payload.tabId]['title']} 可用",
-            payload={"tabId": payload.tabId, "model": canonical_model},
-        )
-        return AdminModelConnectionTestResponse(
-            ok=True,
-            status="success",
-            message="连接成功",
-            provider=_MODEL_TAB_DEFAULTS[payload.tabId]["title"],
-            model=model,
-            elapsedMs=elapsed_ms,
-        )
-    except httpx.HTTPError as exc:
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        _remember_audit_event(
-            request,
-            kind="model_connection_test",
-            status="failed",
-            title="模型连接测试失败",
-            detail=str(exc),
-            payload={"tabId": payload.tabId, "model": canonical_model},
-        )
-        return AdminModelConnectionTestResponse(
-            ok=False,
-            status="request_failed",
-            message=str(exc),
-            provider=_MODEL_TAB_DEFAULTS[payload.tabId]["title"],
-            model=model,
-            elapsedMs=elapsed_ms,
-        )
+    profile = _profile_from_admin_payload(
+        payload.providerId,
+        base_url=payload.baseUrl,
+        model=payload.model,
+        api_key_env=payload.apiKeyEnv,
+        request_mode=payload.requestMode,
+        adapter=payload.adapter,
+        api_key=payload.apiKey,
+    )
+    async with httpx.AsyncClient(timeout=15) as client:
+        result = await get_adapter(profile.adapter).test_connection(profile, client)
+    _remember_audit_event(
+        request,
+        kind="model_connection_test",
+        status="success" if result.ok else "failed",
+        title="模型连接测试成功" if result.ok else "模型连接测试失败",
+        detail=f"{profile.title}：{result.message}",
+        payload={"providerId": payload.providerId, "model": profile.model},
+    )
+    return AdminModelConnectionTestResponse(
+        ok=result.ok,
+        status=result.status,
+        message=result.message,
+        provider=profile.title,
+        model=profile.transport_model,
+        elapsedMs=result.elapsed_ms,
+    )
 
 
 def _static_deepseek_model_response(error: str | None = None) -> AdminDeepSeekModelsResponse:
     return AdminDeepSeekModelsResponse(
-        models=_model_options("deepseek"),
+        models=_admin_model_options(PROVIDER_DEFINITIONS["deepseek"].model_options),
         source="static",
         error=error,
     )
 
 
 @router.post(
-    "/model-config/deepseek/models",
+    "/model-config/{provider_id}/models",
     response_model=AdminDeepSeekModelsResponse,
 )
-async def list_admin_deepseek_models(
+async def list_admin_provider_models(
+    provider_id: AdminModelProviderId,
     payload: AdminDeepSeekModelsRequest,
     _admin=Depends(get_admin_account),
 ) -> AdminDeepSeekModelsResponse:
-    base_url = _validate_url(payload.baseUrl)
-    api_key_env = _validate_env_name(payload.apiKeyEnv)
-    api_key = (payload.apiKey or "").strip() or os.getenv(api_key_env, "").strip()
-    if not api_key:
-        return _static_deepseek_model_response(f"未配置 API Key：{api_key_env}")
-
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.get(
-                f"{base_url}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-        if response.status_code >= 400:
-            return _static_deepseek_model_response(
-                response.text.strip()[:500] or f"HTTP {response.status_code}"
-            )
-        data = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        return _static_deepseek_model_response(str(exc))
-
-    raw_models = data.get("data") if isinstance(data, dict) else None
-    if not isinstance(raw_models, list):
-        return _static_deepseek_model_response("DeepSeek /models 返回格式异常")
-
-    models: list[AdminModelOption] = []
-    seen: set[str] = set()
-    for item in raw_models:
-        if not isinstance(item, dict):
-            continue
-        model_id = str(item.get("id", "")).strip()
-        if not model_id or model_id in seen:
-            continue
-        seen.add(model_id)
-        models.append(AdminModelOption(modelId=model_id, label=model_id))
-    if not models:
-        return _static_deepseek_model_response("DeepSeek /models 没有返回模型")
-    return AdminDeepSeekModelsResponse(models=models, source="dynamic")
+    effective_provider_id = provider_id
+    profile = _profile_from_admin_payload(
+        effective_provider_id,
+        base_url=payload.baseUrl,
+        model=payload.model or PROVIDER_DEFINITIONS[effective_provider_id].default_model,
+        api_key_env=payload.apiKeyEnv,
+        request_mode=payload.requestMode,
+        adapter=payload.adapter,
+        api_key=payload.apiKey,
+    )
+    async with httpx.AsyncClient(timeout=15) as client:
+        result = await get_adapter(profile.adapter).list_models(profile, client)
+    return AdminDeepSeekModelsResponse(
+        models=_admin_model_options(result.models),
+        source=result.source,
+        error=result.error,
+    )
 
 
 def _student_summary(row: Any) -> AdminStudentSummary:

@@ -1,4 +1,4 @@
-export type ProviderType = "server_default";
+export type ProviderType = string;
 export type ThemeMode = "light" | "dark";
 export const ZOOM_PERCENT_MIN = 80;
 export const ZOOM_PERCENT_MAX = 130;
