@@ -53,8 +53,40 @@ class DashboardConfig:
 class LLMServerDefaultConfig:
     mode: str = "openai_compatible"
     base_url: str = "https://api.deepseek.com"
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
     api_key_env: str = "DEFAULT_API_KEY"
+
+
+@dataclass(slots=True)
+class LLMModelTabConfig:
+    base_url: str
+    model: str
+    api_key_env: str
+
+
+def _default_llm_tabs() -> dict[str, LLMModelTabConfig]:
+    return {
+        "siliconflow": LLMModelTabConfig(
+            base_url="https://api.siliconflow.cn/v1",
+            model="Pro/moonshotai/Kimi-K2.5",
+            api_key_env="ASCENDANY_LLM_SILICONFLOW_API_KEY",
+        ),
+        "openai": LLMModelTabConfig(
+            base_url="https://shell.wyzai.top/v1",
+            model="openai/gpt-5.4-medium-thinking",
+            api_key_env="ASCENDANY_LLM_OPENAI_API_KEY",
+        ),
+        "copilot": LLMModelTabConfig(
+            base_url="http://127.0.0.1:5140/api/internal/copilot/v1",
+            model="openai/gpt-5-mini",
+            api_key_env="ASCENDANY_LLM_COPILOT_API_KEY",
+        ),
+        "deepseek": LLMModelTabConfig(
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-flash",
+            api_key_env="ASCENDANY_LLM_DEEPSEEK_API_KEY",
+        ),
+    }
 
 
 @dataclass(slots=True)
@@ -62,6 +94,8 @@ class LLMConfig:
     server_default: LLMServerDefaultConfig = field(
         default_factory=LLMServerDefaultConfig
     )
+    active_tab: str = "deepseek"
+    tabs: dict[str, LLMModelTabConfig] = field(default_factory=_default_llm_tabs)
     request_timeout_seconds: float = 60.0
 
 
@@ -142,6 +176,15 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
                 "model": settings.llm.server_default.model,
                 "api_key_env": settings.llm.server_default.api_key_env,
             },
+            "active_tab": settings.llm.active_tab,
+            "tabs": {
+                key: {
+                    "base_url": tab.base_url,
+                    "model": tab.model,
+                    "api_key_env": tab.api_key_env,
+                }
+                for key, tab in settings.llm.tabs.items()
+            },
             "request_timeout_seconds": settings.llm.request_timeout_seconds,
         },
         "auth": {
@@ -185,6 +228,24 @@ def _build_server_default_config(
     return baseline
 
 
+def _build_llm_tab_configs(llm_data: dict[str, Any]) -> dict[str, LLMModelTabConfig]:
+    tabs = _default_llm_tabs()
+    loaded = llm_data.get("tabs", {}) or {}
+    if not isinstance(loaded, dict):
+        return tabs
+
+    for tab_id, baseline in list(tabs.items()):
+        raw_tab = loaded.get(tab_id, {}) or {}
+        if not isinstance(raw_tab, dict):
+            continue
+        tabs[tab_id] = LLMModelTabConfig(
+            base_url=str(raw_tab.get("base_url", baseline.base_url)),
+            model=str(raw_tab.get("model", baseline.model)),
+            api_key_env=str(raw_tab.get("api_key_env", baseline.api_key_env)),
+        )
+    return tabs
+
+
 def _from_dict(raw: dict[str, Any]) -> Settings:
     db = raw.get("db", {})
     api = raw.get("api", {})
@@ -194,6 +255,10 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
     sso = raw.get("sso", {})
 
     server_default = _build_server_default_config(llm)
+    llm_tabs = _build_llm_tab_configs(llm)
+    active_tab = str(llm.get("active_tab", "deepseek")).strip() or "deepseek"
+    if active_tab not in llm_tabs:
+        active_tab = "deepseek"
 
     return Settings(
         db=DatabaseConfig(
@@ -217,6 +282,8 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
         ),
         llm=LLMConfig(
             server_default=server_default,
+            active_tab=active_tab,
+            tabs=llm_tabs,
             request_timeout_seconds=float(llm.get("request_timeout_seconds", 60.0)),
         ),
         auth=AuthConfig(

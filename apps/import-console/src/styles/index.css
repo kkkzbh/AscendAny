@@ -357,19 +357,29 @@ td {
   overflow: auto;
 }
 
+.page-import {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) clamp(260px, 30vh, 320px);
+  height: 100%;
+  min-height: 0;
+}
+
+.import-workspace,
 .import-layout {
   display: grid;
   grid-template-columns: 320px minmax(360px, 1fr) 420px;
   gap: 14px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .upload-panel,
 .task-panel,
 .history-panel {
   display: flex;
-  min-height: 580px;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .upload-panel > .field {
@@ -497,6 +507,23 @@ td {
   color: var(--text-soft);
 }
 
+.task-empty {
+  display: flex;
+  min-height: 180px;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  gap: 4px;
+  padding: 20px;
+  text-align: center;
+}
+
+.task-empty strong {
+  color: var(--text-soft);
+}
+
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -526,9 +553,12 @@ td {
 .log-panel {
   display: flex;
   min-height: 0;
-  flex: 1;
   flex-direction: column;
-  border-top: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.import-terminal {
+  min-height: 260px;
 }
 
 .log-title {
@@ -541,7 +571,7 @@ td {
 
 .log-lines {
   flex: 1;
-  min-height: 260px;
+  min-height: 0;
   overflow: auto;
   background: #0d1117;
   color: #d6deeb;
@@ -635,6 +665,90 @@ td {
 .test-result span {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.model-config-panel {
+  overflow: hidden;
+}
+
+.model-tab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+}
+
+.model-tab {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text-soft);
+  gap: 8px;
+  padding: 6px 11px;
+}
+
+.model-tab:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.model-tab.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+
+.model-tab b {
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 650;
+  padding: 1px 6px;
+}
+
+.model-tab i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.model-config-body {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) 360px;
+  min-height: 420px;
+}
+
+.model-config-form {
+  border-right: 1px solid var(--line);
+  padding: 14px;
+}
+
+.model-badges,
+.model-secondary-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.model-secondary-action {
+  border-top: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 0;
+  padding-top: 14px;
+}
+
+.model-config-inspector {
+  min-width: 0;
 }
 
 .student-report-layout {
@@ -829,12 +943,21 @@ td {
 }
 
 @media (max-width: 1280px) {
+  .page-import {
+    grid-template-rows: auto auto clamp(260px, 32vh, 320px);
+    height: auto;
+  }
+
+  .import-workspace,
   .import-layout,
   .student-report-layout,
   .settings-grid-wide {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
+  .upload-panel,
+  .task-panel,
   .history-panel,
   .report-panel,
   .student-list-panel,
@@ -866,6 +989,10 @@ td {
     padding: 14px;
   }
 
+  .page-import {
+    grid-template-rows: auto auto 280px;
+  }
+
   .page-header,
   .task-toolbar,
   .report-toolbar {
@@ -874,7 +1001,13 @@ td {
   }
 
   .settings-grid,
+  .model-config-body,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .model-config-form {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 }

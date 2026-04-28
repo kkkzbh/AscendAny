@@ -63,11 +63,12 @@ export function AppLayout() {
               <section className="student-chat-surface">
                 <ChatPanel showClearButton={false} />
               </section>
-              {isMetricsPanelVisible ? (
-                <aside className="student-right-surface">
-                  <MetricsPanel />
-                </aside>
-              ) : null}
+              <aside
+                className="student-right-surface"
+                aria-hidden={!isMetricsPanelVisible}
+              >
+                <MetricsPanel />
+              </aside>
             </div>
           </main>
         </>

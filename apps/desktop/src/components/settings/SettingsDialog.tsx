@@ -447,69 +447,71 @@ function GeneralSettingsPage() {
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             版本与更新
           </label>
-          <div className="grid gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-soft)]/55 px-5 py-5 sm:px-6 sm:py-5">
-            <div className="flex items-center justify-between gap-3 text-[12px] leading-5">
-              <span className="font-medium text-[var(--text-strong)]">
-                当前版本：{updateState?.currentVersion ?? "未知"}
+          <div className="flex items-center gap-2">
+            <div className="settings-input flex cursor-default items-center justify-between gap-3">
+              <span className="text-[13px] font-medium text-[var(--text-strong)]">
+                {updateState?.currentVersion ?? "未知"}
               </span>
-              <span className="text-[var(--text-soft)]">
+              <span className="text-[12px] text-[var(--text-soft)]">
                 状态：{UPDATE_STATUS_LABEL[updateState?.status ?? "disabled"]}
               </span>
             </div>
-            <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
-              上次检查：{formatUpdateTime(updateState?.lastCheckedAt ?? null)}
-            </p>
-            {typeof updateProgress === "number" && (
-              <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
-                下载进度：{updateProgress.toFixed(2)}%
-              </p>
-            )}
-            {updateState?.latestVersion && (
-              <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
-                最新版本：{updateState.latestVersion}
-              </p>
-            )}
-            {(updateState?.message || updateActionMessage) && (
-              <p className="text-[11px] leading-relaxed text-[var(--text-soft)]">
-                {updateActionMessage || updateState?.message}
-              </p>
-            )}
-            <div className="flex flex-wrap items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => void onCheckForUpdates()}
+              disabled={!canCheckUpdates}
+              className={`settings-provider-pill px-4 ${
+                canCheckUpdates
+                  ? "bg-[var(--surface-raised)] text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
+                  : "cursor-not-allowed bg-[var(--surface-soft)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]"
+              }`}
+            >
+              检查更新
+            </button>
+            {canStartDownload && (
               <button
                 type="button"
-                onClick={() => void onCheckForUpdates()}
-                disabled={!canCheckUpdates}
-                className={`settings-provider-pill px-4 ${
-                  canCheckUpdates
-                    ? "bg-[var(--surface-raised)] text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
-                    : "cursor-not-allowed bg-[var(--surface-soft)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]"
-                }`}
+                onClick={() => void onStartDownload()}
+                className="settings-provider-pill bg-[var(--surface-raised)] px-4 font-medium text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
               >
-                检查更新
+                立即更新
               </button>
-              {canStartDownload && (
-                <button
-                  type="button"
-                  onClick={() => void onStartDownload()}
-                  className="settings-provider-pill bg-[var(--surface-raised)] px-4 font-medium text-[var(--text-strong)] ring-1 ring-[var(--border-subtle)] hover:bg-[var(--surface-hover)]"
-                >
-                  立即更新
-                </button>
-              )}
-              {canInstallUpdates && (
-                <button
-                  type="button"
-                  onClick={() => void onQuitAndInstall()}
-                  className="settings-provider-pill bg-[var(--accent-600)] px-4 font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)] hover:opacity-90"
-                >
-                  重启并更新
-                </button>
-              )}
-            </div>
+            )}
+            {canInstallUpdates && (
+              <button
+                type="button"
+                onClick={() => void onQuitAndInstall()}
+                className="settings-provider-pill bg-[var(--accent-600)] px-4 font-medium text-white shadow-[0_8px_16px_rgba(3,105,161,0.25)] hover:opacity-90"
+              >
+                重启并更新
+              </button>
+            )}
           </div>
-          <p className="mt-1 text-[11px] text-[var(--text-soft)]">
-            客户端每次启动后会自动检查更新。
-          </p>
+          {(() => {
+            const parts = [
+              `上次检查 ${formatUpdateTime(updateState?.lastCheckedAt ?? null)}`,
+              updateState?.latestVersion ? `最新版本 ${updateState.latestVersion}` : null,
+              updateActionMessage || updateState?.message || null,
+            ].filter(Boolean) as string[];
+            return (
+              <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-soft)]">
+                {parts.join(" · ")}
+              </p>
+            );
+          })()}
+          {typeof updateProgress === "number" && (
+            <div className="mt-1 flex items-center gap-2">
+              <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--surface-soft)]">
+                <div
+                  className="h-full rounded-full bg-[var(--accent-600)] transition-[width] duration-200"
+                  style={{ width: `${Math.max(0, Math.min(100, updateProgress))}%` }}
+                />
+              </div>
+              <span className="text-[11px] tabular-nums text-[var(--text-soft)]">
+                {updateProgress.toFixed(1)}%
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="settings-field">

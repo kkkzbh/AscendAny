@@ -29,7 +29,7 @@
 pnpm --filter @ascendany/import-console dev
 ```
 
-浏览器打开 **http://localhost:5174**。Vite dev server 自动将 `/api` 代理到 `http://127.0.0.1:8000`。
+浏览器打开 **http://localhost:6748**。Vite dev server 自动将 `/api` 代理到 `http://127.0.0.1:8000`。
 
 **方式 B — 直连云服务器 API**
 
@@ -37,7 +37,7 @@ pnpm --filter @ascendany/import-console dev
 VITE_API_BASE_URL=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/import-console dev
 ```
 
-浏览器打开 **http://localhost:5174**。前端直接请求云端 API（后端 CORS 已配置 `allow_origins: ["*"]`）。
+浏览器打开 **http://localhost:6748**。前端直接请求云端 API（后端 CORS 已配置 `allow_origins: ["*"]`）。
 
 ### 环境变量
 
@@ -45,7 +45,26 @@ VITE_API_BASE_URL=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/import-co
 | --- | --- | --- |
 | `VITE_API_BASE_URL` | 后端 API 地址（不含尾 `/`） | `""` (同源，走 Vite proxy) |
 | `VITE_BASE_PATH` | 部署子路径 | `/` |
+| `VITE_TOKEN_HANDOFF` | `"true"` → 允许从 Action 传入登录 token（仅本地开发建议开启） | dev server 默认可用，生产构建默认关闭 |
 | `VITE_HASH_ROUTER` | `"true"` → 启用 HashRouter（静态托管场景） | 不设置 → BrowserRouter |
+
+### Codex Action 自动登录
+
+`启动管理平台` Action 默认只启动并打开页面。若当前终端环境同时存在以下变量，Action 会先调用 `/api/v1/auth/login`，再打开已写入 token 的管理页：
+
+```bash
+export ASCENDANY_ADMIN_USERNAME=Admin
+export ASCENDANY_ADMIN_PASSWORD='你的本地管理员密码'
+```
+
+也可以写入 git 已忽略的本地文件 `.env.local` 或 `.env`：
+
+```bash
+ASCENDANY_ADMIN_USERNAME=Admin
+ASCENDANY_ADMIN_PASSWORD=你的本地管理员密码
+```
+
+账号密码不会写入 `.codex/environments/environment.toml`；前端收到 token 后会立即清理地址栏中的 token 参数。
 
 ---
 
@@ -70,7 +89,7 @@ VITE_API_BASE_URL=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/import-co
 
 3. **部署后端新代码**到服务器（`git pull` + `systemctl restart ascendany-api`），使 import 路由生效。
 
-4. 打开 `http://localhost:5174`，用管理员账号登录。
+4. 打开 `http://localhost:6748`，用管理员账号登录。
 
 ---
 
@@ -100,7 +119,7 @@ VITE_API_BASE_URL=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/import-co
 ## 技术架构
 
 ```
-浏览器 (React SPA, localhost:5174)
+浏览器 (React SPA, localhost:6748)
   ├── JWT 认证 → /api/v1/auth/*
   ├── 发现考试 → GET /api/v1/import/discover
   ├── 启动导入 → POST /api/v1/import/run → 返回 runId

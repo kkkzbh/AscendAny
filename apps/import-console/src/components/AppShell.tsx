@@ -1,6 +1,7 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import type { AccountInfo } from "../hooks/useAuth";
 import { ImportPage } from "../pages/ImportPage";
+import { ModelConfigPage } from "../pages/ModelConfigPage";
 import { PreprocessConfigPage } from "../pages/PreprocessConfigPage";
 import { StudentReportsPage } from "../pages/StudentReportsPage";
 import { UsersPage } from "../pages/UsersPage";
@@ -13,6 +14,7 @@ interface Props {
 
 const navItems = [
   { to: "/import", label: "数据导入" },
+  { to: "/models", label: "模型配置" },
   { to: "/preprocess", label: "预处理参数" },
   { to: "/students", label: "学生报告" },
   { to: "/users", label: "用户与权限" },
@@ -49,6 +51,7 @@ export function AppShell({ account, onLogout }: Props) {
           <Routes>
             <Route path="/" element={<Navigate to="/import" replace />} />
             <Route path="/import" element={<ImportPage />} />
+            <Route path="/models" element={<ModelConfigPage />} />
             <Route path="/preprocess" element={<PreprocessConfigPage />} />
             <Route path="/students" element={<StudentReportsPage />} />
             <Route path="/users" element={<UsersPage account={account} />} />

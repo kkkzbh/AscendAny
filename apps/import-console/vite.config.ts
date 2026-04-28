@@ -12,7 +12,7 @@ export default defineConfig({
   base: normalizeBasePath(process.env.VITE_BASE_PATH),
   plugins: [react()],
   server: {
-    port: 5175,
+    port: 6748,
     proxy: {
       "/api": {
         target: "http://127.0.0.1:8000",

@@ -71,3 +71,197 @@ ASCENDANY_LINUX_IME_MODE="${ASCENDANY_LINUX_IME_MODE:-auto}" \
 pnpm --filter @ascendany/desktop dev
 '
 '''
+
+[[actions]]
+name = "启动管理平台"
+icon = "run"
+command = '''bash -lc '
+set -euo pipefail
+
+for env_file in .env.local .env; do
+  if [ -f "$env_file" ]; then
+    set -a
+    . "$env_file"
+    set +a
+  fi
+done
+
+for tool in pnpm curl; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "[AscendAny] Missing command: $tool" >&2
+    exit 1
+  fi
+done
+
+if [ ! -x .venv/bin/python ]; then
+  echo "[AscendAny] Missing .venv/bin/python. Run: uv venv .venv && uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt" >&2
+  exit 1
+fi
+
+if [ ! -d node_modules ] || [ ! -d apps/import-console/node_modules ]; then
+  echo "[AscendAny] Node dependencies missing. Run: pnpm install" >&2
+  exit 1
+fi
+
+api_host="${ASCENDANY_LOCAL_API_HOST:-127.0.0.1}"
+api_port="${ASCENDANY_LOCAL_API_PORT:-8000}"
+api_url="http://${api_host}:${api_port}"
+api_health="${api_url}/api/v1/healthz"
+
+admin_host="${ASCENDANY_ADMIN_HOST:-127.0.0.1}"
+admin_port="${ASCENDANY_ADMIN_PORT:-6748}"
+admin_url="http://${admin_host}:${admin_port}/"
+
+api_pid=""
+web_pid=""
+
+cleanup() {
+  if [ -n "${web_pid:-}" ] && kill -0 "$web_pid" 2>/dev/null; then
+    kill "$web_pid" 2>/dev/null || true
+  fi
+  if [ -n "${api_pid:-}" ] && kill -0 "$api_pid" 2>/dev/null; then
+    kill "$api_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+open_admin_url() {
+  target_url="${1:-$admin_url}"
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$target_url" >/dev/null 2>&1 || true
+  elif command -v gio >/dev/null 2>&1; then
+    gio open "$target_url" >/dev/null 2>&1 || true
+  else
+    echo "[AscendAny] Open manually: $target_url"
+  fi
+}
+
+login_handoff_url() {
+  if [ -z "${ASCENDANY_ADMIN_USERNAME:-}" ] || [ -z "${ASCENDANY_ADMIN_PASSWORD:-}" ]; then
+    printf "%s\n" "$admin_url"
+    return 0
+  fi
+
+  echo "[AscendAny] Requesting admin login token for ${ASCENDANY_ADMIN_USERNAME}" >&2
+  ASCENDANY_AUTOLOGIN_API_URL="$api_url" \
+  ASCENDANY_AUTOLOGIN_ADMIN_URL="$admin_url" \
+  .venv/bin/python - <<PY
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+api_url = os.environ.get("ASCENDANY_AUTOLOGIN_API_URL", "").rstrip("/")
+admin_url = os.environ.get("ASCENDANY_AUTOLOGIN_ADMIN_URL", "").rstrip("/") + "/"
+username = os.environ.get("ASCENDANY_ADMIN_USERNAME", "")
+password = os.environ.get("ASCENDANY_ADMIN_PASSWORD", "")
+payload = json.dumps({"username": username, "password": password}).encode("utf-8")
+request = urllib.request.Request(
+    api_url + "/api/v1/auth/login",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.load(response)
+except urllib.error.HTTPError as exc:
+    try:
+        body = json.loads(exc.read().decode("utf-8"))
+        message = body.get("error", {}).get("message", str(exc))
+    except Exception:
+        message = str(exc)
+    print("[AscendAny] Auto-login failed: " + message, file=sys.stderr)
+    raise SystemExit(1)
+except Exception as exc:
+    print("[AscendAny] Auto-login failed: " + str(exc), file=sys.stderr)
+    raise SystemExit(1)
+
+access = data.get("accessToken")
+refresh = data.get("refreshToken")
+if not isinstance(access, str) or not isinstance(refresh, str):
+    print("[AscendAny] Auto-login failed: missing tokens", file=sys.stderr)
+    raise SystemExit(1)
+
+query = urllib.parse.urlencode({
+    "aa_access_token": access,
+    "aa_refresh_token": refresh,
+})
+print(admin_url + "?" + query)
+PY
+}
+
+if curl -fsS "$api_health" >/dev/null 2>&1; then
+  echo "[AscendAny] API already running at $api_url"
+else
+  echo "[AscendAny] Starting API at $api_url"
+  .venv/bin/python -m uvicorn apps.api.main:app --host "$api_host" --port "$api_port" --reload &
+  api_pid=$!
+
+  for _ in $(seq 1 60); do
+    if curl -fsS "$api_health" >/dev/null 2>&1; then
+      break
+    fi
+    if ! kill -0 "$api_pid" 2>/dev/null; then
+      echo "[AscendAny] API process exited before becoming healthy" >&2
+      wait "$api_pid"
+    fi
+    sleep 1
+  done
+
+  if ! curl -fsS "$api_health" >/dev/null 2>&1; then
+    echo "[AscendAny] API did not become healthy: $api_health" >&2
+    exit 1
+  fi
+fi
+
+admin_open_url="$admin_url"
+if [ -n "${ASCENDANY_ADMIN_USERNAME:-}" ] || [ -n "${ASCENDANY_ADMIN_PASSWORD:-}" ]; then
+  if [ -z "${ASCENDANY_ADMIN_USERNAME:-}" ] || [ -z "${ASCENDANY_ADMIN_PASSWORD:-}" ]; then
+    echo "[AscendAny] Set both ASCENDANY_ADMIN_USERNAME and ASCENDANY_ADMIN_PASSWORD to enable auto-login" >&2
+  elif admin_open_url="$(login_handoff_url)"; then
+    echo "[AscendAny] Auto-login token ready"
+  else
+    echo "[AscendAny] Opening login page because auto-login did not complete" >&2
+    admin_open_url="$admin_url"
+  fi
+fi
+
+if curl -fsS "$admin_url" >/dev/null 2>&1; then
+  echo "[AscendAny] Admin console already running at $admin_url"
+  open_admin_url "$admin_open_url"
+  if [ -n "${api_pid:-}" ]; then
+    wait "$api_pid"
+  fi
+  exit 0
+fi
+
+echo "[AscendAny] Starting admin console at $admin_url"
+VITE_API_BASE_URL="$api_url" \
+VITE_TOKEN_HANDOFF=true \
+pnpm --filter @ascendany/import-console dev --host "$admin_host" --port "$admin_port" --strictPort &
+web_pid=$!
+
+for _ in $(seq 1 60); do
+  if curl -fsS "$admin_url" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$web_pid" 2>/dev/null; then
+    echo "[AscendAny] Admin console exited before becoming reachable" >&2
+    wait "$web_pid"
+  fi
+  sleep 1
+done
+
+if ! curl -fsS "$admin_url" >/dev/null 2>&1; then
+  echo "[AscendAny] Admin console did not become reachable: $admin_url" >&2
+  exit 1
+fi
+
+echo "[AscendAny] Opening $admin_url"
+open_admin_url "$admin_open_url"
+wait "$web_pid"
+'
+'''

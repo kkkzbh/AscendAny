@@ -1,8 +1,104 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+AdminModelTabId = Literal["siliconflow", "openai", "copilot", "deepseek"]
+AdminModelRequestMode = Literal["chat_completions", "responses"]
+AdminModelListSource = Literal["dynamic", "static"]
+
+
+class AdminModelOption(BaseModel):
+    modelId: str
+    label: str
+    requestMode: AdminModelRequestMode = "chat_completions"
+    deprecated: bool = False
+    disabled: bool = False
+    disabledReason: str | None = None
+
+
+class AdminModelTabConfig(BaseModel):
+    id: AdminModelTabId
+    title: str
+    provider: str
+    strategyId: str
+    baseUrl: str
+    model: str
+    transportModel: str
+    apiKeyEnv: str
+    apiKeyConfigured: bool
+    active: bool
+    requestMode: AdminModelRequestMode
+    modelOptions: list[AdminModelOption]
+    description: str
+    modelHint: str
+
+
+class AdminModelServerDefault(BaseModel):
+    mode: str
+    baseUrl: str
+    model: str
+    apiKeyEnv: str
+
+
+class AdminModelConfigResponse(BaseModel):
+    configPath: str
+    envFilePath: str
+    activeTab: AdminModelTabId
+    tabs: list[AdminModelTabConfig]
+    serverDefault: AdminModelServerDefault
+
+
+class AdminModelTabPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: AdminModelTabId
+    baseUrl: str | None = None
+    model: str | None = None
+    apiKeyEnv: str | None = None
+    apiKey: str | None = Field(default=None, max_length=10000)
+
+
+class AdminModelConfigPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activeTab: AdminModelTabId | None = None
+    tab: AdminModelTabPatch | None = None
+
+
+class AdminModelConnectionTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tabId: AdminModelTabId
+    baseUrl: str
+    model: str
+    apiKeyEnv: str
+    apiKey: str | None = Field(default=None, max_length=10000)
+
+
+class AdminModelConnectionTestResponse(BaseModel):
+    ok: bool
+    status: str
+    message: str
+    provider: str
+    model: str
+    elapsedMs: int
+
+
+class AdminDeepSeekModelsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    baseUrl: str
+    apiKeyEnv: str
+    apiKey: str | None = Field(default=None, max_length=10000)
+
+
+class AdminDeepSeekModelsResponse(BaseModel):
+    models: list[AdminModelOption]
+    source: AdminModelListSource
+    error: str | None = None
 
 
 class AdminMetricsConfig(BaseModel):

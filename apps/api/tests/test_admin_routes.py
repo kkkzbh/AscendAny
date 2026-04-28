@@ -96,9 +96,27 @@ def _write_configs(tmp_path: Path, monkeypatch) -> None:
 llm:
   server_default:
     mode: openai_compatible
-    base_url: https://llm.example.com/v1
-    model: test-model
-    api_key_env: TEST_ADMIN_MODEL_KEY
+    base_url: https://api.deepseek.com
+    model: deepseek-v4-flash
+    api_key_env: TEST_DEEPSEEK_KEY
+  active_tab: deepseek
+  tabs:
+    siliconflow:
+      base_url: https://api.siliconflow.cn/v1
+      model: Pro/moonshotai/Kimi-K2.5
+      api_key_env: TEST_SILICONFLOW_KEY
+    openai:
+      base_url: https://shell.wyzai.top/v1
+      model: openai/gpt-5.4-medium-thinking
+      api_key_env: TEST_OPENAI_KEY
+    copilot:
+      base_url: http://127.0.0.1:5140/api/internal/copilot/v1
+      model: openai/gpt-5-mini
+      api_key_env: TEST_COPILOT_KEY
+    deepseek:
+      base_url: https://api.deepseek.com
+      model: deepseek-v4-flash
+      api_key_env: TEST_DEEPSEEK_KEY
   request_timeout_seconds: 60
 """,
         encoding="utf-8",
@@ -116,15 +134,13 @@ ingest:
     )
     monkeypatch.setenv("ASCENDANY_API_CONFIG", str(api_config))
     monkeypatch.setenv("ASCENDANY_PREPROCESS_CONFIG", str(preprocess_config))
-    monkeypatch.delenv("TEST_ADMIN_MODEL_KEY", raising=False)
+    monkeypatch.setenv("ASCENDANY_ADMIN_ENV_FILE", str(tmp_path / ".env.local"))
+    monkeypatch.delenv("TEST_DEEPSEEK_KEY", raising=False)
 
 
 def _build_client(tmp_path: Path, monkeypatch) -> TestClient:
     _write_configs(tmp_path, monkeypatch)
     settings = Settings()
-    settings.llm.server_default.base_url = "https://llm.example.com/v1"
-    settings.llm.server_default.model = "test-model"
-    settings.llm.server_default.api_key_env = "TEST_ADMIN_MODEL_KEY"
     app = create_app(settings=settings, repository=_AdminRepo(), llm_service=_StubLLM())
     app.dependency_overrides[get_admin_account] = lambda: AuthenticatedAccount(
         account_id=1,
@@ -134,30 +150,125 @@ def _build_client(tmp_path: Path, monkeypatch) -> TestClient:
     return TestClient(app)
 
 
-def test_admin_config_does_not_expose_or_accept_model_config(
+def test_admin_model_config_does_not_expose_plaintext_key_and_saves_runtime(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     with _build_client(tmp_path, monkeypatch) as client:
-        initial = client.get("/api/v1/admin/config")
+        initial = client.get("/api/v1/admin/model-config")
         assert initial.status_code == 200
         payload = initial.json()
-        assert "model" not in payload
-        assert "apiConfigPath" not in payload
+        assert payload["activeTab"] == "deepseek"
+        assert "sk-secret-value" not in str(payload)
+        assert payload["serverDefault"]["model"] == "deepseek-v4-flash"
 
         patched = client.patch(
-            "/api/v1/admin/config",
+            "/api/v1/admin/model-config",
             json={
-                "model": {
+                "activeTab": "openai",
+                "tab": {
+                    "id": "openai",
                     "baseUrl": "https://new.example.com/v1",
-                    "model": "new-model",
-                    "apiKeyEnv": "NEW_ENV_KEY",
-                    "requestTimeoutSeconds": 30,
+                    "model": "openai/gpt-5.4-high-thinking",
+                    "apiKeyEnv": "NEW_OPENAI_KEY",
+                    "apiKey": "sk-secret-value",
                 }
             },
         )
 
-    assert patched.status_code == 422
+        assert patched.status_code == 200
+        patched_payload = patched.json()
+        assert patched_payload["activeTab"] == "openai"
+        assert patched_payload["serverDefault"]["model"] == "gpt-5.4-high-thinking"
+        assert patched_payload["serverDefault"]["apiKeyEnv"] == "NEW_OPENAI_KEY"
+        assert "sk-secret-value" not in str(patched_payload)
+        assert (tmp_path / ".env.local").read_text(encoding="utf-8").count(
+            "sk-secret-value"
+        ) == 1
+        assert client.app.state.settings.llm.server_default.base_url == (
+            "https://new.example.com/v1"
+        )
+        assert client.app.state.settings.llm.server_default.model == (
+            "gpt-5.4-high-thinking"
+        )
+
+
+def test_admin_model_config_rejects_responses_only_copilot_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    with _build_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/v1/admin/model-config",
+            json={
+                "activeTab": "copilot",
+                "tab": {
+                    "id": "copilot",
+                    "model": "openai/gpt-5.4-mini",
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert "Responses-only" in response.json()["error"]["message"]
+
+
+def test_admin_model_connection_test_and_deepseek_static_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            _ = args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = exc_type, exc, tb
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            assert url == "https://new.example.com/v1/chat/completions"
+            assert headers["Authorization"] == "Bearer sk-test"
+            assert json["model"] == "gpt-5.4-medium-thinking"
+            return _FakeResponse()
+
+    monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test")
+    monkeypatch.setattr(
+        "apps.api.api.routes.admin.httpx.AsyncClient",
+        _FakeAsyncClient,
+    )
+    with _build_client(tmp_path, monkeypatch) as client:
+        result = client.post(
+            "/api/v1/admin/model-config/test",
+            json={
+                "tabId": "openai",
+                "baseUrl": "https://new.example.com/v1",
+                "model": "openai/gpt-5.4-medium-thinking",
+                "apiKeyEnv": "TEST_OPENAI_KEY",
+            },
+        )
+        fallback = client.post(
+            "/api/v1/admin/model-config/deepseek/models",
+            json={
+                "baseUrl": "https://api.deepseek.com",
+                "apiKeyEnv": "TEST_DEEPSEEK_KEY",
+            },
+        )
+
+    assert result.status_code == 200
+    assert result.json()["ok"] is True
+    assert fallback.status_code == 200
+    assert fallback.json()["source"] == "static"
+    assert fallback.json()["models"][0]["modelId"] == "deepseek-v4-flash"
 
 
 def test_admin_student_reports_aggregate_by_student(

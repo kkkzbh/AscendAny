@@ -8,6 +8,9 @@ const API_BASE =
 const TOKEN_KEY = "ascendany-import-access-token";
 const REFRESH_KEY = "ascendany-import-refresh-token";
 
+const TOKEN_HANDOFF_ACCESS_PARAM = "aa_access_token";
+const TOKEN_HANDOFF_REFRESH_PARAM = "aa_refresh_token";
+
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -24,6 +27,30 @@ export function storeTokens(access: string, refresh: string): void {
 export function clearTokens(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(REFRESH_KEY);
+}
+
+export function consumeTokenHandoff(): string | null {
+  if (
+    typeof window === "undefined" ||
+    (!import.meta.env.DEV && import.meta.env.VITE_TOKEN_HANDOFF !== "true")
+  ) {
+    return null;
+  }
+
+  const url = new URL(window.location.href);
+  const access = url.searchParams.get(TOKEN_HANDOFF_ACCESS_PARAM);
+  const refresh = url.searchParams.get(TOKEN_HANDOFF_REFRESH_PARAM);
+  if (!access || !refresh) return null;
+
+  storeTokens(access, refresh);
+  url.searchParams.delete(TOKEN_HANDOFF_ACCESS_PARAM);
+  url.searchParams.delete(TOKEN_HANDOFF_REFRESH_PARAM);
+  window.history.replaceState(
+    window.history.state,
+    document.title,
+    `${url.pathname}${url.search}${url.hash}`,
+  );
+  return access;
 }
 
 export class ApiError extends Error {

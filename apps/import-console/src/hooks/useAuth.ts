@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   apiFetch,
   clearTokens,
+  consumeTokenHandoff,
   getStoredToken,
   storeTokens,
 } from "../api/client";
@@ -30,7 +31,7 @@ interface AuthState {
 }
 
 export function useAuth(): AuthState {
-  const [token, setToken] = useState<string | null>(getStoredToken);
+  const [token, setToken] = useState<string | null>(() => consumeTokenHandoff() ?? getStoredToken());
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

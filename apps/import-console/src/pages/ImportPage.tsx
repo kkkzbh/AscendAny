@@ -155,7 +155,7 @@ export function ImportPage() {
         }
       />
 
-      <div className="import-layout">
+      <div className="import-workspace">
         <section className="panel upload-panel">
           <div className="panel-title">上传队列</div>
           <label className="field">
@@ -273,22 +273,16 @@ export function ImportPage() {
                 </div>
               ))}
             </div>
-          ) : null}
-
-          <div className="log-panel">
-            <div className="log-title">
-              <span>实时日志</span>
-              {stream.logs.length ? (
-                <button className="button button-ghost" type="button" onClick={stream.clearLogs}>
-                  清除
-                </button>
-              ) : null}
+          ) : (
+            <div className="task-empty">
+              <strong>{isStreaming ? "正在执行导入任务" : "等待导入任务"}</strong>
+              <span>
+                {isStreaming
+                  ? "进度会显示在上方，详细输出在底部终端。"
+                  : "设置考试类型和导入选项后启动任务。实时日志会在底部终端显示。"}
+              </span>
             </div>
-            <div className="log-lines">
-              {stream.logs.length ? stream.logs.map((log, index) => <LogLine key={`${log.timestamp}-${index}`} log={log} />) : <EmptyState>任务日志会在导入开始后显示。</EmptyState>}
-              <div ref={logEndRef} />
-            </div>
-          </div>
+          )}
         </section>
 
         <section className="panel history-panel">
@@ -320,6 +314,21 @@ export function ImportPage() {
           </div>
         </section>
       </div>
+
+      <section className="panel log-panel import-terminal" aria-label="实时日志终端">
+        <div className="log-title">
+          <span>实时日志</span>
+          {stream.logs.length ? (
+            <button className="button button-ghost" type="button" onClick={stream.clearLogs}>
+              清除
+            </button>
+          ) : null}
+        </div>
+        <div className="log-lines">
+          {stream.logs.length ? stream.logs.map((log, index) => <LogLine key={`${log.timestamp}-${index}`} log={log} />) : <EmptyState>任务日志会在导入开始后显示。</EmptyState>}
+          <div ref={logEndRef} />
+        </div>
+      </section>
     </div>
   );
 }

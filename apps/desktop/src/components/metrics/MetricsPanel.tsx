@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/authStore";
 import { useLayoutStore, type RightPanelTab } from "@/stores/layoutStore";
 import { useMetricsStore } from "@/stores/metricsStore";
@@ -42,6 +42,27 @@ export function MetricsPanel() {
     { id: "ability", label: "能力" },
     { id: "history", label: "历史" },
   ];
+  const activeIndex = tabs.findIndex((tab) => tab.id === activeTab);
+
+  // 测量当前选中 tab 的位置和宽度，驱动滑块（indicator）的 transform / width 过渡
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [indicator, setIndicator] = useState({ left: 0, width: 0, ready: false });
+  useLayoutEffect(() => {
+    const el = tabRefs.current[activeIndex];
+    if (el) {
+      setIndicator({ left: el.offsetLeft, width: el.offsetWidth, ready: true });
+    }
+  }, [activeIndex]);
+
+  // 跟踪 tab 切换方向，决定内容区域从哪一侧滑入
+  const prevIndexRef = useRef(activeIndex);
+  const [slideDirection, setSlideDirection] = useState<"forward" | "backward">("forward");
+  useEffect(() => {
+    if (activeIndex !== prevIndexRef.current) {
+      setSlideDirection(activeIndex > prevIndexRef.current ? "forward" : "backward");
+      prevIndexRef.current = activeIndex;
+    }
+  }, [activeIndex]);
 
   let content: ReactNode;
   if (loading && !metrics && !rating) {
@@ -135,9 +156,21 @@ export function MetricsPanel() {
   return (
     <section className="student-right-panel">
       <div className="student-right-tabs">
-        {tabs.map((tab) => (
+        <span
+          className="student-right-tab-indicator"
+          style={{
+            transform: `translateX(${indicator.left}px)`,
+            width: `${indicator.width}px`,
+            opacity: indicator.ready ? 1 : 0,
+          }}
+          aria-hidden
+        />
+        {tabs.map((tab, index) => (
           <button
             key={tab.id}
+            ref={(el) => {
+              tabRefs.current[index] = el;
+            }}
             type="button"
             className={`student-right-tab ${activeTab === tab.id ? "is-active" : ""}`}
             onClick={() => setActiveTab(tab.id)}
@@ -147,7 +180,12 @@ export function MetricsPanel() {
         ))}
       </div>
       <div className="metrics-sidebar-scroll student-right-scroll">
-        {content}
+        <div
+          key={activeTab}
+          className={`student-right-pane student-right-pane--${slideDirection}`}
+        >
+          {content}
+        </div>
       </div>
     </section>
   );

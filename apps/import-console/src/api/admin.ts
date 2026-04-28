@@ -1,5 +1,74 @@
 import { apiFetch } from "./client";
 
+export type AdminModelTabId = "siliconflow" | "openai" | "copilot" | "deepseek";
+export type AdminModelRequestMode = "chat_completions" | "responses";
+export type AdminModelListSource = "dynamic" | "static";
+
+export interface AdminModelOption {
+  modelId: string;
+  label: string;
+  requestMode: AdminModelRequestMode;
+  deprecated: boolean;
+  disabled: boolean;
+  disabledReason: string | null;
+}
+
+export interface AdminModelTabConfig {
+  id: AdminModelTabId;
+  title: string;
+  provider: string;
+  strategyId: string;
+  baseUrl: string;
+  model: string;
+  transportModel: string;
+  apiKeyEnv: string;
+  apiKeyConfigured: boolean;
+  active: boolean;
+  requestMode: AdminModelRequestMode;
+  modelOptions: AdminModelOption[];
+  description: string;
+  modelHint: string;
+}
+
+export interface AdminModelConfigResponse {
+  configPath: string;
+  envFilePath: string;
+  activeTab: AdminModelTabId;
+  tabs: AdminModelTabConfig[];
+  serverDefault: {
+    mode: string;
+    baseUrl: string;
+    model: string;
+    apiKeyEnv: string;
+  };
+}
+
+export interface AdminModelConfigPatch {
+  activeTab?: AdminModelTabId;
+  tab?: {
+    id: AdminModelTabId;
+    baseUrl?: string;
+    model?: string;
+    apiKeyEnv?: string;
+    apiKey?: string;
+  };
+}
+
+export interface AdminModelConnectionTestResponse {
+  ok: boolean;
+  status: string;
+  message: string;
+  provider: string;
+  model: string;
+  elapsedMs: number;
+}
+
+export interface AdminDeepSeekModelsResponse {
+  models: AdminModelOption[];
+  source: AdminModelListSource;
+  error: string | null;
+}
+
 export interface AdminPreprocessConfig {
   practiceRoot: string;
   encodings: string[];
@@ -156,6 +225,41 @@ export function getAdminConfig(): Promise<AdminConfigResponse> {
 export function patchAdminConfig(payload: AdminConfigPatch): Promise<AdminConfigResponse> {
   return apiFetch("/api/v1/admin/config", {
     method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getAdminModelConfig(): Promise<AdminModelConfigResponse> {
+  return apiFetch("/api/v1/admin/model-config");
+}
+
+export function patchAdminModelConfig(payload: AdminModelConfigPatch): Promise<AdminModelConfigResponse> {
+  return apiFetch("/api/v1/admin/model-config", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function testAdminModelConnection(payload: {
+  tabId: AdminModelTabId;
+  baseUrl: string;
+  model: string;
+  apiKeyEnv: string;
+  apiKey?: string;
+}): Promise<AdminModelConnectionTestResponse> {
+  return apiFetch("/api/v1/admin/model-config/test", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listAdminDeepSeekModels(payload: {
+  baseUrl: string;
+  apiKeyEnv: string;
+  apiKey?: string;
+}): Promise<AdminDeepSeekModelsResponse> {
+  return apiFetch("/api/v1/admin/model-config/deepseek/models", {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }
