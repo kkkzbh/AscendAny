@@ -61,7 +61,7 @@ export function SettingsSidebar({
   onSelect: (page: SettingsPage) => void;
 }) {
   return (
-    <nav className="settings-nav flex w-44 shrink-0 flex-col gap-1 max-[720px]:w-full max-[720px]:border-b max-[720px]:border-r-0">
+    <nav className="settings-nav">
       <span className="settings-nav-label text-[10px] font-semibold tracking-[0.12em] text-[var(--text-soft)] uppercase">
         设置
       </span>
@@ -91,6 +91,42 @@ export function SettingsSidebar({
         </button>
       ))}
     </nav>
+  );
+}
+
+function SettingsWindowControls() {
+  const api = window.electronAPI;
+
+  return (
+    <div className="student-window-controls" aria-label="窗口控制">
+      <button
+        type="button"
+        onClick={() => api?.minimize()}
+        className="ui-window-button ui-window-traffic ui-window-minimize student-titlebar-traffic"
+        title="最小化"
+        aria-label="最小化"
+      >
+        <span className="ui-window-dot-symbol" aria-hidden="true">−</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => api?.maximize()}
+        className="ui-window-button ui-window-traffic ui-window-maximize student-titlebar-traffic"
+        title="最大化"
+        aria-label="最大化"
+      >
+        <span className="ui-window-dot-symbol" aria-hidden="true">+</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => api?.close()}
+        className="ui-window-button ui-window-traffic ui-window-close student-titlebar-traffic"
+        title="关闭"
+        aria-label="关闭"
+      >
+        <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+      </button>
+    </div>
   );
 }
 
@@ -998,93 +1034,65 @@ function RoleSettingsPage({
   );
 }
 
-export function SettingsDialog() {
+export function SettingsWorkspace() {
   const isOpen = useSettingsStore((s) => s.isOpen);
   const closeSettings = useSettingsStore((s) => s.closeSettings);
   const [activePage, setActivePage] = useState<SettingsPage>("general");
   const [isCustomRoleDialogOpen, setIsCustomRoleDialogOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const rafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-
-    if (isOpen) {
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        setMounted(true);
-      });
-    } else {
-      setMounted(false);
-    }
-
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) {
-        return;
-      }
-      if (event.key === "Escape") {
-        closeSettings();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isOpen, closeSettings]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3">
-      <div
-        className={`absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity duration-300 ${mounted ? "opacity-100" : "opacity-0"}`}
-        onClick={closeSettings}
-      />
-
-      <div
-        className={`settings-dialog relative z-10 flex h-[500px] w-[680px] overflow-hidden rounded-2xl transition-all duration-300 max-[720px]:h-[92vh] max-[720px]:w-full max-[720px]:flex-col ${
-          mounted ? "scale-100 opacity-100" : "scale-95 opacity-0"
-        }`}
-        style={{ transitionTimingFunction: "var(--ease-spring)" }}
-      >
+    <div className="settings-workspace">
+      <aside className="settings-sidebar">
+        <div className="settings-sidebar-top drag-region">
+          <button
+            type="button"
+            onClick={closeSettings}
+            className="settings-return-button no-drag"
+            aria-label="返回应用"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m15 18-6-6 6-6" />
+              <path d="M21 12H9" />
+            </svg>
+            <span>返回应用</span>
+          </button>
+        </div>
         <SettingsSidebar active={activePage} onSelect={setActivePage} />
+      </aside>
 
-        <div className="settings-main flex min-w-0 flex-1">
-          <div className="settings-content flex-1 overflow-y-auto">
-            <div className="settings-content-inner">
-              {activePage === "general" && <GeneralSettingsPage />}
-              {activePage === "role" && (
-                <RoleSettingsPage onCustomRoleDialogVisibilityChange={setIsCustomRoleDialogOpen} />
-              )}
-            </div>
-          </div>
-
+      <main className="settings-main">
+        <header className="settings-titlebar drag-region">
+          <div className="settings-titlebar-spacer" />
           {!isCustomRoleDialogOpen && (
-            <div className="settings-dialog-controls">
-              <button
-                onClick={closeSettings}
-                className="ui-window-button ui-window-traffic ui-window-close dialog-close-traffic"
-                aria-label="关闭设置"
-              >
-                <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
-              </button>
+            <div className="settings-titlebar-actions no-drag">
+              <SettingsWindowControls />
             </div>
           )}
+        </header>
+
+        <div className="settings-content">
+          <div className="settings-content-inner">
+            {activePage === "general" && <GeneralSettingsPage />}
+            {activePage === "role" && (
+              <RoleSettingsPage onCustomRoleDialogVisibilityChange={setIsCustomRoleDialogOpen} />
+            )}
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
+
+export const SettingsDialog = SettingsWorkspace;

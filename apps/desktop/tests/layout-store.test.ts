@@ -13,6 +13,7 @@ describe("layoutStore", () => {
 
   it("persists student layout state", async () => {
     useLayoutStore.getState().toggleLeftSidebar();
+    useLayoutStore.getState().setLeftSidebarRatio(0.24);
     useLayoutStore.getState().setSplitRatio(0.37);
     useLayoutStore.getState().toggleMetricsPanel();
     useLayoutStore.getState().setActiveRightPanelTab("history");
@@ -23,6 +24,7 @@ describe("layoutStore", () => {
     const persisted = persistedRaw ? JSON.parse(persistedRaw) : {};
 
     expect(persisted?.state?.isLeftSidebarCollapsed).toBe(true);
+    expect(persisted?.state?.leftSidebarRatio).toBe(0.24);
     expect(persisted?.state?.splitRatio).toBe(0.37);
     expect(persisted?.state?.isMetricsPanelVisible).toBe(false);
     expect(persisted?.state?.activeRightPanelTab).toBe("history");
@@ -30,13 +32,19 @@ describe("layoutStore", () => {
   });
 
   it("normalizes split ratio from runtime updates and persisted snapshots", async () => {
+    useLayoutStore.getState().setLeftSidebarRatio(0.99);
     useLayoutStore.getState().setSplitRatio(0.99);
+    expect(useLayoutStore.getState().leftSidebarRatio).toBe(0.32);
     expect(useLayoutStore.getState().splitRatio).toBe(0.7);
+
+    useLayoutStore.getState().setLeftSidebarRatio(0.01);
+    expect(useLayoutStore.getState().leftSidebarRatio).toBe(0.17);
 
     localStorage.setItem(
       "ascendany_layout_guest",
       JSON.stringify({
         state: {
+          leftSidebarRatio: "bad-data",
           splitRatio: "bad-data",
           isMetricsPanelVisible: "bad-data",
           isLeftSidebarCollapsed: "bad-data",
@@ -48,6 +56,7 @@ describe("layoutStore", () => {
 
     await useLayoutStore.persist.rehydrate();
     const state = useLayoutStore.getState();
+    expect(state.leftSidebarRatio).toBe(0.22);
     expect(state.splitRatio).toBe(0.55);
     expect(state.isMetricsPanelVisible).toBe(true);
     expect(state.isLeftSidebarCollapsed).toBe(false);

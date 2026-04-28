@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { SsoExchangeScreen } from "@/components/auth/SsoExchangeScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { FeedbackWindow } from "@/components/feedback/FeedbackWindow";
 import { UpdateFlowDialog } from "@/components/updater/UpdateFlowDialog";
 import { useAuthStore } from "@/stores/authStore";
@@ -132,7 +131,6 @@ export default function App() {
   return (
     <>
       <AppLayout />
-      <SettingsDialog />
       <UpdateFlowDialog />
     </>
   );

@@ -7,14 +7,17 @@ import { TitleBar } from "./TitleBar";
 import { StudentSidebar } from "./StudentSidebar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { MetricsPanel } from "@/components/metrics/MetricsPanel";
+import { SettingsWorkspace } from "@/components/settings/SettingsDialog";
 import { useAvatarSync } from "@/hooks/useAvatar";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 export function AppLayout() {
   useAvatarSync();
   const isMetricsPanelVisible = useLayoutStore((s) => s.isMetricsPanelVisible);
   const activeFullscreenView = useLayoutStore((s) => s.activeFullscreenView);
   const closeFullscreenView = useLayoutStore((s) => s.closeFullscreenView);
+  const isSettingsOpen = useSettingsStore((s) => s.isOpen);
   const isAchievementOpen = activeFullscreenView === "achievements";
 
   const account = useAuthStore((s) => s.account);
@@ -49,20 +52,26 @@ export function AppLayout() {
 
   return (
     <div className="app-shell student-app h-screen w-screen overflow-hidden">
-      <StudentSidebar />
-      <main className="student-main">
-        <TitleBar />
-        <div className={`student-workspace ${isMetricsPanelVisible ? "" : "is-right-collapsed"}`}>
-          <section className="student-chat-surface">
-            <ChatPanel showClearButton={false} />
-          </section>
-          {isMetricsPanelVisible ? (
-            <aside className="student-right-surface">
-              <MetricsPanel />
-            </aside>
-          ) : null}
-        </div>
-      </main>
+      {isSettingsOpen ? (
+        <SettingsWorkspace />
+      ) : (
+        <>
+          <StudentSidebar />
+          <main className="student-main">
+            <TitleBar />
+            <div className={`student-workspace ${isMetricsPanelVisible ? "" : "is-right-collapsed"}`}>
+              <section className="student-chat-surface">
+                <ChatPanel showClearButton={false} />
+              </section>
+              {isMetricsPanelVisible ? (
+                <aside className="student-right-surface">
+                  <MetricsPanel />
+                </aside>
+              ) : null}
+            </div>
+          </main>
+        </>
+      )}
       <AchievementFullscreen
         isOpen={isAchievementOpen}
         onClose={closeFullscreenView}

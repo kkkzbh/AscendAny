@@ -1,7 +1,19 @@
-import { useMemo, useState } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import { useChatStore } from "@/stores/chatStore";
-import { useLayoutStore } from "@/stores/layoutStore";
+import {
+  MIN_LEFT_SIDEBAR_RATIO,
+  MAX_LEFT_SIDEBAR_RATIO,
+  useLayoutStore,
+} from "@/stores/layoutStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 function formatRelativeTime(timestamp: number): string {
@@ -20,14 +32,17 @@ function formatRelativeTime(timestamp: number): string {
 
 export function StudentSidebar() {
   const [query, setQuery] = useState("");
+  const draggingRef = useRef(false);
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const createSession = useChatStore((s) => s.createSession);
   const selectSession = useChatStore((s) => s.selectSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const isCollapsed = useLayoutStore((s) => s.isLeftSidebarCollapsed);
+  const leftSidebarRatio = useLayoutStore((s) => s.leftSidebarRatio);
   const toggleLeftSidebar = useLayoutStore((s) => s.toggleLeftSidebar);
   const setLeftSidebarCollapsed = useLayoutStore((s) => s.setLeftSidebarCollapsed);
+  const setLeftSidebarRatio = useLayoutStore((s) => s.setLeftSidebarRatio);
   const openSettings = useSettingsStore((s) => s.openSettings);
 
   const filteredSessions = useMemo(() => {
@@ -46,12 +61,62 @@ export function StudentSidebar() {
     });
   }, [query, sessions]);
 
+  const applyRatioFromClientX = useCallback(
+    (clientX: number) => {
+      const width = window.innerWidth || 1;
+      setLeftSidebarRatio(clientX / width);
+    },
+    [setLeftSidebarRatio],
+  );
+
+  const onResizePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      draggingRef.current = true;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      applyRatioFromClientX(event.clientX);
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        if (!draggingRef.current) return;
+        applyRatioFromClientX(moveEvent.clientX);
+      };
+
+      const onPointerUp = () => {
+        draggingRef.current = false;
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    },
+    [applyRatioFromClientX],
+  );
+
+  const onResizeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const step = event.shiftKey ? 0.03 : 0.01;
+      const delta = event.key === "ArrowLeft" ? -step : step;
+      setLeftSidebarRatio(useLayoutStore.getState().leftSidebarRatio + delta);
+    },
+    [setLeftSidebarRatio],
+  );
+
   if (isCollapsed) {
     return <aside className="student-sidebar is-collapsed" aria-hidden="true" />;
   }
 
+  const sidebarStyle = {
+    "--student-left-sidebar-ratio": String(leftSidebarRatio),
+  } as CSSProperties;
+
   return (
-    <aside className="student-sidebar">
+    <aside className="student-sidebar" style={sidebarStyle}>
       <div className="student-sidebar-top">
         <button
           type="button"
@@ -221,6 +286,20 @@ export function StudentSidebar() {
           </svg>
           {!isCollapsed && <span>设置</span>}
         </button>
+      </div>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整左侧栏宽度"
+        aria-valuemin={MIN_LEFT_SIDEBAR_RATIO}
+        aria-valuemax={MAX_LEFT_SIDEBAR_RATIO}
+        aria-valuenow={Number(leftSidebarRatio.toFixed(2))}
+        tabIndex={0}
+        className="student-sidebar-resizer no-drag"
+        onPointerDown={onResizePointerDown}
+        onKeyDown={onResizeKeyDown}
+      >
+        <div className="student-sidebar-resizer-bar" />
       </div>
     </aside>
   );
