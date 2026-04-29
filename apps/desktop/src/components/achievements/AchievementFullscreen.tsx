@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
-} from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type {
   AchievementItem,
@@ -21,78 +14,208 @@ interface AchievementFullscreenProps {
   onRetry?: () => void;
 }
 
-interface Point {
-  x: number;
-  y: number;
+type TierKey = "gold" | "silver" | "bronze" | "inprogress" | "locked";
+
+type NavKey =
+  | "all"
+  | "earned"
+  | "inprogress"
+  | "locked"
+  | "gold"
+  | "silver"
+  | "bronze";
+
+const NAV_LABEL: Record<NavKey, string> = {
+  all: "全部",
+  earned: "已获得",
+  inprogress: "进行中",
+  locked: "已锁定",
+  gold: "金牌",
+  silver: "银牌",
+  bronze: "铜牌",
+};
+
+const TIER_LABEL: Record<TierKey, string> = {
+  gold: "金牌",
+  silver: "银牌",
+  bronze: "铜牌",
+  inprogress: "进行中",
+  locked: "锁定",
+};
+
+const TIER_GLYPH: Record<TierKey, string> = {
+  gold: "金",
+  silver: "银",
+  bronze: "铜",
+  inprogress: "·",
+  locked: "锁",
+};
+
+function tierKeyOf(item: AchievementItem): TierKey {
+  if (item.tier >= 3) return "gold";
+  if (item.tier === 2) return "silver";
+  if (item.tier === 1) return "bronze";
+  if (item.progress > 0) return "inprogress";
+  return "locked";
 }
 
-const CANVAS_WIDTH = 1500;
-const CANVAS_HEIGHT = 920;
-const CARD_WIDTH = 252;
-const CARD_HEIGHT = 136;
-const DEFAULT_OFFSET = { x: 120, y: 96 };
-const DEFAULT_SCALE = 1;
-const MIN_SCALE = 0.65;
-const MAX_SCALE = 1.85;
-
-const PRESET_POSITIONS: Point[] = [
-  { x: 80, y: 60 },
-  { x: 360, y: 40 },
-  { x: 640, y: 80 },
-  { x: 920, y: 50 },
-  { x: 1180, y: 90 },
-  { x: 120, y: 230 },
-  { x: 400, y: 210 },
-  { x: 680, y: 250 },
-  { x: 960, y: 220 },
-  { x: 1220, y: 260 },
-  { x: 70, y: 420 },
-  { x: 350, y: 390 },
-  { x: 640, y: 430 },
-  { x: 920, y: 400 },
-  { x: 1210, y: 440 },
-  { x: 220, y: 600 },
-  { x: 640, y: 610 },
-  { x: 1060, y: 590 },
-];
-
-const FALLBACK_COLUMNS = 6;
-const FALLBACK_GAP_X = 240;
-const FALLBACK_GAP_Y = 150;
-
-function fallbackPosition(index: number): Point {
-  const row = Math.floor(index / FALLBACK_COLUMNS);
-  const col = index % FALLBACK_COLUMNS;
-  return {
-    x: 90 + col * FALLBACK_GAP_X,
-    y: 70 + row * FALLBACK_GAP_Y,
-  };
+function nextTarget(item: AchievementItem): number {
+  if (item.tier >= 3) return item.goldTarget;
+  if (item.tier === 2) return item.goldTarget;
+  if (item.tier === 1) return item.silverTarget;
+  return item.bronzeTarget;
 }
 
-export function getAchievementTierClass(tier: number): string {
-  if (tier >= 3) {
-    return "achievement-card achievement-tier-gold";
-  }
-  if (tier === 2) {
-    return "achievement-card achievement-tier-silver";
-  }
-  if (tier === 1) {
-    return "achievement-card achievement-tier-bronze";
-  }
-  return "achievement-card achievement-tier-locked";
+function progressPercent(item: AchievementItem): number {
+  if (item.tier >= 3) return 100;
+  const target = nextTarget(item);
+  if (!target || target <= 0) return 0;
+  return Math.min(100, Math.max(0, (item.progress / target) * 100));
 }
 
-function formatProgressText(item: AchievementItem): string {
+function matchesNav(item: AchievementItem, nav: NavKey): boolean {
+  if (nav === "all") return true;
+  if (nav === "earned") return item.tier >= 1;
+  return tierKeyOf(item) === nav;
+}
+
+function searchMatches(item: AchievementItem, queryLower: string): boolean {
+  if (!queryLower) return true;
+  if (item.title.toLowerCase().includes(queryLower)) return true;
+  if (tierKeyOf(item) === "locked") return false;
+  return item.description.toLowerCase().includes(queryLower);
+}
+
+function highlight(text: string, queryLower: string): ReactNode {
+  if (!queryLower) return text;
+  const lower = text.toLowerCase();
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  while (cursor < text.length) {
+    const idx = lower.indexOf(queryLower, cursor);
+    if (idx < 0) {
+      nodes.push(<Fragment key={key++}>{text.slice(cursor)}</Fragment>);
+      break;
+    }
+    if (idx > cursor) {
+      nodes.push(<Fragment key={key++}>{text.slice(cursor, idx)}</Fragment>);
+    }
+    nodes.push(
+      <mark key={key++} className="achievement-mark">
+        {text.slice(idx, idx + queryLower.length)}
+      </mark>,
+    );
+    cursor = idx + queryLower.length;
+  }
+  return <>{nodes}</>;
+}
+
+function WindowControls() {
+  const api = window.electronAPI;
+  return (
+    <div className="student-window-controls" aria-label="窗口控制">
+      <button
+        type="button"
+        onClick={() => api?.minimize()}
+        className="ui-window-button ui-window-traffic ui-window-minimize student-titlebar-traffic"
+        title="最小化"
+        aria-label="最小化"
+      >
+        <span className="ui-window-dot-symbol" aria-hidden="true">−</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => api?.maximize()}
+        className="ui-window-button ui-window-traffic ui-window-maximize student-titlebar-traffic"
+        title="最大化"
+        aria-label="最大化"
+      >
+        <span className="ui-window-dot-symbol" aria-hidden="true">+</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => api?.close()}
+        className="ui-window-button ui-window-traffic ui-window-close student-titlebar-traffic"
+        title="关闭"
+        aria-label="关闭"
+      >
+        <span className="ui-window-dot-symbol" aria-hidden="true">×</span>
+      </button>
+    </div>
+  );
+}
+
+interface NavItemProps {
+  nav: NavKey;
+  active: NavKey;
+  count: number;
+  onSelect: (nav: NavKey) => void;
+}
+
+function NavItem({ nav, active, count, onSelect }: NavItemProps) {
+  const isActive = active === nav;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(nav)}
+      className={`achievement-nav-item achievement-nav-item--${nav}${isActive ? " is-active" : ""}`}
+    >
+      <span className="achievement-nav-dot" aria-hidden="true" />
+      <span className="achievement-nav-name">{NAV_LABEL[nav]}</span>
+      <span className="achievement-nav-count">{count}</span>
+    </button>
+  );
+}
+
+interface AchievementRowProps {
+  item: AchievementItem;
+  queryLower: string;
+}
+
+function AchievementRow({ item, queryLower }: AchievementRowProps) {
+  const tierKey = tierKeyOf(item);
+  const locked = tierKey === "locked";
+  const percent = progressPercent(item);
   const current = Math.floor(item.progress);
-  const target =
-    item.tier >= 3
-      ? item.goldTarget
-      : item.tier === 2
-        ? item.goldTarget
-        : item.tier === 1
-          ? item.silverTarget
-          : item.bronzeTarget;
-  return `${current} / ${Math.floor(target)}`;
+  const target = Math.floor(nextTarget(item));
+
+  return (
+    <li className={`achievement-row achievement-row--${tierKey}`}>
+      <div
+        className={`achievement-row-icon achievement-row-icon--${tierKey}`}
+        aria-hidden="true"
+      >
+        {TIER_GLYPH[tierKey]}
+      </div>
+      <div className="achievement-row-body">
+        <div className="achievement-row-title">
+          {highlight(item.title, queryLower)}
+        </div>
+        <div className="achievement-row-description">
+          {locked ? "达成后解锁" : highlight(item.description, queryLower)}
+        </div>
+      </div>
+      <div className="achievement-row-meta">
+        <span className={`achievement-tier-chip achievement-tier-chip--${tierKey}`}>
+          {TIER_LABEL[tierKey]}
+        </span>
+        {!locked && target > 0 && (
+          <div className="achievement-row-progress">
+            <div className="achievement-progress">
+              <div
+                className={`achievement-progress-fill achievement-progress-fill--${tierKey}`}
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+            <span className="achievement-row-progress-text">
+              {current} / {target}
+            </span>
+          </div>
+        )}
+      </div>
+    </li>
+  );
 }
 
 export function AchievementFullscreen({
@@ -103,21 +226,15 @@ export function AchievementFullscreen({
   error,
   onRetry,
 }: AchievementFullscreenProps) {
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const [offset, setOffset] = useState<Point>(DEFAULT_OFFSET);
-  const [scale, setScale] = useState(DEFAULT_SCALE);
-  const dragStateRef = useRef<{
-    pointerId: number;
-    origin: Point;
-    start: Point;
-  } | null>(null);
+  const [query, setQuery] = useState("");
+  const [activeNav, setActiveNav] = useState<NavKey>("all");
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
-    setOffset(DEFAULT_OFFSET);
-    setScale(DEFAULT_SCALE);
+    setQuery("");
+    setActiveNav("all");
   }, [isOpen]);
 
   useEffect(() => {
@@ -138,160 +255,290 @@ export function AchievementFullscreen({
 
   const items = useMemo(() => {
     const raw = data?.items ?? [];
-    const sorted = [...raw].sort((a, b) => {
+    return [...raw].sort((a, b) => {
       if (a.sortOrder !== b.sortOrder) {
         return a.sortOrder - b.sortOrder;
       }
       return a.code.localeCompare(b.code);
     });
-    return sorted.map((item, index) => ({
-      item,
-      point: PRESET_POSITIONS[index] ?? fallbackPosition(index),
-    }));
   }, [data]);
+
+  const queryLower = query.trim().toLowerCase();
+
+  const navCounts = useMemo(() => {
+    const counts: Record<NavKey, number> = {
+      all: 0,
+      earned: 0,
+      inprogress: 0,
+      locked: 0,
+      gold: 0,
+      silver: 0,
+      bronze: 0,
+    };
+    for (const item of items) {
+      counts.all += 1;
+      if (item.tier >= 1) counts.earned += 1;
+      const key = tierKeyOf(item);
+      if (key === "inprogress") counts.inprogress += 1;
+      else if (key === "locked") counts.locked += 1;
+      else if (key === "gold") counts.gold += 1;
+      else if (key === "silver") counts.silver += 1;
+      else if (key === "bronze") counts.bronze += 1;
+    }
+    return counts;
+  }, [items]);
+
+  const autoNav = useMemo<NavKey | null>(() => {
+    if (!queryLower) return null;
+    const tierSet = new Set<TierKey>();
+    for (const item of items) {
+      if (searchMatches(item, queryLower)) {
+        tierSet.add(tierKeyOf(item));
+      }
+    }
+    if (tierSet.size === 0) return "all";
+    if (tierSet.size === 1) {
+      const [only] = [...tierSet];
+      return only ?? "all";
+    }
+    return "all";
+  }, [items, queryLower]);
+
+  useEffect(() => {
+    if (autoNav) {
+      setActiveNav(autoNav);
+    }
+  }, [autoNav]);
+
+  const filteredItems = useMemo(() => {
+    return items.filter(
+      (item) => matchesNav(item, activeNav) && searchMatches(item, queryLower),
+    );
+  }, [items, activeNav, queryLower]);
+
+  const totalAll = navCounts.all;
+  const totalEarned = navCounts.earned;
+  const overallPercent =
+    totalAll > 0 ? Math.round((totalEarned / totalAll) * 100) : 0;
 
   if (!isOpen) {
     return null;
   }
 
-  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) {
-      return;
-    }
-    dragStateRef.current = {
-      pointerId: event.pointerId,
-      origin: offset,
-      start: { x: event.clientX, y: event.clientY },
-    };
-    if (typeof event.currentTarget.setPointerCapture === "function") {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-  };
-
-  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const dragState = dragStateRef.current;
-    if (!dragState) {
-      return;
-    }
-    const dx = event.clientX - dragState.start.x;
-    const dy = event.clientY - dragState.start.y;
-    setOffset({
-      x: dragState.origin.x + dx,
-      y: dragState.origin.y + dy,
-    });
-  };
-
-  const handlePointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!dragStateRef.current) {
-      return;
-    }
-    dragStateRef.current = null;
-    if (
-      typeof event.currentTarget.hasPointerCapture === "function"
-      && typeof event.currentTarget.releasePointerCapture === "function"
-      && event.currentTarget.hasPointerCapture(event.pointerId)
-    ) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    if (event.ctrlKey) {
-      const zoomFactor = Math.exp(-event.deltaY * 0.0024);
-      setScale((prev) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev * zoomFactor)));
-      return;
-    }
-    setOffset((prev) => ({
-      x: prev.x - event.deltaX,
-      y: prev.y - event.deltaY,
-    }));
-  };
+  const showInitialLoading = loading && items.length === 0;
+  const showErrorState = !loading && Boolean(error) && items.length === 0;
+  const showEmptyData = !loading && !error && items.length === 0;
+  const showSearchEmpty =
+    !showInitialLoading
+    && !showErrorState
+    && !showEmptyData
+    && filteredItems.length === 0;
 
   return (
-    <section className="achievement-overlay fixed inset-0 z-[70]">
-      <div className="achievement-overlay-inner no-drag relative flex h-full w-full flex-col p-0">
-        <button
-          onClick={onClose}
-          className="achievement-close-button ui-window-button ui-window-traffic ui-window-close absolute right-3 top-3 z-30"
-          title="关闭成就页"
-          aria-label="关闭成就页"
-        >
-          <span className="ui-window-dot-symbol" aria-hidden="true">
-            ×
-          </span>
-        </button>
-        <div
-          ref={viewportRef}
-          data-testid="achievement-viewport"
-          className="achievement-viewport-shell relative h-full w-full flex-1 overflow-hidden"
-          style={{ touchAction: "none" }}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerEnd}
-          onPointerCancel={handlePointerEnd}
-          onWheel={handleWheel}
-        >
-          {loading && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center text-sm text-[var(--text-soft)]">
-              加载成就中...
-            </div>
-          )}
-          {error && !loading && (
-            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3">
-              <p className="text-sm text-[var(--rating-negative)]">{error}</p>
-              {onRetry && (
-                <button
-                  type="button"
-                  className="ui-icon-button px-3 py-1 text-xs"
-                  onClick={onRetry}
-                >
-                  重试
-                </button>
-              )}
-            </div>
-          )}
-          {!loading && !error && items.length === 0 && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center text-sm text-[var(--text-soft)]">
-              暂无成就数据
-            </div>
-          )}
-
-          <div
-            className="absolute left-0 top-0"
-            data-testid="achievement-canvas"
-            style={{
-              width: `${CANVAS_WIDTH}px`,
-              height: `${CANVAS_HEIGHT}px`,
-              transformOrigin: "0 0",
-              transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-            }}
+    <div className="achievement-workspace" role="dialog" aria-modal="true">
+      <aside className="achievement-sidebar">
+        <div className="achievement-sidebar-top drag-region">
+          <button
+            type="button"
+            onClick={onClose}
+            className="achievement-return-button no-drag"
+            aria-label="返回应用"
           >
-            {items.map(({ item, point }) => (
-              <article
-                key={item.code}
-                className={getAchievementTierClass(item.tier)}
-                style={{
-                  left: `${point.x}px`,
-                  top: `${point.y}px`,
-                  width: `${CARD_WIDTH}px`,
-                  minHeight: `${CARD_HEIGHT}px`,
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m15 18-6-6 6-6" />
+              <path d="M21 12H9" />
+            </svg>
+            <span>返回应用</span>
+          </button>
+        </div>
+
+        <div className="achievement-sidebar-scroll no-drag">
+          <label className="achievement-search">
+            <svg
+              className="achievement-search-icon"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              type="text"
+              className="achievement-search-input"
+              placeholder="搜索成就…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="搜索成就"
+            />
+            {query && (
+              <button
+                type="button"
+                className="achievement-search-clear"
+                onClick={() => {
+                  setQuery("");
+                  setActiveNav("all");
                 }}
+                aria-label="清除搜索"
               >
-                <h3 className="achievement-card-title">
-                  {item.title}
-                </h3>
-                <p className="achievement-card-description">
-                  {item.description}
-                </p>
-                <span className="achievement-card-progress">
-                  进度 {formatProgressText(item)}
-                </span>
-              </article>
-            ))}
+                ×
+              </button>
+            )}
+          </label>
+
+          <div className="achievement-summary-card">
+            <div className="achievement-summary-head">
+              <span className="achievement-summary-label">总进度</span>
+              <span className="achievement-summary-percent">
+                {overallPercent}%
+              </span>
+            </div>
+            <div className="achievement-progress achievement-progress--summary">
+              <div
+                className="achievement-progress-fill achievement-progress-fill--accent"
+                style={{ width: `${overallPercent}%` }}
+              />
+            </div>
+            <div className="achievement-summary-foot">
+              已获得 {totalEarned} / {totalAll}
+            </div>
+          </div>
+
+          <nav className="achievement-nav">
+            <div className="achievement-nav-label">按状态</div>
+            <NavItem
+              nav="all"
+              active={activeNav}
+              count={navCounts.all}
+              onSelect={setActiveNav}
+            />
+            <NavItem
+              nav="earned"
+              active={activeNav}
+              count={navCounts.earned}
+              onSelect={setActiveNav}
+            />
+            <NavItem
+              nav="inprogress"
+              active={activeNav}
+              count={navCounts.inprogress}
+              onSelect={setActiveNav}
+            />
+            <NavItem
+              nav="locked"
+              active={activeNav}
+              count={navCounts.locked}
+              onSelect={setActiveNav}
+            />
+
+            <div className="achievement-nav-label achievement-nav-label--spaced">
+              按层级
+            </div>
+            <NavItem
+              nav="gold"
+              active={activeNav}
+              count={navCounts.gold}
+              onSelect={setActiveNav}
+            />
+            <NavItem
+              nav="silver"
+              active={activeNav}
+              count={navCounts.silver}
+              onSelect={setActiveNav}
+            />
+            <NavItem
+              nav="bronze"
+              active={activeNav}
+              count={navCounts.bronze}
+              onSelect={setActiveNav}
+            />
+          </nav>
+        </div>
+      </aside>
+
+      <main className="achievement-main">
+        <header className="achievement-titlebar drag-region">
+          <div className="achievement-titlebar-spacer" />
+          <div className="achievement-titlebar-actions no-drag">
+            <WindowControls />
+          </div>
+        </header>
+
+        <div className="achievement-content">
+          <div className="achievement-content-inner">
+            <div className="achievement-content-head">
+              <h2 className="achievement-content-title">
+                {NAV_LABEL[activeNav]}成就
+              </h2>
+              <p className="achievement-content-meta">
+                {queryLower
+                  ? `匹配 ${filteredItems.length} 条结果`
+                  : totalAll > 0
+                    ? `共 ${filteredItems.length} 条 · 整体已获得 ${totalEarned} / ${totalAll} (${overallPercent}%)`
+                    : "尚无成就数据"}
+              </p>
+            </div>
+
+            {showInitialLoading && (
+              <div className="achievement-empty">加载成就中...</div>
+            )}
+            {showErrorState && (
+              <div className="achievement-empty achievement-empty--error">
+                <span>{error}</span>
+                {onRetry && (
+                  <button
+                    type="button"
+                    className="ui-icon-button px-3 py-1 text-xs"
+                    onClick={onRetry}
+                  >
+                    重试
+                  </button>
+                )}
+              </div>
+            )}
+            {showEmptyData && (
+              <div className="achievement-empty">暂无成就数据</div>
+            )}
+            {showSearchEmpty && (
+              <div className="achievement-empty">
+                {queryLower ? "没有匹配的成就" : "该分类下暂无成就"}
+              </div>
+            )}
+
+            {filteredItems.length > 0 && (
+              <ul className="achievement-list">
+                {filteredItems.map((item) => (
+                  <AchievementRow
+                    key={item.code}
+                    item={item}
+                    queryLower={queryLower}
+                  />
+                ))}
+              </ul>
+            )}
+
+            {error && items.length > 0 && (
+              <div className="achievement-inline-error">{error}</div>
+            )}
           </div>
         </div>
-      </div>
-    </section>
+      </main>
+    </div>
   );
 }

@@ -1,10 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  AchievementFullscreen,
-  getAchievementTierClass,
-} from "@/components/achievements/AchievementFullscreen";
+import { AchievementFullscreen } from "@/components/achievements/AchievementFullscreen";
 import type { StudentAchievementsData } from "@/types/achievements";
 
 const SAMPLE_DATA: StudentAchievementsData = {
@@ -14,9 +11,9 @@ const SAMPLE_DATA: StudentAchievementsData = {
     noSubmissionRecords: false,
   },
   summary: {
-    total: 2,
+    total: 4,
     locked: 1,
-    bronze: 0,
+    bronze: 1,
     silver: 0,
     gold: 1,
   },
@@ -43,6 +40,28 @@ const SAMPLE_DATA: StudentAchievementsData = {
       goldTarget: 90,
       sortOrder: 2,
     },
+    {
+      code: "bronze_item",
+      title: "铜色起步",
+      description: "完成第一道题",
+      tier: 1,
+      progress: 5,
+      bronzeTarget: 1,
+      silverTarget: 10,
+      goldTarget: 50,
+      sortOrder: 3,
+    },
+    {
+      code: "inprogress_item",
+      title: "稳步前进",
+      description: "持续提交解答",
+      tier: 0,
+      progress: 3,
+      bronzeTarget: 5,
+      silverTarget: 20,
+      goldTarget: 100,
+      sortOrder: 4,
+    },
   ],
 };
 
@@ -51,14 +70,20 @@ describe("AchievementFullscreen", () => {
     cleanup();
   });
 
-  it("maps tier classes correctly", () => {
-    expect(getAchievementTierClass(0)).toContain("achievement-tier-locked");
-    expect(getAchievementTierClass(1)).toContain("achievement-tier-bronze");
-    expect(getAchievementTierClass(2)).toContain("achievement-tier-silver");
-    expect(getAchievementTierClass(3)).toContain("achievement-tier-gold");
+  it("renders nothing when closed", () => {
+    const { container } = render(
+      <AchievementFullscreen
+        isOpen={false}
+        onClose={() => {}}
+        data={SAMPLE_DATA}
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
   });
 
-  it("supports close by red button and Esc", () => {
+  it("supports close via Esc and back button", () => {
     const onClose = vi.fn();
     render(
       <AchievementFullscreen
@@ -70,13 +95,13 @@ describe("AchievementFullscreen", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "关闭成就页" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回应用" }));
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it("renders locked and gold cards", () => {
+  it("renders all achievements with tier chips", () => {
     render(
       <AchievementFullscreen
         isOpen
@@ -87,13 +112,13 @@ describe("AchievementFullscreen", () => {
       />,
     );
 
-    const locked = screen.getByText("未解锁").closest("article");
-    const gold = screen.getByText("金色成就").closest("article");
-    expect(locked?.className).toContain("achievement-tier-locked");
-    expect(gold?.className).toContain("achievement-tier-gold");
+    expect(screen.getByText("金色成就")).toBeTruthy();
+    expect(screen.getByText("铜色起步")).toBeTruthy();
+    expect(screen.getByText("稳步前进")).toBeTruthy();
+    expect(screen.getByText("未解锁")).toBeTruthy();
   });
 
-  it("supports wheel panning and pointer drag hooks", () => {
+  it("hides locked description and shows placeholder", () => {
     render(
       <AchievementFullscreen
         isOpen
@@ -104,30 +129,11 @@ describe("AchievementFullscreen", () => {
       />,
     );
 
-    const viewport = screen.getByTestId("achievement-viewport");
-    const canvas = screen.getByTestId("achievement-canvas");
-    expect(canvas.getAttribute("style")).toContain("translate(120px, 96px)");
-
-    fireEvent.wheel(viewport, { deltaX: 20, deltaY: 10 });
-    expect(canvas.getAttribute("style")).toContain("translate(100px, 86px) scale(1)");
-
-    fireEvent.pointerDown(viewport, {
-      pointerId: 1,
-      button: 0,
-      clientX: 120,
-      clientY: 120,
-    });
-    fireEvent.pointerMove(viewport, {
-      pointerId: 1,
-      clientX: 150,
-      clientY: 160,
-    });
-    fireEvent.pointerUp(viewport, { pointerId: 1 });
-
-    expect(canvas.getAttribute("style")).toContain("translate(");
+    expect(screen.queryByText("未达成条件")).toBeNull();
+    expect(screen.getByText("达成后解锁")).toBeTruthy();
   });
 
-  it("supports Ctrl + wheel zoom with min/max limits", () => {
+  it("filters by category when nav item is clicked", () => {
     render(
       <AchievementFullscreen
         isOpen
@@ -138,19 +144,75 @@ describe("AchievementFullscreen", () => {
       />,
     );
 
-    const viewport = screen.getByTestId("achievement-viewport");
-    const canvas = screen.getByTestId("achievement-canvas");
-    expect(canvas.getAttribute("style")).toContain("scale(1)");
+    fireEvent.click(screen.getByRole("button", { name: /金牌\s*1/ }));
+    expect(screen.getByText("金色成就")).toBeTruthy();
+    expect(screen.queryByText("铜色起步")).toBeNull();
+    expect(screen.queryByText("稳步前进")).toBeNull();
+  });
 
-    fireEvent.wheel(viewport, { deltaY: -100, ctrlKey: true });
-    const styleAfterZoomIn = canvas.getAttribute("style") ?? "";
-    expect(styleAfterZoomIn).toContain("translate(120px, 96px)");
-    expect(styleAfterZoomIn).toMatch(/scale\(1\.[0-9]+\)/);
+  it("filters list by search query and auto-selects matching tier nav", () => {
+    render(
+      <AchievementFullscreen
+        isOpen
+        onClose={() => {}}
+        data={SAMPLE_DATA}
+        loading={false}
+        error={null}
+      />,
+    );
 
-    fireEvent.wheel(viewport, { deltaY: 30000, ctrlKey: true });
-    expect(canvas.getAttribute("style")).toContain("scale(0.65)");
+    fireEvent.change(screen.getByLabelText("搜索成就"), {
+      target: { value: "金色" },
+    });
 
-    fireEvent.wheel(viewport, { deltaY: -30000, ctrlKey: true });
-    expect(canvas.getAttribute("style")).toContain("scale(1.85)");
+    const titleByContent = (text: string) =>
+      screen.getByText((_, el) =>
+        el?.classList?.contains("achievement-row-title") === true
+        && (el.textContent ?? "").trim() === text,
+      );
+
+    expect(titleByContent("金色成就")).toBeTruthy();
+    expect(screen.queryByText("铜色起步")).toBeNull();
+
+    const goldNav = screen.getByRole("button", { name: /金牌\s*1/ });
+    expect(goldNav.className).toContain("is-active");
+  });
+
+  it("clears search via the clear button", () => {
+    render(
+      <AchievementFullscreen
+        isOpen
+        onClose={() => {}}
+        data={SAMPLE_DATA}
+        loading={false}
+        error={null}
+      />,
+    );
+
+    const input = screen.getByLabelText("搜索成就") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "金色" } });
+    expect(input.value).toBe("金色");
+
+    fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
+    expect(input.value).toBe("");
+    expect(screen.getByText("铜色起步")).toBeTruthy();
+  });
+
+  it("shows error state with retry", () => {
+    const onRetry = vi.fn();
+    render(
+      <AchievementFullscreen
+        isOpen
+        onClose={() => {}}
+        data={null}
+        loading={false}
+        error="加载失败"
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText("加载失败")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });
