@@ -1,15 +1,20 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useChatStore } from "@/stores/chatStore";
 
 describe("chatStore sessions", () => {
-  beforeEach(async () => {
-    localStorage.clear();
-    useChatStore.persist.setOptions({
-      name: "ascendany_chat_guest",
-    });
+  const localStateSaveChat = vi.fn().mockResolvedValue(true);
+
+  beforeEach(() => {
+    localStateSaveChat.mockClear();
+    window.electronAPI = {
+      minimize: vi.fn(),
+      maximize: vi.fn(),
+      close: vi.fn(),
+      platform: "linux",
+      localStateSaveChat,
+    };
     useChatStore.getState().resetForAccount();
-    await useChatStore.persist.rehydrate();
   });
 
   it("keeps messages isolated between local sessions", () => {
@@ -30,36 +35,40 @@ describe("chatStore sessions", () => {
     expect(state.getActiveSession().messages[0]?.content).toBe("分析一下最近一次考试");
   });
 
-  it("migrates legacy single-session persistence", async () => {
-    localStorage.setItem(
-      "ascendany_chat_guest",
-      JSON.stringify({
-        state: {
-          session: {
-            messages: [
-              {
-                id: "msg_old",
-                role: "user",
-                content: "旧会话第一句",
-                timestamp: 1710000000000,
-              },
-            ],
-            summary: "legacy summary",
-            createdAt: 1710000000000,
-            updatedAt: 1710000001000,
-          },
+  it("hydrates sessions from local state snapshot", () => {
+    useChatStore.getState().hydrateFromLocalState({
+      sessions: [
+        {
+          id: "session_old",
+          title: "",
+          messages: [
+            {
+              id: "msg_old",
+              role: "user",
+              content: "旧会话第一句",
+              timestamp: 1710000000000,
+            },
+          ],
+          summary: "legacy summary",
+          createdAt: 1710000000000,
+          updatedAt: 1710000001000,
         },
-        version: 0,
-      }),
-    );
-
-    await useChatStore.persist.rehydrate();
+      ],
+      activeSessionId: "session_old",
+    });
 
     const state = useChatStore.getState();
     expect(state.sessions).toHaveLength(1);
-    expect(state.activeSessionId).toBe(state.sessions[0].id);
+    expect(state.activeSessionId).toBe("session_old");
     expect(state.sessions[0].title).toBe("旧会话第一句");
     expect(state.sessions[0].summary).toBe("legacy summary");
+  });
+
+  it("persists chat changes through desktop local state IPC", () => {
+    useChatStore.getState().addMessage("user", "分析一下最近一次考试");
+    expect(localStateSaveChat).toHaveBeenCalled();
+    expect(localStateSaveChat.mock.calls.at(-1)?.[0].sessions[0].messages[0].content)
+      .toBe("分析一下最近一次考试");
   });
 
   it("streams assistant drafts without leaking transient state into reload", async () => {

@@ -99,7 +99,7 @@ export function MessageList() {
 
   const contentClassName = messages.length === 0
     ? "flex min-h-full flex-col items-center justify-center"
-    : "space-y-1";
+    : "space-y-1.5";
 
   return (
     <div ref={containerRef} className="message-list-shell flex-1 overflow-y-auto">

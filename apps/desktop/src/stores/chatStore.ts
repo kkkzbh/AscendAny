@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 import type { ChatMessage, ChatSession } from "@/types/chat";
 
 interface ChatState {
@@ -8,6 +7,7 @@ interface ChatState {
   aiWorkTaskIds: string[];
   isAiWorking: boolean;
   resetForAccount: () => void;
+  hydrateFromLocalState: (chat: unknown) => void;
   createSession: () => string;
   selectSession: (sessionId: string) => void;
   deleteSession: (sessionId: string) => void;
@@ -135,11 +135,46 @@ function getActiveSessionFromState(state: Pick<ChatState, "sessions" | "activeSe
   );
 }
 
+function normalizeChatSnapshot(value: unknown): Pick<ChatState, "sessions" | "activeSessionId"> {
+  const persisted = (value ?? {}) as Partial<ChatState & { session?: unknown }>;
+  const sessions = Array.isArray(persisted.sessions)
+    ? persisted.sessions.map((session) => normalizeSession(session))
+    : persisted.session
+      ? [normalizeSession(persisted.session)]
+      : [];
+  const safeSessions = sessions.length > 0 ? sessions : [createEmptySession()];
+  const activeSessionId =
+    typeof persisted.activeSessionId === "string" &&
+    safeSessions.some((session) => session.id === persisted.activeSessionId)
+      ? persisted.activeSessionId
+      : safeSessions[0]!.id;
+  return {
+    sessions: safeSessions,
+    activeSessionId,
+  };
+}
+
+function pickChatSnapshot(state: ChatState): Pick<ChatState, "sessions" | "activeSessionId"> {
+  return {
+    sessions: state.sessions,
+    activeSessionId: state.activeSessionId,
+  };
+}
+
+function persistChatSnapshot(snapshot: Pick<ChatState, "sessions" | "activeSessionId">): void {
+  const api = typeof window === "undefined" ? undefined : window.electronAPI;
+  if (!api?.localStateSaveChat) {
+    return;
+  }
+  void api.localStateSaveChat(snapshot).catch(() => {
+    // Local UI state remains authoritative until the next successful save.
+  });
+}
+
 export const useChatStore = create<ChatState>()(
-  persist(
-    (set, get) => {
-      const initialSession = createEmptySession();
-      return {
+  (set, get) => {
+    const initialSession = createEmptySession();
+    return {
       sessions: [initialSession],
       activeSessionId: initialSession.id,
       aiWorkTaskIds: [],
@@ -153,6 +188,16 @@ export const useChatStore = create<ChatState>()(
           aiWorkTaskIds: [],
           isAiWorking: false,
         });
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
+
+      hydrateFromLocalState: (chat) => {
+        const normalized = normalizeChatSnapshot(chat);
+        set({
+          ...normalized,
+          aiWorkTaskIds: [],
+          isAiWorking: false,
+        });
       },
 
       createSession: () => {
@@ -163,10 +208,11 @@ export const useChatStore = create<ChatState>()(
           aiWorkTaskIds: [],
           isAiWorking: false,
         }));
+        persistChatSnapshot(pickChatSnapshot(get()));
         return session.id;
       },
 
-      selectSession: (sessionId) =>
+      selectSession: (sessionId) => {
         set((state) => {
           if (!state.sessions.some((session) => session.id === sessionId)) {
             return state;
@@ -174,9 +220,11 @@ export const useChatStore = create<ChatState>()(
           return {
             activeSessionId: sessionId,
           };
-        }),
+        });
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
 
-      deleteSession: (sessionId) =>
+      deleteSession: (sessionId) => {
         set((state) => {
           const nextSessions = state.sessions.filter((session) => session.id !== sessionId);
           if (nextSessions.length === 0) {
@@ -195,11 +243,13 @@ export const useChatStore = create<ChatState>()(
             aiWorkTaskIds: wasActive ? [] : state.aiWorkTaskIds,
             isAiWorking: wasActive ? false : state.isAiWorking,
           };
-        }),
+        });
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
 
       getActiveSession: () => getActiveSessionFromState(get()),
 
-      addMessage: (role, content, options) =>
+      addMessage: (role, content, options) => {
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
           const nextMessage: ChatMessage = {
@@ -226,7 +276,9 @@ export const useChatStore = create<ChatState>()(
             sessions: nextSessions,
             activeSessionId: activeSession.id,
           };
-        }),
+        });
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
 
       createAssistantDraft: (roleId) => {
         const messageId = generateId();
@@ -254,6 +306,7 @@ export const useChatStore = create<ChatState>()(
             activeSessionId: activeSession.id,
           };
         });
+        persistChatSnapshot(pickChatSnapshot(get()));
         return messageId;
       },
 
@@ -272,9 +325,10 @@ export const useChatStore = create<ChatState>()(
               : session.updatedAt,
           })),
         }));
+        persistChatSnapshot(pickChatSnapshot(get()));
       },
 
-      finalizeMessage: (messageId) =>
+      finalizeMessage: (messageId) => {
         set((state) => ({
           sessions: state.sessions.map((session) => ({
             ...session,
@@ -285,9 +339,11 @@ export const useChatStore = create<ChatState>()(
               ? Date.now()
               : session.updatedAt,
           })),
-        })),
+        }));
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
 
-      removeMessage: (messageId) =>
+      removeMessage: (messageId) => {
         set((state) => ({
           sessions: state.sessions.map((session) => {
             if (!session.messages.some((message) => message.id === messageId)) {
@@ -299,9 +355,11 @@ export const useChatStore = create<ChatState>()(
               updatedAt: Date.now(),
             };
           }),
-        })),
+        }));
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
 
-      clearContext: () =>
+      clearContext: () => {
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
           const replacement = {
@@ -316,9 +374,11 @@ export const useChatStore = create<ChatState>()(
             aiWorkTaskIds: [],
             isAiWorking: false,
           };
-        }),
+        });
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
 
-      setSummary: (summary) =>
+      setSummary: (summary) => {
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
           return {
@@ -329,10 +389,12 @@ export const useChatStore = create<ChatState>()(
                     summary,
                     updatedAt: Date.now(),
                   }
-                : session,
+              : session,
             ),
           };
-        }),
+        });
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
 
       startAiWork: (source) => {
         const taskId = generateWorkId(source);
@@ -353,35 +415,4 @@ export const useChatStore = create<ChatState>()(
         }),
       };
     },
-    {
-      name: "ascendany_chat_guest",
-      partialize: (state) => ({
-        sessions: state.sessions,
-        activeSessionId: state.activeSessionId,
-      }),
-      merge: (persistedState, currentState) => {
-        const persisted = (persistedState ?? {}) as Partial<
-          ChatState & { session?: unknown }
-        >;
-        const sessions = Array.isArray(persisted.sessions)
-          ? persisted.sessions.map((session) => normalizeSession(session))
-          : persisted.session
-            ? [normalizeSession(persisted.session)]
-            : currentState.sessions;
-        const safeSessions = sessions.length > 0 ? sessions : [createEmptySession()];
-        const activeSessionId =
-          typeof persisted.activeSessionId === "string" &&
-          safeSessions.some((session) => session.id === persisted.activeSessionId)
-            ? persisted.activeSessionId
-            : safeSessions[0]!.id;
-        return {
-          ...currentState,
-          sessions: safeSessions,
-          activeSessionId,
-          aiWorkTaskIds: [],
-          isAiWorking: false,
-        };
-      },
-    },
-  ),
 );

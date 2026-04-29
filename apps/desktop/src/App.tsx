@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { SsoExchangeScreen } from "@/components/auth/SsoExchangeScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { FeedbackWindow } from "@/components/feedback/FeedbackWindow";
 import { UpdateFlowDialog } from "@/components/updater/UpdateFlowDialog";
 import { useAuthStore } from "@/stores/authStore";
+import { hydrateLocalStateFromDesktop } from "@/stores/localStateHydration";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 type ThemeMode = "light" | "dark";
@@ -14,9 +15,9 @@ export default function App() {
   const themeTransitionTimerRef = useRef<number | null>(null);
   const isFeedbackMode = window.location.hash.startsWith("#/feedback");
   const isSsoMode = window.location.hash.startsWith("#/sso");
+  const [localStateReady, setLocalStateReady] = useState(false);
   const theme = useSettingsStore((s) => s.theme);
-  const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
-  const setOpaqueWindowBackground = useSettingsStore((s) => s.setOpaqueWindowBackground);
+  const useOpaqueSidebarBackground = useSettingsStore((s) => s.useOpaqueSidebarBackground);
   const zoomPercent = useSettingsStore((s) => s.zoomPercent);
   const authStatus = useAuthStore((s) => s.status);
   const bootstrap = useAuthStore((s) => s.bootstrap);
@@ -72,8 +73,8 @@ export default function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    root.setAttribute("data-opaque-window", useOpaqueWindowBackground ? "true" : "false");
-  }, [useOpaqueWindowBackground]);
+    root.setAttribute("data-opaque-sidebar", useOpaqueSidebarBackground ? "true" : "false");
+  }, [useOpaqueSidebarBackground]);
 
   useEffect(() => {
     if (isFeedbackMode) {
@@ -90,23 +91,27 @@ export default function App() {
   }, [isFeedbackMode, zoomPercent]);
 
   useEffect(() => {
-    const api = window.electronAPI;
-    if (!api?.getOpaqueWindowBackground) {
+    if (isFeedbackMode || isSsoMode) {
+      setLocalStateReady(true);
       return;
     }
-    void api.getOpaqueWindowBackground().then((value) => {
-      setOpaqueWindowBackground(value);
-    }).catch(() => {
-      // Keep local persisted value when IPC is unavailable.
+    let cancelled = false;
+    void hydrateLocalStateFromDesktop().finally(() => {
+      if (!cancelled) {
+        setLocalStateReady(true);
+      }
     });
-  }, [setOpaqueWindowBackground]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isFeedbackMode, isSsoMode]);
 
   useEffect(() => {
-    if (isFeedbackMode || isSsoMode) {
+    if (isFeedbackMode || isSsoMode || !localStateReady) {
       return;
     }
     void bootstrap();
-  }, [bootstrap, isFeedbackMode, isSsoMode]);
+  }, [bootstrap, isFeedbackMode, isSsoMode, localStateReady]);
 
   if (isFeedbackMode) {
     return <FeedbackWindow />;
@@ -118,7 +123,7 @@ export default function App() {
 
   if (authStatus === "booting") {
     return (
-      <div className="flex h-screen w-screen items-center justify-center text-sm text-[var(--text-soft)]">
+      <div className="flex h-screen w-screen items-center justify-center bg-[var(--surface-base)] text-sm text-[var(--text-soft)]">
         启动中...
       </div>
     );

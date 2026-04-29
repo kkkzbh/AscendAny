@@ -7,8 +7,8 @@ export const DEFAULT_ZOOM_PERCENT = 100;
 
 export interface AppSettings {
   theme: ThemeMode;
-  /** True uses solid window background, false enables translucency when OS supports it */
-  useOpaqueWindowBackground: boolean;
+  /** True uses the current solid sidebar material, false lets the desktop show through the sidebar */
+  useOpaqueSidebarBackground: boolean;
   /** UI zoom percentage applied to the desktop renderer */
   zoomPercent: number;
   /** Currently selected role id */

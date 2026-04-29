@@ -10,10 +10,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("feedback-submit", payload) as Promise<{ success: boolean; message: string }>,
   setZoomFactor: (factor: number) =>
     ipcRenderer.invoke("window-set-zoom-factor", factor) as Promise<boolean>,
-  getOpaqueWindowBackground: () =>
-    ipcRenderer.invoke("window-get-opaque-background") as Promise<boolean>,
-  setOpaqueWindowBackground: (enabled: boolean) =>
-    ipcRenderer.invoke("window-set-opaque-background", enabled) as Promise<boolean>,
+  getOpaqueSidebarBackground: () =>
+    ipcRenderer.invoke("window-get-opaque-sidebar-background") as Promise<boolean>,
+  setOpaqueSidebarBackground: (enabled: boolean) =>
+    ipcRenderer.invoke("window-set-opaque-sidebar-background", enabled) as Promise<boolean>,
   platform: process.platform,
   credentialAvailable: () => ipcRenderer.invoke("credential-available") as Promise<boolean>,
   credentialSave: (username: string, password: string) =>
@@ -28,6 +28,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("auth-session-set", key, value) as Promise<boolean>,
   authSessionDelete: (key: string) =>
     ipcRenderer.invoke("auth-session-delete", key) as Promise<boolean>,
+  localStateHydrate: () =>
+    ipcRenderer.invoke("local-state-hydrate") as Promise<unknown>,
+  localStateSaveSettings: (value: unknown) =>
+    ipcRenderer.invoke("local-state-save-settings", value) as Promise<boolean>,
+  localStateSaveLayout: (value: unknown) =>
+    ipcRenderer.invoke("local-state-save-layout", value) as Promise<boolean>,
+  localStateSaveChat: (value: unknown) =>
+    ipcRenderer.invoke("local-state-save-chat", value) as Promise<boolean>,
+  localStateBindProfile: (value: unknown) =>
+    ipcRenderer.invoke("local-state-bind-profile", value) as Promise<unknown>,
   avatarSave: (accountId: string, base64Data: string) =>
     ipcRenderer.invoke("avatar-save", accountId, base64Data) as Promise<boolean>,
   avatarRead: (accountId: string) =>

@@ -81,8 +81,8 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
   return (
     <div className="message-row user-message-row flex w-full items-start justify-end gap-2.5 py-2">
       <div className="flex max-w-[72%] flex-col gap-1">
-        <div className="message-bubble message-bubble-user rounded-[18px] text-[13px] leading-relaxed text-white">
-          <div className="chat-markdown chat-markdown-user break-words leading-6">
+        <div className="message-bubble message-bubble-user rounded-[18px] text-[13px] leading-5 text-white">
+          <div className="chat-markdown chat-markdown-user break-words leading-5">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {message.content}
             </ReactMarkdown>

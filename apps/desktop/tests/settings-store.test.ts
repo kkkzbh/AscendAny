@@ -1,11 +1,20 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useSettingsStore } from "@/stores/settingsStore";
 import { DEFAULT_ZOOM_PERCENT } from "@/types/settings";
 
 describe("settingsStore zoom", () => {
+  const localStateSaveSettings = vi.fn().mockResolvedValue(true);
+
   beforeEach(() => {
-    localStorage.clear();
+    localStateSaveSettings.mockClear();
+    window.electronAPI = {
+      minimize: vi.fn(),
+      maximize: vi.fn(),
+      close: vi.fn(),
+      platform: "linux",
+      localStateSaveSettings,
+    };
     useSettingsStore.getState().resetForAccount();
   });
 
@@ -25,32 +34,22 @@ describe("settingsStore zoom", () => {
     expect(useSettingsStore.getState().zoomPercent).toBe(DEFAULT_ZOOM_PERCENT);
   });
 
-  it("keeps hydration compatible with legacy persisted values", async () => {
-    localStorage.setItem(
-      "ascendany_settings_guest",
-      JSON.stringify({
-        state: {
-          zoomPercent: 118,
-        },
-        version: 0,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
+  it("hydrates normalized values from local state snapshot", () => {
+    useSettingsStore.getState().hydrateFromLocalState({
+      zoomPercent: 118,
+    });
     expect(useSettingsStore.getState().zoomPercent).toBe(120);
 
-    localStorage.setItem(
-      "ascendany_settings_guest",
-      JSON.stringify({
-        state: {
-          zoomPercent: "bad-data",
-        },
-        version: 0,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
+    useSettingsStore.getState().hydrateFromLocalState({
+      zoomPercent: "bad-data",
+    });
     expect(useSettingsStore.getState().zoomPercent).toBe(DEFAULT_ZOOM_PERCENT);
+  });
+
+  it("persists settings changes through desktop local state IPC", () => {
+    useSettingsStore.getState().setZoomPercent(118);
+    expect(localStateSaveSettings).toHaveBeenCalled();
+    expect(localStateSaveSettings.mock.calls.at(-1)?.[0].zoomPercent).toBe(120);
   });
 
   it("allows custom role id as active role", () => {

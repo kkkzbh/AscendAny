@@ -137,8 +137,8 @@ function GeneralSettingsPage() {
   const bootstrapLocalPassword = useAuthStore((s) => s.bootstrapLocalPassword);
   const updateProfile = useAuthStore((s) => s.updateProfile);
   const clearAuthError = useAuthStore((s) => s.clearError);
-  const useOpaqueWindowBackground = useSettingsStore((s) => s.useOpaqueWindowBackground);
-  const setOpaqueWindowBackground = useSettingsStore((s) => s.setOpaqueWindowBackground);
+  const useOpaqueSidebarBackground = useSettingsStore((s) => s.useOpaqueSidebarBackground);
+  const setOpaqueSidebarBackground = useSettingsStore((s) => s.setOpaqueSidebarBackground);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
   const saveAvatar = useAvatarStore((s) => s.saveAvatar);
   const deleteAvatar = useAvatarStore((s) => s.deleteAvatar);
@@ -346,9 +346,6 @@ function GeneralSettingsPage() {
                   移除头像
                 </button>
               )}
-              <p className="text-[11px] text-[var(--text-soft)]">
-                头像仅存储在本地，不会上传至服务器。
-              </p>
             </div>
           </div>
         </div>
@@ -357,36 +354,37 @@ function GeneralSettingsPage() {
       <div className="settings-group">
         <div className="settings-field">
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
-            窗口背景
+            左侧栏背景
           </label>
           <div className="flex items-center justify-between gap-4">
             <div className="grid gap-0.5">
               <p className="text-[13px] font-semibold leading-none text-[var(--text-strong)]">
-                使用不透明窗口背景
+                使用不透明左侧栏背景
               </p>
             </div>
             <button
               type="button"
               role="switch"
-              aria-checked={useOpaqueWindowBackground}
+              aria-label="使用不透明左侧栏背景"
+              aria-checked={useOpaqueSidebarBackground}
               onClick={() => {
-                const next = !useOpaqueWindowBackground;
-                setOpaqueWindowBackground(next);
+                const next = !useOpaqueSidebarBackground;
+                setOpaqueSidebarBackground(next);
                 const api = window.electronAPI;
-                if (api?.setOpaqueWindowBackground) {
-                  void api.setOpaqueWindowBackground(next);
+                if (api?.setOpaqueSidebarBackground) {
+                  void api.setOpaqueSidebarBackground(next);
                 }
               }}
               className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                useOpaqueWindowBackground
+                useOpaqueSidebarBackground
                   ? "bg-[var(--accent-600)]"
                   : "bg-[var(--surface-soft)] ring-1 ring-[var(--border-subtle)]"
               }`}
-              title={useOpaqueWindowBackground ? "已开启不透明背景" : "已关闭不透明背景"}
+              title={useOpaqueSidebarBackground ? "已开启不透明左侧栏背景" : "已关闭不透明左侧栏背景"}
             >
               <span
-                className={`absolute top-[2px] h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                  useOpaqueWindowBackground ? "translate-x-[22px]" : "translate-x-[2px]"
+                className={`absolute left-[2px] top-[2px] h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                  useOpaqueSidebarBackground ? "translate-x-5" : "translate-x-0"
                 }`}
               />
             </button>
@@ -427,10 +425,7 @@ function GeneralSettingsPage() {
               {zoomPercent}%
             </p>
           </div>
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] text-[var(--text-soft)]">
-              调整范围 {ZOOM_PERCENT_MIN}% - {ZOOM_PERCENT_MAX}%。
-            </p>
+          <div className="flex items-center justify-end">
             {zoomPercent !== DEFAULT_ZOOM_PERCENT && (
               <button
                 type="button"
@@ -638,12 +633,6 @@ function GeneralSettingsPage() {
           </label>
           <p className="settings-readonly-pill text-sm text-[var(--text-strong)]">
             {account?.ptaNickname?.trim() || "未绑定"}
-          </p>
-        </div>
-
-        <div className="settings-field">
-          <p className="text-[11px] text-[var(--text-soft)]">
-            用户名可随时修改；学号在注册后不可修改；PTA 昵称可由服务端按规则更新并回填历史提交。
           </p>
         </div>
 

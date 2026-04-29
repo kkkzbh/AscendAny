@@ -29,6 +29,7 @@ describe("SettingsWorkspace layout", () => {
       minimize: vi.fn(),
       maximize: vi.fn(),
       close: vi.fn(),
+      setOpaqueSidebarBackground: vi.fn().mockResolvedValue(true),
       updaterGetState: vi.fn().mockResolvedValue({
         status: "idle",
         currentVersion: "0.1.0",
@@ -76,5 +77,49 @@ describe("SettingsWorkspace layout", () => {
     fireEvent.click(screen.getByRole("button", { name: "角色" }));
     expect(screen.getByText("角色设置")).toBeTruthy();
     expect(screen.queryByText("通用设置")).toBeNull();
+  });
+
+  it("toggles only the sidebar opacity setting without using window-wide styling", () => {
+    render(<SettingsWorkspace />);
+
+    const toggle = screen.getByRole("switch", { name: "使用不透明左侧栏背景" });
+    expect(screen.getByText("使用不透明左侧栏背景")).toBeTruthy();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+
+    expect(useSettingsStore.getState().useOpaqueSidebarBackground).toBe(false);
+    expect(window.electronAPI?.setOpaqueSidebarBackground).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps transparent styling scoped to the left sidebars", () => {
+    expect(SETTINGS_CSS).not.toContain("data-opaque-window");
+    expect(SETTINGS_CSS).not.toContain("#26264f");
+    expect(SETTINGS_CSS).not.toContain("#143447");
+    const studentSidebarRule = getCssRule(".student-sidebar");
+    const settingsSidebarRule = getCssRule(".settings-sidebar");
+    const darkRootRule = getCssRule(':root[data-theme="dark"]');
+    const darkStudentAppRule = getCssRule(':root[data-theme="dark"] .student-app');
+    const darkStudentSidebarRule = getCssRule(':root[data-theme="dark"] .student-sidebar');
+    const darkTransparentStudentSidebarRule = getCssRule(':root[data-theme="dark"][data-opaque-sidebar="false"] .student-sidebar');
+    const transparentStudentSidebarRule = getCssRule(':root[data-opaque-sidebar="false"] .student-sidebar');
+    const transparentSettingsSidebarRule = getCssRule(':root[data-opaque-sidebar="false"] .settings-sidebar');
+
+    expect(darkRootRule).toContain("--surface-base: #151617");
+    expect(darkRootRule).toContain("--surface-raised: rgba(32, 33, 35, 0.96)");
+    expect(darkStudentAppRule).toContain("--student-surface: #191a1b");
+    expect(darkStudentAppRule).toContain("--student-surface-raised: #202123");
+    expect(studentSidebarRule).toContain("linear-gradient(155deg, #ded7ff, #d6edf6)");
+    expect(studentSidebarRule).toContain("#eef7fb");
+    expect(settingsSidebarRule).toContain("linear-gradient(155deg, #ded7ff, #d6edf6)");
+    expect(settingsSidebarRule).toContain("#eef7fb");
+    expect(darkStudentSidebarRule).toContain("linear-gradient(155deg, #1f2021, #18191a)");
+    expect(darkStudentSidebarRule).toContain("#141516");
+    expect(transparentStudentSidebarRule).toContain("background: rgba(248, 250, 252, 0.26)");
+    expect(transparentSettingsSidebarRule).toContain("background: rgba(248, 250, 252, 0.26)");
+    expect(darkTransparentStudentSidebarRule).toContain("background: rgba(20, 21, 22, 0.42)");
+    expect(getCssRule("body")).not.toContain("var(--body-background)");
+    expect(getCssRule(".student-main")).toContain("background: var(--student-surface)");
+    expect(getCssRule(".settings-main")).toContain("background: var(--student-surface)");
   });
 });

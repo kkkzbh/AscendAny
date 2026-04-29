@@ -27,7 +27,7 @@ function dispatchPointerEvent(target: EventTarget, type: string, clientX: number
 }
 
 describe("student shell components", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "ResizeObserver",
@@ -38,9 +38,7 @@ describe("student shell components", () => {
       },
     );
     localStorage.clear();
-    useChatStore.persist.setOptions({ name: "ascendany_chat_guest" });
     useChatStore.getState().resetForAccount();
-    await useChatStore.persist.rehydrate();
     useLayoutStore.getState().resetForAccount();
     useSettingsStore.getState().resetForAccount();
     useAuthStore.setState({

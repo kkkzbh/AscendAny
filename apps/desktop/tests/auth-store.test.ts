@@ -22,9 +22,8 @@ const {
   putAuthProfile: vi.fn(),
 }));
 
-const { cleanupLegacyAnonymousStorage, switchAccountNamespace } = vi.hoisted(() => ({
-  cleanupLegacyAnonymousStorage: vi.fn(),
-  switchAccountNamespace: vi.fn().mockResolvedValue(undefined),
+const { bindCurrentLocalProfile } = vi.hoisted(() => ({
+  bindCurrentLocalProfile: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -41,9 +40,8 @@ vi.mock("@/lib/api", () => ({
   putAuthProfile,
 }));
 
-vi.mock("@/stores/accountNamespace", () => ({
-  cleanupLegacyAnonymousStorage,
-  switchAccountNamespace,
+vi.mock("@/stores/localStateHydration", () => ({
+  bindCurrentLocalProfile,
 }));
 
 import { useAuthStore } from "@/stores/authStore";
@@ -54,8 +52,7 @@ describe("authStore logout", () => {
   beforeEach(() => {
     localStorage.clear();
     postLogout.mockReset();
-    switchAccountNamespace.mockClear();
-    cleanupLegacyAnonymousStorage.mockClear();
+    bindCurrentLocalProfile.mockClear();
     credentialDelete.mockClear();
 
     window.electronAPI = {
@@ -119,8 +116,7 @@ describe("authStore bootstrap", () => {
     fetchAuthMe.mockReset();
     fetchAuthPolicy.mockReset();
     postRefresh.mockReset();
-    switchAccountNamespace.mockClear();
-    cleanupLegacyAnonymousStorage.mockClear();
+    bindCurrentLocalProfile.mockClear();
 
     window.electronAPI = {
       minimize: vi.fn(),
@@ -179,6 +175,11 @@ describe("authStore bootstrap", () => {
 
     expect(rehydrateSpy).toHaveBeenCalledTimes(1);
     expect(fetchAuthMe).toHaveBeenCalledWith("persisted-access-token");
+    expect(bindCurrentLocalProfile).toHaveBeenCalledWith({
+      accountId: "acc-1",
+      username: "alice",
+      displayName: "Alice",
+    });
     expect(useAuthStore.getState().status).toBe("authenticated");
     expect(useAuthStore.getState().lastUsername).toBe("alice");
 
@@ -228,5 +229,23 @@ describe("authStore bootstrap", () => {
 
     expect(fetchAuthMe).toHaveBeenCalledWith("local-access-token");
     expect(useAuthStore.getState().status).toBe("authenticated");
+  });
+
+  it("keeps local profile data untouched when auth bootstrap fails", async () => {
+    useAuthStore.setState({
+      accessToken: "expired-access-token",
+      refreshToken: "expired-refresh-token",
+      autoLogin: true,
+      initialized: false,
+      status: "booting",
+    });
+    fetchAuthPolicy.mockResolvedValue({});
+    fetchAuthMe.mockRejectedValue(new Error("expired"));
+    postRefresh.mockRejectedValue(new Error("expired"));
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useAuthStore.getState().status).toBe("anonymous");
+    expect(bindCurrentLocalProfile).not.toHaveBeenCalled();
   });
 });

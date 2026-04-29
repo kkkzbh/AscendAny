@@ -1,17 +1,22 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useLayoutStore } from "@/stores/layoutStore";
 
 describe("layoutStore", () => {
-  beforeEach(async () => {
-    localStorage.clear();
-    useLayoutStore.persist.setOptions({
-      name: "ascendany_layout_guest",
-    });
+  const localStateSaveLayout = vi.fn().mockResolvedValue(true);
+
+  beforeEach(() => {
+    localStateSaveLayout.mockClear();
+    window.electronAPI = {
+      minimize: vi.fn(),
+      maximize: vi.fn(),
+      close: vi.fn(),
+      platform: "linux",
+      localStateSaveLayout,
+    };
     useLayoutStore.getState().resetForAccount();
-    await useLayoutStore.persist.rehydrate();
   });
 
-  it("persists student layout state", async () => {
+  it("persists student layout state through desktop local state IPC", () => {
     useLayoutStore.getState().toggleLeftSidebar();
     useLayoutStore.getState().setLeftSidebarRatio(0.24);
     useLayoutStore.getState().setSplitRatio(0.37);
@@ -19,19 +24,16 @@ describe("layoutStore", () => {
     useLayoutStore.getState().setActiveRightPanelTab("history");
     useLayoutStore.getState().setActiveFullscreenView("achievements");
 
-    await useLayoutStore.persist.rehydrate();
-    const persistedRaw = localStorage.getItem("ascendany_layout_guest");
-    const persisted = persistedRaw ? JSON.parse(persistedRaw) : {};
-
-    expect(persisted?.state?.isLeftSidebarCollapsed).toBe(true);
-    expect(persisted?.state?.leftSidebarRatio).toBe(0.24);
-    expect(persisted?.state?.splitRatio).toBe(0.37);
-    expect(persisted?.state?.isMetricsPanelVisible).toBe(false);
-    expect(persisted?.state?.activeRightPanelTab).toBe("history");
-    expect(persisted?.state?.activeFullscreenView).toBeUndefined();
+    const saved = localStateSaveLayout.mock.calls.at(-1)?.[0];
+    expect(saved.isLeftSidebarCollapsed).toBe(true);
+    expect(saved.leftSidebarRatio).toBe(0.24);
+    expect(saved.splitRatio).toBe(0.37);
+    expect(saved.isMetricsPanelVisible).toBe(false);
+    expect(saved.activeRightPanelTab).toBe("history");
+    expect(saved.activeFullscreenView).toBe("achievements");
   });
 
-  it("normalizes split ratio from runtime updates and persisted snapshots", async () => {
+  it("normalizes split ratio from runtime updates and local state snapshots", () => {
     useLayoutStore.getState().setLeftSidebarRatio(0.99);
     useLayoutStore.getState().setSplitRatio(0.99);
     expect(useLayoutStore.getState().leftSidebarRatio).toBe(0.32);
@@ -40,21 +42,13 @@ describe("layoutStore", () => {
     useLayoutStore.getState().setLeftSidebarRatio(0.01);
     expect(useLayoutStore.getState().leftSidebarRatio).toBe(0.17);
 
-    localStorage.setItem(
-      "ascendany_layout_guest",
-      JSON.stringify({
-        state: {
-          leftSidebarRatio: "bad-data",
-          splitRatio: "bad-data",
-          isMetricsPanelVisible: "bad-data",
-          isLeftSidebarCollapsed: "bad-data",
-          activeRightPanelTab: "bad-data",
-        },
-        version: 0,
-      }),
-    );
-
-    await useLayoutStore.persist.rehydrate();
+    useLayoutStore.getState().hydrateFromLocalState({
+      leftSidebarRatio: "bad-data",
+      splitRatio: "bad-data",
+      isMetricsPanelVisible: "bad-data",
+      isLeftSidebarCollapsed: "bad-data",
+      activeRightPanelTab: "bad-data",
+    });
     const state = useLayoutStore.getState();
     expect(state.leftSidebarRatio).toBe(0.22);
     expect(state.splitRatio).toBe(0.55);

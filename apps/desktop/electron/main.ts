@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "path";
 import nodemailer from "nodemailer";
 import { desktopUpdater } from "./updater";
+import { LocalStateService } from "./localState";
 
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = app.isPackaged
@@ -16,10 +17,11 @@ const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 const CREDENTIAL_FILE_NAME = "secure-credentials.json";
 const RENDERER_STATE_FILE_NAME = "renderer-state.json";
-const WINDOW_APPEARANCE_FILE_NAME = "window-appearance.json";
+const LOCAL_STATE_FILE_NAME = "state_v2.sqlite";
 const LINUX_DESKTOP_FILE = "ascendany.desktop";
 const DEFAULT_FEEDBACK_TARGET_EMAIL = "1405359129@qq.com";
 const FEEDBACK_FAILURE_MESSAGE = "当前反馈功能异常，以后可再来尝试一下";
+const DEFAULT_OPAQUE_SIDEBAR_BACKGROUND = true;
 
 interface FeedbackImagePayload {
   name: string;
@@ -36,14 +38,6 @@ interface FeedbackSubmitResult {
   success: boolean;
   message: string;
 }
-
-interface WindowAppearanceConfig {
-  useOpaqueWindowBackground: boolean;
-}
-
-const DEFAULT_WINDOW_APPEARANCE: WindowAppearanceConfig = {
-  useOpaqueWindowBackground: true,
-};
 
 function resolveWindowIconPath(): string | undefined {
   if (!isLinux) {
@@ -166,52 +160,25 @@ if (isLinux) {
   configureLinuxInputMethod(linuxGpuMode);
 }
 
-function windowAppearanceFilePath(): string {
-  return path.join(app.getPath("userData"), WINDOW_APPEARANCE_FILE_NAME);
-}
-
-function loadWindowAppearance(): WindowAppearanceConfig {
-  try {
-    const filePath = windowAppearanceFilePath();
-    if (!fs.existsSync(filePath)) {
-      return { ...DEFAULT_WINDOW_APPEARANCE };
-    }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return { ...DEFAULT_WINDOW_APPEARANCE };
-    }
-    const useOpaqueWindowBackground = (parsed as Partial<WindowAppearanceConfig>).useOpaqueWindowBackground;
-    if (typeof useOpaqueWindowBackground !== "boolean") {
-      return { ...DEFAULT_WINDOW_APPEARANCE };
-    }
-    return {
-      useOpaqueWindowBackground,
-    };
-  } catch {
-    return { ...DEFAULT_WINDOW_APPEARANCE };
-  }
-}
-
-function saveWindowAppearance(next: WindowAppearanceConfig): boolean {
-  try {
-    const filePath = windowAppearanceFilePath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(next), { encoding: "utf-8" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeOpaqueWindowBackground(value: unknown): boolean | null {
+function normalizeOpaqueSidebarBackground(value: unknown): boolean | null {
   if (typeof value !== "boolean") {
     return null;
   }
   return value;
 }
 
-let windowAppearance = loadWindowAppearance();
+let localStateService: LocalStateService | null = null;
+
+function localStateFilePath(): string {
+  return path.join(app.getPath("userData"), LOCAL_STATE_FILE_NAME);
+}
+
+function getLocalStateService(): LocalStateService {
+  if (!localStateService) {
+    localStateService = new LocalStateService(localStateFilePath());
+  }
+  return localStateService;
+}
 
 function loadMainWindow(window: BrowserWindow) {
   if (VITE_DEV_SERVER_URL) {
@@ -235,8 +202,6 @@ function createWindow(options?: {
   show?: boolean;
   bounds?: Rectangle;
 }) {
-  const useOpaqueWindowBackground = windowAppearance.useOpaqueWindowBackground;
-  const enableTranslucentWindow = !useOpaqueWindowBackground;
   const nextWindow = new BrowserWindow({
     show: options?.show ?? true,
     width: 1280,
@@ -245,11 +210,11 @@ function createWindow(options?: {
     minHeight: 600,
     frame: false,
     titleBarStyle: isMac ? "hiddenInset" : "hidden",
-    // Linux translucency is opt-in via setting because some environments can be unstable.
-    transparent: isMac || enableTranslucentWindow,
+    // Keep compositor transparency available; renderer CSS decides which pixels are transparent.
+    transparent: true,
     vibrancy: isMac ? "under-window" : undefined,
     visualEffectState: isMac ? "active" : undefined,
-    backgroundColor: enableTranslucentWindow || isMac ? "#00000000" : "#f0f2f8",
+    backgroundColor: "#00000000",
     icon: resolveWindowIconPath(),
     // On Linux, use rounded corners via CSS instead of OS-level transparency
     ...(isLinux && { backgroundMaterial: undefined }),
@@ -279,8 +244,6 @@ function createFeedbackWindow() {
     return feedbackWindow;
   }
 
-  const useOpaqueWindowBackground = windowAppearance.useOpaqueWindowBackground;
-  const enableTranslucentWindow = !useOpaqueWindowBackground;
   const nextWindow = new BrowserWindow({
     show: true,
     width: 700,
@@ -289,10 +252,10 @@ function createFeedbackWindow() {
     minHeight: 740,
     frame: false,
     titleBarStyle: isMac ? "hiddenInset" : "hidden",
-    transparent: isMac || enableTranslucentWindow,
+    transparent: true,
     vibrancy: isMac ? "under-window" : undefined,
     visualEffectState: isMac ? "active" : undefined,
-    backgroundColor: enableTranslucentWindow || isMac ? "#00000000" : "#f0f2f8",
+    backgroundColor: "#00000000",
     icon: resolveWindowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -314,53 +277,6 @@ function createFeedbackWindow() {
   feedbackWindow = nextWindow;
   loadFeedbackWindow(nextWindow);
   return nextWindow;
-}
-
-let isRebuildingMainWindow = false;
-
-async function rebuildMainWindow(): Promise<boolean> {
-  const currentWindow = mainWindow;
-  if (!currentWindow || currentWindow.isDestroyed()) {
-    createWindow();
-    return true;
-  }
-
-  if (isRebuildingMainWindow) {
-    return false;
-  }
-  isRebuildingMainWindow = true;
-
-  const wasMaximized = currentWindow.isMaximized();
-  const wasFullScreen = currentWindow.isFullScreen();
-  const bounds = currentWindow.getBounds();
-  const nextWindow = createWindow({
-    show: false,
-    bounds: wasMaximized || wasFullScreen ? undefined : bounds,
-  });
-
-  try {
-    await new Promise<void>((resolve) => {
-      nextWindow.once("ready-to-show", () => resolve());
-      nextWindow.webContents.once("did-finish-load", () => resolve());
-      nextWindow.webContents.once("did-fail-load", () => resolve());
-    });
-
-    if (wasFullScreen) {
-      nextWindow.setFullScreen(true);
-    } else if (wasMaximized) {
-      nextWindow.maximize();
-    }
-
-    nextWindow.show();
-    currentWindow.close();
-    return true;
-  } catch {
-    nextWindow.close();
-    mainWindow = currentWindow;
-    return false;
-  } finally {
-    isRebuildingMainWindow = false;
-  }
 }
 
 function credentialFilePath(): string {
@@ -657,6 +573,51 @@ ipcMain.handle("auth-session-delete", (_event, key: unknown) => {
   return saveRendererStateStore(next);
 });
 
+ipcMain.handle("local-state-hydrate", () => {
+  try {
+    return getLocalStateService().hydrate();
+  } catch (error) {
+    console.error("[AscendAny] Failed to hydrate local state:", error);
+    return null;
+  }
+});
+
+ipcMain.handle("local-state-save-settings", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().saveSettings(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to save local settings:", error);
+    return false;
+  }
+});
+
+ipcMain.handle("local-state-save-layout", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().saveLayout(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to save local layout:", error);
+    return false;
+  }
+});
+
+ipcMain.handle("local-state-save-chat", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().saveChat(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to save local chat:", error);
+    return false;
+  }
+});
+
+ipcMain.handle("local-state-bind-profile", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().bindActiveProfile(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to bind local profile:", error);
+    return null;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Avatar local storage
 // ---------------------------------------------------------------------------
@@ -737,31 +698,30 @@ ipcMain.handle("window-set-zoom-factor", (event, value: unknown) => {
   return true;
 });
 
-ipcMain.handle("window-get-opaque-background", () => {
-  return windowAppearance.useOpaqueWindowBackground;
+ipcMain.handle("window-get-opaque-sidebar-background", () => {
+  try {
+    return getLocalStateService().getOpaqueSidebarBackground();
+  } catch {
+    return DEFAULT_OPAQUE_SIDEBAR_BACKGROUND;
+  }
 });
 
-ipcMain.handle("window-set-opaque-background", async (_event, value: unknown) => {
-  const useOpaqueWindowBackground = normalizeOpaqueWindowBackground(value);
-  if (useOpaqueWindowBackground === null) {
+ipcMain.handle("window-set-opaque-sidebar-background", (_event, value: unknown) => {
+  const useOpaqueSidebarBackground = normalizeOpaqueSidebarBackground(value);
+  if (useOpaqueSidebarBackground === null) {
     return false;
   }
 
-  if (windowAppearance.useOpaqueWindowBackground === useOpaqueWindowBackground) {
-    return true;
-  }
-
-  const next: WindowAppearanceConfig = {
-    useOpaqueWindowBackground,
-  };
-  const saved = saveWindowAppearance(next);
-  if (!saved) {
+  try {
+    const current = getLocalStateService().hydrate().settings;
+    getLocalStateService().saveSettings({
+      ...current,
+      useOpaqueSidebarBackground,
+    });
+  } catch {
     return false;
   }
-
-  windowAppearance = next;
-  // `transparent` is immutable after window creation; recreate window to apply seamlessly.
-  return rebuildMainWindow();
+  return true;
 });
 
 ipcMain.handle("window-open-feedback", () => {
@@ -828,7 +788,13 @@ app.on("activate", () => {
   }
 });
 
+app.on("before-quit", () => {
+  localStateService?.close();
+  localStateService = null;
+});
+
 app.whenReady().then(() => {
+  getLocalStateService();
   desktopUpdater.registerIpc();
   desktopUpdater.start();
   createWindow();

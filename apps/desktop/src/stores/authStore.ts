@@ -13,10 +13,7 @@ import {
   putAuthProfile,
 } from "@/lib/api";
 import type { AuthAccount, AuthPolicy } from "@/types/auth";
-import {
-  cleanupLegacyAnonymousStorage,
-  switchAccountNamespace,
-} from "@/stores/accountNamespace";
+import { bindCurrentLocalProfile } from "@/stores/localStateHydration";
 
 interface LoginInput {
   username: string;
@@ -155,7 +152,11 @@ async function applySession(params: {
   rememberPassword: boolean;
   lastUsername: string;
 }): Promise<void> {
-  await switchAccountNamespace(params.account.accountId);
+  await bindCurrentLocalProfile({
+    accountId: params.account.accountId,
+    username: params.account.username,
+    displayName: params.account.displayName,
+  });
   useAuthStore.setState({
     status: "authenticated",
     account: params.account,
@@ -193,7 +194,6 @@ export const useAuthStore = create<AuthState>()(
           return;
         }
 
-        cleanupLegacyAnonymousStorage();
         await get().refreshPolicy();
 
         const accessToken = get().accessToken;
@@ -203,7 +203,11 @@ export const useAuthStore = create<AuthState>()(
         if (accessToken) {
           try {
             const account = await fetchAuthMe(accessToken);
-            await switchAccountNamespace(account.accountId);
+            await bindCurrentLocalProfile({
+              accountId: account.accountId,
+              username: account.username,
+              displayName: account.displayName,
+            });
             set({
               status: "authenticated",
               account,
@@ -233,7 +237,6 @@ export const useAuthStore = create<AuthState>()(
           }
         }
 
-        await switchAccountNamespace(null);
         set({
           status: "anonymous",
           account: null,
@@ -377,7 +380,6 @@ export const useAuthStore = create<AuthState>()(
           }
         }
 
-        await switchAccountNamespace(null);
         set({
           status: "anonymous",
           account: null,
@@ -429,6 +431,11 @@ export const useAuthStore = create<AuthState>()(
             },
             accessToken,
           );
+          await bindCurrentLocalProfile({
+            accountId: account.accountId,
+            username: account.username,
+            displayName: profile.displayName ?? account.displayName,
+          });
           set({
             account: {
               ...account,

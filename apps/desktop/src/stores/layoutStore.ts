@@ -1,16 +1,19 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 
 export type RightPanelTab = "ability" | "history";
 
-interface LayoutState {
+export interface LayoutSnapshot {
   isLeftSidebarCollapsed: boolean;
   leftSidebarRatio: number;
   isMetricsPanelVisible: boolean;
   activeRightPanelTab: RightPanelTab;
   splitRatio: number;
   activeFullscreenView: "none" | "achievements";
+}
+
+interface LayoutState extends LayoutSnapshot {
   resetForAccount: () => void;
+  hydrateFromLocalState: (layout: unknown) => void;
   toggleLeftSidebar: () => void;
   setLeftSidebarCollapsed: (collapsed: boolean) => void;
   setLeftSidebarRatio: (ratio: number) => void;
@@ -43,9 +46,51 @@ function normalizeSplitRatio(value: unknown): number {
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value));
 }
 
+function normalizeLayoutSnapshot(value: unknown, fallback: LayoutSnapshot): LayoutSnapshot {
+  const persisted = (value ?? {}) as Partial<LayoutSnapshot>;
+  return {
+    isLeftSidebarCollapsed:
+      typeof persisted.isLeftSidebarCollapsed === "boolean"
+        ? persisted.isLeftSidebarCollapsed
+        : fallback.isLeftSidebarCollapsed,
+    leftSidebarRatio: normalizeLeftSidebarRatio(persisted.leftSidebarRatio),
+    isMetricsPanelVisible:
+      typeof persisted.isMetricsPanelVisible === "boolean"
+        ? persisted.isMetricsPanelVisible
+        : fallback.isMetricsPanelVisible,
+    activeRightPanelTab:
+      persisted.activeRightPanelTab === "ability" || persisted.activeRightPanelTab === "history"
+        ? persisted.activeRightPanelTab
+        : fallback.activeRightPanelTab,
+    splitRatio: normalizeSplitRatio(persisted.splitRatio),
+    activeFullscreenView:
+      persisted.activeFullscreenView === "achievements" ? "achievements" : fallback.activeFullscreenView,
+  };
+}
+
+function pickLayoutSnapshot(state: LayoutState): LayoutSnapshot {
+  return {
+    isLeftSidebarCollapsed: state.isLeftSidebarCollapsed,
+    leftSidebarRatio: state.leftSidebarRatio,
+    isMetricsPanelVisible: state.isMetricsPanelVisible,
+    activeRightPanelTab: state.activeRightPanelTab,
+    splitRatio: state.splitRatio,
+    activeFullscreenView: state.activeFullscreenView,
+  };
+}
+
+function persistLayoutSnapshot(snapshot: LayoutSnapshot): void {
+  const api = typeof window === "undefined" ? undefined : window.electronAPI;
+  if (!api?.localStateSaveLayout) {
+    return;
+  }
+  void api.localStateSaveLayout(snapshot).catch(() => {
+    // Local UI state remains authoritative until the next successful save.
+  });
+}
+
 export const useLayoutStore = create<LayoutState>()(
-  persist(
-    (set) => ({
+  (set, get) => ({
       isLeftSidebarCollapsed: false,
       leftSidebarRatio: DEFAULT_LEFT_SIDEBAR_RATIO,
       isMetricsPanelVisible: true,
@@ -61,69 +106,57 @@ export const useLayoutStore = create<LayoutState>()(
           splitRatio: DEFAULT_SPLIT_RATIO,
           activeFullscreenView: "none",
         }),
-      toggleLeftSidebar: () =>
+      hydrateFromLocalState: (layout) =>
+        set((state) => ({
+          ...normalizeLayoutSnapshot(layout, pickLayoutSnapshot(state)),
+        })),
+      toggleLeftSidebar: () => {
         set((state) => ({
           isLeftSidebarCollapsed: !state.isLeftSidebarCollapsed,
-        })),
-      setLeftSidebarCollapsed: (collapsed) =>
+        }));
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
+      },
+      setLeftSidebarCollapsed: (collapsed) => {
         set({
           isLeftSidebarCollapsed: collapsed,
-        }),
-      setLeftSidebarRatio: (ratio) =>
+        });
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
+      },
+      setLeftSidebarRatio: (ratio) => {
         set({
           leftSidebarRatio: normalizeLeftSidebarRatio(ratio),
-        }),
-      toggleMetricsPanel: () =>
+        });
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
+      },
+      toggleMetricsPanel: () => {
         set((state) => ({
           isMetricsPanelVisible: !state.isMetricsPanelVisible,
-        })),
-      setActiveRightPanelTab: (tab) =>
+        }));
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
+      },
+      setActiveRightPanelTab: (tab) => {
         set({
           activeRightPanelTab: tab,
-        }),
-      setSplitRatio: (ratio) =>
+        });
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
+      },
+      setSplitRatio: (ratio) => {
         set({
           splitRatio: normalizeSplitRatio(ratio),
-        }),
-      setActiveFullscreenView: (view) =>
+        });
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
+      },
+      setActiveFullscreenView: (view) => {
         set({
           activeFullscreenView: view,
-        }),
-      closeFullscreenView: () =>
+        });
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
+      },
+      closeFullscreenView: () => {
         set({
           activeFullscreenView: "none",
-        }),
-    }),
-    {
-      name: "ascendany_layout_guest",
-      partialize: (state) => ({
-        isLeftSidebarCollapsed: state.isLeftSidebarCollapsed,
-        leftSidebarRatio: state.leftSidebarRatio,
-        isMetricsPanelVisible: state.isMetricsPanelVisible,
-        activeRightPanelTab: state.activeRightPanelTab,
-        splitRatio: state.splitRatio,
-      }),
-      merge: (persistedState, currentState) => {
-        const persisted = (persistedState ?? {}) as Partial<LayoutState>;
-        return {
-          ...currentState,
-          isLeftSidebarCollapsed:
-            typeof persisted.isLeftSidebarCollapsed === "boolean"
-              ? persisted.isLeftSidebarCollapsed
-              : currentState.isLeftSidebarCollapsed,
-          leftSidebarRatio: normalizeLeftSidebarRatio(persisted.leftSidebarRatio),
-          isMetricsPanelVisible:
-            typeof persisted.isMetricsPanelVisible === "boolean"
-              ? persisted.isMetricsPanelVisible
-              : currentState.isMetricsPanelVisible,
-          activeRightPanelTab:
-            persisted.activeRightPanelTab === "ability" ||
-            persisted.activeRightPanelTab === "history"
-              ? persisted.activeRightPanelTab
-              : currentState.activeRightPanelTab,
-          splitRatio: normalizeSplitRatio(persisted.splitRatio),
-        };
+        });
+        persistLayoutSnapshot(pickLayoutSnapshot(get()));
       },
-    },
-  ),
+    }),
 );

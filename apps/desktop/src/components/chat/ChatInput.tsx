@@ -203,7 +203,7 @@ export function ChatInput({
             handleInput();
           }}
           onKeyDown={handleKeyDown}
-          placeholder="输入消息，按 Enter 发送..."
+          aria-label="消息输入"
           rows={1}
           className="chat-textarea max-h-[120px] min-h-[40px] flex-1 resize-none bg-transparent text-[13px] leading-relaxed text-[var(--text-strong)] outline-none placeholder:text-[var(--text-soft)]"
         />
@@ -257,10 +257,6 @@ export function ChatInput({
         </div>
       </div>
 
-      <div className="chat-input-hint mt-1.5 flex items-center justify-between gap-3 text-[10px] text-[var(--text-soft)]">
-        <span>{isAiWorking ? "助手正在处理请求..." : "Shift + Enter 换行"}</span>
-        <span className="text-right">对话纯本地存储，不会上传至服务器</span>
-      </div>
     </div>
   );
 }

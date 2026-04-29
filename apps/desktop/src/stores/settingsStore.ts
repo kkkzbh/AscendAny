@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 import type {
   AppSettings,
   ThemeMode,
@@ -17,9 +16,10 @@ interface SettingsState extends AppSettings {
   openSettings: () => void;
   closeSettings: () => void;
   resetForAccount: () => void;
+  hydrateFromLocalState: (settings: unknown) => void;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
-  setOpaqueWindowBackground: (enabled: boolean) => void;
+  setOpaqueSidebarBackground: (enabled: boolean) => void;
   setZoomPercent: (zoomPercent: number) => void;
   setActiveRole: (roleId: string) => void;
 }
@@ -36,11 +36,51 @@ function normalizeZoomPercent(value: unknown): number {
   return Math.min(ZOOM_PERCENT_MAX, Math.max(ZOOM_PERCENT_MIN, rounded));
 }
 
+function normalizeSettingsSnapshot(value: unknown, fallback: AppSettings): AppSettings {
+  const persisted = (value ?? {}) as Partial<AppSettings> & {
+    useOpaqueWindowBackground?: unknown;
+  };
+  const persistedSidebarBackground =
+    typeof persisted.useOpaqueSidebarBackground === "boolean"
+      ? persisted.useOpaqueSidebarBackground
+      : typeof persisted.useOpaqueWindowBackground === "boolean"
+        ? persisted.useOpaqueWindowBackground
+        : fallback.useOpaqueSidebarBackground;
+
+  return {
+    theme: isThemeMode(persisted.theme) ? persisted.theme : fallback.theme,
+    useOpaqueSidebarBackground: persistedSidebarBackground,
+    zoomPercent: normalizeZoomPercent(persisted.zoomPercent),
+    activeRole:
+      typeof persisted.activeRole === "string" && persisted.activeRole.trim()
+        ? persisted.activeRole.trim()
+        : fallback.activeRole,
+  };
+}
+
+function persistSettingsSnapshot(snapshot: AppSettings): void {
+  const api = typeof window === "undefined" ? undefined : window.electronAPI;
+  if (!api?.localStateSaveSettings) {
+    return;
+  }
+  void api.localStateSaveSettings(snapshot).catch(() => {
+    // Local UI state remains authoritative until the next successful save.
+  });
+}
+
+function pickSettingsSnapshot(state: SettingsState): AppSettings {
+  return {
+    theme: state.theme,
+    useOpaqueSidebarBackground: state.useOpaqueSidebarBackground,
+    zoomPercent: state.zoomPercent,
+    activeRole: state.activeRole,
+  };
+}
+
 export const useSettingsStore = create<SettingsState>()(
-  persist(
-    (set) => ({
+  (set, get) => ({
       theme: "light",
-      useOpaqueWindowBackground: true,
+      useOpaqueSidebarBackground: true,
       zoomPercent: DEFAULT_ZOOM_PERCENT,
       activeRole: DEFAULT_ROLE_ID,
       isOpen: false,
@@ -50,57 +90,45 @@ export const useSettingsStore = create<SettingsState>()(
       resetForAccount: () =>
         set({
           theme: "light",
-          useOpaqueWindowBackground: true,
+          useOpaqueSidebarBackground: true,
           zoomPercent: DEFAULT_ZOOM_PERCENT,
           activeRole: DEFAULT_ROLE_ID,
           isOpen: false,
         }),
-      setTheme: (theme) => set({ theme }),
-      toggleTheme: () =>
+      hydrateFromLocalState: (settings) =>
+        set((state) => ({
+          ...normalizeSettingsSnapshot(settings, pickSettingsSnapshot(state)),
+        })),
+      setTheme: (theme) => {
+        set({ theme });
+        persistSettingsSnapshot(pickSettingsSnapshot(get()));
+      },
+      toggleTheme: () => {
         set((state) => ({
           theme: state.theme === "light" ? "dark" : "light",
-        })),
-      setOpaqueWindowBackground: (enabled) =>
+        }));
+        persistSettingsSnapshot(pickSettingsSnapshot(get()));
+      },
+      setOpaqueSidebarBackground: (enabled) => {
         set({
-          useOpaqueWindowBackground: enabled,
-        }),
-      setZoomPercent: (zoomPercent) =>
+          useOpaqueSidebarBackground: enabled,
+        });
+        persistSettingsSnapshot(pickSettingsSnapshot(get()));
+      },
+      setZoomPercent: (zoomPercent) => {
         set({
           zoomPercent: normalizeZoomPercent(zoomPercent),
-        }),
+        });
+        persistSettingsSnapshot(pickSettingsSnapshot(get()));
+      },
 
-      setActiveRole: (roleId) =>
+      setActiveRole: (roleId) => {
         set(() => {
           const normalized = roleId.trim();
           return { activeRole: normalized || DEFAULT_ROLE_ID };
-        }),
+        });
+        persistSettingsSnapshot(pickSettingsSnapshot(get()));
+      },
 
     }),
-    {
-      name: "ascendany_settings_guest",
-      partialize: (state) => ({
-        theme: state.theme,
-        useOpaqueWindowBackground: state.useOpaqueWindowBackground,
-        zoomPercent: state.zoomPercent,
-        activeRole: state.activeRole,
-      }),
-      merge: (persistedState, currentState) => {
-        const persisted = (persistedState ?? {}) as Partial<SettingsState>;
-
-        return {
-          ...currentState,
-          theme: isThemeMode(persisted.theme) ? persisted.theme : currentState.theme,
-          useOpaqueWindowBackground:
-            typeof persisted.useOpaqueWindowBackground === "boolean"
-              ? persisted.useOpaqueWindowBackground
-              : currentState.useOpaqueWindowBackground,
-          zoomPercent: normalizeZoomPercent(persisted.zoomPercent),
-          activeRole:
-            typeof persisted.activeRole === "string" && persisted.activeRole.trim()
-              ? persisted.activeRole.trim()
-              : currentState.activeRole,
-        };
-      },
-    },
-  ),
 );
