@@ -143,7 +143,9 @@ class ExamAnalysisService:
                     messages=[
                         ChatMessageRequest(
                             role="user",
-                            content=self._prompt_service.build_auto_analysis_user_message(),
+                            content=await self._prompt_service.build_auto_analysis_user_message(
+                                exam_id
+                            ),
                         )
                     ],
                     summary="",

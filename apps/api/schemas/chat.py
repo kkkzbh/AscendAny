@@ -12,6 +12,7 @@ ProviderType = str
 class ChatMessageRequest(BaseModel):
     role: ChatRole
     content: str = Field(min_length=1)
+    reasoningContent: str | None = None
 
 
 class ChatReplyRequest(BaseModel):

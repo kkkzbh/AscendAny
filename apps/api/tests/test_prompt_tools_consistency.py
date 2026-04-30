@@ -4,34 +4,35 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 from apps.api.db.repository import (
     DashboardMetricsRow,
-    ExamBandMediansRow,
+    ExamInfoRow,
     ExamMetricHistoryRow,
-    ExamParticipantContextRow,
-    ExamParticipantRow,
-    ExamPreviousRankerRow,
-    ExamStudentMetricRow,
+    ExamParticipantMetricRow,
+    ExamSubmissionRow,
     RatingHistoryRow,
+    StudentIdentityMatch,
 )
 from apps.api.services.identity import ResolvedIdentity
 from apps.api.services.prompt import PromptService
-from apps.api.services.tools import ToolExecutor
+from apps.api.services.tools import TOOL_DEFINITIONS, ToolExecutor
 
 
-class FakeMergedHistoryRepo:
+class FakeFactRepo:
     def __init__(self) -> None:
         self.metrics_by_student: dict[int, DashboardMetricsRow | None] = {}
         self.rating_by_student: dict[int, list[RatingHistoryRow]] = {}
         self.exam_metrics_by_student: dict[int, list[ExamMetricHistoryRow]] = {}
-        self.exam_participants_by_exam: dict[int, list[ExamParticipantRow]] = {}
-        self.exam_metric_by_exam_student: dict[
-            tuple[int, int], ExamStudentMetricRow
+        self.exam_info_by_id: dict[int, ExamInfoRow] = {}
+        self.exam_participant_metrics_by_exam: dict[
+            int, list[ExamParticipantMetricRow]
         ] = {}
-        self.participant_context_by_exam: dict[int, ExamParticipantContextRow] = {}
-        self.band_medians_by_exam: dict[int, ExamBandMediansRow] = {}
-        self.previous_ranker_by_exam: dict[int, ExamPreviousRankerRow] = {}
+        self.submissions_by_exam_student: dict[
+            tuple[int, int], list[ExamSubmissionRow]
+        ] = {}
+        self.student_matches_by_no: dict[str, list[StudentIdentityMatch]] = {}
 
     async def fetch_current_metrics(
         self, student_id: int
@@ -48,38 +49,47 @@ class FakeMergedHistoryRepo:
     ) -> list[ExamMetricHistoryRow]:
         return self.exam_metrics_by_student.get(student_id, [])[:limit]
 
-    async def fetch_exam_participants_ranked(
-        self, exam_id: int, limit: int = 200
-    ) -> list[ExamParticipantRow]:
-        return self.exam_participants_by_exam.get(exam_id, [])[:limit]
+    async def fetch_exam_info(self, exam_id: int) -> ExamInfoRow | None:
+        return self.exam_info_by_id.get(exam_id)
 
-    async def fetch_exam_student_metrics_for_students(
-        self, exam_id: int, student_ids: list[int]
-    ) -> list[ExamStudentMetricRow]:
-        rows: list[ExamStudentMetricRow] = []
-        for sid in student_ids:
-            row = self.exam_metric_by_exam_student.get((exam_id, sid))
-            if row is not None:
-                rows.append(row)
-        return rows
+    async def fetch_exam_participant_metrics(
+        self, exam_id: int, limit: int = 10000
+    ) -> list[ExamParticipantMetricRow]:
+        return self.exam_participant_metrics_by_exam.get(exam_id, [])[:limit]
 
-    async def fetch_exam_participant_context(
-        self, exam_id: int, student_ids: list[int]
-    ) -> ExamParticipantContextRow | None:
-        del student_ids
-        return self.participant_context_by_exam.get(exam_id)
+    async def fetch_exam_submissions_for_student(
+        self, exam_id: int, student_id: int, limit: int = 100
+    ) -> list[ExamSubmissionRow]:
+        return self.submissions_by_exam_student.get((exam_id, student_id), [])[:limit]
 
-    async def fetch_exam_band_medians(
-        self, exam_id: int, pos_start: int, pos_end: int
-    ) -> ExamBandMediansRow | None:
-        del pos_start, pos_end
-        return self.band_medians_by_exam.get(exam_id)
+    async def find_students_by_student_no(
+        self, student_no: str
+    ) -> list[StudentIdentityMatch]:
+        return self.student_matches_by_no.get(student_no, [])
 
-    async def fetch_exam_previous_ranker(
-        self, exam_id: int, my_pos: int
-    ) -> ExamPreviousRankerRow | None:
-        del my_pos
-        return self.previous_ranker_by_exam.get(exam_id)
+
+class ExplodingRepo:
+    async def fetch_ai_prompt_template(self, prompt_key: str):
+        _ = prompt_key
+        return None
+
+    def __getattr__(self, name: str):
+        raise AssertionError(f"PromptService should not query repository: {name}")
+
+
+class PromptOverrideRepo(ExplodingRepo):
+    def __init__(self, prompts: dict[str, str]) -> None:
+        self.prompts = prompts
+
+    async def fetch_ai_prompt_template(self, prompt_key: str):
+        content = self.prompts.get(prompt_key)
+        if content is None:
+            return None
+        return SimpleNamespace(content=content)
+
+
+def _dt(day: int) -> datetime:
+    return datetime(2026, 2, day, 9, 0, tzinfo=timezone.utc)
 
 
 def _build_identity() -> ResolvedIdentity:
@@ -93,9 +103,8 @@ def _build_identity() -> ResolvedIdentity:
     )
 
 
-def _build_repo() -> FakeMergedHistoryRepo:
-    repo = FakeMergedHistoryRepo()
-
+def _build_repo() -> FakeFactRepo:
+    repo = FakeFactRepo()
     repo.metrics_by_student[101] = DashboardMetricsRow(
         knowledge=Decimal("96"),
         accuracy=Decimal("22"),
@@ -103,7 +112,7 @@ def _build_repo() -> FakeMergedHistoryRepo:
         flexibility=Decimal("28"),
         proficiency=Decimal("28"),
         rating=1097,
-        updated_at=datetime(2026, 2, 8, 10, 0, tzinfo=timezone.utc),
+        updated_at=_dt(8),
     )
     repo.metrics_by_student[202] = DashboardMetricsRow(
         knowledge=Decimal("75"),
@@ -114,96 +123,140 @@ def _build_repo() -> FakeMergedHistoryRepo:
         rating=1097,
         updated_at=datetime(2026, 2, 8, 10, 5, tzinfo=timezone.utc),
     )
-
+    repo.rating_by_student[101] = [
+        RatingHistoryRow(3, "精选3", _dt(8), 1080, 17, 1097),
+        RatingHistoryRow(2, "精选2", _dt(1), 1050, 30, 1080),
+    ]
+    repo.rating_by_student[202] = [
+        RatingHistoryRow(3, "精选3", _dt(8), 900, 10, 910),
+    ]
     repo.exam_metrics_by_student[101] = [
-        ExamMetricHistoryRow(
-            exam_id=3,
-            exam_name="精选3",
-            exam_time=datetime(2026, 2, 8, 9, 0, tzinfo=timezone.utc),
-            knowledge=96,
-            accuracy=22,
-            quality=None,
-            flexibility=28,
-            proficiency=28,
-            computed_at=datetime(2026, 2, 8, 10, 0, tzinfo=timezone.utc),
-        ),
-        ExamMetricHistoryRow(
-            exam_id=2,
-            exam_name="精选2",
-            exam_time=datetime(2026, 2, 1, 9, 0, tzinfo=timezone.utc),
-            knowledge=48,
-            accuracy=40,
-            quality=64,
-            flexibility=31,
-            proficiency=60,
-            computed_at=datetime(2026, 2, 1, 10, 0, tzinfo=timezone.utc),
-        ),
+        ExamMetricHistoryRow(3, "精选3", _dt(8), 96, 22, None, 28, 28, _dt(8)),
+        ExamMetricHistoryRow(2, "精选2", _dt(1), 48, 40, 64, 31, 60, _dt(1)),
     ]
     repo.exam_metrics_by_student[202] = [
+        ExamMetricHistoryRow(29, "精进3", _dt(9), None, None, None, None, None, _dt(9)),
         ExamMetricHistoryRow(
-            exam_id=29,
-            exam_name="精进3",
-            exam_time=datetime(2026, 2, 9, 9, 0, tzinfo=timezone.utc),
-            knowledge=None,
-            accuracy=None,
-            quality=None,
-            flexibility=None,
-            proficiency=None,
-            computed_at=datetime(2026, 2, 9, 10, 5, tzinfo=timezone.utc),
+            3,
+            "精选3",
+            _dt(8),
+            75,
+            None,
+            64,
+            40,
+            53,
+            datetime(2026, 2, 8, 10, 5, tzinfo=timezone.utc),
         ),
         ExamMetricHistoryRow(
-            exam_id=3,
-            exam_name="精选3",
-            exam_time=datetime(2026, 2, 8, 9, 0, tzinfo=timezone.utc),
-            knowledge=75,
-            accuracy=None,
-            quality=64,
-            flexibility=40,
-            proficiency=53,
-            computed_at=datetime(2026, 2, 8, 10, 5, tzinfo=timezone.utc),
+            2,
+            "精选2",
+            _dt(1),
+            None,
+            32,
+            None,
+            None,
+            None,
+            datetime(2026, 2, 1, 10, 5, tzinfo=timezone.utc),
         ),
-        ExamMetricHistoryRow(
-            exam_id=2,
-            exam_name="精选2",
-            exam_time=datetime(2026, 2, 1, 9, 0, tzinfo=timezone.utc),
-            knowledge=None,
+    ]
+    repo.exam_info_by_id[3] = ExamInfoRow(
+        exam_id=3,
+        exam_type="pta",
+        source_path="/practice/精选3",
+        title="精选3",
+        starts_at=_dt(8),
+        ends_at=datetime(2026, 2, 8, 12, 0, tzinfo=timezone.utc),
+        duration_seconds=10800,
+        problem_count=6,
+        participant_count=2,
+    )
+    repo.exam_participant_metrics_by_exam[3] = [
+        ExamParticipantMetricRow(
+            student_entity_id=303,
+            student_no="20231202001",
+            student_name="前一名同学",
+            rank=6,
+            total_score=Decimal("380"),
+            solved_count=5,
+            old_rating=1120,
+            new_rating=1130,
+            rating_delta=10,
+            knowledge=90,
             accuracy=32,
-            quality=None,
-            flexibility=None,
-            proficiency=None,
-            computed_at=datetime(2026, 2, 1, 10, 5, tzinfo=timezone.utc),
+            quality=50,
+            flexibility=26,
+            proficiency=31,
+            total_participants=2,
         ),
+        ExamParticipantMetricRow(
+            student_entity_id=101,
+            student_no="20231202047",
+            student_name="王浩然",
+            rank=7,
+            total_score=Decimal("370"),
+            solved_count=5,
+            old_rating=1080,
+            new_rating=1097,
+            rating_delta=17,
+            knowledge=96,
+            accuracy=22,
+            quality=64,
+            flexibility=28,
+            proficiency=28,
+            total_participants=2,
+        ),
+    ]
+    repo.submissions_by_exam_student[(3, 101)] = [
+        ExamSubmissionRow(
+            submission_id=10,
+            problem_code="A",
+            submitted_at=_dt(8),
+            verdict="Accepted",
+            score=Decimal("100"),
+            language="C++",
+            time_ms=12,
+            memory_kb=256,
+        )
+    ]
+    repo.submissions_by_exam_student[(3, 303)] = [
+        ExamSubmissionRow(
+            submission_id=11,
+            problem_code="B",
+            submitted_at=datetime(2026, 2, 8, 9, 30, tzinfo=timezone.utc),
+            verdict="Wrong Answer",
+            score=Decimal("30"),
+            language="C++",
+            time_ms=18,
+            memory_kb=512,
+        )
+    ]
+    repo.student_matches_by_no["20231202001"] = [
+        StudentIdentityMatch(
+            student_id=303,
+            student_no="20231202001",
+            student_name="前一名同学",
+        )
     ]
     return repo
 
 
-def test_prompt_service_uses_merged_exam_metric_rows() -> None:
-    repo = _build_repo()
-    prompt_service = PromptService(repository=repo)
+def test_prompt_service_does_not_inject_numeric_student_data() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
 
     prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
 
-    assert "知识: 75 / 100" in prompt
-    assert "- 知识: 75（+27，上一场: 48）" in prompt
-    assert "- 质量: 64（+0，上一场: 64）" in prompt
-    assert "精进3" not in prompt
+    assert "## 当前学生身份" in prompt
+    assert "学号: 20231202047" in prompt
+    assert "get_student_learning_profile" in prompt
+    assert "get_exam_participant_metrics" in prompt
+    assert "get_student_growth_insights" not in prompt
+    assert "Rating: **" not in prompt
+    assert "知识: 75 / 100" not in prompt
+    assert "精选3" not in prompt
 
 
-def test_prompt_service_normal_mode_is_minimal_and_contextual() -> None:
-    repo = _build_repo()
-    prompt_service = PromptService(repository=repo)
-
-    prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
-
-    assert "## 任务目标" in prompt
-    assert "## 工具使用规则" in prompt
-    assert "## 指标体系说明" not in prompt
-    assert "寒暄/闲聊" not in prompt
-
-
-def test_prompt_service_proactive_mode_contains_analysis_workflow() -> None:
-    repo = _build_repo()
-    prompt_service = PromptService(repository=repo)
+def test_prompt_service_proactive_mode_uses_fact_tools() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
 
     prompt = asyncio.run(
         prompt_service.build_proactive_analysis_system_prompt(identity=_build_identity())
@@ -212,11 +265,29 @@ def test_prompt_service_proactive_mode_contains_analysis_workflow() -> None:
     assert "## 主动分析模式" in prompt
     assert "## 分析流程（必须执行）" in prompt
     assert "## 指标体系说明" in prompt
+    assert "get_student_learning_profile" in prompt
+    assert "get_exam_participant_metrics" in prompt
+    assert "get_student_growth_insights" not in prompt
+
+
+def test_prompt_service_exam_mode_only_injects_target_exam_id() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
+
+    prompt = asyncio.run(
+        prompt_service.build_exam_analysis_system_prompt(
+            identity=_build_identity(),
+            target_exam_id=3,
+        )
+    )
+
+    assert "目标考试 ID 为 `3`" in prompt
+    assert "目标考试 ID: 3" in prompt
+    assert "精选3" not in prompt
+    assert "1080" not in prompt
 
 
 def test_prompt_service_sakiko_role_includes_style_prompt() -> None:
-    repo = _build_repo()
-    prompt_service = PromptService(repository=repo)
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
 
     prompt = asyncio.run(
         prompt_service.build_system_prompt(
@@ -230,113 +301,142 @@ def test_prompt_service_sakiko_role_includes_style_prompt() -> None:
     assert "你的中文名：丰川祥子" in prompt
 
 
-def test_tool_executor_merges_exam_metric_rows() -> None:
-    repo = _build_repo()
-    executor = ToolExecutor(repository=repo, identity=_build_identity())
-
-    result = asyncio.run(
-        executor.execute("get_student_metric_history", {"limit": 2})
+def test_prompt_service_uses_admin_prompt_overrides() -> None:
+    prompt_service = PromptService(
+        repository=PromptOverrideRepo(
+            {
+                "chat.tool_rules": "## 自定义工具规则\n- 必须调用事实工具。",
+                "chat.normal_system": "角色={role_name}\n\n{tool_rules}",
+                "chat.student_context": "绑定学生：{student_id}/{pta_nickname}/{matched_by}/{student_entity_ids}",
+                "role.xiaoD.style": "使用更克制的教师语气。",
+            }
+        )  # type: ignore[arg-type]
     )
-    payload = json.loads(result)
 
-    assert payload[0]["exam_id"] == 3
-    assert payload[0]["knowledge"] == 75
-    assert payload[0]["accuracy"] == 22
-    assert payload[0]["quality"] == 64
-    assert payload[1]["exam_id"] == 2
-    assert payload[1]["accuracy"] == 32
-    assert all(item["exam_id"] != 29 for item in payload)
+    prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
+
+    assert "角色=小D" in prompt
+    assert "## 自定义工具规则" in prompt
+    assert "绑定学生：20231202047/王浩然/student_id/101, 202" in prompt
+    assert "使用更克制的教师语气。" in prompt
+    assert "## 任务目标" not in prompt
 
 
-def test_tool_executor_student_ability_scores_returns_rank_gap() -> None:
-    repo = _build_repo()
-    repo.exam_participants_by_exam[3] = [
-        ExamParticipantRow(
-            student_id=303,
-            student_name="前一名同学",
-            rank=6,
-            total_score=Decimal("380"),
-            solved_count=5,
-        ),
-        ExamParticipantRow(
-            student_id=101,
-            student_name="王浩然",
-            rank=7,
-            total_score=Decimal("370"),
-            solved_count=5,
-        ),
+def test_prompt_service_falls_back_when_admin_prompt_is_invalid() -> None:
+    prompt_service = PromptService(
+        repository=PromptOverrideRepo(
+            {
+                "chat.normal_system": "这个模板包含非法变量 {unknown}",
+            }
+        )  # type: ignore[arg-type]
+    )
+
+    prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
+
+    assert "## 任务目标" in prompt
+    assert "这个模板包含非法变量" not in prompt
+
+
+def test_prompt_service_auto_analysis_message_uses_admin_template() -> None:
+    prompt_service = PromptService(
+        repository=PromptOverrideRepo(
+            {
+                "chat.auto_analysis_user_message": "自动分析：{target_exam_instruction}开始。",
+            }
+        )  # type: ignore[arg-type]
+    )
+
+    message = asyncio.run(prompt_service.build_auto_analysis_user_message(8))
+
+    assert message == "自动分析：目标考试 ID 为 8，开始。"
+
+
+def test_tool_definitions_only_expose_fact_tools() -> None:
+    names = [item["function"]["name"] for item in TOOL_DEFINITIONS]
+
+    assert names == [
+        "get_student_learning_profile",
+        "get_exam_participant_metrics",
+        "get_exam_submissions",
     ]
-    repo.exam_metric_by_exam_student[(3, 101)] = ExamStudentMetricRow(
-        exam_id=3,
-        student_id=101,
-        knowledge=96,
-        accuracy=22,
-        quality=64,
-        flexibility=28,
-        proficiency=28,
-    )
-    repo.exam_metric_by_exam_student[(3, 303)] = ExamStudentMetricRow(
-        exam_id=3,
-        student_id=303,
-        knowledge=90,
-        accuracy=32,
-        quality=50,
-        flexibility=26,
-        proficiency=31,
-    )
 
-    executor = ToolExecutor(repository=repo, identity=_build_identity())
+
+def test_tool_executor_learning_profile_merges_fact_history() -> None:
+    executor = ToolExecutor(repository=_build_repo(), identity=_build_identity())
+
     result = asyncio.run(
-        executor.execute("get_student_ability_scores", {"exam_id": 3})
+        executor.execute("get_student_learning_profile", {"history_limit": 2})
     )
     payload = json.loads(result)
 
-    assert payload["me"]["rank"] == 7
-    assert payload["previous_ranker"]["rank"] == 6
-    assert payload["gap_vs_previous"]["score_gap"] == 10.0
-    assert payload["rank_basis"]["source"] == "exam_participants.rank"
-    assert payload["metric_diff_vs_previous"]["knowledge"]["delta_vs_previous"] == 6
-    assert payload["metric_diff_vs_previous"]["knowledge"]["mine_is_missing"] is False
+    assert payload["student"]["student_no"] == "20231202047"
+    assert payload["current"]["rating"] == 1097
+    assert payload["current"]["knowledge"] == 75
+    assert payload["current"]["accuracy"] == 32
+    assert payload["current"]["quality"] == 64
+    assert payload["history"][0]["exam_id"] == 3
+    assert payload["history"][0]["new_rating"] == 1097
+    assert payload["history"][0]["knowledge"] == 75
+    assert payload["history"][1]["exam_id"] == 2
+    assert payload["history"][1]["accuracy"] == 32
+    assert all(item["exam_id"] != 29 for item in payload["history"])
 
 
-def test_tool_executor_growth_insights_returns_dashboard_shape() -> None:
-    repo = _build_repo()
-    repo.participant_context_by_exam[3] = ExamParticipantContextRow(
-        student_id=101,
-        position=7,
-        rank=7,
-        total_score=370,
-        solved_count=5,
-        total_participants=100,
-    )
-    repo.band_medians_by_exam[3] = ExamBandMediansRow(
-        sample_size=20,
-        total_score_median=365,
-        solved_count_median=5,
-        knowledge_median=70,
-        accuracy_median=20,
-        quality_median=60,
-        flexibility_median=35,
-        proficiency_median=50,
-    )
-    repo.previous_ranker_by_exam[3] = ExamPreviousRankerRow(
-        student_id=303,
-        position=6,
-        rank=6,
-        total_score=380,
-        solved_count=5,
-        knowledge=90,
-        accuracy=32,
-        quality=50,
-        flexibility=26,
-        proficiency=31,
-    )
+def test_tool_executor_exam_participant_metrics_returns_full_fact_rows() -> None:
+    executor = ToolExecutor(repository=_build_repo(), identity=_build_identity())
 
-    executor = ToolExecutor(repository=repo, identity=_build_identity())
-    result = asyncio.run(executor.execute("get_student_growth_insights", {}))
+    result = asyncio.run(
+        executor.execute("get_exam_participant_metrics", {"exam_id": 3})
+    )
     payload = json.loads(result)
 
-    assert payload["progressExplanation"]["available"] is True
-    assert payload["milestoneStreak"]["available"] is True
-    assert payload["peerComparison"]["defaultMode"] == "percentile_band"
-    assert "postExamSupport" in payload
+    assert payload["exam"]["exam_id"] == 3
+    assert payload["participant_count"] == 2
+    assert payload["returned_count"] == 2
+    assert payload["truncated"] is False
+    assert payload["participants"][0]["student_no"] == "20231202001"
+    assert payload["participants"][0]["rank"] == 6
+    assert payload["participants"][0]["rating_delta"] == 10
+    assert payload["participants"][1]["student_name"] == "王浩然"
+    assert payload["participants"][1]["is_current_student"] is True
+    assert payload["participants"][1]["knowledge"] == 96
+
+
+def test_tool_executor_exam_submissions_defaults_to_bound_student() -> None:
+    executor = ToolExecutor(repository=_build_repo(), identity=_build_identity())
+
+    result = asyncio.run(executor.execute("get_exam_submissions", {"exam_id": 3}))
+    payload = json.loads(result)
+
+    assert payload["student_entity_ids"] == [101, 202]
+    assert payload["returned_count"] == 1
+    assert payload["submissions"][0]["problem_code"] == "A"
+
+
+def test_tool_executor_exam_submissions_can_target_student_no() -> None:
+    executor = ToolExecutor(repository=_build_repo(), identity=_build_identity())
+
+    result = asyncio.run(
+        executor.execute(
+            "get_exam_submissions",
+            {"exam_id": 3, "student_no": "20231202001"},
+        )
+    )
+    payload = json.loads(result)
+
+    assert payload["student_entity_ids"] == [303]
+    assert payload["submissions"][0]["problem_code"] == "B"
+
+
+def test_tool_executor_requires_identity_for_default_student_tools() -> None:
+    executor = ToolExecutor(repository=_build_repo(), identity=None)
+
+    profile = json.loads(
+        asyncio.run(executor.execute("get_student_learning_profile", {}))
+    )
+    submissions = json.loads(
+        asyncio.run(executor.execute("get_exam_submissions", {"exam_id": 3}))
+    )
+
+    assert "未绑定学生身份" in profile["error"]
+    assert "未绑定学生身份" in submissions["error"]

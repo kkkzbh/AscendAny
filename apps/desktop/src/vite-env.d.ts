@@ -47,7 +47,6 @@ interface ElectronAPI {
   minimize: () => void;
   maximize: () => void;
   close: () => void;
-  openFeedbackWindow?: () => Promise<boolean>;
   submitFeedback?: (payload: {
     title: string;
     content: string;

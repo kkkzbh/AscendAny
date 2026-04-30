@@ -50,7 +50,7 @@ export function LeaderboardWorkspace() {
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 

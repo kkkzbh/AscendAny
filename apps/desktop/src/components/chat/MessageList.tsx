@@ -12,6 +12,15 @@ export function MessageList() {
   });
   const isAiWorking = useChatStore((s) => s.isAiWorking);
   const containerRef = useRef<HTMLDivElement>(null);
+  const shouldStickToBottomRef = useRef(true);
+
+  const isNearBottom = () => {
+    const container = containerRef.current;
+    if (!container) return true;
+    return (
+      container.scrollHeight - container.scrollTop - container.clientHeight < 96
+    );
+  };
 
   const scrollToBottom = (behavior: ScrollBehavior) => {
     const container = containerRef.current;
@@ -53,20 +62,33 @@ export function MessageList() {
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || typeof ResizeObserver === "undefined") return;
+    if (!container) return;
 
-    const content = container.firstElementChild;
-    if (!(content instanceof HTMLElement)) return;
-
-    const observer = new ResizeObserver(() => {
-      scrollToBottom("auto");
-    });
-    observer.observe(content);
+    const handleScroll = () => {
+      shouldStickToBottomRef.current = isNearBottom();
+    };
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    handleScroll();
 
     return () => {
-      observer.disconnect();
+      container.removeEventListener("scroll", handleScroll);
     };
-  }, [messages.length]);
+  }, []);
+
+  const latestMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
+  const latestContentLength = latestMessage?.content.length ?? 0;
+  const latestReasoningLength = latestMessage?.reasoningContent?.length ?? 0;
+
+  useEffect(() => {
+    if (!shouldStickToBottomRef.current) return;
+    if (!latestMessage?.streaming && !latestMessage?.reasoningStreaming) return;
+    scrollToBottom("auto");
+  }, [
+    latestContentLength,
+    latestReasoningLength,
+    latestMessage?.streaming,
+    latestMessage?.reasoningStreaming,
+  ]);
 
   if (messages.length === 0 && !isAiWorking) {
     return (

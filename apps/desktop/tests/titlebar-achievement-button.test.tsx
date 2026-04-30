@@ -53,7 +53,6 @@ describe("TitleBar student controls", () => {
     });
     window.electronAPI = {
       platform: "linux",
-      openFeedbackWindow: vi.fn(async () => true),
       minimize: vi.fn(),
       maximize: vi.fn(),
       close: vi.fn(),
@@ -66,8 +65,8 @@ describe("TitleBar student controls", () => {
     expect(screen.getByRole("button", { name: "打开排行榜" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "打开成就页面" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "切换到暗色主题" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "打开反馈窗口" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "退出登录" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "打开反馈窗口" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "退出登录" })).toBeNull();
     expect(screen.queryByRole("button", { name: "展开左侧栏" })).toBeNull();
     expect(screen.getByRole("button", { name: "折叠右侧栏" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
@@ -118,14 +117,11 @@ describe("TitleBar student controls", () => {
     expect(useLeaderboardStore.getState().isOpen).toBe(true);
   });
 
-  it("keeps theme and feedback actions functional", () => {
+  it("keeps theme actions functional", () => {
     render(<TitleBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "切换到暗色主题" }));
     expect(useSettingsStore.getState().theme).toBe("dark");
     expect(screen.getByRole("button", { name: "切换到亮色主题" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "打开反馈窗口" }));
-    expect(window.electronAPI?.openFeedbackWindow).toHaveBeenCalledTimes(1);
   });
 });

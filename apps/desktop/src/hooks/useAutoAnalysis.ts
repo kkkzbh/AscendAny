@@ -16,12 +16,14 @@ export function useAutoAnalysis(params: {
   onReply: (reply: string, roleId: string) => void;
   onStreamStart?: (roleId: string) => string;
   onStreamDelta?: (messageId: string, delta: string) => void;
+  onStreamReasoning?: (messageId: string, delta: string) => void;
+  onStreamReasoningDone?: (messageId: string) => void;
   onStreamDone?: (messageId: string, reply: string) => void;
   onStreamEmpty?: (messageId: string) => void;
   onWorkStart?: () => string;
   onWorkEnd?: (taskId: string | undefined) => void;
 }) {
-  const { onReply, onStreamStart, onStreamDelta, onStreamDone, onStreamEmpty, onWorkStart, onWorkEnd } = params;
+  const { onReply, onStreamStart, onStreamDelta, onStreamReasoning, onStreamReasoningDone, onStreamDone, onStreamEmpty, onWorkStart, onWorkEnd } = params;
   const inFlightExamIdRef = useRef<string | null>(null);
 
   const account = useAuthStore((s) => s.account);
@@ -52,13 +54,27 @@ export function useAutoAnalysis(params: {
 
         let draftMessageId: string | null = null;
         let bufferedText = "";
+        let bufferedReasoning = "";
         let rafId = 0;
         const flush = () => {
           rafId = 0;
-          if (!draftMessageId || !bufferedText) return;
-          const next = bufferedText;
-          bufferedText = "";
-          onStreamDelta?.(draftMessageId, next);
+          if (!draftMessageId) return;
+          if (bufferedReasoning) {
+            const nextReasoning = bufferedReasoning;
+            bufferedReasoning = "";
+            onStreamReasoning?.(draftMessageId, nextReasoning);
+          }
+          if (bufferedText) {
+            const next = bufferedText;
+            bufferedText = "";
+            onStreamDelta?.(draftMessageId, next);
+          }
+        };
+        const flushReasoning = () => {
+          if (!draftMessageId || !bufferedReasoning) return;
+          const nextReasoning = bufferedReasoning;
+          bufferedReasoning = "";
+          onStreamReasoning?.(draftMessageId, nextReasoning);
         };
 
         await streamAutoAnalysis(
@@ -79,7 +95,23 @@ export function useAutoAnalysis(params: {
                 taskId = undefined;
               }
               if (draftMessageId) {
+                flushReasoning();
+                onStreamReasoningDone?.(draftMessageId);
                 bufferedText += event.text;
+                if (!rafId) {
+                  rafId = window.requestAnimationFrame(flush);
+                }
+              }
+              return;
+            }
+            if (event.type === "reasoning_delta" && event.text) {
+              if (!draftMessageId) {
+                draftMessageId = onStreamStart?.(roleIdAtRequest) ?? null;
+                onWorkEnd?.(taskId);
+                taskId = undefined;
+              }
+              if (draftMessageId) {
+                bufferedReasoning += event.text;
                 if (!rafId) {
                   rafId = window.requestAnimationFrame(flush);
                 }
@@ -127,6 +159,8 @@ export function useAutoAnalysis(params: {
     onReply,
     onStreamStart,
     onStreamDelta,
+    onStreamReasoning,
+    onStreamReasoningDone,
     onStreamDone,
     onStreamEmpty,
     onWorkStart,

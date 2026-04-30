@@ -7,7 +7,7 @@ import httpx
 
 RequestMode = Literal["chat_completions", "responses"]
 AdapterKind = Literal["openai_compatible", "responses"]
-ProviderStreamEventKind = Literal["delta", "tool_call_delta"]
+ProviderStreamEventKind = Literal["delta", "reasoning_delta", "tool_call_delta"]
 
 
 @dataclass(slots=True)
@@ -35,6 +35,7 @@ class ProviderDefinition:
     model_hint: str
     model_options: list[ProviderModelOption]
     supports_dynamic_models: bool = False
+    assistant_passthrough_fields: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -54,6 +55,7 @@ class ProviderProfile:
     model_hint: str
     model_options: list[ProviderModelOption]
     supports_dynamic_models: bool = False
+    assistant_passthrough_fields: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

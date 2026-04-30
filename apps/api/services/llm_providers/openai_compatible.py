@@ -79,6 +79,14 @@ class OpenAICompatibleAdapter:
                         delta = choices[0].get("delta")
                         if not isinstance(delta, dict):
                             continue
+                        reasoning_content = self._extract_text(
+                            delta.get("reasoning_content")
+                        )
+                        if reasoning_content:
+                            yield ProviderStreamEvent(
+                                kind="reasoning_delta",
+                                text=reasoning_content,
+                            )
                         content = self._extract_text(delta.get("content"))
                         if content:
                             yield ProviderStreamEvent(kind="delta", text=content)

@@ -17,6 +17,94 @@ class _StubLLM:
 
 
 class _AdminRepo:
+    def __init__(self) -> None:
+        self.prompts: dict[str, SimpleNamespace] = {}
+        self.prompt_versions: dict[str, list[SimpleNamespace]] = {}
+
+    async def ensure_ai_prompt_template_default(
+        self,
+        *,
+        prompt_key: str,
+        title: str,
+        description: str,
+        category: str,
+        default_content: str,
+        allowed_variables: list[str],
+        required_variables: list[str],
+    ) -> None:
+        now = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        if prompt_key not in self.prompts:
+            self.prompts[prompt_key] = SimpleNamespace(
+                prompt_key=prompt_key,
+                title=title,
+                description=description,
+                category=category,
+                content=default_content,
+                default_content=default_content,
+                allowed_variables=allowed_variables,
+                required_variables=required_variables,
+                version=1,
+                updated_by="system",
+                created_at=now,
+                updated_at=now,
+            )
+            self.prompt_versions[prompt_key] = [
+                SimpleNamespace(
+                    version_id=1,
+                    prompt_key=prompt_key,
+                    version=1,
+                    content=default_content,
+                    change_note="系统默认版本",
+                    updated_by="system",
+                    created_at=now,
+                )
+            ]
+            return
+        row = self.prompts[prompt_key]
+        row.title = title
+        row.description = description
+        row.category = category
+        row.default_content = default_content
+        row.allowed_variables = allowed_variables
+        row.required_variables = required_variables
+
+    async def list_ai_prompt_templates(self):
+        return list(self.prompts.values())
+
+    async def fetch_ai_prompt_template(self, prompt_key: str):
+        return self.prompts.get(prompt_key)
+
+    async def fetch_ai_prompt_template_versions(self, prompt_key: str):
+        return list(reversed(self.prompt_versions.get(prompt_key, [])))
+
+    async def update_ai_prompt_template(
+        self,
+        *,
+        prompt_key: str,
+        content: str,
+        change_note: str | None,
+        updated_by: str | None,
+    ):
+        row = self.prompts.get(prompt_key)
+        if row is None:
+            return None
+        row.version += 1
+        row.content = content
+        row.updated_by = updated_by
+        row.updated_at = datetime(2026, 2, row.version, tzinfo=timezone.utc)
+        self.prompt_versions.setdefault(prompt_key, []).append(
+            SimpleNamespace(
+                version_id=row.version,
+                prompt_key=prompt_key,
+                version=row.version,
+                content=content,
+                change_note=change_note,
+                updated_by=updated_by,
+                created_at=row.updated_at,
+            )
+        )
+        return row
+
     async def fetch_admin_student_summaries(self, search=None, limit=200, role_id="xiaoD"):
         _ = search, limit, role_id
         return [
@@ -276,6 +364,64 @@ def test_admin_model_connection_test_and_deepseek_static_fallback(
     assert fallback.status_code == 200
     assert fallback.json()["source"] == "static"
     assert fallback.json()["models"][0]["modelId"] == "deepseek-v4-flash"
+
+
+def test_admin_prompt_config_saves_previews_and_restores(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    with _build_client(tmp_path, monkeypatch) as client:
+        prompts = client.get("/api/v1/admin/prompts")
+        assert prompts.status_code == 200
+        assert any(item["key"] == "chat.normal_system" for item in prompts.json()["items"])
+
+        patched = client.patch(
+            "/api/v1/admin/prompts/chat.normal_system",
+            json={
+                "content": "角色：{role_name}\n\n{tool_rules}\n\n请先给结论。",
+                "changeNote": "测试版本",
+            },
+        )
+        assert patched.status_code == 200
+        patched_payload = patched.json()
+        assert patched_payload["version"] == 2
+        assert patched_payload["content"].startswith("角色：")
+
+        preview = client.post(
+            "/api/v1/admin/prompts/chat.normal_system/preview",
+            json={"content": "你好 {role_name}\n{tool_rules}"},
+        )
+        assert preview.status_code == 200
+        assert "你好 小D" in preview.json()["rendered"]
+
+        restored = client.post(
+            "/api/v1/admin/prompts/chat.normal_system/restore",
+            json={"version": 1},
+        )
+        assert restored.status_code == 200
+        restored_payload = restored.json()
+        assert restored_payload["version"] == 3
+        assert "任务目标" in restored_payload["content"]
+
+
+def test_admin_prompt_config_rejects_unknown_and_missing_variables(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    with _build_client(tmp_path, monkeypatch) as client:
+        unknown = client.patch(
+            "/api/v1/admin/prompts/chat.normal_system",
+            json={"content": "你好 {role_name} {unknown}\n{tool_rules}"},
+        )
+        missing = client.patch(
+            "/api/v1/admin/prompts/chat.normal_system",
+            json={"content": "没有角色变量\n{tool_rules}"},
+        )
+
+    assert unknown.status_code == 422
+    assert unknown.json()["error"]["code"] == "INVALID_PROMPT_TEMPLATE"
+    assert missing.status_code == 422
+    assert "role_name" in missing.json()["error"]["message"]
 
 
 def test_admin_student_reports_aggregate_by_student(

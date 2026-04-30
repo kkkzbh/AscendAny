@@ -73,22 +73,72 @@ describe("chatStore sessions", () => {
 
   it("streams assistant drafts without leaking transient state into reload", async () => {
     const draftId = useChatStore.getState().createAssistantDraft("sakiko");
+    useChatStore.getState().appendMessageReasoning(draftId, "先查看数据。");
     useChatStore.getState().appendMessageContent(draftId, "第一段");
     useChatStore.getState().appendMessageContent(draftId, "第二段");
 
     let message = useChatStore.getState().getActiveSession().messages[0];
     expect(message?.content).toBe("第一段第二段");
+    expect(message?.reasoningContent).toBe("先查看数据。");
+    expect(message?.reasoningStartedAt).toEqual(expect.any(Number));
+    expect(message?.reasoningEndedAt).toBeUndefined();
     expect(message?.streaming).toBe(true);
+    expect(message?.reasoningStreaming).toBe(true);
     expect(message?.roleId).toBe("sakiko");
+
+    useChatStore.getState().finalizeMessageReasoning(draftId);
+    message = useChatStore.getState().getActiveSession().messages[0];
+    expect(message?.streaming).toBe(true);
+    expect(message?.reasoningStreaming).toBe(false);
+    expect(message?.reasoningEndedAt).toEqual(expect.any(Number));
+    const endedAt = message?.reasoningEndedAt;
 
     useChatStore.getState().finalizeMessage(draftId);
     message = useChatStore.getState().getActiveSession().messages[0];
     expect(message?.streaming).toBe(false);
+    expect(message?.reasoningStreaming).toBe(false);
+    expect(message?.reasoningEndedAt).toBe(endedAt);
 
     const emptyDraftId = useChatStore.getState().createAssistantDraft("xiaoD");
     useChatStore.getState().removeMessage(emptyDraftId);
     expect(
       useChatStore.getState().getActiveSession().messages.some((item) => item.id === emptyDraftId),
     ).toBe(false);
+  });
+
+  it("hydrates persisted reasoning content but clears transient reasoning stream state", () => {
+    useChatStore.getState().hydrateFromLocalState({
+      sessions: [
+        {
+          id: "session_reasoning",
+          title: "reasoning",
+          messages: [
+            {
+              id: "msg_reasoning",
+              role: "assistant",
+              content: "最终回答",
+              reasoningContent: "思考内容",
+              reasoningStartedAt: 1710000000100,
+              reasoningEndedAt: 1710000005100,
+              timestamp: 1710000000000,
+              streaming: true,
+              reasoningStreaming: true,
+            },
+          ],
+          summary: "",
+          createdAt: 1710000000000,
+          updatedAt: 1710000001000,
+        },
+      ],
+      activeSessionId: "session_reasoning",
+    });
+
+    const message = useChatStore.getState().getActiveSession().messages[0];
+    expect(message?.content).toBe("最终回答");
+    expect(message?.reasoningContent).toBe("思考内容");
+    expect(message?.reasoningStartedAt).toBe(1710000000100);
+    expect(message?.reasoningEndedAt).toBe(1710000005100);
+    expect(message?.streaming).toBe(false);
+    expect(message?.reasoningStreaming).toBe(false);
   });
 });

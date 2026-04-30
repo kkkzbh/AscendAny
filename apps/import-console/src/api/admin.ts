@@ -72,6 +72,42 @@ export interface AdminDeepSeekModelsResponse {
   error: string | null;
 }
 
+export interface AdminPromptSummary {
+  key: string;
+  title: string;
+  description: string;
+  category: string;
+  allowedVariables: string[];
+  requiredVariables: string[];
+  version: number;
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
+
+export interface AdminPromptVersion {
+  versionId: string;
+  version: number;
+  content: string;
+  changeNote: string | null;
+  updatedBy: string | null;
+  createdAt: string | null;
+}
+
+export interface AdminPromptDetail extends AdminPromptSummary {
+  content: string;
+  defaultContent: string;
+  sampleVariables: Record<string, string>;
+  history: AdminPromptVersion[];
+}
+
+export interface AdminPromptListResponse {
+  items: AdminPromptSummary[];
+}
+
+export interface AdminPromptPreviewResponse {
+  rendered: string;
+}
+
 export interface AdminPreprocessConfig {
   practiceRoot: string;
   encodings: string[];
@@ -271,6 +307,44 @@ export function listAdminDeepSeekModels(payload: {
   return apiFetch(`/api/v1/admin/model-config/${providerId}/models`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function getAdminPrompts(): Promise<AdminPromptListResponse> {
+  return apiFetch("/api/v1/admin/prompts");
+}
+
+export function getAdminPrompt(key: string): Promise<AdminPromptDetail> {
+  return apiFetch(`/api/v1/admin/prompts/${encodeURIComponent(key)}`);
+}
+
+export function patchAdminPrompt(
+  key: string,
+  payload: { content: string; changeNote?: string },
+): Promise<AdminPromptDetail> {
+  return apiFetch(`/api/v1/admin/prompts/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewAdminPrompt(
+  key: string,
+  payload: { content?: string; variables?: Record<string, string> },
+): Promise<AdminPromptPreviewResponse> {
+  return apiFetch(`/api/v1/admin/prompts/${encodeURIComponent(key)}/preview`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function restoreAdminPrompt(
+  key: string,
+  version: number,
+): Promise<AdminPromptDetail> {
+  return apiFetch(`/api/v1/admin/prompts/${encodeURIComponent(key)}/restore`, {
+    method: "POST",
+    body: JSON.stringify({ version }),
   });
 }
 

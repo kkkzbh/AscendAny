@@ -302,7 +302,8 @@ def test_exam_analysis_service_targets_selected_exam_and_includes_students_witho
 
     alice_prompt = llm.calls[0][1]
     assert "目标考试 ID 为 `11`" in alice_prompt
-    assert "目标考试: Contest 11（2026-02-11，ID=11）" in alice_prompt
+    assert "目标考试 ID: 11" in alice_prompt
+    assert "Contest 11" not in alice_prompt
     assert "系统主动分析最新考试表现" not in alice_prompt
 
 

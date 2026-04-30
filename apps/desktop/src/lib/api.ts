@@ -117,6 +117,7 @@ interface StudentLeaderboardPayload {
 export interface ChatMessagePayload {
   role: Role;
   content: string;
+  reasoningContent?: string;
 }
 
 export interface ChatReplyRequestPayload {
@@ -160,6 +161,7 @@ export interface ChatReplyResponsePayload {
 export type ChatStreamEvent =
   | { type: "meta"; provider?: string; model?: string; requestMode?: string; summary?: string }
   | { type: "delta"; text: string }
+  | { type: "reasoning_delta"; text: string }
   | { type: "tool_start" }
   | { type: "tool_done" }
   | { type: "done"; reply: string; summary?: string; provider?: string; model?: string; requestMode?: string }
@@ -618,6 +620,8 @@ async function streamJsonEvents(
     const type = typeof parsed.type === "string" ? parsed.type : eventType;
     if (type === "delta") {
       onEvent({ type: "delta", text: String(parsed.text ?? "") });
+    } else if (type === "reasoning_delta") {
+      onEvent({ type: "reasoning_delta", text: String(parsed.text ?? "") });
     } else if (type === "done") {
       onEvent({ type: "done", reply: String(parsed.reply ?? ""), summary: typeof parsed.summary === "string" ? parsed.summary : undefined, provider: typeof parsed.provider === "string" ? parsed.provider : undefined, model: typeof parsed.model === "string" ? parsed.model : undefined, requestMode: typeof parsed.requestMode === "string" ? parsed.requestMode : undefined });
     } else if (type === "error") {

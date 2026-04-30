@@ -159,9 +159,11 @@ class FakeRepo:
 class FakeLLM:
     def __init__(self) -> None:
         self.calls = 0
+        self.payloads = []
 
     async def generate_reply(self, payload, system_prompt=None, tool_executor=None) -> ChatReplyResponse:
         self.calls += 1
+        self.payloads.append(payload)
         return ChatReplyResponse(
             reply="ok",
             summary=payload.summary,
@@ -170,6 +172,7 @@ class FakeLLM:
 
     async def stream_reply(self, payload, system_prompt=None, tool_executor=None):
         self.calls += 1
+        self.payloads.append(payload)
         yield {
             "type": "meta",
             "provider": "deepseek",
@@ -386,6 +389,33 @@ def test_chat_reply_stream_emits_meta_delta_done() -> None:
     assert '"reply":"ok"' in body
     assert llm.calls == 1
     assert repo.ai_counter_calls == [(1,)]
+
+
+def test_chat_reply_stream_preserves_assistant_reasoning_content() -> None:
+    repo = FakeRepo()
+    llm = FakeLLM()
+    app = create_app(repository=repo, llm_service=llm)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat/reply/stream",
+            json={
+                "studentId": "20230001",
+                "messages": [
+                    {"role": "user", "content": "第一轮"},
+                    {
+                        "role": "assistant",
+                        "content": "第一轮回答",
+                        "reasoningContent": "第一轮工具调用 reasoning",
+                    },
+                    {"role": "user", "content": "第二轮"},
+                ],
+                "summary": "",
+            },
+        )
+
+    assert response.status_code == 200
+    assert llm.calls == 1
+    assert llm.payloads[0].messages[1].reasoningContent == "第一轮工具调用 reasoning"
 
 
 def test_chat_reply_rejects_legacy_client_provider_config() -> None:

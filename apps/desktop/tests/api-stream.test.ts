@@ -24,6 +24,7 @@ describe("chat stream API", () => {
       new Response(
         eventStream([
           'event: meta\ndata: {"provider":"deepseek","model":"deepseek-v4-flash"}\n\n',
+          'event: reasoning_delta\ndata: {"text":"先分析"}\n\n',
           'event: delta\ndata: {"text":"你',
           '好"}\n\n',
           'event: done\ndata: {"reply":"你好","summary":"s"}\n\n',
@@ -40,6 +41,7 @@ describe("chat stream API", () => {
 
     expect(events).toEqual([
       { type: "meta", provider: "deepseek", model: "deepseek-v4-flash", requestMode: undefined, summary: undefined },
+      { type: "reasoning_delta", text: "先分析" },
       { type: "delta", text: "你好" },
       { type: "done", reply: "你好", summary: "s", provider: undefined, model: undefined, requestMode: undefined },
     ]);

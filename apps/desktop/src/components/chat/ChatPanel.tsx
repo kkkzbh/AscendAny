@@ -14,6 +14,8 @@ export function ChatPanel({
   const addMessage = useChatStore((s) => s.addMessage);
   const createAssistantDraft = useChatStore((s) => s.createAssistantDraft);
   const appendMessageContent = useChatStore((s) => s.appendMessageContent);
+  const appendMessageReasoning = useChatStore((s) => s.appendMessageReasoning);
+  const finalizeMessageReasoning = useChatStore((s) => s.finalizeMessageReasoning);
   const finalizeMessage = useChatStore((s) => s.finalizeMessage);
   const removeMessage = useChatStore((s) => s.removeMessage);
   const startAiWork = useChatStore((s) => s.startAiWork);
@@ -43,6 +45,8 @@ export function ChatPanel({
     onReply: handleAutoAnalysis,
     onStreamStart: createAssistantDraft,
     onStreamDelta: appendMessageContent,
+    onStreamReasoning: appendMessageReasoning,
+    onStreamReasoningDone: finalizeMessageReasoning,
     onStreamDone: (messageId) => finalizeMessage(messageId),
     onStreamEmpty: removeMessage,
     onWorkStart: handleAutoWorkStart,

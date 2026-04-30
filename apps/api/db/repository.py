@@ -105,6 +105,25 @@ class ExamParticipantRow:
 
 
 @dataclass(slots=True)
+class ExamParticipantMetricRow:
+    student_entity_id: int
+    student_no: str | None
+    student_name: str | None
+    rank: int | None
+    total_score: Decimal | float | int | None
+    solved_count: int | None
+    old_rating: int | None
+    new_rating: int | None
+    rating_delta: int | None
+    knowledge: Decimal | float | int | None
+    accuracy: Decimal | float | int | None
+    quality: Decimal | float | int | None
+    flexibility: Decimal | float | int | None
+    proficiency: Decimal | float | int | None
+    total_participants: int
+
+
+@dataclass(slots=True)
 class ExamStudentMetricRow:
     exam_id: int
     student_id: int
@@ -312,6 +331,33 @@ class AdminAuditLogRow:
     detail: str
     created_at: datetime
     payload: dict[str, object]
+
+
+@dataclass(slots=True)
+class AiPromptTemplateRow:
+    prompt_key: str
+    title: str
+    description: str
+    category: str
+    content: str
+    default_content: str
+    allowed_variables: list[str]
+    required_variables: list[str]
+    version: int
+    updated_by: str | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass(slots=True)
+class AiPromptTemplateVersionRow:
+    version_id: int
+    prompt_key: str
+    version: int
+    content: str
+    change_note: str | None
+    updated_by: str | None
+    created_at: datetime | None
 
 
 @dataclass(slots=True)
@@ -2336,6 +2382,235 @@ class ApiRepository:
             )
         return normalized
 
+    def _prompt_template_from_row(self, row: dict[str, object]) -> AiPromptTemplateRow:
+        allowed = row.get("allowed_variables")
+        required = row.get("required_variables")
+        if not isinstance(allowed, list):
+            allowed = []
+        if not isinstance(required, list):
+            required = []
+        created_at = row.get("created_at")
+        updated_at = row.get("updated_at")
+        return AiPromptTemplateRow(
+            prompt_key=str(row["prompt_key"]),
+            title=str(row["title"]),
+            description=str(row.get("description") or ""),
+            category=str(row.get("category") or "chat"),
+            content=str(row.get("content") or ""),
+            default_content=str(row.get("default_content") or ""),
+            allowed_variables=[str(item) for item in allowed],
+            required_variables=[str(item) for item in required],
+            version=int(row.get("version") or 1),
+            updated_by=str(row["updated_by"]) if row.get("updated_by") else None,
+            created_at=created_at if isinstance(created_at, datetime) else None,
+            updated_at=updated_at if isinstance(updated_at, datetime) else None,
+        )
+
+    async def ensure_ai_prompt_template_default(
+        self,
+        *,
+        prompt_key: str,
+        title: str,
+        description: str,
+        category: str,
+        default_content: str,
+        allowed_variables: list[str],
+        required_variables: list[str],
+    ) -> None:
+        query = """
+            INSERT INTO ascendany.ai_prompt_templates (
+                prompt_key,
+                title,
+                description,
+                category,
+                content,
+                default_content,
+                allowed_variables,
+                required_variables,
+                version,
+                updated_by
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, 1, 'system')
+            ON CONFLICT (prompt_key) DO UPDATE SET
+                title = EXCLUDED.title,
+                description = EXCLUDED.description,
+                category = EXCLUDED.category,
+                default_content = EXCLUDED.default_content,
+                allowed_variables = EXCLUDED.allowed_variables,
+                required_variables = EXCLUDED.required_variables
+        """
+        version_query = """
+            INSERT INTO ascendany.ai_prompt_template_versions (
+                prompt_key,
+                version,
+                content,
+                change_note,
+                updated_by
+            )
+            SELECT %s, 1, %s, '系统默认版本', 'system'
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM ascendany.ai_prompt_template_versions
+                WHERE prompt_key = %s
+                  AND version = 1
+            )
+        """
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(
+                        query,
+                        (
+                            prompt_key,
+                            title,
+                            description,
+                            category,
+                            default_content,
+                            default_content,
+                            json.dumps(allowed_variables, ensure_ascii=False),
+                            json.dumps(required_variables, ensure_ascii=False),
+                        ),
+                    )
+                    await cursor.execute(
+                        version_query,
+                        (prompt_key, default_content, prompt_key),
+                    )
+
+    async def list_ai_prompt_templates(self) -> list[AiPromptTemplateRow]:
+        query = """
+            SELECT *
+            FROM ascendany.ai_prompt_templates
+            ORDER BY
+                CASE category
+                    WHEN 'chat' THEN 1
+                    WHEN 'context' THEN 2
+                    WHEN 'role' THEN 3
+                    ELSE 9
+                END,
+                prompt_key ASC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query)
+                rows = await cursor.fetchall()
+        return [self._prompt_template_from_row(row) for row in rows]
+
+    async def fetch_ai_prompt_template(
+        self, prompt_key: str
+    ) -> AiPromptTemplateRow | None:
+        query = """
+            SELECT *
+            FROM ascendany.ai_prompt_templates
+            WHERE prompt_key = %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (prompt_key,))
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        return self._prompt_template_from_row(row)
+
+    async def fetch_ai_prompt_template_versions(
+        self, prompt_key: str
+    ) -> list[AiPromptTemplateVersionRow]:
+        query = """
+            SELECT *
+            FROM ascendany.ai_prompt_template_versions
+            WHERE prompt_key = %s
+            ORDER BY version DESC
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (prompt_key,))
+                rows = await cursor.fetchall()
+        normalized: list[AiPromptTemplateVersionRow] = []
+        for row in rows:
+            created_at = row.get("created_at")
+            normalized.append(
+                AiPromptTemplateVersionRow(
+                    version_id=int(row["version_id"]),
+                    prompt_key=str(row["prompt_key"]),
+                    version=int(row["version"]),
+                    content=str(row.get("content") or ""),
+                    change_note=str(row["change_note"])
+                    if row.get("change_note")
+                    else None,
+                    updated_by=str(row["updated_by"]) if row.get("updated_by") else None,
+                    created_at=created_at if isinstance(created_at, datetime) else None,
+                )
+            )
+        return normalized
+
+    async def update_ai_prompt_template(
+        self,
+        *,
+        prompt_key: str,
+        content: str,
+        change_note: str | None,
+        updated_by: str | None,
+    ) -> AiPromptTemplateRow | None:
+        update_query = """
+            UPDATE ascendany.ai_prompt_templates
+            SET
+                content = %s,
+                version = version + 1,
+                updated_by = %s,
+                updated_at = now()
+            WHERE prompt_key = %s
+            RETURNING *
+        """
+        version_query = """
+            INSERT INTO ascendany.ai_prompt_template_versions (
+                prompt_key,
+                version,
+                content,
+                change_note,
+                updated_by
+            )
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute(
+                        update_query,
+                        (content, updated_by, prompt_key),
+                    )
+                    row = await cursor.fetchone()
+                    if row is None:
+                        return None
+                    template = self._prompt_template_from_row(row)
+                    await cursor.execute(
+                        version_query,
+                        (
+                            prompt_key,
+                            template.version,
+                            content,
+                            change_note,
+                            updated_by,
+                        ),
+                    )
+        return template
+
+    async def restore_ai_prompt_template_version(
+        self,
+        *,
+        prompt_key: str,
+        version: int,
+        updated_by: str | None,
+    ) -> AiPromptTemplateRow | None:
+        versions = await self.fetch_ai_prompt_template_versions(prompt_key)
+        target = next((item for item in versions if item.version == version), None)
+        if target is None:
+            return None
+        return await self.update_ai_prompt_template(
+            prompt_key=prompt_key,
+            content=target.content,
+            change_note=f"回滚到版本 {version}",
+            updated_by=updated_by,
+        )
+
     async def fetch_exam_submissions_for_student(
         self, exam_id: int, student_id: int, limit: int = 100
     ) -> list[ExamSubmissionRow]:
@@ -2422,6 +2697,105 @@ class ApiRepository:
                 solved_count=int(row["solved_count"])
                 if row.get("solved_count") is not None
                 else None,
+            )
+            for row in rows
+        ]
+
+    async def fetch_exam_participant_metrics(
+        self, exam_id: int, limit: int = 10000
+    ) -> list[ExamParticipantMetricRow]:
+        query = """
+            SELECT
+                ep.student_id AS student_entity_id,
+                NULLIF(BTRIM(student_no.external_id), '') AS student_no,
+                COALESCE(
+                    NULLIF(BTRIM(s.canonical_name), ''),
+                    NULLIF(BTRIM(active_nickname.nickname), ''),
+                    NULLIF(BTRIM(latest_name.external_name), '')
+                ) AS student_name,
+                ep.rank,
+                ep.total_score,
+                ep.solved_count,
+                rh.old_rating,
+                rh.new_rating,
+                rh.delta AS rating_delta,
+                esm.knowledge,
+                esm.accuracy,
+                esm.quality,
+                esm.flexibility,
+                esm.proficiency,
+                COUNT(*) OVER () AS total_participants
+            FROM ascendany.exam_participants AS ep
+            JOIN ascendany.students AS s
+              ON s.student_id = ep.student_id
+            LEFT JOIN ascendany.exam_student_metrics AS esm
+              ON esm.exam_id = ep.exam_id
+             AND esm.student_id = ep.student_id
+            LEFT JOIN ascendany.rating_history AS rh
+              ON rh.exam_id = ep.exam_id
+             AND rh.student_id = ep.student_id
+            LEFT JOIN LATERAL (
+                SELECT si.external_id
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = ep.student_id
+                  AND si.source LIKE %s
+                ORDER BY si.identity_id ASC
+                LIMIT 1
+            ) AS student_no ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT snc.nickname
+                FROM ascendany.student_nickname_claims AS snc
+                WHERE snc.student_id = ep.student_id
+                  AND snc.is_active = TRUE
+                ORDER BY snc.claimed_from DESC, snc.claim_id DESC
+                LIMIT 1
+            ) AS active_nickname ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT si.external_name
+                FROM ascendany.student_identities AS si
+                WHERE si.student_id = ep.student_id
+                  AND si.external_name IS NOT NULL
+                  AND BTRIM(si.external_name) <> ''
+                ORDER BY si.identity_id DESC
+                LIMIT 1
+            ) AS latest_name ON TRUE
+            WHERE ep.exam_id = %s
+              AND ep.absent = FALSE
+            ORDER BY ep.rank ASC NULLS LAST, ep.total_score DESC NULLS LAST, ep.student_id ASC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, ("%student_no", exam_id, limit))
+                rows = await cursor.fetchall()
+
+        return [
+            ExamParticipantMetricRow(
+                student_entity_id=int(row["student_entity_id"]),
+                student_no=str(row["student_no"]) if row.get("student_no") else None,
+                student_name=str(row["student_name"])
+                if row.get("student_name")
+                else None,
+                rank=int(row["rank"]) if row.get("rank") is not None else None,
+                total_score=row.get("total_score"),
+                solved_count=int(row["solved_count"])
+                if row.get("solved_count") is not None
+                else None,
+                old_rating=int(row["old_rating"])
+                if row.get("old_rating") is not None
+                else None,
+                new_rating=int(row["new_rating"])
+                if row.get("new_rating") is not None
+                else None,
+                rating_delta=int(row["rating_delta"])
+                if row.get("rating_delta") is not None
+                else None,
+                knowledge=row.get("knowledge"),
+                accuracy=row.get("accuracy"),
+                quality=row.get("quality"),
+                flexibility=row.get("flexibility"),
+                proficiency=row.get("proficiency"),
+                total_participants=int(row.get("total_participants", 0)),
             )
             for row in rows
         ]

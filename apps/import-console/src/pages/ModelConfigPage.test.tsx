@@ -212,6 +212,8 @@ describe("ModelConfigPage", () => {
 
     render(<ModelConfigPage />);
 
+    expect(await screen.findByText(/DeepSeek thinking 内容会在聊天中流式显示/)).toBeInTheDocument();
+
     fireEvent.click(await screen.findByRole("tab", { name: /GitHub Copilot/ }));
     const select = screen.getByRole("combobox");
     const responsesOption = within(select).getByRole("option", { name: /GPT-5.4 mini/ });

@@ -9,6 +9,7 @@ import { useChatStore } from "@/stores/chatStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { findRole } from "@/types/role";
+import type { ChatMessage } from "@/types/chat";
 
 export interface ChatInputProps {
   showClearButton?: boolean;
@@ -19,6 +20,21 @@ export interface ChatInputProps {
 function normalizeIdentifier(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+export function toOutboundChatMessage(message: ChatMessage): ChatMessagePayload | null {
+  if (message.role === "system") return null;
+  const content = message.content.trim();
+  if (!content) return null;
+  const payload: ChatMessagePayload = {
+    role: message.role,
+    content,
+  };
+  const reasoningContent = message.reasoningContent?.trim();
+  if (message.role === "assistant" && reasoningContent) {
+    payload.reasoningContent = reasoningContent;
+  }
+  return payload;
 }
 
 export function ChatInput({
@@ -33,6 +49,8 @@ export function ChatInput({
   const addMessage = useChatStore((s) => s.addMessage);
   const createAssistantDraft = useChatStore((s) => s.createAssistantDraft);
   const appendMessageContent = useChatStore((s) => s.appendMessageContent);
+  const appendMessageReasoning = useChatStore((s) => s.appendMessageReasoning);
+  const finalizeMessageReasoning = useChatStore((s) => s.finalizeMessageReasoning);
   const finalizeMessage = useChatStore((s) => s.finalizeMessage);
   const removeMessage = useChatStore((s) => s.removeMessage);
   const clearContext = useChatStore((s) => s.clearContext);
@@ -65,23 +83,33 @@ export function ChatInput({
     try {
       const latestSession = useChatStore.getState().getActiveSession();
       const messages: ChatMessagePayload[] = latestSession.messages
-        .filter((message) => message.role !== "system")
-        .map((message) => ({
-          role: message.role,
-          content: message.content.trim(),
-        }))
-        .filter((message) => message.content.length > 0);
+        .map(toOutboundChatMessage)
+        .filter((message): message is ChatMessagePayload => message !== null);
 
       let draftMessageId: string | null = null;
       let workFinishedForOutput = false;
       let bufferedText = "";
+      let bufferedReasoning = "";
       let rafId = 0;
       const flush = () => {
         rafId = 0;
-        if (!draftMessageId || !bufferedText) return;
-        const next = bufferedText;
-        bufferedText = "";
-        appendMessageContent(draftMessageId, next);
+        if (!draftMessageId) return;
+        if (bufferedReasoning) {
+          const nextReasoning = bufferedReasoning;
+          bufferedReasoning = "";
+          appendMessageReasoning(draftMessageId, nextReasoning);
+        }
+        if (bufferedText) {
+          const next = bufferedText;
+          bufferedText = "";
+          appendMessageContent(draftMessageId, next);
+        }
+      };
+      const flushReasoning = () => {
+        if (!draftMessageId || !bufferedReasoning) return;
+        const nextReasoning = bufferedReasoning;
+        bufferedReasoning = "";
+        appendMessageReasoning(draftMessageId, nextReasoning);
       };
       const ensureDraft = () => {
         if (!draftMessageId) {
@@ -106,8 +134,18 @@ export function ChatInput({
         accessToken ?? undefined,
         (event) => {
           if (event.type === "delta" && event.text) {
-            ensureDraft();
+            const activeDraftId = ensureDraft();
+            flushReasoning();
+            finalizeMessageReasoning(activeDraftId);
             bufferedText += event.text;
+            if (!rafId) {
+              rafId = window.requestAnimationFrame(flush);
+            }
+            return;
+          }
+          if (event.type === "reasoning_delta" && event.text) {
+            ensureDraft();
+            bufferedReasoning += event.text;
             if (!rafId) {
               rafId = window.requestAnimationFrame(flush);
             }
@@ -157,6 +195,8 @@ export function ChatInput({
     addMessage,
     createAssistantDraft,
     appendMessageContent,
+    appendMessageReasoning,
+    finalizeMessageReasoning,
     finalizeMessage,
     removeMessage,
     account?.studentId,

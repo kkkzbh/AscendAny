@@ -372,15 +372,20 @@ export function ModelConfigPage() {
             </div>
 
             {activeProvider === "deepseek" ? (
-              <div className="model-secondary-action">
-                <button className="button" type="button" onClick={refreshDeepSeekModels} disabled={refreshingModels}>
-                  {refreshingModels ? "刷新中" : "刷新 DeepSeek 模型列表"}
-                </button>
-                <span>
-                  来源：{deepSeekState?.source === "dynamic" ? "官方动态" : "静态兜底"}
-                  {deepSeekState?.error ? ` · ${deepSeekState.error}` : ""}
-                </span>
-              </div>
+              <>
+                <div className="model-provider-note">
+                  DeepSeek thinking 内容会在聊天中流式显示为“思考过程”，并在工具调用多轮请求中自动回传给 DeepSeek。
+                </div>
+                <div className="model-secondary-action">
+                  <button className="button" type="button" onClick={refreshDeepSeekModels} disabled={refreshingModels}>
+                    {refreshingModels ? "刷新中" : "刷新 DeepSeek 模型列表"}
+                  </button>
+                  <span>
+                    来源：{deepSeekState?.source === "dynamic" ? "官方动态" : "静态兜底"}
+                    {deepSeekState?.error ? ` · ${deepSeekState.error}` : ""}
+                  </span>
+                </div>
+              </>
             ) : null}
           </div>
 

@@ -11,7 +11,6 @@ process.env.VITE_PUBLIC = app.isPackaged
   : path.join(process.env.DIST, "../public");
 
 let mainWindow: BrowserWindow | null = null;
-let feedbackWindow: BrowserWindow | null = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
@@ -188,16 +187,6 @@ function loadMainWindow(window: BrowserWindow) {
   }
 }
 
-function loadFeedbackWindow(window: BrowserWindow) {
-  if (VITE_DEV_SERVER_URL) {
-    void window.loadURL(`${VITE_DEV_SERVER_URL}#/feedback`);
-  } else {
-    void window.loadFile(path.join(process.env.DIST!, "index.html"), {
-      hash: "/feedback",
-    });
-  }
-}
-
 function createWindow(options?: {
   show?: boolean;
   bounds?: Rectangle;
@@ -234,48 +223,6 @@ function createWindow(options?: {
 
   mainWindow = nextWindow;
   loadMainWindow(nextWindow);
-  return nextWindow;
-}
-
-function createFeedbackWindow() {
-  if (feedbackWindow && !feedbackWindow.isDestroyed()) {
-    feedbackWindow.show();
-    feedbackWindow.focus();
-    return feedbackWindow;
-  }
-
-  const nextWindow = new BrowserWindow({
-    show: true,
-    width: 700,
-    height: 880,
-    minWidth: 620,
-    minHeight: 740,
-    frame: false,
-    titleBarStyle: isMac ? "hiddenInset" : "hidden",
-    transparent: true,
-    vibrancy: isMac ? "under-window" : undefined,
-    visualEffectState: isMac ? "active" : undefined,
-    backgroundColor: "#00000000",
-    icon: resolveWindowIconPath(),
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-    ...(isLinux && { backgroundMaterial: undefined }),
-  });
-
-  nextWindow.show();
-  nextWindow.focus();
-
-  nextWindow.on("closed", () => {
-    if (feedbackWindow === nextWindow) {
-      feedbackWindow = null;
-    }
-  });
-
-  feedbackWindow = nextWindow;
-  loadFeedbackWindow(nextWindow);
   return nextWindow;
 }
 
@@ -722,16 +669,6 @@ ipcMain.handle("window-set-opaque-sidebar-background", (_event, value: unknown) 
     return false;
   }
   return true;
-});
-
-ipcMain.handle("window-open-feedback", () => {
-  try {
-    createFeedbackWindow();
-    return true;
-  } catch (error) {
-    console.error("[AscendAny] Failed to create feedback window:", error);
-    return false;
-  }
 });
 
 ipcMain.handle("feedback-submit", async (_event, payload: unknown) => {

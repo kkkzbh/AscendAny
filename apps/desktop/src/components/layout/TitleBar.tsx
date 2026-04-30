@@ -1,4 +1,3 @@
-import { useAuthStore } from "@/stores/authStore";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { useLeaderboardStore } from "@/stores/leaderboardStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -7,7 +6,6 @@ export function TitleBar() {
   const openLeaderboard = useLeaderboardStore((s) => s.openLeaderboard);
   const theme = useSettingsStore((s) => s.theme);
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
-  const logout = useAuthStore((s) => s.logout);
   const isLeftSidebarCollapsed = useLayoutStore((s) => s.isLeftSidebarCollapsed);
   const isMetricsPanelVisible = useLayoutStore((s) => s.isMetricsPanelVisible);
   const setLeftSidebarCollapsed = useLayoutStore((s) => s.setLeftSidebarCollapsed);
@@ -131,55 +129,6 @@ export function TitleBar() {
               aria-hidden="true"
             >
               <path d="M20.4 14.5A8.5 8.5 0 1 1 9.5 3.6a6.8 6.8 0 0 0 10.9 10.9z" />
-            </svg>
-          </button>
-
-          <button
-            type="button"
-            className="student-titlebar-button"
-            onClick={() => {
-              void api?.openFeedbackWindow?.();
-            }}
-            title="反馈"
-            aria-label="打开反馈窗口"
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M7 10h10M7 14h7" />
-              <path d="M21 12a8.8 8.8 0 0 1-8.9 8.7h-3.8L3 23l1.8-4.4A8.8 8.8 0 1 1 21 12Z" />
-            </svg>
-          </button>
-
-          <button
-            type="button"
-            className="student-titlebar-button"
-            onClick={() => {
-              void logout();
-            }}
-            title="退出登录"
-            aria-label="退出登录"
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <path d="m16 17 5-5-5-5" />
-              <path d="M21 12H9" />
             </svg>
           </button>
 

@@ -37,8 +37,12 @@ class LLMService:
         system_prompt: str | None = None,
         tool_executor: ToolExecutor | None = None,
     ) -> ChatReplyResponse:
-        prepared_messages = self._prepare_messages(request, system_prompt=system_prompt)
         profile = self._resolve_active_profile()
+        prepared_messages = self._prepare_messages(
+            request,
+            system_prompt=system_prompt,
+            profile=profile,
+        )
         reply = await self._complete_with_tools(
             profile=profile,
             messages=prepared_messages,
@@ -64,8 +68,12 @@ class LLMService:
         system_prompt: str | None = None,
         tool_executor: ToolExecutor | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        prepared_messages = self._prepare_messages(request, system_prompt=system_prompt)
         profile = self._resolve_active_profile()
+        prepared_messages = self._prepare_messages(
+            request,
+            system_prompt=system_prompt,
+            profile=profile,
+        )
         yield {
             "type": "meta",
             "provider": profile.id,
@@ -111,6 +119,7 @@ class LLMService:
         self,
         request: ChatReplyRequest,
         system_prompt: str | None = None,
+        profile: Any | None = None,
     ) -> list[dict[str, Any]]:
         prepared: list[dict[str, Any]] = []
         if system_prompt:
@@ -126,7 +135,16 @@ class LLMService:
             content = message.content.strip()
             if not content:
                 continue
-            prepared.append({"role": message.role, "content": content})
+            prepared_message: dict[str, Any] = {"role": message.role, "content": content}
+            reasoning_content = (message.reasoningContent or "").strip()
+            if (
+                message.role == "assistant"
+                and reasoning_content
+                and "reasoning_content"
+                in getattr(profile, "assistant_passthrough_fields", ())
+            ):
+                prepared_message["reasoning_content"] = reasoning_content
+            prepared.append(prepared_message)
 
         if not prepared:
             raise AppError(
@@ -158,13 +176,19 @@ class LLMService:
 
             tool_calls = message.get("tool_calls")
             if isinstance(tool_calls, list) and tool_calls:
-                messages.append(message)
+                messages.append(self._assistant_replay_message(profile, message))
                 await self._append_tool_results(messages, tool_executor, tool_calls)
                 continue
 
             parsed_text_tool_calls = self._extract_text_tool_calls(response.text)
             if parsed_text_tool_calls:
-                messages.append({"role": "assistant", "content": response.text})
+                messages.append(
+                    self._assistant_replay_message(
+                        profile,
+                        message,
+                        fallback_content=response.text,
+                    )
+                )
                 await self._append_text_tool_results(
                     messages, tool_executor, parsed_text_tool_calls
                 )
@@ -190,6 +214,7 @@ class LLMService:
         adapter = get_adapter(profile.adapter)
         for _ in range(_MAX_TOOL_ROUNDS):
             text_parts: list[str] = []
+            reasoning_parts: list[str] = []
             tool_calls_by_index: dict[int, dict[str, Any]] = {}
             async for event in adapter.stream(
                 ProviderRequest(
@@ -202,6 +227,10 @@ class LLMService:
                 if event.kind == "delta":
                     text_parts.append(event.text)
                     yield {"type": "delta", "text": event.text}
+                    continue
+                if event.kind == "reasoning_delta":
+                    reasoning_parts.append(event.text)
+                    yield {"type": "reasoning_delta", "text": event.text}
                     continue
                 if event.kind == "tool_call_delta":
                     self._merge_tool_call_deltas(tool_calls_by_index, event.tool_calls)
@@ -217,13 +246,18 @@ class LLMService:
             if not tool_calls:
                 return
 
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": "".join(text_parts) or None,
-                    "tool_calls": tool_calls,
-                }
-            )
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": "".join(text_parts) or None,
+                "tool_calls": tool_calls,
+            }
+            reasoning_content = "".join(reasoning_parts)
+            if (
+                reasoning_content
+                and "reasoning_content" in profile.assistant_passthrough_fields
+            ):
+                assistant_message["reasoning_content"] = reasoning_content
+            messages.append(assistant_message)
             yield {"type": "tool_start"}
             await self._append_tool_results(messages, tool_executor, tool_calls)
             yield {"type": "tool_done"}
@@ -237,6 +271,30 @@ class LLMService:
         ):
             if event.kind == "delta":
                 yield {"type": "delta", "text": event.text}
+            elif event.kind == "reasoning_delta":
+                yield {"type": "reasoning_delta", "text": event.text}
+
+    def _assistant_replay_message(
+        self,
+        profile: Any,
+        message: dict[str, Any],
+        fallback_content: str | None = None,
+    ) -> dict[str, Any]:
+        content = message.get("content")
+        if content is None and fallback_content is not None:
+            content = fallback_content
+        replay: dict[str, Any] = {
+            "role": str(message.get("role") or "assistant"),
+            "content": content,
+        }
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            replay["tool_calls"] = tool_calls
+        for field in getattr(profile, "assistant_passthrough_fields", ()):
+            value = message.get(field)
+            if value is not None and value != "":
+                replay[field] = value
+        return replay
 
     async def _append_tool_results(
         self,

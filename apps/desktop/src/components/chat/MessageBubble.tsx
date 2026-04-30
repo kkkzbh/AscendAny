@@ -6,7 +6,7 @@ import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { memo } from "react";
+import { memo, useState } from "react";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -21,7 +21,21 @@ function formatMessageTime(date: Date): string {
   return `${month}.${day} ${hour}:${minute}`;
 }
 
+function formatReasoningStatus(message: ChatMessage): string {
+  if (message.reasoningStreaming) {
+    return "思考中";
+  }
+  const startedAt = message.reasoningStartedAt ?? message.timestamp;
+  const endedAt = message.reasoningEndedAt ?? Date.now();
+  const durationSeconds = Math.max(
+    0,
+    Math.round((endedAt - startedAt) / 1000),
+  );
+  return `思考结束(${durationSeconds}s)`;
+}
+
 function MessageBubbleComponent({ message }: MessageBubbleProps) {
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const account = useAuthStore((s) => s.account);
@@ -33,6 +47,9 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
   );
   const messageDate = new Date(message.timestamp);
   const timeStr = formatMessageTime(messageDate);
+  const reasoningContent = message.reasoningContent ?? "";
+  const hasReasoning = Boolean(reasoningContent.trim()) || Boolean(message.reasoningStreaming);
+  const reasoningStatus = hasReasoning ? formatReasoningStatus(message) : "";
 
   if (isSystem) {
     return (
@@ -61,6 +78,29 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
               {timeStr}
             </time>
           </div>
+          {hasReasoning ? (
+            <div className="assistant-reasoning">
+              <button
+                type="button"
+                className="assistant-reasoning-status"
+                aria-expanded={reasoningExpanded}
+                onClick={() => setReasoningExpanded((expanded) => !expanded)}
+              >
+                {reasoningStatus}
+              </button>
+              <div
+                className={`assistant-reasoning-body${reasoningExpanded ? " is-expanded" : ""}`}
+                aria-hidden={!reasoningExpanded}
+              >
+                <div className="assistant-reasoning-body-inner">
+                  {reasoningContent}
+                  {message.reasoningStreaming ? (
+                    <span className="streaming-caret" aria-hidden="true" />
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="assistant-message-text chat-markdown chat-markdown-assistant break-words leading-6">
             {message.streaming ? (
               <div className="streaming-message-text">

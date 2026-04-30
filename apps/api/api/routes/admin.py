@@ -35,6 +35,14 @@ from ...schemas.admin import (
     AdminModelProviderId,
     AdminModelProviderConfig,
     AdminMetricsConfig,
+    AdminPromptDetail,
+    AdminPromptListResponse,
+    AdminPromptPatch,
+    AdminPromptPreviewRequest,
+    AdminPromptPreviewResponse,
+    AdminPromptRestoreRequest,
+    AdminPromptSummary,
+    AdminPromptVersion,
     AdminPreprocessConfig,
     AdminRatingConfig,
     AdminModelServerDefault,
@@ -57,6 +65,13 @@ from ...services.llm_providers.registry import (
     transport_model,
 )
 from ...services.llm_providers.types import ProviderModelOption
+from ...services.prompt import (
+    PromptDefinition,
+    get_prompt_definition,
+    list_prompt_definitions,
+    render_prompt_content,
+    validate_prompt_content,
+)
 
 router = APIRouter(tags=["admin"], prefix="/admin")
 
@@ -402,6 +417,102 @@ def _remember_audit_event(
         },
     )
     del events[_AUDIT_LIMIT:]
+
+
+async def _ensure_prompt_defaults(repository: Any) -> None:
+    seed = getattr(repository, "ensure_ai_prompt_template_default", None)
+    if not callable(seed):
+        raise AppError(
+            status_code=500,
+            code="PROMPT_STORE_UNAVAILABLE",
+            message="Prompt template repository is not available.",
+        )
+    for definition in list_prompt_definitions():
+        validate_prompt_content(definition, definition.default_content)
+        await seed(
+            prompt_key=definition.key,
+            title=definition.title,
+            description=definition.description,
+            category=definition.category,
+            default_content=definition.default_content,
+            allowed_variables=list(definition.allowed_variables),
+            required_variables=list(definition.required_variables),
+        )
+
+
+def _prompt_summary_from_row(row: Any, definition: PromptDefinition) -> AdminPromptSummary:
+    return AdminPromptSummary(
+        key=definition.key,
+        title=getattr(row, "title", definition.title),
+        description=getattr(row, "description", definition.description),
+        category=getattr(row, "category", definition.category),
+        allowedVariables=list(
+            getattr(row, "allowed_variables", list(definition.allowed_variables))
+        ),
+        requiredVariables=list(
+            getattr(row, "required_variables", list(definition.required_variables))
+        ),
+        version=int(getattr(row, "version", 1)),
+        updatedBy=getattr(row, "updated_by", None),
+        updatedAt=getattr(row, "updated_at", None),
+    )
+
+
+def _prompt_version_from_row(row: Any) -> AdminPromptVersion:
+    return AdminPromptVersion(
+        versionId=str(getattr(row, "version_id")),
+        version=int(getattr(row, "version")),
+        content=str(getattr(row, "content", "")),
+        changeNote=getattr(row, "change_note", None),
+        updatedBy=getattr(row, "updated_by", None),
+        createdAt=getattr(row, "created_at", None),
+    )
+
+
+async def _fetch_prompt_detail(repository: Any, key: str) -> AdminPromptDetail:
+    definition = get_prompt_definition(key)
+    await _ensure_prompt_defaults(repository)
+    fetch = getattr(repository, "fetch_ai_prompt_template", None)
+    fetch_versions = getattr(repository, "fetch_ai_prompt_template_versions", None)
+    if not callable(fetch) or not callable(fetch_versions):
+        raise AppError(
+            status_code=500,
+            code="PROMPT_STORE_UNAVAILABLE",
+            message="Prompt template repository is not available.",
+        )
+    row = await fetch(key)
+    if row is None:
+        raise AppError(
+            status_code=404,
+            code="PROMPT_NOT_FOUND",
+            message="Prompt template was not found.",
+        )
+    versions = await fetch_versions(key)
+    summary = _prompt_summary_from_row(row, definition)
+    return AdminPromptDetail(
+        **summary.model_dump(),
+        content=str(getattr(row, "content", definition.default_content)),
+        defaultContent=str(
+            getattr(row, "default_content", definition.default_content)
+        ),
+        sampleVariables=definition.sample_variables or {},
+        history=[_prompt_version_from_row(item) for item in versions],
+    )
+
+
+def _validate_admin_prompt_payload(
+    definition: PromptDefinition,
+    content: str,
+) -> str:
+    normalized = content.strip()
+    if not normalized and definition.category != "role":
+        raise AppError(
+            status_code=422,
+            code="INVALID_PROMPT_TEMPLATE",
+            message="Prompt content cannot be empty.",
+        )
+    validate_prompt_content(definition, normalized)
+    return normalized
 
 
 @router.get("/config", response_model=AdminConfigResponse)
@@ -764,6 +875,159 @@ async def list_admin_provider_models(
         source=result.source,
         error=result.error,
     )
+
+
+@router.get("/prompts", response_model=AdminPromptListResponse)
+async def list_admin_prompts(
+    _admin=Depends(get_admin_account),
+    repository=Depends(get_repository),
+) -> AdminPromptListResponse:
+    await _ensure_prompt_defaults(repository)
+    loader = getattr(repository, "list_ai_prompt_templates", None)
+    if not callable(loader):
+        raise AppError(
+            status_code=500,
+            code="PROMPT_STORE_UNAVAILABLE",
+            message="Prompt template repository is not available.",
+        )
+    rows = await loader()
+    row_by_key = {getattr(row, "prompt_key", ""): row for row in rows}
+    return AdminPromptListResponse(
+        items=[
+            _prompt_summary_from_row(
+                row_by_key.get(definition.key),
+                definition,
+            )
+            for definition in list_prompt_definitions()
+        ]
+    )
+
+
+@router.get("/prompts/{key}", response_model=AdminPromptDetail)
+async def get_admin_prompt(
+    key: str,
+    _admin=Depends(get_admin_account),
+    repository=Depends(get_repository),
+) -> AdminPromptDetail:
+    return await _fetch_prompt_detail(repository, key)
+
+
+@router.patch("/prompts/{key}", response_model=AdminPromptDetail)
+async def patch_admin_prompt(
+    key: str,
+    payload: AdminPromptPatch,
+    request: Request,
+    admin=Depends(get_admin_account),
+    repository=Depends(get_repository),
+) -> AdminPromptDetail:
+    definition = get_prompt_definition(key)
+    content = _validate_admin_prompt_payload(definition, payload.content)
+    await _ensure_prompt_defaults(repository)
+    updater = getattr(repository, "update_ai_prompt_template", None)
+    if not callable(updater):
+        raise AppError(
+            status_code=500,
+            code="PROMPT_STORE_UNAVAILABLE",
+            message="Prompt template repository is not available.",
+        )
+    row = await updater(
+        prompt_key=key,
+        content=content,
+        change_note=(payload.changeNote or "").strip() or None,
+        updated_by=getattr(admin, "username", None),
+    )
+    if row is None:
+        raise AppError(
+            status_code=404,
+            code="PROMPT_NOT_FOUND",
+            message="Prompt template was not found.",
+        )
+    _remember_audit_event(
+        request,
+        kind="prompt_update",
+        status="success",
+        title="提示词已保存",
+        detail=f"{definition.title} 已更新到版本 {getattr(row, 'version', 1)}",
+        payload={
+            "key": key,
+            "version": int(getattr(row, "version", 1)),
+            "changeNote": payload.changeNote,
+        },
+    )
+    return await _fetch_prompt_detail(repository, key)
+
+
+@router.post("/prompts/{key}/preview", response_model=AdminPromptPreviewResponse)
+async def preview_admin_prompt(
+    key: str,
+    payload: AdminPromptPreviewRequest,
+    _admin=Depends(get_admin_account),
+    repository=Depends(get_repository),
+) -> AdminPromptPreviewResponse:
+    detail = await _fetch_prompt_detail(repository, key)
+    definition = get_prompt_definition(key)
+    content = payload.content if payload.content is not None else detail.content
+    content = _validate_admin_prompt_payload(definition, content)
+    variables = {
+        **(definition.sample_variables or {}),
+        **{item_key: str(value) for item_key, value in payload.variables.items()},
+    }
+    rendered = render_prompt_content(definition, content, variables)
+    return AdminPromptPreviewResponse(rendered=rendered)
+
+
+@router.post("/prompts/{key}/restore", response_model=AdminPromptDetail)
+async def restore_admin_prompt(
+    key: str,
+    payload: AdminPromptRestoreRequest,
+    request: Request,
+    admin=Depends(get_admin_account),
+    repository=Depends(get_repository),
+) -> AdminPromptDetail:
+    definition = get_prompt_definition(key)
+    await _ensure_prompt_defaults(repository)
+    fetch_versions = getattr(repository, "fetch_ai_prompt_template_versions", None)
+    updater = getattr(repository, "update_ai_prompt_template", None)
+    if not callable(fetch_versions) or not callable(updater):
+        raise AppError(
+            status_code=500,
+            code="PROMPT_STORE_UNAVAILABLE",
+            message="Prompt template repository is not available.",
+        )
+    versions = await fetch_versions(key)
+    target = next((item for item in versions if item.version == payload.version), None)
+    if target is None:
+        raise AppError(
+            status_code=404,
+            code="PROMPT_VERSION_NOT_FOUND",
+            message="Prompt template version was not found.",
+        )
+    content = _validate_admin_prompt_payload(definition, target.content)
+    row = await updater(
+        prompt_key=key,
+        content=content,
+        change_note=f"回滚到版本 {payload.version}",
+        updated_by=getattr(admin, "username", None),
+    )
+    if row is None:
+        raise AppError(
+            status_code=404,
+            code="PROMPT_NOT_FOUND",
+            message="Prompt template was not found.",
+        )
+    _remember_audit_event(
+        request,
+        kind="prompt_restore",
+        status="success",
+        title="提示词已回滚",
+        detail=f"{definition.title} 已回滚到历史版本 {payload.version}",
+        payload={
+            "key": key,
+            "restoredVersion": payload.version,
+            "version": int(getattr(row, "version", 1)),
+        },
+    )
+    return await _fetch_prompt_detail(repository, key)
 
 
 def _student_summary(row: Any) -> AdminStudentSummary:

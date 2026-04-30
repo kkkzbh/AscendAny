@@ -61,8 +61,8 @@ function tierKeyOf(item: AchievementItem): TierKey {
 
 function nextTarget(item: AchievementItem): number {
   if (item.tier >= 3) return item.goldTarget;
-  if (item.tier === 2) return item.goldTarget;
-  if (item.tier === 1) return item.silverTarget;
+  if (item.tier === 2) return item.silverTarget;
+  if (item.tier === 1) return item.bronzeTarget;
   return item.bronzeTarget;
 }
 
@@ -79,11 +79,37 @@ function matchesNav(item: AchievementItem, nav: NavKey): boolean {
   return tierKeyOf(item) === nav;
 }
 
+function formatTarget(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  return Number.isInteger(value) ? String(value) : String(value);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function disclosedDescription(item: AchievementItem): string {
+  if (item.tier <= 0) return "";
+  if (item.tier >= 3) return item.description;
+
+  const bronze = formatTarget(item.bronzeTarget);
+  const silver = formatTarget(item.silverTarget);
+  const gold = formatTarget(item.goldTarget);
+  if (!bronze || !silver || !gold) return "";
+
+  const exposedTargets = item.tier === 1 ? bronze : `${bronze} / ${silver}`;
+  const targetSequence = new RegExp(
+    `${escapeRegExp(bronze)}\\s*/\\s*${escapeRegExp(silver)}\\s*/\\s*${escapeRegExp(gold)}`,
+  );
+  return item.description.replace(targetSequence, exposedTargets);
+}
+
 function searchMatches(item: AchievementItem, queryLower: string): boolean {
   if (!queryLower) return true;
   if (item.title.toLowerCase().includes(queryLower)) return true;
-  if (tierKeyOf(item) === "locked") return false;
-  return item.description.toLowerCase().includes(queryLower);
+  const description = disclosedDescription(item);
+  if (!description) return false;
+  return description.toLowerCase().includes(queryLower);
 }
 
 function highlight(text: string, queryLower: string): ReactNode {
@@ -176,6 +202,7 @@ interface AchievementRowProps {
 function AchievementRow({ item, queryLower }: AchievementRowProps) {
   const tierKey = tierKeyOf(item);
   const locked = tierKey === "locked";
+  const description = disclosedDescription(item);
   const percent = progressPercent(item);
   const current = Math.floor(item.progress);
   const target = Math.floor(nextTarget(item));
@@ -193,7 +220,11 @@ function AchievementRow({ item, queryLower }: AchievementRowProps) {
           {highlight(item.title, queryLower)}
         </div>
         <div className="achievement-row-description">
-          {locked ? "达成后解锁" : highlight(item.description, queryLower)}
+          {description
+            ? highlight(description, queryLower)
+            : locked
+              ? "达成后解锁"
+              : ""}
         </div>
       </div>
       <div className="achievement-row-meta">

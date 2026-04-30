@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { AuthScreen } from "@/components/auth/AuthScreen";
 import { SsoExchangeScreen } from "@/components/auth/SsoExchangeScreen";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { FeedbackWindow } from "@/components/feedback/FeedbackWindow";
 import { UpdateFlowDialog } from "@/components/updater/UpdateFlowDialog";
 import { useAuthStore } from "@/stores/authStore";
 import { hydrateLocalStateFromDesktop } from "@/stores/localStateHydration";
@@ -13,7 +12,6 @@ const THEME_TRANSITION_MS = 280;
 
 export default function App() {
   const themeTransitionTimerRef = useRef<number | null>(null);
-  const isFeedbackMode = window.location.hash.startsWith("#/feedback");
   const isSsoMode = window.location.hash.startsWith("#/sso");
   const [localStateReady, setLocalStateReady] = useState(false);
   const theme = useSettingsStore((s) => s.theme);
@@ -77,9 +75,6 @@ export default function App() {
   }, [useOpaqueSidebarBackground]);
 
   useEffect(() => {
-    if (isFeedbackMode) {
-      return;
-    }
     const factor = zoomPercent / 100;
     const api = window.electronAPI;
     if (api?.setZoomFactor) {
@@ -88,10 +83,10 @@ export default function App() {
     }
     // Fallback for browser/test environments without Electron bridge.
     document.documentElement.style.zoom = `${zoomPercent}%`;
-  }, [isFeedbackMode, zoomPercent]);
+  }, [zoomPercent]);
 
   useEffect(() => {
-    if (isFeedbackMode || isSsoMode) {
+    if (isSsoMode) {
       setLocalStateReady(true);
       return;
     }
@@ -104,18 +99,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [isFeedbackMode, isSsoMode]);
+  }, [isSsoMode]);
 
   useEffect(() => {
-    if (isFeedbackMode || isSsoMode || !localStateReady) {
+    if (isSsoMode || !localStateReady) {
       return;
     }
     void bootstrap();
-  }, [bootstrap, isFeedbackMode, isSsoMode, localStateReady]);
-
-  if (isFeedbackMode) {
-    return <FeedbackWindow />;
-  }
+  }, [bootstrap, isSsoMode, localStateReady]);
 
   if (isSsoMode) {
     return <SsoExchangeScreen />;

@@ -132,10 +132,14 @@ PROVIDER_DEFINITIONS: dict[str, ProviderDefinition] = {
         default_model="deepseek-v4-flash",
         default_api_key_env="ASCENDANY_LLM_DEEPSEEK_API_KEY",
         default_request_mode="chat_completions",
-        description="按 DeepSeek 官方 OpenAI 兼容接口接入，模型列表优先从官方 /models 刷新。",
-        model_hint="运行时发送 DeepSeek 官方原始模型 ID。",
+        description=(
+            "按 DeepSeek 官方 OpenAI 兼容接口接入；支持 thinking 内容流式展示，"
+            "并在工具调用多轮请求中自动回传 reasoning_content。"
+        ),
+        model_hint="运行时发送 DeepSeek 官方原始模型 ID；thinking/tool-call 兼容由后端自动处理。",
         model_options=_provider_options("deepseek"),
         supports_dynamic_models=True,
+        assistant_passthrough_fields=("reasoning_content",),
     ),
 }
 
@@ -248,6 +252,7 @@ def build_provider_profile(
         model_hint=definition.model_hint,
         model_options=definition.model_options,
         supports_dynamic_models=definition.supports_dynamic_models,
+        assistant_passthrough_fields=definition.assistant_passthrough_fields,
     )
 
 

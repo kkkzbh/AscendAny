@@ -391,7 +391,7 @@ async def chat_auto_analysis(
     )
 
     # ── 3. Build the hidden user trigger message ──
-    user_message = prompt_service.build_auto_analysis_user_message()
+    user_message = await prompt_service.build_auto_analysis_user_message(latest_exam_id)
 
     # ── 4. Create a synthetic ChatReplyRequest ──
     synthetic_request = ChatReplyRequest(
@@ -528,7 +528,9 @@ async def chat_auto_analysis_stream(
                 messages=[
                     ChatMessageRequest(
                         role="user",
-                        content=prompt_service.build_auto_analysis_user_message(),
+                        content=await prompt_service.build_auto_analysis_user_message(
+                            latest_exam_id
+                        ),
                     )
                 ],
                 summary="",
@@ -662,7 +664,9 @@ async def chat_auto_analysis_precompute_exam(
                 role_id=role_id,
                 role_name=role_name,
             )
-            user_message = prompt_service.build_auto_analysis_user_message()
+            user_message = await prompt_service.build_auto_analysis_user_message(
+                payload.examId
+            )
             synthetic_request = ChatReplyRequest(
                 studentId=student_id,
                 ptaNickname=pta_nickname,

@@ -1,27 +1,19 @@
-"""Function calling tools for the chat Agent.
-
-Provides OpenAI-compatible tool definitions and an executor that maps
-tool call names to DB queries.
-
-Tools available:
-  - get_student_rating_history   : Rating history for a student
-  - get_student_metric_history   : Per-exam metric history for a student
-  - get_student_growth_insights  : Unified growth insights for dashboard and chat
-  - get_student_ability_scores   : Student rank + ability-gap snapshot in an exam
-  - get_exam_submissions         : Submission records for a student in an exam
-  - get_exam_participants        : Ranked participant list for an exam
-  - get_exam_info                : Exam metadata (title, date, duration, counts)
-"""
+"""Fact-only function calling tools for the chat Agent."""
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from ..db.repository import ApiRepository
-from .growth_insights import GrowthInsightsService
-from .history_merge import merge_exam_metric_rows, merge_rating_history_rows
+from .history_merge import (
+    latest_metrics_row,
+    merge_exam_metric_rows,
+    merge_rating_history_rows,
+    metric_from_rows,
+)
 from .identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
@@ -29,22 +21,21 @@ logger = logging.getLogger(__name__)
 _METRIC_KEYS = ("knowledge", "accuracy", "quality", "flexibility", "proficiency")
 
 
-# ---------------------------------------------------------------------------
-# OpenAI-compatible tool definitions
-# ---------------------------------------------------------------------------
-
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "get_student_rating_history",
-            "description": "获取该学生的 Rating 历史记录（按考试时间倒序），包含每场考试的 old_rating、delta、new_rating。",
+            "name": "get_student_learning_profile",
+            "description": (
+                "获取当前绑定学生的事实型学习画像：身份、当前 Rating/五维指标、"
+                "最近考试 Rating 与五维指标历史。只返回数据，不生成分析结论。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "limit": {
+                    "history_limit": {
                         "type": "integer",
-                        "description": "返回最近几场考试的记录，默认 10",
+                        "description": "返回最近几场考试的历史记录，默认 10。",
                     },
                 },
                 "required": [],
@@ -54,47 +45,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "get_student_metric_history",
-            "description": "获取该学生每场考试的五大能力指标历史记录（知识、准确、质量、灵活、熟练），按考试时间倒序。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": "integer",
-                        "description": "返回最近几场考试的记录，默认 10",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_student_growth_insights",
-            "description": "获取统一成长洞察，包含进步解释、里程碑连胜、同层对比、考后心理支持。返回结构与学生仪表盘一致。",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_student_ability_scores",
-            "description": "获取该学生在指定考试中的名次、总分、解题数，以及与“紧邻前一名（rank 严格更小）”同学在五大能力指标上的差异。",
+            "name": "get_exam_participant_metrics",
+            "description": (
+                "获取指定考试的事实型全量榜单与指标：考试信息、未缺考学生的"
+                "学号、姓名、排名、总分、解题数、Rating 变化和五维指标。"
+                "用于模型自行对比和分析。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "exam_id": {
                         "type": "integer",
-                        "description": "考试 ID",
+                        "description": "考试 ID。",
                     },
-                    "student_id": {
-                        "type": "string",
-                        "description": "可选。兼容旧调用字段；实际以当前已绑定学生身份为准。",
+                    "limit": {
+                        "type": "integer",
+                        "description": "最多返回多少名未缺考学生，默认 10000，硬上限 20000。",
                     },
                 },
                 "required": ["exam_id"],
@@ -105,51 +71,28 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_exam_submissions",
-            "description": "获取该学生在指定考试中的所有提交记录，包含题号、判定结果、得分、语言、用时等。",
+            "description": (
+                "获取指定考试中的提交记录。默认查询当前绑定学生；也可用 "
+                "student_no 或 student_entity_id 查询指定学生。只返回提交事实。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "exam_id": {
                         "type": "integer",
-                        "description": "考试 ID（可从 rating_history 或 metric_history 获取）",
+                        "description": "考试 ID。",
                     },
-                },
-                "required": ["exam_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_exam_participants",
-            "description": "获取指定考试的参与者排名列表，包含排名、总分、解题数。可用于了解考试整体情况。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "exam_id": {
+                    "student_no": {
+                        "type": "string",
+                        "description": "可选。指定要查询的学生学号。",
+                    },
+                    "student_entity_id": {
                         "type": "integer",
-                        "description": "考试 ID",
+                        "description": "可选。指定要查询的内部学生实体 ID。",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "返回前几名参与者，默认 30",
-                    },
-                },
-                "required": ["exam_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_exam_info",
-            "description": "获取考试基本信息：标题、类型、时间、时长、题目数、参与人数。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "exam_id": {
-                        "type": "integer",
-                        "description": "考试 ID",
+                        "description": "最多返回多少条提交记录，默认 100。",
                     },
                 },
                 "required": ["exam_id"],
@@ -159,13 +102,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Tool executor
-# ---------------------------------------------------------------------------
-
-
 class ToolExecutor:
-    """Executes tool calls by dispatching to the appropriate DB query."""
+    """Executes fact-only tool calls by dispatching to DB queries."""
 
     def __init__(
         self,
@@ -174,10 +112,8 @@ class ToolExecutor:
     ) -> None:
         self._repository = repository
         self._identity = identity
-        self._growth_service = GrowthInsightsService(repository)
 
     async def execute(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        """Execute a tool call and return a JSON string result."""
         handler = _HANDLERS.get(tool_name)
         if handler is None:
             return json.dumps(
@@ -193,8 +129,6 @@ class ToolExecutor:
             return json.dumps(
                 {"error": f"Tool execution failed: {exc}"}, ensure_ascii=False
             )
-
-    # ---- Individual handlers ----
 
     async def _load_merged_histories(
         self,
@@ -230,273 +164,268 @@ class ToolExecutor:
             merge_exam_metric_rows(exam_metric_rows, limit=exam_metric_limit),
         )
 
-    async def _get_student_rating_history(self, args: dict[str, Any]) -> Any:
-        if self._identity is None:
-            return {"error": "当前未绑定学生身份，无法查询数据。"}
-        limit = int(args.get("limit", 10))
-        deduplicated, _ = await self._load_merged_histories(
-            rating_limit=limit,
-            exam_metric_limit=1,
-        )
-        return [
-            {
-                "exam_id": r.exam_id,
-                "exam_name": r.exam_name,
-                "exam_date": r.exam_time.strftime("%Y-%m-%d"),
-                "old_rating": r.old_rating,
-                "delta": r.delta,
-                "new_rating": r.new_rating,
-            }
-            for r in deduplicated
-        ]
-
-    async def _get_student_metric_history(self, args: dict[str, Any]) -> Any:
-        if self._identity is None:
-            return {"error": "当前未绑定学生身份，无法查询数据。"}
-        limit = int(args.get("limit", 10))
-        _, deduplicated = await self._load_merged_histories(
-            rating_limit=1,
-            exam_metric_limit=limit,
-        )
-        return [
-            {
-                "exam_id": r.exam_id,
-                "exam_name": r.exam_name,
-                "exam_date": r.exam_time.strftime("%Y-%m-%d"),
-                "knowledge": self._safe_int(r.knowledge),
-                "accuracy": self._safe_int(r.accuracy),
-                "quality": self._safe_int(r.quality),
-                "flexibility": self._safe_int(r.flexibility),
-                "proficiency": self._safe_int(r.proficiency),
-            }
-            for r in deduplicated
-        ]
-
-    async def _get_student_growth_insights(self, args: dict[str, Any]) -> Any:
-        del args
+    async def _get_student_learning_profile(self, args: dict[str, Any]) -> Any:
         if self._identity is None:
             return {"error": "当前未绑定学生身份，无法查询数据。"}
 
-        rating_rows, exam_metric_rows = await self._load_merged_histories(
-            rating_limit=20,
-            exam_metric_limit=10,
+        history_limit = _bounded_int(
+            args.get("history_limit"),
+            default=10,
+            min_value=1,
+            max_value=50,
         )
-        payload = await self._growth_service.build(
-            identity=self._identity,
-            rating_rows=rating_rows,
-            exam_metric_rows=exam_metric_rows,
-        )
-        return {
-            "progressExplanation": payload.progress_explanation.model_dump(mode="json"),
-            "milestoneStreak": payload.milestone_streak.model_dump(mode="json"),
-            "peerComparison": payload.peer_comparison.model_dump(mode="json"),
-            "postExamSupport": payload.post_exam_support.model_dump(mode="json"),
-        }
-
-    async def _get_exam_submissions(self, args: dict[str, Any]) -> Any:
-        if self._identity is None:
-            return {"error": "当前未绑定学生身份，无法查询数据。"}
-        exam_id = int(args["exam_id"])
         student_ids = self._identity.student_entity_ids or (
             self._identity.student_entity_id,
         )
-        all_rows = []
+        current_metric_rows = []
         for sid in student_ids:
+            row = await self._repository.fetch_current_metrics(sid)
+            if row is not None:
+                current_metric_rows.append(row)
+
+        rating_rows, metric_rows = await self._load_merged_histories(
+            rating_limit=history_limit,
+            exam_metric_limit=history_limit,
+        )
+        latest_metrics = latest_metrics_row(current_metric_rows)
+        history_by_exam: dict[int, dict[str, Any]] = {}
+
+        for row in rating_rows:
+            history_by_exam[row.exam_id] = {
+                "exam_id": row.exam_id,
+                "exam_name": row.exam_name,
+                "exam_date": _date_str(row.exam_time),
+                "old_rating": row.old_rating,
+                "delta": row.delta,
+                "new_rating": row.new_rating,
+                "knowledge": None,
+                "accuracy": None,
+                "quality": None,
+                "flexibility": None,
+                "proficiency": None,
+                "_sort_time": row.exam_time,
+            }
+
+        for row in metric_rows:
+            item = history_by_exam.setdefault(
+                row.exam_id,
+                {
+                    "exam_id": row.exam_id,
+                    "exam_name": row.exam_name,
+                    "exam_date": _date_str(row.exam_time),
+                    "old_rating": None,
+                    "delta": None,
+                    "new_rating": None,
+                    "_sort_time": row.exam_time,
+                },
+            )
+            item["exam_name"] = row.exam_name
+            item["exam_date"] = _date_str(row.exam_time)
+            item["_sort_time"] = max(
+                item.get("_sort_time", row.exam_time),
+                row.exam_time,
+            )
+            for key in _METRIC_KEYS:
+                item[key] = _safe_int(getattr(row, key))
+
+        history = sorted(
+            history_by_exam.values(),
+            key=lambda item: (item.get("_sort_time") or datetime.min, item["exam_id"]),
+            reverse=True,
+        )[:history_limit]
+        for item in history:
+            item.pop("_sort_time", None)
+
+        return {
+            "student": {
+                "student_entity_id": self._identity.student_entity_id,
+                "student_entity_ids": list(student_ids),
+                "student_no": self._identity.student_id,
+                "pta_nickname": self._identity.pta_nickname,
+                "matched_by": self._identity.matched_by,
+            },
+            "current": {
+                "rating": latest_metrics.rating if latest_metrics else 800,
+                "knowledge": _safe_int(
+                    metric_from_rows(current_metric_rows, "knowledge")
+                ),
+                "accuracy": _safe_int(
+                    metric_from_rows(current_metric_rows, "accuracy")
+                ),
+                "quality": _safe_int(metric_from_rows(current_metric_rows, "quality")),
+                "flexibility": _safe_int(
+                    metric_from_rows(current_metric_rows, "flexibility")
+                ),
+                "proficiency": _safe_int(
+                    metric_from_rows(current_metric_rows, "proficiency")
+                ),
+            },
+            "history": history,
+        }
+
+    async def _get_exam_participant_metrics(self, args: dict[str, Any]) -> Any:
+        exam_id = int(args["exam_id"])
+        limit = _bounded_int(
+            args.get("limit"),
+            default=10000,
+            min_value=1,
+            max_value=20000,
+        )
+        exam = await self._repository.fetch_exam_info(exam_id)
+        if exam is None:
+            return {"error": f"考试 {exam_id} 不存在。"}
+
+        rows = await self._repository.fetch_exam_participant_metrics(
+            exam_id=exam_id,
+            limit=limit,
+        )
+        current_student_ids = set()
+        if self._identity is not None:
+            current_student_ids = set(
+                self._identity.student_entity_ids
+                or (self._identity.student_entity_id,)
+            )
+        participant_count = (
+            rows[0].total_participants if rows else exam.participant_count
+        )
+
+        return {
+            "exam": {
+                "exam_id": exam.exam_id,
+                "exam_type": exam.exam_type,
+                "title": exam.title,
+                "starts_at": exam.starts_at.isoformat() if exam.starts_at else None,
+                "ends_at": exam.ends_at.isoformat() if exam.ends_at else None,
+                "duration_seconds": exam.duration_seconds,
+                "problem_count": exam.problem_count,
+                "participant_count": participant_count,
+            },
+            "participant_count": participant_count,
+            "returned_count": len(rows),
+            "truncated": len(rows) < participant_count,
+            "participants": [
+                {
+                    "student_entity_id": row.student_entity_id,
+                    "student_no": row.student_no,
+                    "student_name": row.student_name,
+                    "rank": row.rank,
+                    "total_score": _safe_float(row.total_score),
+                    "solved_count": row.solved_count,
+                    "old_rating": row.old_rating,
+                    "new_rating": row.new_rating,
+                    "rating_delta": row.rating_delta,
+                    "knowledge": _safe_int(row.knowledge),
+                    "accuracy": _safe_int(row.accuracy),
+                    "quality": _safe_int(row.quality),
+                    "flexibility": _safe_int(row.flexibility),
+                    "proficiency": _safe_int(row.proficiency),
+                    "is_current_student": row.student_entity_id in current_student_ids,
+                }
+                for row in rows
+            ],
+        }
+
+    async def _get_exam_submissions(self, args: dict[str, Any]) -> Any:
+        exam_id = int(args["exam_id"])
+        limit = _bounded_int(
+            args.get("limit"),
+            default=100,
+            min_value=1,
+            max_value=1000,
+        )
+        student_ids_result = await self._resolve_submission_student_ids(args)
+        if isinstance(student_ids_result, dict):
+            return student_ids_result
+
+        all_rows = []
+        for sid in student_ids_result:
             all_rows.extend(
                 await self._repository.fetch_exam_submissions_for_student(
-                    exam_id=exam_id, student_id=sid
+                    exam_id=exam_id,
+                    student_id=sid,
+                    limit=limit,
                 )
             )
-        return [
-            {
-                "problem_code": r.problem_code,
-                "submitted_at": r.submitted_at.isoformat() if r.submitted_at else None,
-                "verdict": r.verdict,
-                "score": float(r.score) if r.score is not None else None,
-                "language": r.language,
-                "time_ms": r.time_ms,
-                "memory_kb": r.memory_kb,
-            }
-            for r in all_rows
-        ]
 
-    async def _get_student_ability_scores(self, args: dict[str, Any]) -> Any:
-        if self._identity is None:
-            return {"error": "当前未绑定学生身份，无法查询数据。"}
-
-        exam_id = int(args["exam_id"])
-        student_ids = set(
-            self._identity.student_entity_ids or (self._identity.student_entity_id,)
-        )
-        participant_limit = int(args.get("participant_limit", 5000))
-        participant_limit = max(50, min(participant_limit, 20000))
-        participants = await self._repository.fetch_exam_participants_ranked(
-            exam_id=exam_id,
-            limit=participant_limit,
-        )
-
-        my_idx = -1
-        my_row = None
-        for idx, row in enumerate(participants):
-            if row.student_id in student_ids:
-                my_idx = idx
-                my_row = row
-                break
-
-        if my_row is None:
-            return {
-                "error": f"未在考试 {exam_id} 的前 {participant_limit} 名中找到该学生的参赛记录。"
-            }
-
-        previous_row = None
-        if my_row.rank is not None:
-            for idx in range(my_idx - 1, -1, -1):
-                row = participants[idx]
-                if row.rank is None:
-                    continue
-                if row.rank < my_row.rank:
-                    previous_row = row
-                    break
-        elif my_idx > 0:
-            previous_row = participants[my_idx - 1]
-
-        metric_student_ids = [my_row.student_id]
-        if previous_row is not None:
-            metric_student_ids.append(previous_row.student_id)
-        metric_rows = await self._repository.fetch_exam_student_metrics_for_students(
-            exam_id=exam_id,
-            student_ids=metric_student_ids,
-        )
-        metrics_by_student = {row.student_id: row for row in metric_rows}
-        my_metric_row = metrics_by_student.get(my_row.student_id)
-        previous_metric_row = (
-            metrics_by_student.get(previous_row.student_id)
-            if previous_row is not None
-            else None
-        )
-
-        def _metric_payload(
-            mine: Any | None,
-            previous: Any | None,
-        ) -> dict[str, int | bool | None]:
-            mine_int = self._safe_int(mine)
-            previous_int = self._safe_int(previous)
-            if mine_int is None or previous_int is None:
-                delta = None
-            else:
-                delta = mine_int - previous_int
-            return {
-                "mine": mine_int,
-                "previous": previous_int,
-                "delta_vs_previous": delta,
-                "mine_is_missing": mine_int is None,
-                "previous_is_missing": previous_int is None,
-            }
-
-        metric_diff: dict[str, dict[str, int | None]] = {}
-        for key in _METRIC_KEYS:
-            metric_diff[key] = _metric_payload(
-                getattr(my_metric_row, key, None),
-                getattr(previous_metric_row, key, None),
-            )
-
-        if my_row.total_score is None or previous_row is None or previous_row.total_score is None:
-            score_gap = None
-        else:
-            score_gap = float(previous_row.total_score) - float(my_row.total_score)
-        if my_row.solved_count is None or previous_row is None or previous_row.solved_count is None:
-            solved_gap = None
-        else:
-            solved_gap = int(previous_row.solved_count) - int(my_row.solved_count)
-        if my_row.rank is None or previous_row is None or previous_row.rank is None:
-            rank_gap = None
-        else:
-            rank_gap = int(my_row.rank) - int(previous_row.rank)
-
+        all_rows = sorted(
+            all_rows,
+            key=lambda row: (
+                row.submitted_at.isoformat() if row.submitted_at else "",
+                row.submission_id,
+            ),
+        )[:limit]
         return {
             "exam_id": exam_id,
-            "student_id": self._identity.student_id,
-            "rank_basis": {
-                "source": "exam_participants.rank",
-                "absent_filtered": True,
-                "previous_ranker_rule": "choose nearest participant with rank < my_rank",
-            },
-            "me": {
-                "rank": my_row.rank,
-                "student_name": my_row.student_name,
-                "total_score": float(my_row.total_score)
-                if my_row.total_score is not None
-                else None,
-                "solved_count": my_row.solved_count,
-            },
-            "previous_ranker": (
+            "student_entity_ids": student_ids_result,
+            "returned_count": len(all_rows),
+            "submissions": [
                 {
-                    "rank": previous_row.rank,
-                    "student_name": previous_row.student_name,
-                    "total_score": float(previous_row.total_score)
-                    if previous_row.total_score is not None
+                    "problem_code": row.problem_code,
+                    "submitted_at": row.submitted_at.isoformat()
+                    if row.submitted_at
                     else None,
-                    "solved_count": previous_row.solved_count,
+                    "verdict": row.verdict,
+                    "score": _safe_float(row.score),
+                    "language": row.language,
+                    "time_ms": row.time_ms,
+                    "memory_kb": row.memory_kb,
                 }
-                if previous_row is not None
-                else None
-            ),
-            "gap_vs_previous": {
-                "rank_gap": rank_gap,
-                "score_gap": score_gap,
-                "solved_gap": solved_gap,
-            },
-            "metric_diff_vs_previous": metric_diff,
+                for row in all_rows
+            ],
         }
 
-    async def _get_exam_participants(self, args: dict[str, Any]) -> Any:
-        exam_id = int(args["exam_id"])
-        limit = int(args.get("limit", 30))
-        rows = await self._repository.fetch_exam_participants_ranked(
-            exam_id=exam_id, limit=limit
+    async def _resolve_submission_student_ids(
+        self, args: dict[str, Any]
+    ) -> list[int] | dict[str, str]:
+        if args.get("student_entity_id") is not None:
+            return [int(args["student_entity_id"])]
+
+        student_no = str(args.get("student_no", "")).strip()
+        if student_no:
+            matches = await self._repository.find_students_by_student_no(student_no)
+            if not matches:
+                return {"error": f"未找到学号 {student_no} 对应的学生。"}
+            return list(dict.fromkeys(match.student_id for match in matches))
+
+        if self._identity is None:
+            return {"error": "当前未绑定学生身份，无法查询数据。"}
+        return list(
+            self._identity.student_entity_ids or (self._identity.student_entity_id,)
         )
-        return [
-            {
-                "rank": r.rank,
-                "student_name": r.student_name,
-                "total_score": float(r.total_score)
-                if r.total_score is not None
-                else None,
-                "solved_count": r.solved_count,
-            }
-            for r in rows
-        ]
-
-    async def _get_exam_info(self, args: dict[str, Any]) -> Any:
-        exam_id = int(args["exam_id"])
-        row = await self._repository.fetch_exam_info(exam_id)
-        if row is None:
-            return {"error": f"考试 {exam_id} 不存在。"}
-        return {
-            "exam_id": row.exam_id,
-            "exam_type": row.exam_type,
-            "title": row.title,
-            "starts_at": row.starts_at.isoformat() if row.starts_at else None,
-            "ends_at": row.ends_at.isoformat() if row.ends_at else None,
-            "duration_seconds": row.duration_seconds,
-            "problem_count": row.problem_count,
-            "participant_count": row.participant_count,
-        }
-
-    @staticmethod
-    def _safe_int(value: Any) -> int | None:
-        if value is None:
-            return None
-        return int(round(float(value)))
 
 
-# Handler dispatch table
+def _bounded_int(
+    value: Any,
+    *,
+    default: int,
+    min_value: int,
+    max_value: int,
+) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(min_value, min(parsed, max_value))
+
+
+def _date_str(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d")
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(round(float(value)))
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
 _HANDLERS: dict[str, Any] = {
-    "get_student_rating_history": ToolExecutor._get_student_rating_history,
-    "get_student_metric_history": ToolExecutor._get_student_metric_history,
-    "get_student_growth_insights": ToolExecutor._get_student_growth_insights,
-    "get_student_ability_scores": ToolExecutor._get_student_ability_scores,
+    "get_student_learning_profile": ToolExecutor._get_student_learning_profile,
+    "get_exam_participant_metrics": ToolExecutor._get_exam_participant_metrics,
     "get_exam_submissions": ToolExecutor._get_exam_submissions,
-    "get_exam_participants": ToolExecutor._get_exam_participants,
-    "get_exam_info": ToolExecutor._get_exam_info,
 }

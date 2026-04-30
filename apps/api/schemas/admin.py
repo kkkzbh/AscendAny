@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 AdminModelProviderId = Literal["siliconflow", "openai", "copilot", "deepseek"]
 AdminModelRequestMode = Literal["chat_completions", "responses"]
 AdminModelListSource = Literal["dynamic", "static"]
+AdminPromptCategory = Literal["chat", "context", "role"]
 
 
 class AdminModelOption(BaseModel):
@@ -108,6 +109,62 @@ class AdminDeepSeekModelsResponse(BaseModel):
     models: list[AdminModelOption]
     source: AdminModelListSource
     error: str | None = None
+
+
+class AdminPromptSummary(BaseModel):
+    key: str
+    title: str
+    description: str
+    category: str
+    allowedVariables: list[str]
+    requiredVariables: list[str]
+    version: int
+    updatedBy: str | None
+    updatedAt: datetime | None
+
+
+class AdminPromptVersion(BaseModel):
+    versionId: str
+    version: int
+    content: str
+    changeNote: str | None
+    updatedBy: str | None
+    createdAt: datetime | None
+
+
+class AdminPromptDetail(AdminPromptSummary):
+    content: str
+    defaultContent: str
+    sampleVariables: dict[str, str]
+    history: list[AdminPromptVersion]
+
+
+class AdminPromptListResponse(BaseModel):
+    items: list[AdminPromptSummary]
+
+
+class AdminPromptPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(max_length=100000)
+    changeNote: str | None = Field(default=None, max_length=1000)
+
+
+class AdminPromptPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str | None = Field(default=None, max_length=100000)
+    variables: dict[str, str] = Field(default_factory=dict)
+
+
+class AdminPromptPreviewResponse(BaseModel):
+    rendered: str
+
+
+class AdminPromptRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = Field(ge=1)
 
 
 class AdminMetricsConfig(BaseModel):

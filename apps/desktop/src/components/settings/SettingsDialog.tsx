@@ -15,8 +15,9 @@ import { useAvatarStore } from "@/stores/avatarStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import { AvatarCropper } from "@/components/settings/AvatarCropper";
+import { FeedbackSettingsPage } from "@/components/settings/FeedbackSettingsPage";
 
-type SettingsPage = "general" | "role";
+type SettingsPage = "general" | "role" | "feedback";
 
 const NAV_ITEMS: { key: SettingsPage; label: string; icon: string }[] = [
   {
@@ -28,6 +29,11 @@ const NAV_ITEMS: { key: SettingsPage; label: string; icon: string }[] = [
     key: "role",
     label: "角色",
     icon: "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 3a4 4 0 100 8 4 4 0 000-8z",
+  },
+  {
+    key: "feedback",
+    label: "反馈",
+    icon: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z",
   },
 ];
 
@@ -137,6 +143,23 @@ function GeneralSettingsPage() {
   const bootstrapLocalPassword = useAuthStore((s) => s.bootstrapLocalPassword);
   const updateProfile = useAuthStore((s) => s.updateProfile);
   const clearAuthError = useAuthStore((s) => s.clearError);
+  const logout = useAuthStore((s) => s.logout);
+  const closeSettings = useSettingsStore((s) => s.closeSettings);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function onLogout() {
+    if (loggingOut) {
+      return;
+    }
+    setLoggingOut(true);
+    try {
+      closeSettings();
+      await logout();
+    } finally {
+      setLoggingOut(false);
+    }
+  }
+
   const useOpaqueSidebarBackground = useSettingsStore((s) => s.useOpaqueSidebarBackground);
   const setOpaqueSidebarBackground = useSettingsStore((s) => s.setOpaqueSidebarBackground);
   const avatarUrl = useAvatarStore((s) => s.avatarUrl);
@@ -304,49 +327,64 @@ function GeneralSettingsPage() {
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             头像
           </label>
-          <div className="flex items-center gap-4">
-            <div
-              className="avatar-edit-wrapper group relative cursor-pointer"
-              onClick={() => setShowCropper(true)}
-            >
-              <AvatarDisplay
-                size={72}
-                avatarUrl={avatarUrl}
-                username={account?.displayName ?? account?.username ?? ""}
-              />
-              <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/0 transition-all duration-200 group-hover:bg-black/40">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="white"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-                >
-                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                  <circle cx="12" cy="13" r="4" />
-                </svg>
-              </div>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <button
-                className="text-left text-[13px] font-medium text-[var(--accent-600)] hover:underline"
+          <div className="flex w-full items-center gap-4">
+            <div className="flex items-center gap-4">
+              <div
+                className="avatar-edit-wrapper group relative cursor-pointer"
                 onClick={() => setShowCropper(true)}
               >
-                更换头像
-              </button>
-              {avatarUrl && (
+                <AvatarDisplay
+                  size={72}
+                  avatarUrl={avatarUrl}
+                  username={account?.displayName ?? account?.username ?? ""}
+                />
+                <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/0 transition-all duration-200 group-hover:bg-black/40">
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="white"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                  >
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                    <circle cx="12" cy="13" r="4" />
+                  </svg>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
                 <button
-                  className="text-left text-[12px] text-[var(--text-soft)] hover:text-[var(--rating-negative)] hover:underline"
-                  onClick={() => void onAvatarRemove()}
+                  className="text-left text-[13px] font-medium text-[var(--accent-600)] hover:underline"
+                  onClick={() => setShowCropper(true)}
                 >
-                  移除头像
+                  更换头像
                 </button>
-              )}
+                {avatarUrl && (
+                  <button
+                    className="text-left text-[12px] text-[var(--text-soft)] hover:text-[var(--rating-negative)] hover:underline"
+                    onClick={() => void onAvatarRemove()}
+                  >
+                    移除头像
+                  </button>
+                )}
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => void onLogout()}
+              disabled={loggingOut}
+              aria-label="退出登录"
+              className={`settings-provider-pill ml-auto font-medium tracking-[0.04em] transition-colors ${
+                loggingOut
+                  ? "cursor-not-allowed bg-[var(--surface-soft)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]"
+                  : "bg-[var(--rating-negative)] text-white shadow-[0_8px_16px_rgba(220,38,38,0.22)] hover:opacity-90"
+              }`}
+            >
+              {loggingOut ? "退出中..." : "退出登录"}
+            </button>
           </div>
         </div>
       </div>
@@ -1079,6 +1117,7 @@ export function SettingsWorkspace() {
             {activePage === "role" && (
               <RoleSettingsPage onCustomRoleDialogVisibilityChange={setIsCustomRoleDialogOpen} />
             )}
+            {activePage === "feedback" && <FeedbackSettingsPage />}
           </div>
         </div>
       </main>

@@ -19,6 +19,8 @@ interface ChatState {
   ) => void;
   createAssistantDraft: (roleId: string) => string;
   appendMessageContent: (messageId: string, contentDelta: string) => void;
+  appendMessageReasoning: (messageId: string, reasoningDelta: string) => void;
+  finalizeMessageReasoning: (messageId: string) => void;
   finalizeMessage: (messageId: string) => void;
   removeMessage: (messageId: string) => void;
   clearContext: () => void;
@@ -88,12 +90,27 @@ function normalizeMessages(value: unknown): ChatMessage[] {
           ? message.role
           : "system",
       content: typeof message.content === "string" ? message.content : "",
+      reasoningContent:
+        typeof message.reasoningContent === "string"
+          ? message.reasoningContent
+          : undefined,
+      reasoningStartedAt:
+        typeof message.reasoningStartedAt === "number" &&
+        Number.isFinite(message.reasoningStartedAt)
+          ? message.reasoningStartedAt
+          : undefined,
+      reasoningEndedAt:
+        typeof message.reasoningEndedAt === "number" &&
+        Number.isFinite(message.reasoningEndedAt)
+          ? message.reasoningEndedAt
+          : undefined,
       timestamp:
         typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
           ? message.timestamp
           : Date.now(),
       roleId: typeof message.roleId === "string" ? message.roleId : undefined,
       streaming: false,
+      reasoningStreaming: false,
     }));
 }
 
@@ -259,6 +276,7 @@ export const useChatStore = create<ChatState>()(
             timestamp: Date.now(),
             roleId: role === "assistant" ? options?.roleId : undefined,
             streaming: false,
+            reasoningStreaming: false,
           };
           const nextSessions = state.sessions.map((session) => {
             if (session.id !== activeSession.id) {
@@ -291,6 +309,7 @@ export const useChatStore = create<ChatState>()(
             timestamp: Date.now(),
             roleId,
             streaming: true,
+            reasoningStreaming: false,
           };
           return {
             sessions: state.sessions.map((session) => {
@@ -328,12 +347,71 @@ export const useChatStore = create<ChatState>()(
         persistChatSnapshot(pickChatSnapshot(get()));
       },
 
+      appendMessageReasoning: (messageId, reasoningDelta) => {
+        if (!reasoningDelta) return;
+        set((state) => ({
+          sessions: state.sessions.map((session) => ({
+            ...session,
+            messages: session.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    reasoningContent: `${message.reasoningContent ?? ""}${reasoningDelta}`,
+                    reasoningStartedAt: message.reasoningStartedAt ?? Date.now(),
+                    reasoningEndedAt: undefined,
+                    reasoningStreaming: true,
+                  }
+                : message,
+            ),
+            updatedAt: session.messages.some((message) => message.id === messageId)
+              ? Date.now()
+              : session.updatedAt,
+          })),
+        }));
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
+
+      finalizeMessageReasoning: (messageId) => {
+        set((state) => ({
+          sessions: state.sessions.map((session) => ({
+            ...session,
+            messages: session.messages.map((message) => {
+              if (message.id !== messageId || !message.reasoningStreaming) {
+                return message;
+              }
+              return {
+                ...message,
+                reasoningStreaming: false,
+                reasoningEndedAt: message.reasoningEndedAt ?? Date.now(),
+              };
+            }),
+            updatedAt: session.messages.some((message) => message.id === messageId)
+              ? Date.now()
+              : session.updatedAt,
+          })),
+        }));
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
+
       finalizeMessage: (messageId) => {
         set((state) => ({
           sessions: state.sessions.map((session) => ({
             ...session,
             messages: session.messages.map((message) =>
-              message.id === messageId ? { ...message, streaming: false } : message,
+              message.id === messageId
+                ? {
+                    ...message,
+                    streaming: false,
+                    reasoningStreaming: false,
+                    reasoningEndedAt:
+                      message.reasoningEndedAt !== undefined
+                        ? message.reasoningEndedAt
+                        : message.reasoningStartedAt !== undefined ||
+                            message.reasoningContent
+                        ? Date.now()
+                        : message.reasoningEndedAt,
+                  }
+                : message,
             ),
             updatedAt: session.messages.some((message) => message.id === messageId)
               ? Date.now()
