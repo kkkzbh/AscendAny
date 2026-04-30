@@ -2,16 +2,16 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelConfigPage } from "./ModelConfigPage";
 import type {
-  AdminDeepSeekModelsResponse,
   AdminModelConfigResponse,
   AdminModelConnectionTestResponse,
+  AdminProviderModelsResponse,
 } from "../api/admin";
 
 const adminMocks = vi.hoisted(() => ({
   getAdminModelConfig: vi.fn<() => Promise<AdminModelConfigResponse>>(),
   patchAdminModelConfig: vi.fn<(payload: unknown) => Promise<AdminModelConfigResponse>>(),
   testAdminModelConnection: vi.fn<(payload: unknown) => Promise<AdminModelConnectionTestResponse>>(),
-  listAdminDeepSeekModels: vi.fn<(payload: unknown) => Promise<AdminDeepSeekModelsResponse>>(),
+  listAdminProviderModels: vi.fn<(payload: unknown) => Promise<AdminProviderModelsResponse>>(),
 }));
 
 vi.mock("../api/admin", () => adminMocks);
@@ -139,6 +139,56 @@ const BASE_CONFIG: AdminModelConfigResponse = {
       description: "deepseek",
       modelHint: "deepseek hint",
     },
+    {
+      id: "mimo",
+      title: "MIMO",
+      provider: "mimo",
+      strategyId: "mimo-official-main-chat",
+      adapter: "openai_compatible",
+      baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      model: "mimo-v2.5-pro",
+      transportModel: "mimo-v2.5-pro",
+      apiKeyEnv: "TEST_MIMO_KEY",
+      apiKeyConfigured: false,
+      active: false,
+      requestMode: "chat_completions",
+      modelOptions: [
+        {
+          modelId: "mimo-v2.5-pro",
+          label: "MiMo V2.5 Pro",
+          requestMode: "chat_completions",
+          deprecated: false,
+          disabled: false,
+          disabledReason: null,
+        },
+        {
+          modelId: "mimo-v2.5",
+          label: "MiMo V2.5",
+          requestMode: "chat_completions",
+          deprecated: false,
+          disabled: false,
+          disabledReason: null,
+        },
+        {
+          modelId: "mimo-v2-pro",
+          label: "MiMo V2 Pro",
+          requestMode: "chat_completions",
+          deprecated: false,
+          disabled: false,
+          disabledReason: null,
+        },
+        {
+          modelId: "mimo-v2-omni",
+          label: "MiMo V2 Omni",
+          requestMode: "chat_completions",
+          deprecated: false,
+          disabled: false,
+          disabledReason: null,
+        },
+      ],
+      description: "mimo",
+      modelHint: "mimo hint",
+    },
   ],
 };
 
@@ -147,7 +197,7 @@ describe("ModelConfigPage", () => {
     adminMocks.getAdminModelConfig.mockReset();
     adminMocks.patchAdminModelConfig.mockReset();
     adminMocks.testAdminModelConnection.mockReset();
-    adminMocks.listAdminDeepSeekModels.mockReset();
+    adminMocks.listAdminProviderModels.mockReset();
   });
 
   it("renders model providers and saves changed OpenAI config without requiring a visible key", async () => {
@@ -195,7 +245,7 @@ describe("ModelConfigPage", () => {
 
   it("shows Copilot Responses models and refreshes DeepSeek list", async () => {
     adminMocks.getAdminModelConfig.mockResolvedValue(BASE_CONFIG);
-    adminMocks.listAdminDeepSeekModels.mockResolvedValue({
+    adminMocks.listAdminProviderModels.mockResolvedValue({
       source: "dynamic",
       error: null,
       models: [
@@ -223,9 +273,103 @@ describe("ModelConfigPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "刷新 DeepSeek 模型列表" }));
 
     await waitFor(() => {
-      expect(adminMocks.listAdminDeepSeekModels).toHaveBeenCalled();
+      expect(adminMocks.listAdminProviderModels).toHaveBeenCalled();
     });
     expect(await screen.findByText("DeepSeek 模型列表已刷新")).toBeInTheDocument();
+  });
+
+  it("renders MIMO models, refreshes the provider list, and saves chat config", async () => {
+    adminMocks.getAdminModelConfig.mockResolvedValue(BASE_CONFIG);
+    adminMocks.listAdminProviderModels.mockResolvedValue({
+      source: "dynamic",
+      error: null,
+      models: [
+        {
+          modelId: "mimo-v2.5-pro",
+          label: "MiMo V2.5 Pro",
+          requestMode: "chat_completions",
+          deprecated: false,
+          disabled: false,
+          disabledReason: null,
+        },
+        {
+          modelId: "mimo-v2-omni",
+          label: "MiMo V2 Omni",
+          requestMode: "chat_completions",
+          deprecated: false,
+          disabled: false,
+          disabledReason: null,
+        },
+      ],
+    });
+    adminMocks.patchAdminModelConfig.mockResolvedValue({
+      ...BASE_CONFIG,
+      activeProvider: "mimo",
+      activeRuntime: {
+        mode: "openai_compatible",
+        baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+        model: "mimo-v2-omni",
+        apiKeyEnv: "TEST_MIMO_KEY",
+      },
+      providers: BASE_CONFIG.providers.map((provider) => (
+        provider.id === "mimo"
+          ? { ...provider, active: true, model: "mimo-v2-omni", transportModel: "mimo-v2-omni" }
+          : { ...provider, active: false }
+      )),
+    });
+
+    render(<ModelConfigPage />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /MIMO/ }));
+    expect(screen.getByText(/MIMO 使用 OpenAI 兼容/)).toBeInTheDocument();
+    const select = screen.getByRole("combobox");
+    expect(within(select).getByRole("option", { name: /MiMo V2.5 Pro/ })).toBeEnabled();
+    expect(within(select).queryByRole("option", { name: /tts/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新 MIMO 模型列表" }));
+    await waitFor(() => {
+      expect(adminMocks.listAdminProviderModels).toHaveBeenCalledWith({
+        providerId: "mimo",
+        baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+        model: "mimo-v2.5-pro",
+        apiKeyEnv: "TEST_MIMO_KEY",
+        adapter: "openai_compatible",
+        requestMode: "chat_completions",
+        apiKey: undefined,
+      });
+    });
+    expect(await screen.findByText("MIMO 模型列表已刷新")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "mimo-v2-omni" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => {
+      expect(adminMocks.patchAdminModelConfig).toHaveBeenCalledWith({
+        activeProvider: "mimo",
+        provider: {
+          id: "mimo",
+          baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+          model: "mimo-v2-omni",
+          apiKeyEnv: "TEST_MIMO_KEY",
+          adapter: "openai_compatible",
+          requestMode: "chat_completions",
+          apiKey: undefined,
+        },
+      });
+    });
+  });
+
+  it("does not render providers missing from the API response", async () => {
+    adminMocks.getAdminModelConfig.mockResolvedValue({
+      ...BASE_CONFIG,
+      providers: BASE_CONFIG.providers.filter((provider) => provider.id !== "mimo"),
+    });
+
+    render(<ModelConfigPage />);
+
+    expect(await screen.findByRole("tab", { name: /DeepSeek/ })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /MIMO/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("加载管理员全局模型配置。")).not.toBeInTheDocument();
   });
 
   it("renders connection test failures", async () => {

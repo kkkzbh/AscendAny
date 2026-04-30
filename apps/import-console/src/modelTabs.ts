@@ -5,6 +5,7 @@ export const MODEL_PROVIDER_IDS: AdminModelProviderId[] = [
   "openai",
   "copilot",
   "deepseek",
+  "mimo",
 ];
 
 export const MODEL_PROVIDER_LABELS: Record<AdminModelProviderId, string> = {
@@ -12,6 +13,7 @@ export const MODEL_PROVIDER_LABELS: Record<AdminModelProviderId, string> = {
   openai: "OpenAI",
   copilot: "GitHub Copilot",
   deepseek: "DeepSeek",
+  mimo: "MIMO",
 };
 
 export const RESPONSES_UNSUPPORTED_TEXT = "当前 AscendAny 运行时暂不支持 Responses API";

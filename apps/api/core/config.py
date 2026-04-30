@@ -86,6 +86,12 @@ def _default_llm_providers() -> dict[str, LLMProviderConfig]:
             model="deepseek-v4-flash",
             api_key_env="ASCENDANY_LLM_DEEPSEEK_API_KEY",
         ),
+        "mimo": LLMProviderConfig(
+            adapter="openai_compatible",
+            base_url="https://token-plan-cn.xiaomimimo.com/v1",
+            model="mimo-v2.5-pro",
+            api_key_env="ASCENDANY_LLM_MIMO_API_KEY",
+        ),
     }
 
 

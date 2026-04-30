@@ -199,14 +199,34 @@ class OpenAICompatibleAdapter:
             )
         models: list[ProviderModelOption] = []
         seen: set[str] = set()
+        allowlist = set(profile.dynamic_model_allowlist)
+        option_by_id = {option.model_id: option for option in profile.model_options}
         for item in raw_models:
             if not isinstance(item, dict):
                 continue
             model_id = str(item.get("id", "")).strip()
             if not model_id or model_id in seen:
                 continue
+            if allowlist and model_id not in allowlist:
+                continue
             seen.add(model_id)
-            models.append(ProviderModelOption(model_id=model_id, label=model_id))
+            static_option = option_by_id.get(model_id)
+            models.append(
+                ProviderModelOption(
+                    model_id=model_id,
+                    label=static_option.label if static_option else model_id,
+                    request_mode=(
+                        static_option.request_mode
+                        if static_option
+                        else "chat_completions"
+                    ),
+                    deprecated=static_option.deprecated if static_option else False,
+                    disabled=static_option.disabled if static_option else False,
+                    disabled_reason=(
+                        static_option.disabled_reason if static_option else None
+                    ),
+                )
+            )
         if not models:
             return ProviderModelListResult(
                 models=profile.model_options,

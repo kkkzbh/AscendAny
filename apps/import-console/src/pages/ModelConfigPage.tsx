@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   getAdminModelConfig,
-  listAdminDeepSeekModels,
+  listAdminProviderModels,
   patchAdminModelConfig,
   testAdminModelConnection,
   type AdminModelConfigResponse,
@@ -15,11 +15,17 @@ import { MODEL_PROVIDER_IDS, MODEL_PROVIDER_LABELS } from "../modelTabs";
 type ModelDraft = Pick<AdminModelProviderConfig, "id" | "adapter" | "baseUrl" | "model" | "apiKeyEnv" | "requestMode">;
 type DraftMap = Partial<Record<AdminModelProviderId, ModelDraft>>;
 type ApiKeyMap = Partial<Record<AdminModelProviderId, string>>;
-type DeepSeekModelState = {
+type DynamicModelState = {
   options: AdminModelOption[];
   source: "dynamic" | "static";
   error: string | null;
 };
+
+const DYNAMIC_MODEL_PROVIDER_IDS: AdminModelProviderId[] = ["deepseek", "mimo"];
+
+function isDynamicModelProvider(providerId: AdminModelProviderId): boolean {
+  return DYNAMIC_MODEL_PROVIDER_IDS.includes(providerId);
+}
 
 function getProviderList(config: AdminModelConfigResponse): AdminModelProviderConfig[] {
   if (!Array.isArray(config.providers)) {
@@ -85,7 +91,7 @@ export function ModelConfigPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
-  const [deepSeekState, setDeepSeekState] = useState<DeepSeekModelState | null>(null);
+  const [dynamicModelStates, setDynamicModelStates] = useState<Partial<Record<AdminModelProviderId, DynamicModelState>>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -102,14 +108,20 @@ export function ModelConfigPage() {
         setActiveProvider(response.activeProvider);
         setOriginalActiveProvider(response.activeProvider);
         setApiKeys(makeEmptyKeyMap());
-        const deepseekTab = response.providers.find((provider) => provider.id === "deepseek");
-        if (deepseekTab) {
-          setDeepSeekState({
-            options: deepseekTab.modelOptions,
-            source: "static",
-            error: null,
-          });
-        }
+        setDynamicModelStates(
+          Object.fromEntries(
+            response.providers
+              .filter((provider) => isDynamicModelProvider(provider.id))
+              .map((provider) => [
+                provider.id,
+                {
+                  options: provider.modelOptions,
+                  source: "static",
+                  error: null,
+                },
+              ]),
+          ) as Partial<Record<AdminModelProviderId, DynamicModelState>>,
+        );
       } catch (loadError) {
         if (!cancelled) setError(loadError instanceof Error ? loadError.message : "模型配置加载失败");
       } finally {
@@ -128,12 +140,26 @@ export function ModelConfigPage() {
     }
     return map;
   }, [config]);
+  const visibleProviderIds = useMemo(
+    () => MODEL_PROVIDER_IDS.filter((providerId) => providerById.has(providerId)),
+    [providerById],
+  );
 
   const currentProvider = providerById.get(activeProvider);
   const currentDraft = drafts[activeProvider];
   const currentApiKey = apiKeys[activeProvider] ?? "";
 
-  const dirtyProviderIds = MODEL_PROVIDER_IDS.filter((providerId) => {
+  useEffect(() => {
+    if (!config || currentProvider || visibleProviderIds.length === 0) return;
+    const firstProvider = visibleProviderIds[0];
+    if (!firstProvider) return;
+    const fallbackProvider = visibleProviderIds.includes(config.activeProvider)
+      ? config.activeProvider
+      : firstProvider;
+    setActiveProvider(fallbackProvider);
+  }, [activeProvider, config, currentProvider, visibleProviderIds]);
+
+  const dirtyProviderIds = visibleProviderIds.filter((providerId) => {
     const keyChanged = Boolean((apiKeys[providerId] ?? "").trim());
     return keyChanged || !sameDraft(drafts[providerId], originalDrafts[providerId]);
   });
@@ -141,11 +167,11 @@ export function ModelConfigPage() {
 
   const currentOptions = useMemo(() => {
     if (!currentProvider || !currentDraft) return [];
-    const options = activeProvider === "deepseek" && deepSeekState
-      ? deepSeekState.options
+    const options = isDynamicModelProvider(activeProvider) && dynamicModelStates[activeProvider]
+      ? dynamicModelStates[activeProvider]?.options ?? currentProvider.modelOptions
       : currentProvider.modelOptions;
     return optionWithCurrent(options, currentDraft.model);
-  }, [activeProvider, currentDraft, currentProvider, deepSeekState]);
+  }, [activeProvider, currentDraft, currentProvider, dynamicModelStates]);
 
   const updateDraft = (patch: Partial<ModelDraft>) => {
     setDrafts((prev) => {
@@ -166,14 +192,23 @@ export function ModelConfigPage() {
     setActiveProvider(response.activeProvider);
     setOriginalActiveProvider(response.activeProvider);
     setApiKeys(makeEmptyKeyMap());
-    const deepseekTab = response.providers.find((provider) => provider.id === "deepseek");
-    if (deepseekTab) {
-      setDeepSeekState((prev) => ({
-        options: prev?.source === "dynamic" ? prev.options : deepseekTab.modelOptions,
-        source: prev?.source ?? "static",
-        error: prev?.error ?? null,
-      }));
-    }
+    setDynamicModelStates((prev) => (
+      Object.fromEntries(
+        response.providers
+          .filter((provider) => isDynamicModelProvider(provider.id))
+          .map((provider) => {
+            const existing = prev[provider.id];
+            return [
+              provider.id,
+              {
+                options: existing?.source === "dynamic" ? existing.options : provider.modelOptions,
+                source: existing?.source ?? "static",
+                error: existing?.error ?? null,
+              },
+            ];
+          }),
+      ) as Partial<Record<AdminModelProviderId, DynamicModelState>>
+    ));
   };
 
   const save = async () => {
@@ -237,28 +272,33 @@ export function ModelConfigPage() {
     }
   };
 
-  const refreshDeepSeekModels = async () => {
-    const deepseekDraft = drafts.deepseek;
-    if (!deepseekDraft) return;
+  const refreshProviderModels = async () => {
+    const draft = drafts[activeProvider];
+    const provider = providerById.get(activeProvider);
+    if (!draft || !provider || !isDynamicModelProvider(activeProvider)) return;
     setRefreshingModels(true);
     setError(null);
     try {
-      const response = await listAdminDeepSeekModels({
-        baseUrl: deepseekDraft.baseUrl,
-        model: deepseekDraft.model,
-        apiKeyEnv: deepseekDraft.apiKeyEnv,
-        adapter: deepseekDraft.adapter,
-        requestMode: deepseekDraft.requestMode,
-        apiKey: (apiKeys.deepseek ?? "").trim() || undefined,
+      const response = await listAdminProviderModels({
+        providerId: activeProvider,
+        baseUrl: draft.baseUrl,
+        model: draft.model,
+        apiKeyEnv: draft.apiKeyEnv,
+        adapter: draft.adapter,
+        requestMode: draft.requestMode,
+        apiKey: (apiKeys[activeProvider] ?? "").trim() || undefined,
       });
-      setDeepSeekState({
-        options: response.models,
-        source: response.source,
-        error: response.error,
-      });
-      setMessage(response.source === "dynamic" ? "DeepSeek 模型列表已刷新" : "已使用 DeepSeek 静态兜底模型列表");
+      setDynamicModelStates((prev) => ({
+        ...prev,
+        [activeProvider]: {
+          options: response.models,
+          source: response.source,
+          error: response.error,
+        },
+      }));
+      setMessage(response.source === "dynamic" ? `${provider.title} 模型列表已刷新` : `已使用 ${provider.title} 静态兜底模型列表`);
     } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : "刷新 DeepSeek 模型失败");
+      setError(refreshError instanceof Error ? refreshError.message : `刷新 ${provider.title} 模型失败`);
     } finally {
       setRefreshingModels(false);
     }
@@ -297,7 +337,7 @@ export function ModelConfigPage() {
 
       <section className="panel model-config-panel">
         <div className="model-tab-row" role="tablist" aria-label="模型 Provider">
-          {MODEL_PROVIDER_IDS.map((providerId) => {
+          {visibleProviderIds.map((providerId) => {
             const provider = providerById.get(providerId);
             const dirty = dirtyProviderIds.includes(providerId);
             return (
@@ -371,18 +411,20 @@ export function ModelConfigPage() {
               </Field>
             </div>
 
-            {activeProvider === "deepseek" ? (
+            {activeProvider === "deepseek" || activeProvider === "mimo" ? (
               <>
                 <div className="model-provider-note">
-                  DeepSeek thinking 内容会在聊天中流式显示为“思考过程”，并在工具调用多轮请求中自动回传给 DeepSeek。
+                  {activeProvider === "deepseek"
+                    ? "DeepSeek thinking 内容会在聊天中流式显示为“思考过程”，并在工具调用多轮请求中自动回传给 DeepSeek。"
+                    : "MIMO 使用 OpenAI 兼容 chat/completions 接口；reasoning_content 会在聊天中流式显示为“思考过程”，并在工具调用多轮请求中自动回传。"}
                 </div>
                 <div className="model-secondary-action">
-                  <button className="button" type="button" onClick={refreshDeepSeekModels} disabled={refreshingModels}>
-                    {refreshingModels ? "刷新中" : "刷新 DeepSeek 模型列表"}
+                  <button className="button" type="button" onClick={refreshProviderModels} disabled={refreshingModels}>
+                    {refreshingModels ? "刷新中" : `刷新 ${currentProvider.title} 模型列表`}
                   </button>
                   <span>
-                    来源：{deepSeekState?.source === "dynamic" ? "官方动态" : "静态兜底"}
-                    {deepSeekState?.error ? ` · ${deepSeekState.error}` : ""}
+                    来源：{dynamicModelStates[activeProvider]?.source === "dynamic" ? "官方动态" : "静态兜底"}
+                    {dynamicModelStates[activeProvider]?.error ? ` · ${dynamicModelStates[activeProvider]?.error}` : ""}
                   </span>
                 </div>
               </>

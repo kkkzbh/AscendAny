@@ -17,7 +17,13 @@ from .types import (
     RequestMode,
 )
 
-PROVIDER_ORDER: tuple[str, ...] = ("siliconflow", "openai", "copilot", "deepseek")
+PROVIDER_ORDER: tuple[str, ...] = (
+    "siliconflow",
+    "openai",
+    "copilot",
+    "deepseek",
+    "mimo",
+)
 
 _OPENAI_GPT54_MODEL_OPTIONS = [
     ("openai/gpt-5.4", "GPT-5.4 (default thinking)"),
@@ -49,6 +55,13 @@ _DEEPSEEK_MODEL_OPTIONS = [
     ("deepseek-reasoner", "deepseek-reasoner (deprecated 2026-07-24)", True),
 ]
 
+_MIMO_MODEL_OPTIONS = [
+    ("mimo-v2.5-pro", "MiMo V2.5 Pro"),
+    ("mimo-v2.5", "MiMo V2.5"),
+    ("mimo-v2-pro", "MiMo V2 Pro"),
+    ("mimo-v2-omni", "MiMo V2 Omni"),
+]
+
 
 def _provider_options(provider_id: str) -> list[ProviderModelOption]:
     if provider_id == "siliconflow":
@@ -72,6 +85,11 @@ def _provider_options(provider_id: str) -> list[ProviderModelOption]:
                 deprecated=deprecated,
             )
             for model_id, label, request_mode, deprecated in _COPILOT_MODEL_OPTIONS
+        ]
+    if provider_id == "mimo":
+        return [
+            ProviderModelOption(model_id=model_id, label=label)
+            for model_id, label in _MIMO_MODEL_OPTIONS
         ]
     return [
         ProviderModelOption(model_id=model_id, label=label, deprecated=deprecated)
@@ -141,6 +159,26 @@ PROVIDER_DEFINITIONS: dict[str, ProviderDefinition] = {
         supports_dynamic_models=True,
         assistant_passthrough_fields=("reasoning_content",),
     ),
+    "mimo": ProviderDefinition(
+        id="mimo",
+        title="MIMO",
+        provider="mimo",
+        strategy_id="mimo-official-main-chat",
+        adapter="openai_compatible",
+        default_base_url="https://token-plan-cn.xiaomimimo.com/v1",
+        default_model="mimo-v2.5-pro",
+        default_api_key_env="ASCENDANY_LLM_MIMO_API_KEY",
+        default_request_mode="chat_completions",
+        description=(
+            "按 Xiaomi MIMO Token Plan 的 OpenAI 兼容接口接入；"
+            "聊天模型会返回 reasoning_content，并在工具调用多轮请求中自动回传。"
+        ),
+        model_hint="仅显示已验证可走 chat/completions 的 MIMO 模型；TTS 模型不会出现在此列表。",
+        model_options=_provider_options("mimo"),
+        supports_dynamic_models=True,
+        dynamic_model_allowlist=tuple(model_id for model_id, _label in _MIMO_MODEL_OPTIONS),
+        assistant_passthrough_fields=("reasoning_content",),
+    ),
 }
 
 _ADAPTERS: dict[AdapterKind, ProviderAdapter] = {
@@ -189,6 +227,8 @@ def normalize_model(provider_id: str, model: str) -> str:
         return _normalize_copilot_model(model)
     if provider_id == "deepseek":
         return _normalize_deepseek_model_id(model)
+    if provider_id == "mimo":
+        return _normalize_mimo_model(model)
     raise AppError(
         status_code=422,
         code="INVALID_MODEL_CONFIG",
@@ -252,6 +292,7 @@ def build_provider_profile(
         model_hint=definition.model_hint,
         model_options=definition.model_options,
         supports_dynamic_models=definition.supports_dynamic_models,
+        dynamic_model_allowlist=definition.dynamic_model_allowlist,
         assistant_passthrough_fields=definition.assistant_passthrough_fields,
     )
 
@@ -340,6 +381,20 @@ def _normalize_deepseek_model_id(model: str) -> str:
             status_code=422,
             code="INVALID_MODEL_CONFIG",
             message="DeepSeek Provider 模型必须是官方原始模型 ID。",
+        )
+    return value
+
+
+def _normalize_mimo_model(model: str) -> str:
+    value = model.strip()
+    if value.startswith("mimo/"):
+        value = value.removeprefix("mimo/").strip()
+    supported = {model_id for model_id, _label in _MIMO_MODEL_OPTIONS}
+    if value not in supported:
+        raise AppError(
+            status_code=422,
+            code="INVALID_MODEL_CONFIG",
+            message="MIMO Provider 只能从已验证的 chat/completions 模型列表选择。",
         )
     return value
 

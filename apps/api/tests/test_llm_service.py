@@ -37,7 +37,9 @@ def test_active_provider_uses_provider_config(monkeypatch) -> None:
     assert provider.api_key == "secret"
 
 
-def test_prepare_messages_replays_reasoning_only_for_deepseek(monkeypatch) -> None:
+def test_prepare_messages_replays_reasoning_for_reasoning_passthrough_providers(
+    monkeypatch,
+) -> None:
     request = ChatReplyRequest(
         messages=[
             ChatMessageRequest(role="user", content="第一轮问题"),
@@ -67,6 +69,14 @@ def test_prepare_messages_replays_reasoning_only_for_deepseek(monkeypatch) -> No
         model="openai/gpt-5.4-medium-thinking",
         api_key_env="SERVER_DEFAULT_TEST_KEY",
     )
+    mimo_settings = Settings()
+    mimo_settings.llm.active_provider = "mimo"
+    mimo_settings.llm.providers["mimo"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="mimo-v2.5-pro",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
     monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "secret")
 
     deepseek_service = _build_service(deepseek_settings)
@@ -76,6 +86,18 @@ def test_prepare_messages_replays_reasoning_only_for_deepseek(monkeypatch) -> No
         profile=deepseek_profile,
     )
     assert deepseek_messages[1] == {
+        "role": "assistant",
+        "content": "第一轮回答",
+        "reasoning_content": "第一轮工具调用的思考内容",
+    }
+
+    mimo_service = _build_service(mimo_settings)
+    mimo_profile = mimo_service._resolve_active_profile()
+    mimo_messages = mimo_service._prepare_messages(
+        request,
+        profile=mimo_profile,
+    )
+    assert mimo_messages[1] == {
         "role": "assistant",
         "content": "第一轮回答",
         "reasoning_content": "第一轮工具调用的思考内容",

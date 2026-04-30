@@ -35,6 +35,7 @@ class ProviderDefinition:
     model_hint: str
     model_options: list[ProviderModelOption]
     supports_dynamic_models: bool = False
+    dynamic_model_allowlist: tuple[str, ...] = ()
     assistant_passthrough_fields: tuple[str, ...] = ()
 
 
@@ -55,6 +56,7 @@ class ProviderProfile:
     model_hint: str
     model_options: list[ProviderModelOption]
     supports_dynamic_models: bool = False
+    dynamic_model_allowlist: tuple[str, ...] = ()
     assistant_passthrough_fields: tuple[str, ...] = ()
 
 

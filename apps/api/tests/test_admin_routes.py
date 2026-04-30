@@ -208,6 +208,12 @@ llm:
       model: deepseek-v4-flash
       api_key_env: TEST_DEEPSEEK_KEY
       request_mode: chat_completions
+    mimo:
+      adapter: openai_compatible
+      base_url: https://token-plan-cn.xiaomimimo.com/v1
+      model: mimo-v2.5-pro
+      api_key_env: TEST_MIMO_KEY
+      request_mode: chat_completions
   request_timeout_seconds: 60
 """,
         encoding="utf-8",
@@ -252,6 +258,11 @@ def test_admin_model_config_does_not_expose_plaintext_key_and_saves_runtime(
         assert payload["activeProvider"] == "deepseek"
         assert "sk-secret-value" not in str(payload)
         assert payload["activeRuntime"]["model"] == "deepseek-v4-flash"
+        mimo = next(item for item in payload["providers"] if item["id"] == "mimo")
+        assert mimo["baseUrl"] == "https://token-plan-cn.xiaomimimo.com/v1"
+        assert mimo["model"] == "mimo-v2.5-pro"
+        assert mimo["apiKeyEnv"] == "TEST_MIMO_KEY"
+        assert mimo["requestMode"] == "chat_completions"
 
         patched = client.patch(
             "/api/v1/admin/model-config",
@@ -306,6 +317,42 @@ def test_admin_model_config_accepts_responses_copilot_model_as_responses_adapter
     copilot = next(item for item in payload["providers"] if item["id"] == "copilot")
     assert copilot["adapter"] == "responses"
     assert copilot["requestMode"] == "responses"
+
+
+def test_admin_model_config_saves_mimo_and_rejects_tts_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    with _build_client(tmp_path, monkeypatch) as client:
+        response = client.patch(
+            "/api/v1/admin/model-config",
+            json={
+                "activeProvider": "mimo",
+                "provider": {
+                    "id": "mimo",
+                    "model": "mimo-v2.5-pro",
+                },
+            },
+        )
+        invalid = client.patch(
+            "/api/v1/admin/model-config",
+            json={
+                "activeProvider": "mimo",
+                "provider": {
+                    "id": "mimo",
+                    "model": "mimo-v2.5-tts",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["activeProvider"] == "mimo"
+    assert payload["activeRuntime"]["model"] == "mimo-v2.5-pro"
+    mimo = next(item for item in payload["providers"] if item["id"] == "mimo")
+    assert mimo["adapter"] == "openai_compatible"
+    assert mimo["requestMode"] == "chat_completions"
+    assert invalid.status_code == 422
 
 
 def test_admin_model_connection_test_and_deepseek_static_fallback(
@@ -364,6 +411,63 @@ def test_admin_model_connection_test_and_deepseek_static_fallback(
     assert fallback.status_code == 200
     assert fallback.json()["source"] == "static"
     assert fallback.json()["models"][0]["modelId"] == "deepseek-v4-flash"
+
+
+def test_admin_mimo_model_list_filters_dynamic_tts_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "data": [
+                    {"id": "mimo-v2.5-pro"},
+                    {"id": "mimo-v2.5-tts"},
+                    {"id": "mimo-v2-omni"},
+                    {"id": "mimo-v2.5-tts-voiceclone"},
+                ]
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            _ = args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = exc_type, exc, tb
+            return False
+
+        async def get(self, url, headers=None):
+            assert url == "https://token-plan-cn.xiaomimimo.com/v1/models"
+            assert headers["Authorization"] == "Bearer sk-mimo"
+            return _FakeResponse()
+
+    monkeypatch.setenv("TEST_MIMO_KEY", "sk-mimo")
+    monkeypatch.setattr(
+        "apps.api.api.routes.admin.httpx.AsyncClient",
+        _FakeAsyncClient,
+    )
+    with _build_client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/api/v1/admin/model-config/mimo/models",
+            json={
+                "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+                "apiKeyEnv": "TEST_MIMO_KEY",
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "dynamic"
+    assert [item["modelId"] for item in payload["models"]] == [
+        "mimo-v2.5-pro",
+        "mimo-v2-omni",
+    ]
 
 
 def test_admin_prompt_config_saves_previews_and_restores(

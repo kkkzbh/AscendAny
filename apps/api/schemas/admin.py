@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-AdminModelProviderId = Literal["siliconflow", "openai", "copilot", "deepseek"]
+AdminModelProviderId = Literal["siliconflow", "openai", "copilot", "deepseek", "mimo"]
 AdminModelRequestMode = Literal["chat_completions", "responses"]
 AdminModelListSource = Literal["dynamic", "static"]
 AdminPromptCategory = Literal["chat", "context", "role"]

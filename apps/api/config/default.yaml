@@ -16,7 +16,7 @@ dashboard:
   default_metric: 0
   rating_history_limit: 50
 llm:
-  active_provider: deepseek
+  active_provider: mimo
   providers:
     siliconflow:
       adapter: openai_compatible
@@ -41,6 +41,12 @@ llm:
       base_url: https://api.deepseek.com
       model: deepseek-v4-flash
       api_key_env: ASCENDANY_LLM_DEEPSEEK_API_KEY
+      request_mode: chat_completions
+    mimo:
+      adapter: openai_compatible
+      base_url: https://token-plan-cn.xiaomimimo.com/v1
+      model: mimo-v2.5-pro
+      api_key_env: ASCENDANY_LLM_MIMO_API_KEY
       request_mode: chat_completions
   request_timeout_seconds: 60
 auth:

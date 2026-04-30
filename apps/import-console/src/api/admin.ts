@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 
-export type AdminModelProviderId = "siliconflow" | "openai" | "copilot" | "deepseek";
+export type AdminModelProviderId = "siliconflow" | "openai" | "copilot" | "deepseek" | "mimo";
 export type AdminModelRequestMode = "chat_completions" | "responses";
 export type AdminModelListSource = "dynamic" | "static";
 
@@ -66,11 +66,13 @@ export interface AdminModelConnectionTestResponse {
   elapsedMs: number;
 }
 
-export interface AdminDeepSeekModelsResponse {
+export interface AdminProviderModelsResponse {
   models: AdminModelOption[];
   source: AdminModelListSource;
   error: string | null;
 }
+
+export type AdminDeepSeekModelsResponse = AdminProviderModelsResponse;
 
 export interface AdminPromptSummary {
   key: string;
@@ -294,7 +296,7 @@ export function testAdminModelConnection(payload: {
   });
 }
 
-export function listAdminDeepSeekModels(payload: {
+export function listAdminProviderModels(payload: {
   providerId?: AdminModelProviderId;
   adapter?: string;
   baseUrl: string;
@@ -302,13 +304,15 @@ export function listAdminDeepSeekModels(payload: {
   apiKeyEnv: string;
   requestMode?: AdminModelRequestMode;
   apiKey?: string;
-}): Promise<AdminDeepSeekModelsResponse> {
+}): Promise<AdminProviderModelsResponse> {
   const providerId = payload.providerId ?? "deepseek";
   return apiFetch(`/api/v1/admin/model-config/${providerId}/models`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
+
+export const listAdminDeepSeekModels = listAdminProviderModels;
 
 export function getAdminPrompts(): Promise<AdminPromptListResponse> {
   return apiFetch("/api/v1/admin/prompts");
