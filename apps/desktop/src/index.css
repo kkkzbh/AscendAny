@@ -1157,6 +1157,26 @@ body {
   gap: 6px;
 }
 
+.settings-avatar-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.settings-avatar-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-logout-button {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 .settings-provider-list {
   display: flex;
   flex-wrap: wrap;
@@ -3633,6 +3653,11 @@ body {
 
   .settings-page-title {
     margin-bottom: 10px;
+  }
+
+  .settings-avatar-row {
+    flex-wrap: wrap;
+    gap: 12px;
   }
 
   .custom-role-dialog-header {

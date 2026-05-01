@@ -44,12 +44,14 @@ export interface LocalChatSessionSnapshot {
     title: string;
     messages: LocalChatMessageSnapshot[];
     summary: string;
+    draft?: string;
     createdAt: number;
     updatedAt: number;
 }
 export interface LocalChatSnapshot {
     sessions: LocalChatSessionSnapshot[];
-    activeSessionId: string;
+    activeSessionId: string | null;
+    newSessionDraft: string;
 }
 export interface LocalNoteSnapshot {
     id: string;
@@ -106,5 +108,6 @@ export declare class LocalStateService {
     private getAppState;
     private setAppState;
     private activeSessionKey;
+    private chatDraftsKey;
 }
 export {};

@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppLayout } from "@/components/layout/AppLayout";
+import { ChatInput } from "@/components/chat/ChatInput";
+import { MessageList } from "@/components/chat/MessageList";
 import { StudentSidebar } from "@/components/layout/StudentSidebar";
 import { MetricsPanel } from "@/components/metrics/MetricsPanel";
 import { useAuthStore } from "@/stores/authStore";
@@ -169,6 +171,51 @@ describe("student shell components", () => {
     expect(transparentAppRule).toContain("--student-control-hover: var(--student-transparent-control-hover)");
     const selectRule = getCssRule(".student-session-select");
     expect(selectRule).toContain("align-items: center");
+  });
+
+  it("returns to the initial chat surface without creating another session", () => {
+    useChatStore.getState().addMessage("user", "分析最近一次考试");
+
+    render(
+      <>
+        <StudentSidebar />
+        <MessageList />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+
+    expect(useChatStore.getState().sessions).toHaveLength(1);
+    expect(useChatStore.getState().activeSessionId).toBeNull();
+    expect(screen.getByText("开始对话")).toBeTruthy();
+  });
+
+  it("restores separate drafts for the blank composer and real sessions", () => {
+    useChatStore.getState().addMessage("user", "分析最近一次考试");
+    useChatStore.getState().setCurrentDraft("会话草稿");
+    useChatStore.getState().startNewSessionDraft();
+    useChatStore.getState().setCurrentDraft("初始界面草稿");
+
+    render(
+      <>
+        <StudentSidebar />
+        <ChatInput />
+      </>,
+    );
+
+    const messageInput = () => screen.getByRole("textbox", { name: "消息输入" });
+
+    expect(messageInput()).toHaveProperty("value", "初始界面草稿");
+
+    const sessionButton = screen
+      .getAllByRole("button", { name: /分析最近一次考试/ })
+      .find((button) => button.classList.contains("student-session-select"));
+    expect(sessionButton).toBeTruthy();
+    fireEvent.click(sessionButton!);
+    expect(messageInput()).toHaveProperty("value", "会话草稿");
+
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+    expect(messageInput()).toHaveProperty("value", "初始界面草稿");
   });
 
   it("fully hides the sidebar content when collapsed", () => {

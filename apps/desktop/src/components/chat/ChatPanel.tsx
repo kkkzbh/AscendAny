@@ -12,6 +12,7 @@ export function ChatPanel({
   sendLabel,
 }: ChatPanelProps = {}) {
   const addMessage = useChatStore((s) => s.addMessage);
+  const createSession = useChatStore((s) => s.createSession);
   const createAssistantDraft = useChatStore((s) => s.createAssistantDraft);
   const appendMessageContent = useChatStore((s) => s.appendMessageContent);
   const appendMessageReasoning = useChatStore((s) => s.appendMessageReasoning);
@@ -51,6 +52,7 @@ export function ChatPanel({
     onStreamToolActivity: upsertMessageToolActivity,
     onStreamDone: (messageId) => finalizeMessage(messageId),
     onStreamEmpty: removeMessage,
+    onSessionStart: (title) => createSession({ title }),
     onWorkStart: handleAutoWorkStart,
     onWorkEnd: handleAutoWorkEnd,
   });

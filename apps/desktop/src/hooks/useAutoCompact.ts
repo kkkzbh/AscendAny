@@ -27,10 +27,9 @@ export function useAutoCompact(options?: {
 }) {
   const { maxTokens = 4000, keepRecent = 6 } = options ?? {};
   const session = useChatStore((s) => {
-    return (
-      s.sessions.find((item) => item.id === s.activeSessionId) ??
-      s.sessions[0]
-    );
+    return s.activeSessionId
+      ? s.sessions.find((item) => item.id === s.activeSessionId)
+      : undefined;
   });
   const setSummary = useChatStore((s) => s.setSummary);
 

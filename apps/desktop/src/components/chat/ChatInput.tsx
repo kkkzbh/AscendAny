@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getApiErrorMessage,
   streamChatReply,
@@ -43,11 +43,16 @@ export function ChatInput({
   sendVariant = "icon",
   sendLabel = "发送",
 }: ChatInputProps = {}) {
-  const [text, setText] = useState("");
   const [isSending, setIsSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const text = useChatStore((s) =>
+    s.activeSessionId
+      ? s.sessions.find((session) => session.id === s.activeSessionId)?.draft ?? ""
+      : s.newSessionDraft,
+  );
   const addMessage = useChatStore((s) => s.addMessage);
+  const setText = useChatStore((s) => s.setCurrentDraft);
   const createAssistantDraft = useChatStore((s) => s.createAssistantDraft);
   const appendMessageContent = useChatStore((s) => s.appendMessageContent);
   const appendMessageReasoning = useChatStore((s) => s.appendMessageReasoning);
@@ -65,6 +70,13 @@ export function ChatInput({
   const accessToken = useAuthStore((s) => s.accessToken);
   const activeRole = useSettingsStore((s) => s.activeRole);
   const customRoles = useCustomRoleStore((s) => s.customRoles);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [text]);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
@@ -84,6 +96,9 @@ export function ChatInput({
 
     try {
       const latestSession = useChatStore.getState().getActiveSession();
+      if (!latestSession) {
+        throw new Error("未能创建对话，请重试。");
+      }
       const messages: ChatMessagePayload[] = latestSession.messages
         .map(toOutboundChatMessage)
         .filter((message): message is ChatMessagePayload => message !== null);

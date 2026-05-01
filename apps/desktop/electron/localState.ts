@@ -55,13 +55,15 @@ export interface LocalChatSessionSnapshot {
   title: string;
   messages: LocalChatMessageSnapshot[];
   summary: string;
+  draft?: string;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface LocalChatSnapshot {
   sessions: LocalChatSessionSnapshot[];
-  activeSessionId: string;
+  activeSessionId: string | null;
+  newSessionDraft: string;
 }
 
 export interface LocalNoteSnapshot {
@@ -258,20 +260,9 @@ function normalizeSession(value: unknown): LocalChatSessionSnapshot {
     title: stringOrNull(input.title) ?? "新对话",
     messages,
     summary: typeof input.summary === "string" ? input.summary : "",
+    draft: typeof input.draft === "string" ? input.draft : "",
     createdAt,
     updatedAt,
-  };
-}
-
-function createEmptySession(): LocalChatSessionSnapshot {
-  const timestamp = nowMs();
-  return {
-    id: newId("session"),
-    title: "新对话",
-    messages: [],
-    summary: "",
-    createdAt: timestamp,
-    updatedAt: timestamp,
   };
 }
 
@@ -280,15 +271,37 @@ function normalizeChat(value: unknown): LocalChatSnapshot {
   const sessions = Array.isArray(input.sessions)
     ? input.sessions.map(normalizeSession)
     : [];
-  const safeSessions = sessions.length > 0 ? sessions : [createEmptySession()];
   const requestedActiveId = stringOrNull(input.activeSessionId);
   const activeSessionId =
-    requestedActiveId && safeSessions.some((session) => session.id === requestedActiveId)
+    requestedActiveId && sessions.some((session) => session.id === requestedActiveId)
       ? requestedActiveId
-      : safeSessions[0]!.id;
+      : sessions.length > 0 && input.activeSessionId !== null
+        ? sessions[0]!.id
+        : null;
   return {
-    sessions: safeSessions,
+    sessions,
     activeSessionId,
+    newSessionDraft: typeof input.newSessionDraft === "string" ? input.newSessionDraft : "",
+  };
+}
+
+interface LocalChatDraftState {
+  newSessionDraft: string;
+  sessionDrafts: Record<string, string>;
+}
+
+function normalizeChatDraftState(value: unknown): LocalChatDraftState {
+  const input = isRecord(value) ? value : {};
+  const rawSessionDrafts = isRecord(input.sessionDrafts) ? input.sessionDrafts : {};
+  const sessionDrafts: Record<string, string> = {};
+  for (const [key, draft] of Object.entries(rawSessionDrafts)) {
+    if (typeof draft === "string") {
+      sessionDrafts[key] = draft;
+    }
+  }
+  return {
+    newSessionDraft: typeof input.newSessionDraft === "string" ? input.newSessionDraft : "",
+    sessionDrafts,
   };
 }
 
@@ -450,6 +463,7 @@ export class LocalStateService {
     const profile = this.ensureActiveProfile();
     const chat = normalizeChat(value);
     const activeKey = this.activeSessionKey(profile.id);
+    const draftsKey = this.chatDraftsKey(profile.id);
     const transaction = this.db.transaction(() => {
       this.db.prepare(`
         DELETE FROM chat_messages
@@ -492,6 +506,12 @@ export class LocalStateService {
       }
 
       this.setAppState(activeKey, chat.activeSessionId);
+      this.setAppState(draftsKey, {
+        newSessionDraft: chat.newSessionDraft,
+        sessionDrafts: Object.fromEntries(
+          chat.sessions.map((session) => [session.id, session.draft ?? ""]),
+        ),
+      } satisfies LocalChatDraftState);
     });
     transaction();
     return true;
@@ -806,13 +826,7 @@ export class LocalStateService {
       WHERE profile_id = ? AND archived_at IS NULL
       ORDER BY updated_at DESC, created_at DESC
     `).all(profileId) as SessionRow[];
-
-    if (sessionRows.length === 0) {
-      const session = createEmptySession();
-      const chat = { sessions: [session], activeSessionId: session.id };
-      this.saveChat(chat);
-      return chat;
-    }
+    const draftState = normalizeChatDraftState(this.getAppState(this.chatDraftsKey(profileId)));
 
     const messageQuery = this.db.prepare(`
       SELECT content_json
@@ -826,6 +840,7 @@ export class LocalStateService {
         id: session.id,
         title: session.title,
         summary: session.summary,
+        draft: draftState.sessionDrafts[session.id] ?? "",
         createdAt: session.created_at,
         updatedAt: session.updated_at,
         messages: messageRows.map((row) => normalizeMessage(safeJsonParse(row.content_json))),
@@ -834,6 +849,7 @@ export class LocalStateService {
     return normalizeChat({
       sessions,
       activeSessionId: this.getAppState(this.activeSessionKey(profileId)),
+      newSessionDraft: draftState.newSessionDraft,
     });
   }
 
@@ -912,5 +928,9 @@ export class LocalStateService {
 
   private activeSessionKey(profileId: string): string {
     return `active_session_id:${profileId}`;
+  }
+
+  private chatDraftsKey(profileId: string): string {
+    return `chat_drafts:${profileId}`;
   }
 }

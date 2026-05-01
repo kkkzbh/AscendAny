@@ -41,4 +41,11 @@ describe("LocalStateService source contract", () => {
     expect(SOURCE).toContain("setActiveNote(id: unknown)");
     expect(SOURCE).toContain("clearNoteContent(id: unknown)");
   });
+
+  it("allows an empty chat composer without auto-creating a blank session", () => {
+    expect(SOURCE).toContain("activeSessionId: string | null");
+    expect(SOURCE).toContain("newSessionDraft: string");
+    expect(SOURCE).toContain("chatDraftsKey(profileId: string)");
+    expect(SOURCE).not.toMatch(/if \(sessionRows\.length === 0\)[\s\S]*this\.saveChat/);
+  });
 });

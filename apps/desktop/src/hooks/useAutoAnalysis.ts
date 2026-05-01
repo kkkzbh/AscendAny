@@ -23,10 +23,11 @@ export function useAutoAnalysis(params: {
   onStreamToolActivity?: (messageId: string, activity: ChatToolActivity) => void;
   onStreamDone?: (messageId: string, reply: string) => void;
   onStreamEmpty?: (messageId: string) => void;
+  onSessionStart?: (title: string) => void;
   onWorkStart?: () => string;
   onWorkEnd?: (taskId: string | undefined) => void;
 }) {
-  const { onReply, onStreamStart, onStreamDelta, onStreamReasoning, onStreamReasoningDone, onStreamToolActivity, onStreamDone, onStreamEmpty, onWorkStart, onWorkEnd } = params;
+  const { onReply, onStreamStart, onStreamDelta, onStreamReasoning, onStreamReasoningDone, onStreamToolActivity, onStreamDone, onStreamEmpty, onSessionStart, onWorkStart, onWorkEnd } = params;
   const inFlightExamIdRef = useRef<string | null>(null);
 
   const account = useAuthStore((s) => s.account);
@@ -38,8 +39,10 @@ export function useAutoAnalysis(params: {
 
   useEffect(() => {
     if (status !== "authenticated" || !account || !accessToken) return;
-    const latestExamId = rating?.history?.[0]?.examId?.trim();
+    const latestExam = rating?.history?.[0];
+    const latestExamId = latestExam?.examId?.trim();
     if (!latestExamId) return;
+    const latestExamName = latestExam?.examName?.trim() || latestExamId;
 
     const examStorageKey = `last_auto_analysis_exam_${account.accountId}`;
     const lastExamId = storage.get<string>(examStorageKey, "");
@@ -53,6 +56,7 @@ export function useAutoAnalysis(params: {
       const roleAtRequest = findRole(roleIdAtRequest, customRoles);
       let taskId: string | undefined;
       try {
+        onSessionStart?.(`${latestExamName}考试分析报告`);
         taskId = onWorkStart?.();
 
         let draftMessageId: string | null = null;
@@ -197,6 +201,7 @@ export function useAutoAnalysis(params: {
     onStreamToolActivity,
     onStreamDone,
     onStreamEmpty,
+    onSessionStart,
     onWorkStart,
     onWorkEnd,
   ]);

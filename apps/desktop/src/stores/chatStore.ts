@@ -3,15 +3,19 @@ import type { ChatMessage, ChatSession, ChatToolActivity } from "@/types/chat";
 
 interface ChatState {
   sessions: ChatSession[];
-  activeSessionId: string;
+  activeSessionId: string | null;
+  newSessionDraft: string;
   aiWorkTaskIds: string[];
   isAiWorking: boolean;
   resetForAccount: () => void;
   hydrateFromLocalState: (chat: unknown) => void;
-  createSession: () => string;
+  createSession: (options?: { title?: string }) => string;
+  startNewSessionDraft: () => void;
   selectSession: (sessionId: string) => void;
   deleteSession: (sessionId: string) => void;
-  getActiveSession: () => ChatSession;
+  getActiveSession: () => ChatSession | null;
+  getCurrentDraft: () => string;
+  setCurrentDraft: (draft: string) => void;
   addMessage: (
     role: ChatMessage["role"],
     content: string,
@@ -48,6 +52,7 @@ function createEmptySession(title = DEFAULT_SESSION_TITLE): ChatSession {
     title,
     messages: [],
     summary: "",
+    draft: "",
     createdAt: now,
     updatedAt: now,
   };
@@ -165,46 +170,59 @@ function normalizeSession(value: unknown): ChatSession {
     title,
     messages,
     summary: typeof candidate.summary === "string" ? candidate.summary : "",
+    draft: typeof candidate.draft === "string" ? candidate.draft : "",
     createdAt,
     updatedAt,
   };
 }
 
-function getActiveSessionFromState(state: Pick<ChatState, "sessions" | "activeSessionId">): ChatSession {
-  return (
-    state.sessions.find((session) => session.id === state.activeSessionId) ??
-    state.sessions[0] ??
-    createEmptySession()
-  );
+function getActiveSessionFromState(
+  state: Pick<ChatState, "sessions" | "activeSessionId">,
+): ChatSession | null {
+  if (!state.activeSessionId) {
+    return null;
+  }
+  return state.sessions.find((session) => session.id === state.activeSessionId) ?? null;
 }
 
-function normalizeChatSnapshot(value: unknown): Pick<ChatState, "sessions" | "activeSessionId"> {
+function normalizeChatSnapshot(
+  value: unknown,
+): Pick<ChatState, "sessions" | "activeSessionId" | "newSessionDraft"> {
   const persisted = (value ?? {}) as Partial<ChatState & { session?: unknown }>;
   const sessions = Array.isArray(persisted.sessions)
     ? persisted.sessions.map((session) => normalizeSession(session))
     : persisted.session
       ? [normalizeSession(persisted.session)]
       : [];
-  const safeSessions = sessions.length > 0 ? sessions : [createEmptySession()];
+  const requestedActiveId =
+    typeof persisted.activeSessionId === "string" ? persisted.activeSessionId : null;
   const activeSessionId =
-    typeof persisted.activeSessionId === "string" &&
-    safeSessions.some((session) => session.id === persisted.activeSessionId)
-      ? persisted.activeSessionId
-      : safeSessions[0]!.id;
+    requestedActiveId && sessions.some((session) => session.id === requestedActiveId)
+      ? requestedActiveId
+      : sessions.length > 0 && persisted.activeSessionId !== null
+        ? sessions[0]!.id
+        : null;
   return {
-    sessions: safeSessions,
+    sessions,
     activeSessionId,
+    newSessionDraft:
+      typeof persisted.newSessionDraft === "string" ? persisted.newSessionDraft : "",
   };
 }
 
-function pickChatSnapshot(state: ChatState): Pick<ChatState, "sessions" | "activeSessionId"> {
+function pickChatSnapshot(
+  state: ChatState,
+): Pick<ChatState, "sessions" | "activeSessionId" | "newSessionDraft"> {
   return {
     sessions: state.sessions,
     activeSessionId: state.activeSessionId,
+    newSessionDraft: state.newSessionDraft,
   };
 }
 
-function persistChatSnapshot(snapshot: Pick<ChatState, "sessions" | "activeSessionId">): void {
+function persistChatSnapshot(
+  snapshot: Pick<ChatState, "sessions" | "activeSessionId" | "newSessionDraft">,
+): void {
   const api = typeof window === "undefined" ? undefined : window.electronAPI;
   if (!api?.localStateSaveChat) {
     return;
@@ -216,18 +234,18 @@ function persistChatSnapshot(snapshot: Pick<ChatState, "sessions" | "activeSessi
 
 export const useChatStore = create<ChatState>()(
   (set, get) => {
-    const initialSession = createEmptySession();
     return {
-      sessions: [initialSession],
-      activeSessionId: initialSession.id,
+      sessions: [],
+      activeSessionId: null,
+      newSessionDraft: "",
       aiWorkTaskIds: [],
       isAiWorking: false,
 
       resetForAccount: () => {
-        const session = createEmptySession();
         set({
-          sessions: [session],
-          activeSessionId: session.id,
+          sessions: [],
+          activeSessionId: null,
+          newSessionDraft: "",
           aiWorkTaskIds: [],
           isAiWorking: false,
         });
@@ -243,8 +261,8 @@ export const useChatStore = create<ChatState>()(
         });
       },
 
-      createSession: () => {
-        const session = createEmptySession();
+      createSession: (options) => {
+        const session = createEmptySession(options?.title ?? DEFAULT_SESSION_TITLE);
         set((state) => ({
           sessions: [session, ...state.sessions],
           activeSessionId: session.id,
@@ -253,6 +271,22 @@ export const useChatStore = create<ChatState>()(
         }));
         persistChatSnapshot(pickChatSnapshot(get()));
         return session.id;
+      },
+
+      startNewSessionDraft: () => {
+        set((state) => {
+          const currentDraft =
+            state.activeSessionId === null
+              ? state.newSessionDraft
+              : state.sessions.find((session) => session.id === state.activeSessionId)?.draft ?? "";
+          return {
+            activeSessionId: null,
+            newSessionDraft: state.newSessionDraft ? state.newSessionDraft : currentDraft,
+            aiWorkTaskIds: [],
+            isAiWorking: false,
+          };
+        });
+        persistChatSnapshot(pickChatSnapshot(get()));
       },
 
       selectSession: (sessionId) => {
@@ -271,10 +305,9 @@ export const useChatStore = create<ChatState>()(
         set((state) => {
           const nextSessions = state.sessions.filter((session) => session.id !== sessionId);
           if (nextSessions.length === 0) {
-            const replacement = createEmptySession();
             return {
-              sessions: [replacement],
-              activeSessionId: replacement.id,
+              sessions: [],
+              activeSessionId: null,
               aiWorkTaskIds: [],
               isAiWorking: false,
             };
@@ -292,6 +325,28 @@ export const useChatStore = create<ChatState>()(
 
       getActiveSession: () => getActiveSessionFromState(get()),
 
+      getCurrentDraft: () => {
+        const state = get();
+        if (!state.activeSessionId) {
+          return state.newSessionDraft;
+        }
+        return state.sessions.find((session) => session.id === state.activeSessionId)?.draft ?? "";
+      },
+
+      setCurrentDraft: (draft) => {
+        set((state) => {
+          if (!state.activeSessionId) {
+            return { newSessionDraft: draft };
+          }
+          return {
+            sessions: state.sessions.map((session) =>
+              session.id === state.activeSessionId ? { ...session, draft } : session,
+            ),
+          };
+        });
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
+
       addMessage: (role, content, options) => {
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
@@ -304,6 +359,23 @@ export const useChatStore = create<ChatState>()(
             streaming: false,
             reasoningStreaming: false,
           };
+
+          if (!activeSession) {
+            const session = createEmptySession();
+            const messages = [nextMessage];
+            const nextSession = {
+              ...session,
+              messages,
+              title: role === "user" ? formatSessionTitle(messages) : session.title,
+              draft: "",
+              updatedAt: Date.now(),
+            };
+            return {
+              sessions: [nextSession, ...state.sessions],
+              activeSessionId: nextSession.id,
+              newSessionDraft: role === "user" ? "" : state.newSessionDraft,
+            };
+          }
           const nextSessions = state.sessions.map((session) => {
             if (session.id !== activeSession.id) {
               return session;
@@ -328,6 +400,9 @@ export const useChatStore = create<ChatState>()(
         const messageId = generateId();
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
+          if (!activeSession) {
+            return state;
+          }
           const nextMessage: ChatMessage = {
             id: messageId,
             role: "assistant",
@@ -497,6 +572,13 @@ export const useChatStore = create<ChatState>()(
       clearContext: () => {
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
+          if (!activeSession) {
+            return {
+              newSessionDraft: "",
+              aiWorkTaskIds: [],
+              isAiWorking: false,
+            };
+          }
           const replacement = {
             ...createEmptySession(DEFAULT_SESSION_TITLE),
             id: activeSession.id,
@@ -516,6 +598,9 @@ export const useChatStore = create<ChatState>()(
       setSummary: (summary) => {
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
+          if (!activeSession) {
+            return state;
+          }
           return {
             sessions: state.sessions.map((session) =>
               session.id === activeSession.id

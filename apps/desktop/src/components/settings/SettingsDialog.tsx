@@ -327,8 +327,8 @@ function GeneralSettingsPage() {
           <label className="block text-xs font-semibold tracking-[0.08em] text-[var(--text-soft)] uppercase">
             头像
           </label>
-          <div className="flex w-full items-center gap-4">
-            <div className="flex items-center gap-4">
+          <div className="settings-avatar-row">
+            <div className="settings-avatar-actions">
               <div
                 className="avatar-edit-wrapper group relative cursor-pointer"
                 onClick={() => setShowCropper(true)}
@@ -377,7 +377,7 @@ function GeneralSettingsPage() {
               onClick={() => void onLogout()}
               disabled={loggingOut}
               aria-label="退出登录"
-              className={`settings-provider-pill ml-auto font-medium tracking-[0.04em] transition-colors ${
+              className={`settings-provider-pill settings-logout-button font-medium tracking-[0.04em] transition-colors ${
                 loggingOut
                   ? "cursor-not-allowed bg-[var(--surface-soft)] text-[var(--text-soft)] ring-1 ring-[var(--border-subtle)]"
                   : "bg-[var(--rating-negative)] text-white shadow-[0_8px_16px_rgba(220,38,38,0.22)] hover:opacity-90"

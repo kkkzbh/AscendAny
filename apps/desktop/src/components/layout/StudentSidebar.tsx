@@ -35,7 +35,7 @@ export function StudentSidebar() {
   const draggingRef = useRef(false);
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
-  const createSession = useChatStore((s) => s.createSession);
+  const startNewSessionDraft = useChatStore((s) => s.startNewSessionDraft);
   const selectSession = useChatStore((s) => s.selectSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const isCollapsed = useLayoutStore((s) => s.isLeftSidebarCollapsed);
@@ -147,7 +147,7 @@ export function StudentSidebar() {
           type="button"
           className="student-sidebar-action no-drag"
           onClick={() => {
-            createSession();
+            startNewSessionDraft();
             setLeftSidebarCollapsed(false);
           }}
           title="新对话"

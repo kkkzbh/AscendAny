@@ -2,13 +2,16 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { useChatStore } from "@/stores/chatStore";
 import { MessageBubble } from "./MessageBubble";
 import { AssistantWorkingCard } from "./AssistantWorkingCard";
+import type { ChatMessage } from "@/types/chat";
+
+const EMPTY_MESSAGES: ChatMessage[] = [];
 
 export function MessageList() {
   const messages = useChatStore((s) => {
-    const activeSession =
-      s.sessions.find((session) => session.id === s.activeSessionId) ??
-      s.sessions[0];
-    return activeSession?.messages ?? [];
+    const activeSession = s.activeSessionId
+      ? s.sessions.find((session) => session.id === s.activeSessionId)
+      : null;
+    return activeSession?.messages ?? EMPTY_MESSAGES;
   });
   const isAiWorking = useChatStore((s) => s.isAiWorking);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -25,6 +28,7 @@ export function MessageList() {
   const scrollToBottom = (behavior: ScrollBehavior) => {
     const container = containerRef.current;
     if (!container) return;
+    if (typeof container.scrollTo !== "function") return;
     container.scrollTo({ top: container.scrollHeight, behavior });
   };
 

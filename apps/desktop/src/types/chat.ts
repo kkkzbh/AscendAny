@@ -34,6 +34,7 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   summary: string;
+  draft?: string;
   createdAt: number;
   updatedAt: number;
 }

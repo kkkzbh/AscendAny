@@ -92,6 +92,18 @@ describe("SettingsWorkspace layout", () => {
     expect(window.electronAPI?.setOpaqueSidebarBackground).toHaveBeenCalledWith(false);
   });
 
+  it("keeps the logout button aligned to the right side of the avatar row", () => {
+    render(<SettingsWorkspace />);
+
+    const avatarRow = document.querySelector(".settings-avatar-row");
+    const logoutButton = screen.getByRole("button", { name: "退出登录" });
+
+    expect(avatarRow?.contains(logoutButton)).toBe(true);
+    expect(logoutButton.classList.contains("settings-logout-button")).toBe(true);
+    expect(getCssRule(".settings-avatar-row")).toContain("justify-content: space-between");
+    expect(getCssRule(".settings-logout-button")).toContain("margin-left: auto");
+  });
+
   it("keeps transparent styling scoped to the left sidebars", () => {
     expect(SETTINGS_CSS).not.toContain("data-opaque-window");
     expect(SETTINGS_CSS).not.toContain("#26264f");
