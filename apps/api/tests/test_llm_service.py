@@ -115,6 +115,40 @@ def test_prepare_messages_replays_reasoning_for_reasoning_passthrough_providers(
     }
 
 
+def test_public_tool_activity_labels_do_not_expose_tool_names() -> None:
+    cases = {
+        "get_student_learning_profile": "查看学习画像",
+        "get_exam_submissions": "核对提交记录",
+        "read_notes": "读取学习笔记",
+        "update_notes": "更新学习笔记",
+    }
+
+    for tool_name, label in cases.items():
+        assert LLMService._tool_activity_label(tool_name) == label
+        assert tool_name not in label
+
+    assert (
+        LLMService._tool_activity_label(
+            "read_notes",
+            arguments={"mode": "search", "query": "图论"},
+        )
+        == "搜索学习笔记"
+    )
+
+    exam_result = json.dumps(
+        {"exam": {"title": "数据结构第三次实验", "exam_id": 32}},
+        ensure_ascii=False,
+    )
+    assert (
+        LLMService._tool_activity_label(
+            "get_exam_participant_metrics",
+            result=exam_result,
+        )
+        == "查看《数据结构第三次实验》数据"
+    )
+    assert LLMService._tool_activity_label("unknown_tool") is None
+
+
 class FakeToolExecutor:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
@@ -123,6 +157,10 @@ class FakeToolExecutor:
         self.calls.append((tool_name, arguments))
         return json.dumps(
             {
+                "exam": {
+                    "exam_id": 32,
+                    "title": "数据结构第三次实验",
+                },
                 "exam_id": 32,
                 "participants": [
                     {"student_no": "20231202019", "rank": 7},
@@ -617,9 +655,26 @@ def test_streaming_deepseek_reasoning_delta_and_tool_replay(monkeypatch) -> None
 
     assert {"type": "reasoning_delta", "text": "先看"} in events
     assert {"type": "reasoning_delta", "text": "榜单。"} in events
+    assert {
+        "type": "tool_activity_start",
+        "activityId": "call_1",
+        "label": "查看考试数据",
+        "status": "running",
+    } in events
+    assert {
+        "type": "tool_activity_done",
+        "activityId": "call_1",
+        "label": "查看《数据结构第三次实验》数据",
+        "status": "done",
+    } in events
     assert {"type": "delta", "text": "最终结论"} in events
     assert events[-1]["type"] == "done"
     assert events[-1]["reply"] == "最终结论"
+    assert not any(event.get("type") in {"tool_start", "tool_done"} for event in events)
+    assert not any(
+        "get_exam_participant_metrics" in json.dumps(event, ensure_ascii=False)
+        for event in events
+    )
     second_messages = requests_payload[1]["messages"]
     assert isinstance(second_messages, list)
     replayed_assistant = next(

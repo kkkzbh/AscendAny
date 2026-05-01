@@ -74,6 +74,16 @@ describe("chatStore sessions", () => {
   it("streams assistant drafts without leaking transient state into reload", async () => {
     const draftId = useChatStore.getState().createAssistantDraft("sakiko");
     useChatStore.getState().appendMessageReasoning(draftId, "先查看数据。");
+    useChatStore.getState().upsertMessageToolActivity(draftId, {
+      id: "call_1",
+      label: "查看考试数据",
+      status: "running",
+    });
+    useChatStore.getState().upsertMessageToolActivity(draftId, {
+      id: "call_1",
+      label: "查看《数据结构第三次实验》数据",
+      status: "done",
+    });
     useChatStore.getState().appendMessageContent(draftId, "第一段");
     useChatStore.getState().appendMessageContent(draftId, "第二段");
 
@@ -82,6 +92,9 @@ describe("chatStore sessions", () => {
     expect(message?.reasoningContent).toBe("先查看数据。");
     expect(message?.reasoningStartedAt).toEqual(expect.any(Number));
     expect(message?.reasoningEndedAt).toBeUndefined();
+    expect(message?.toolActivities).toEqual([
+      { id: "call_1", label: "查看《数据结构第三次实验》数据", status: "done" },
+    ]);
     expect(message?.streaming).toBe(true);
     expect(message?.reasoningStreaming).toBe(true);
     expect(message?.roleId).toBe("sakiko");
@@ -118,6 +131,10 @@ describe("chatStore sessions", () => {
               role: "assistant",
               content: "最终回答",
               reasoningContent: "思考内容",
+              toolActivities: [
+                { id: "call_running", label: "查看学习画像", status: "running" },
+                { id: "call_error", label: "核对提交记录", status: "error" },
+              ],
               reasoningStartedAt: 1710000000100,
               reasoningEndedAt: 1710000005100,
               timestamp: 1710000000000,
@@ -138,6 +155,10 @@ describe("chatStore sessions", () => {
     expect(message?.reasoningContent).toBe("思考内容");
     expect(message?.reasoningStartedAt).toBe(1710000000100);
     expect(message?.reasoningEndedAt).toBe(1710000005100);
+    expect(message?.toolActivities).toEqual([
+      { id: "call_running", label: "查看学习画像", status: "done" },
+      { id: "call_error", label: "核对提交记录", status: "error" },
+    ]);
     expect(message?.streaming).toBe(false);
     expect(message?.reasoningStreaming).toBe(false);
   });

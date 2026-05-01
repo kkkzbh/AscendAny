@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type RightPanelTab = "ability" | "history";
+export type RightPanelTab = "ability" | "history" | "notes";
 
 export interface LayoutSnapshot {
   isLeftSidebarCollapsed: boolean;
@@ -59,7 +59,9 @@ function normalizeLayoutSnapshot(value: unknown, fallback: LayoutSnapshot): Layo
         ? persisted.isMetricsPanelVisible
         : fallback.isMetricsPanelVisible,
     activeRightPanelTab:
-      persisted.activeRightPanelTab === "ability" || persisted.activeRightPanelTab === "history"
+      persisted.activeRightPanelTab === "ability"
+      || persisted.activeRightPanelTab === "history"
+      || persisted.activeRightPanelTab === "notes"
         ? persisted.activeRightPanelTab
         : fallback.activeRightPanelTab,
     splitRatio: normalizeSplitRatio(persisted.splitRatio),

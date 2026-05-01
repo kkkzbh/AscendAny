@@ -358,7 +358,42 @@ def test_tool_definitions_only_expose_fact_tools() -> None:
         "get_student_learning_profile",
         "get_exam_participant_metrics",
         "get_exam_submissions",
+        "read_notes",
+        "update_notes",
     ]
+
+
+def test_prompt_service_injects_notes_context() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
+
+    prompt = asyncio.run(
+        prompt_service.build_system_prompt(
+            identity=_build_identity(),
+            notes="- 图论是当前弱项\n- 习惯遗漏边界条件",
+            notes_title="刷题策略",
+        )
+    )
+
+    assert "## 长期笔记" in prompt
+    assert "刷题策略" in prompt
+    assert "图论是当前弱项" in prompt
+    assert "read_notes" in prompt
+    assert "update_notes" in prompt
+    assert "可整篇读取，也可按关键词搜索" in prompt
+    assert "小改用 patch，大改或全文重构用 replace" in prompt
+    assert "成功调用 `update_notes` 之前，不要说笔记已经修改完成" in prompt
+
+
+def test_prompt_service_renders_empty_notes_with_placeholder() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
+
+    prompt = asyncio.run(
+        prompt_service.build_system_prompt(identity=_build_identity())
+    )
+
+    assert "## 长期笔记" in prompt
+    assert "未命名笔记" in prompt
+    assert "（暂无笔记内容" in prompt
 
 
 def test_tool_executor_learning_profile_merges_fact_history() -> None:

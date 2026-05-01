@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import { useAuthStore } from "@/stores/authStore";
 import { useMetricsStore } from "@/stores/metricsStore";
+import { useNotesStore } from "@/stores/notesStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { storage } from "@/lib/storage";
 import { streamAutoAnalysis } from "@/lib/api";
+import type { ChatToolActivity } from "@/types/chat";
 import { findRole } from "@/types/role";
 
 /**
@@ -18,12 +20,13 @@ export function useAutoAnalysis(params: {
   onStreamDelta?: (messageId: string, delta: string) => void;
   onStreamReasoning?: (messageId: string, delta: string) => void;
   onStreamReasoningDone?: (messageId: string) => void;
+  onStreamToolActivity?: (messageId: string, activity: ChatToolActivity) => void;
   onStreamDone?: (messageId: string, reply: string) => void;
   onStreamEmpty?: (messageId: string) => void;
   onWorkStart?: () => string;
   onWorkEnd?: (taskId: string | undefined) => void;
 }) {
-  const { onReply, onStreamStart, onStreamDelta, onStreamReasoning, onStreamReasoningDone, onStreamDone, onStreamEmpty, onWorkStart, onWorkEnd } = params;
+  const { onReply, onStreamStart, onStreamDelta, onStreamReasoning, onStreamReasoningDone, onStreamToolActivity, onStreamDone, onStreamEmpty, onWorkStart, onWorkEnd } = params;
   const inFlightExamIdRef = useRef<string | null>(null);
 
   const account = useAuthStore((s) => s.account);
@@ -77,6 +80,10 @@ export function useAutoAnalysis(params: {
           onStreamReasoning?.(draftMessageId, nextReasoning);
         };
 
+        const notesState = useNotesStore.getState();
+        const activeNote = notesState.activeId
+          ? notesState.items[notesState.activeId] ?? null
+          : null;
         await streamAutoAnalysis(
           {
             studentId: account.studentId ?? undefined,
@@ -85,6 +92,8 @@ export function useAutoAnalysis(params: {
             roleName: roleAtRequest.name,
             roleSystemPrompt: roleAtRequest.systemPromptExtra || undefined,
             latestExamId,
+            notes: activeNote?.content ?? "",
+            notesTitle: activeNote?.title ?? "",
           },
           accessToken,
           (event) => {
@@ -118,10 +127,34 @@ export function useAutoAnalysis(params: {
               }
               return;
             }
+            if (
+              event.type === "tool_activity_start" ||
+              event.type === "tool_activity_done" ||
+              event.type === "tool_activity_error"
+            ) {
+              if (!draftMessageId) {
+                draftMessageId = onStreamStart?.(roleIdAtRequest) ?? null;
+                onWorkEnd?.(taskId);
+                taskId = undefined;
+              }
+              if (draftMessageId) {
+                flushReasoning();
+                onStreamReasoningDone?.(draftMessageId);
+                onStreamToolActivity?.(draftMessageId, {
+                  id: event.activityId,
+                  label: event.label,
+                  status: event.status,
+                });
+              }
+              return;
+            }
             if (event.type === "done") {
               if (rafId) {
                 window.cancelAnimationFrame(rafId);
                 flush();
+              }
+              if (typeof event.updatedNotes === "string") {
+                useNotesStore.getState().applyRemoteUpdate(event.updatedNotes);
               }
               const reply = event.reply.trim();
               if (draftMessageId) {
@@ -161,6 +194,7 @@ export function useAutoAnalysis(params: {
     onStreamDelta,
     onStreamReasoning,
     onStreamReasoningDone,
+    onStreamToolActivity,
     onStreamDone,
     onStreamEmpty,
     onWorkStart,

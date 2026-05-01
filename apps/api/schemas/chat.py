@@ -25,6 +25,8 @@ class ChatReplyRequest(BaseModel):
     roleId: str | None = None
     roleName: str | None = None
     roleSystemPrompt: str | None = None
+    notes: str = Field(default="", max_length=32_768)
+    notesTitle: str = Field(default="", max_length=120)
 
 
 class ChatReplyResponse(BaseModel):
@@ -33,6 +35,7 @@ class ChatReplyResponse(BaseModel):
     provider: ProviderType
     model: str = ""
     requestMode: str = "chat_completions"
+    updatedNotes: str | None = None
 
 
 class AutoAnalysisRequest(BaseModel):
@@ -44,6 +47,8 @@ class AutoAnalysisRequest(BaseModel):
     roleId: str | None = None
     roleName: str | None = None
     roleSystemPrompt: str | None = None
+    notes: str = Field(default="", max_length=32_768)
+    notesTitle: str = Field(default="", max_length=120)
 
 
 class AutoAnalysisResponse(BaseModel):
@@ -51,6 +56,7 @@ class AutoAnalysisResponse(BaseModel):
     provider: ProviderType
     model: str = ""
     requestMode: str = "chat_completions"
+    updatedNotes: str | None = None
 
 
 class AutoAnalysisPrecomputeRequest(BaseModel):

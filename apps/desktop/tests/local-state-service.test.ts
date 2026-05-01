@@ -26,4 +26,19 @@ describe("LocalStateService source contract", () => {
     expect(SOURCE).toContain('this.db.pragma("journal_mode = WAL")');
     expect(SOURCE).toContain('this.db.pragma("busy_timeout = 5000")');
   });
+
+  it("includes the notes table in the v2 migration", () => {
+    expect(SOURCE).toContain("const SCHEMA_VERSION = 2;");
+    expect(SOURCE).toContain("CREATE TABLE IF NOT EXISTS notes");
+    expect(SOURCE).toContain("title_is_auto INTEGER NOT NULL DEFAULT 1");
+    expect(SOURCE).toContain("idx_notes_profile_updated");
+  });
+
+  it("exposes notes CRUD methods scoped to the active profile", () => {
+    expect(SOURCE).toContain("upsertNote(payload: unknown)");
+    expect(SOURCE).toContain("createNote(): LocalNoteSnapshot");
+    expect(SOURCE).toContain("deleteNote(id: unknown)");
+    expect(SOURCE).toContain("setActiveNote(id: unknown)");
+    expect(SOURCE).toContain("clearNoteContent(id: unknown)");
+  });
 });

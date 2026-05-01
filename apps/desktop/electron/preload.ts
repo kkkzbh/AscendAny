@@ -37,6 +37,23 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("local-state-save-chat", value) as Promise<boolean>,
   localStateBindProfile: (value: unknown) =>
     ipcRenderer.invoke("local-state-bind-profile", value) as Promise<unknown>,
+  localStateUpsertNote: (value: unknown) =>
+    ipcRenderer.invoke("local-state-upsert-note", value) as Promise<unknown>,
+  localStateCreateNote: () =>
+    ipcRenderer.invoke("local-state-create-note") as Promise<unknown>,
+  localStateDeleteNote: (id: string) =>
+    ipcRenderer.invoke("local-state-delete-note", id) as Promise<unknown>,
+  localStateSetActiveNote: (id: string) =>
+    ipcRenderer.invoke("local-state-set-active-note", id) as Promise<boolean>,
+  localStateClearNoteContent: (id: string) =>
+    ipcRenderer.invoke("local-state-clear-note-content", id) as Promise<unknown>,
+  notesExportPdf: (payload: { html: string; defaultFilename?: string }) =>
+    ipcRenderer.invoke("notes-export-pdf", payload) as Promise<{
+      success: boolean;
+      canceled?: boolean;
+      path?: string;
+      message?: string;
+    }>,
   avatarSave: (accountId: string, base64Data: string) =>
     ipcRenderer.invoke("avatar-save", accountId, base64Data) as Promise<boolean>,
   avatarRead: (accountId: string) =>

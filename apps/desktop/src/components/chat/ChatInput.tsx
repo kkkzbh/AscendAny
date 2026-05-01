@@ -6,6 +6,7 @@ import {
 } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { useChatStore } from "@/stores/chatStore";
+import { useNotesStore } from "@/stores/notesStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { findRole } from "@/types/role";
@@ -50,6 +51,7 @@ export function ChatInput({
   const createAssistantDraft = useChatStore((s) => s.createAssistantDraft);
   const appendMessageContent = useChatStore((s) => s.appendMessageContent);
   const appendMessageReasoning = useChatStore((s) => s.appendMessageReasoning);
+  const upsertMessageToolActivity = useChatStore((s) => s.upsertMessageToolActivity);
   const finalizeMessageReasoning = useChatStore((s) => s.finalizeMessageReasoning);
   const finalizeMessage = useChatStore((s) => s.finalizeMessage);
   const removeMessage = useChatStore((s) => s.removeMessage);
@@ -122,6 +124,8 @@ export function ChatInput({
         return draftMessageId;
       };
 
+      const notesState = useNotesStore.getState();
+      const activeNote = notesState.activeId ? notesState.items[notesState.activeId] ?? null : null;
       await streamChatReply({
           studentId: normalizeIdentifier(account?.studentId ?? ""),
           ptaNickname: normalizeIdentifier(account?.ptaNickname ?? ""),
@@ -130,6 +134,8 @@ export function ChatInput({
           roleId: roleIdAtSend,
           roleName: roleAtSend.name,
           roleSystemPrompt: roleAtSend.systemPromptExtra || undefined,
+          notes: activeNote?.content ?? "",
+          notesTitle: activeNote?.title ?? "",
         },
         accessToken ?? undefined,
         (event) => {
@@ -151,6 +157,21 @@ export function ChatInput({
             }
             return;
           }
+          if (
+            event.type === "tool_activity_start" ||
+            event.type === "tool_activity_done" ||
+            event.type === "tool_activity_error"
+          ) {
+            const activeDraftId = ensureDraft();
+            flushReasoning();
+            finalizeMessageReasoning(activeDraftId);
+            upsertMessageToolActivity(activeDraftId, {
+              id: event.activityId,
+              label: event.label,
+              status: event.status,
+            });
+            return;
+          }
           if (event.type === "done") {
             if (rafId) {
               window.cancelAnimationFrame(rafId);
@@ -158,6 +179,9 @@ export function ChatInput({
             }
             if (event.summary !== undefined && event.summary !== latestSession.summary) {
               setSummary(event.summary);
+            }
+            if (typeof event.updatedNotes === "string") {
+              useNotesStore.getState().applyRemoteUpdate(event.updatedNotes);
             }
             if (draftMessageId) {
               if (!event.reply.trim()) {

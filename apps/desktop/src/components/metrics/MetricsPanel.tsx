@@ -6,6 +6,7 @@ import { RadarChart } from "./RadarChart";
 import { RatingDisplay } from "./RatingDisplay";
 import { MetricCard } from "./MetricCard";
 import { RatingHistoryLineChart } from "./RatingHistoryLineChart";
+import { NotesWorkspace } from "@/components/notes/NotesWorkspace";
 import type { MetricName } from "@/types/metrics";
 
 const METRIC_ORDER: MetricName[] = [
@@ -41,6 +42,7 @@ export function MetricsPanel() {
   const tabs: Array<{ id: RightPanelTab; label: string }> = [
     { id: "ability", label: "能力" },
     { id: "history", label: "历史" },
+    { id: "notes", label: "笔记" },
   ];
   const activeIndex = tabs.findIndex((tab) => tab.id === activeTab);
 
@@ -65,7 +67,9 @@ export function MetricsPanel() {
   }, [activeIndex]);
 
   let content: ReactNode;
-  if (loading && !metrics && !rating) {
+  if (activeTab === "notes") {
+    content = <NotesWorkspace />;
+  } else if (loading && !metrics && !rating) {
     content = (
       <div className="student-right-empty">
         加载中...

@@ -25,6 +25,8 @@ describe("chat stream API", () => {
         eventStream([
           'event: meta\ndata: {"provider":"deepseek","model":"deepseek-v4-flash"}\n\n',
           'event: reasoning_delta\ndata: {"text":"先分析"}\n\n',
+          'event: tool_activity_start\ndata: {"activityId":"call_1","label":"查看考试数据","status":"running"}\n\n',
+          'event: tool_activity_done\ndata: {"activityId":"call_1","label":"查看《数据结构第三次实验》数据","status":"done"}\n\n',
           'event: delta\ndata: {"text":"你',
           '好"}\n\n',
           'event: done\ndata: {"reply":"你好","summary":"s"}\n\n',
@@ -42,6 +44,8 @@ describe("chat stream API", () => {
     expect(events).toEqual([
       { type: "meta", provider: "deepseek", model: "deepseek-v4-flash", requestMode: undefined, summary: undefined },
       { type: "reasoning_delta", text: "先分析" },
+      { type: "tool_activity_start", activityId: "call_1", label: "查看考试数据", status: "running" },
+      { type: "tool_activity_done", activityId: "call_1", label: "查看《数据结构第三次实验》数据", status: "done" },
       { type: "delta", text: "你好" },
       { type: "done", reply: "你好", summary: "s", provider: undefined, model: undefined, requestMode: undefined },
     ]);
@@ -85,6 +89,27 @@ describe("chat stream API", () => {
     expect(events).toEqual([
       { type: "meta", provider: "deepseek", model: undefined, requestMode: undefined, summary: undefined },
     ]);
+  });
+
+  it("ignores legacy unlabelled tool events", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        eventStream([
+          'event: tool_start\ndata: {"type":"tool_start"}\n\n',
+          'event: tool_done\ndata: {"type":"tool_done"}\n\n',
+          'event: delta\ndata: {"text":"ok"}\n\n',
+        ]),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      ),
+    );
+    const events: ChatStreamEvent[] = [];
+
+    await streamChatReply({ messages: [], summary: "" }, undefined, (event) => events.push(event));
+
+    expect(events).toEqual([{ type: "delta", text: "ok" }]);
   });
 
   it("does not swallow consumer callback errors", async () => {

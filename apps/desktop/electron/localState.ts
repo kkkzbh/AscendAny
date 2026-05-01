@@ -4,8 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 type ThemeMode = "light" | "dark";
-type RightPanelTab = "ability" | "history";
+type RightPanelTab = "ability" | "history" | "notes";
 type ChatRole = "user" | "assistant" | "system";
+type ToolActivityStatus = "running" | "done" | "error";
 
 export interface LocalProfileSnapshot {
   id: string;
@@ -39,7 +40,14 @@ export interface LocalChatMessageSnapshot {
   content: string;
   timestamp: number;
   roleId?: string;
+  toolActivities?: LocalToolActivitySnapshot[];
   streaming?: boolean;
+}
+
+export interface LocalToolActivitySnapshot {
+  id: string;
+  label: string;
+  status: ToolActivityStatus;
 }
 
 export interface LocalChatSessionSnapshot {
@@ -56,17 +64,34 @@ export interface LocalChatSnapshot {
   activeSessionId: string;
 }
 
+export interface LocalNoteSnapshot {
+  id: string;
+  title: string;
+  content: string;
+  titleIsAuto: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LocalNotesSnapshot {
+  items: LocalNoteSnapshot[];
+  activeNoteId: string;
+}
+
 export interface LocalStateSnapshot {
   profile: LocalProfileSnapshot;
   settings: LocalSettingsSnapshot;
   layout: LocalLayoutSnapshot;
   chat: LocalChatSnapshot;
+  notes: LocalNotesSnapshot;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const SETTINGS_KEY = "app_settings";
 const ACTIVE_PROFILE_KEY = "active_profile_id";
 const DEFAULT_ROLE_ID = "sakiko";
+export const NOTES_MAX_LENGTH = 32_768;
+export const NOTES_TITLE_MAX_LENGTH = 120;
 
 const DEFAULT_SETTINGS: LocalSettingsSnapshot = {
   theme: "light",
@@ -166,7 +191,12 @@ function normalizeLayout(value: unknown): LocalLayoutSnapshot {
       typeof input.isMetricsPanelVisible === "boolean"
         ? input.isMetricsPanelVisible
         : DEFAULT_LAYOUT.isMetricsPanelVisible,
-    activeRightPanelTab: input.activeRightPanelTab === "history" ? "history" : "ability",
+    activeRightPanelTab:
+      input.activeRightPanelTab === "history"
+        ? "history"
+        : input.activeRightPanelTab === "notes"
+        ? "notes"
+        : "ability",
     splitRatio: normalizeSplitRatio(input.splitRatio),
     activeFullscreenView: input.activeFullscreenView === "achievements" ? "achievements" : "none",
   };
@@ -187,8 +217,29 @@ function normalizeMessage(value: unknown): LocalChatMessageSnapshot {
         ? input.timestamp
         : nowMs(),
     roleId: typeof input.roleId === "string" ? input.roleId : undefined,
+    toolActivities: normalizeToolActivities(input.toolActivities),
     streaming: typeof input.streaming === "boolean" ? input.streaming : false,
   };
+}
+
+function normalizeToolActivities(value: unknown): LocalToolActivitySnapshot[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item): LocalToolActivitySnapshot | null => {
+      const id = stringOrNull(item.id);
+      const label = stringOrNull(item.label);
+      if (!id || !label) {
+        return null;
+      }
+      const status: ToolActivityStatus =
+        item.status === "done" || item.status === "error" ? item.status : "done";
+      return { id, label, status };
+    })
+    .filter((item): item is LocalToolActivitySnapshot => item !== null);
+  return items.length > 0 ? items : undefined;
 }
 
 function normalizeSession(value: unknown): LocalChatSessionSnapshot {
@@ -267,6 +318,82 @@ interface MessageRow {
   content_json: string;
 }
 
+interface NoteRow {
+  id: string;
+  title: string;
+  content: string;
+  title_is_auto: number;
+  created_at: number;
+  updated_at: number;
+}
+
+const STRIP_MD_PATTERNS: Array<[RegExp, string]> = [
+  [/^#{1,6}\s+/m, ""],
+  [/^>\s+/gm, ""],
+  [/^[-*+]\s+/gm, ""],
+  [/^\d+\.\s+/gm, ""],
+  [/`{1,3}([^`]*)`{1,3}/g, "$1"],
+  [/!\[[^\]]*\]\([^)]*\)/g, ""],
+  [/\[([^\]]+)\]\([^)]*\)/g, "$1"],
+  [/[*_~]+/g, ""],
+];
+
+function stripMarkdownInline(value: string): string {
+  let text = value;
+  for (const [pattern, replacement] of STRIP_MD_PATTERNS) {
+    text = text.replace(pattern, replacement);
+  }
+  return text.trim();
+}
+
+export function deriveAutoNoteTitle(content: string): string {
+  const text = (content || "").trim();
+  if (!text) {
+    return "";
+  }
+  const lines = text.split(/\r?\n/);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      continue;
+    }
+    const heading = /^#{1,6}\s+(.+)$/.exec(line);
+    if (heading) {
+      return stripMarkdownInline(heading[1]).slice(0, NOTES_TITLE_MAX_LENGTH);
+    }
+    return stripMarkdownInline(line).slice(0, 30);
+  }
+  return "";
+}
+
+function clampNoteContent(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  if (value.length <= NOTES_MAX_LENGTH) {
+    return value;
+  }
+  return value.slice(0, NOTES_MAX_LENGTH);
+}
+
+function clampNoteTitle(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.slice(0, NOTES_TITLE_MAX_LENGTH);
+}
+
+function noteFromRow(row: NoteRow): LocalNoteSnapshot {
+  return {
+    id: row.id,
+    title: row.title ?? "",
+    content: row.content ?? "",
+    titleIsAuto: row.title_is_auto !== 0,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export class LocalStateService {
   private db: Database.Database;
 
@@ -290,6 +417,7 @@ export class LocalStateService {
       settings: this.getSettings(profile.id),
       layout: this.getLayout(profile.id),
       chat: this.getChat(profile.id),
+      notes: this.getNotes(profile.id),
     };
   }
 
@@ -367,6 +495,124 @@ export class LocalStateService {
     });
     transaction();
     return true;
+  }
+
+  upsertNote(payload: unknown): LocalNoteSnapshot | null {
+    if (!isRecord(payload)) {
+      return null;
+    }
+    const id = stringOrNull(payload.id);
+    if (!id) {
+      return null;
+    }
+    const profile = this.ensureActiveProfile();
+    const existing = this.db
+      .prepare("SELECT * FROM notes WHERE id = ? AND profile_id = ?")
+      .get(id, profile.id) as NoteRow | undefined;
+
+    const title = clampNoteTitle(payload.title);
+    const content = clampNoteContent(payload.content);
+    const titleIsAuto =
+      typeof payload.titleIsAuto === "boolean"
+        ? (payload.titleIsAuto ? 1 : 0)
+        : existing
+        ? existing.title_is_auto
+        : 1;
+    const timestamp = nowMs();
+
+    if (existing) {
+      this.db
+        .prepare(`
+          UPDATE notes
+          SET title = ?, content = ?, title_is_auto = ?, updated_at = ?
+          WHERE id = ? AND profile_id = ?
+        `)
+        .run(title, content, titleIsAuto, timestamp, id, profile.id);
+    } else {
+      this.db
+        .prepare(`
+          INSERT INTO notes (id, profile_id, title, content, title_is_auto, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(id, profile.id, title, content, titleIsAuto, timestamp, timestamp);
+    }
+    return this.fetchNote(id, profile.id);
+  }
+
+  createNote(): LocalNoteSnapshot {
+    const profile = this.ensureActiveProfile();
+    const id = newId("note");
+    const timestamp = nowMs();
+    this.db
+      .prepare(`
+        INSERT INTO notes (id, profile_id, title, content, title_is_auto, created_at, updated_at)
+        VALUES (?, ?, '', '', 1, ?, ?)
+      `)
+      .run(id, profile.id, timestamp, timestamp);
+    this.setAppState(this.activeNoteKey(profile.id), id);
+    return this.fetchNote(id, profile.id)!;
+  }
+
+  deleteNote(id: unknown): { activeNoteId: string } | null {
+    const noteId = stringOrNull(id);
+    if (!noteId) {
+      return null;
+    }
+    const profile = this.ensureActiveProfile();
+    const transaction = this.db.transaction(() => {
+      this.db
+        .prepare("DELETE FROM notes WHERE id = ? AND profile_id = ?")
+        .run(noteId, profile.id);
+      const remaining = this.db
+        .prepare(
+          "SELECT id FROM notes WHERE profile_id = ? ORDER BY updated_at DESC LIMIT 1",
+        )
+        .get(profile.id) as { id: string } | undefined;
+      let activeId: string;
+      if (remaining) {
+        activeId = remaining.id;
+      } else {
+        const replacement = this.createNoteUnsafe(profile.id);
+        activeId = replacement.id;
+      }
+      this.setAppState(this.activeNoteKey(profile.id), activeId);
+      return activeId;
+    });
+    const activeNoteId = transaction();
+    return { activeNoteId };
+  }
+
+  setActiveNote(id: unknown): boolean {
+    const noteId = stringOrNull(id);
+    if (!noteId) {
+      return false;
+    }
+    const profile = this.ensureActiveProfile();
+    const exists = this.db
+      .prepare("SELECT id FROM notes WHERE id = ? AND profile_id = ?")
+      .get(noteId, profile.id);
+    if (!exists) {
+      return false;
+    }
+    this.setAppState(this.activeNoteKey(profile.id), noteId);
+    return true;
+  }
+
+  clearNoteContent(id: unknown): LocalNoteSnapshot | null {
+    const noteId = stringOrNull(id);
+    if (!noteId) {
+      return null;
+    }
+    const profile = this.ensureActiveProfile();
+    const timestamp = nowMs();
+    this.db
+      .prepare(`
+        UPDATE notes
+        SET content = '', updated_at = ?
+        WHERE id = ? AND profile_id = ?
+      `)
+      .run(timestamp, noteId, profile.id);
+    return this.fetchNote(noteId, profile.id);
   }
 
   bindActiveProfile(payload: unknown): LocalProfileSnapshot | null {
@@ -470,6 +716,20 @@ export class LocalStateService {
           ON chat_sessions(profile_id, archived_at, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_messages_session_seq
           ON chat_messages(session_id, seq ASC);
+
+        CREATE TABLE IF NOT EXISTS notes (
+          id TEXT PRIMARY KEY,
+          profile_id TEXT NOT NULL,
+          title TEXT NOT NULL DEFAULT '',
+          content TEXT NOT NULL DEFAULT '',
+          title_is_auto INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_notes_profile_updated
+          ON notes(profile_id, updated_at DESC);
       `);
       this.db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
         .run(SCHEMA_VERSION, nowMs());
@@ -575,6 +835,51 @@ export class LocalStateService {
       sessions,
       activeSessionId: this.getAppState(this.activeSessionKey(profileId)),
     });
+  }
+
+  private getNotes(profileId: string): LocalNotesSnapshot {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM notes WHERE profile_id = ? ORDER BY updated_at DESC, created_at DESC",
+      )
+      .all(profileId) as NoteRow[];
+    let items = rows.map(noteFromRow);
+    if (items.length === 0) {
+      const created = this.createNoteUnsafe(profileId);
+      items = [created];
+    }
+    const requested = stringOrNull(this.getAppState(this.activeNoteKey(profileId)));
+    const activeNoteId =
+      requested && items.some((note) => note.id === requested)
+        ? requested
+        : items[0]!.id;
+    if (activeNoteId !== requested) {
+      this.setAppState(this.activeNoteKey(profileId), activeNoteId);
+    }
+    return { items, activeNoteId };
+  }
+
+  private fetchNote(id: string, profileId: string): LocalNoteSnapshot | null {
+    const row = this.db
+      .prepare("SELECT * FROM notes WHERE id = ? AND profile_id = ?")
+      .get(id, profileId) as NoteRow | undefined;
+    return row ? noteFromRow(row) : null;
+  }
+
+  private createNoteUnsafe(profileId: string): LocalNoteSnapshot {
+    const id = newId("note");
+    const timestamp = nowMs();
+    this.db
+      .prepare(`
+        INSERT INTO notes (id, profile_id, title, content, title_is_auto, created_at, updated_at)
+        VALUES (?, ?, '', '', 1, ?, ?)
+      `)
+      .run(id, profileId, timestamp, timestamp);
+    return this.fetchNote(id, profileId)!;
+  }
+
+  private activeNoteKey(profileId: string): string {
+    return `active_note_id:${profileId}`;
   }
 
   private upsertProfileSetting(profileId: string, key: string, value: unknown): void {

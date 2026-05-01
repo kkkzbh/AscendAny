@@ -70,7 +70,15 @@ _TOOL_RULES = """\
 ## 可用事实工具
 - `get_student_learning_profile`: 当前绑定学生身份、当前 Rating/五维指标、最近考试历史。
 - `get_exam_participant_metrics`: 指定考试的考试信息与未缺考学生全量榜单、分数、Rating 变化和五维指标。
-- `get_exam_submissions`: 指定考试提交记录；默认查当前学生，也可按学号或内部学生实体 ID 查询。\
+- `get_exam_submissions`: 指定考试提交记录；默认查当前学生，也可按学号或内部学生实体 ID 查询。
+
+## 长期笔记工具
+你可以读写一份跨会话持久化的「长期笔记」（用户当前激活的那一份；其内容已在系统提示中给出）。
+- `read_notes`: 读取当前长期笔记；可整篇读取，也可按关键词搜索。
+- `update_notes`: 修改当前长期笔记；小改用 patch，大改或全文重构用 replace。
+- 用户要求整理、精简、补充、删除、改写笔记时，必须调用 `update_notes`。
+- 成功调用 `update_notes` 之前，不要说笔记已经修改完成。
+- 写笔记时保留仍有价值的用户内容，不要无故清空或丢失手写记录。\
 """
 
 _NORMAL_SYSTEM_PROMPT_TEMPLATE = """\
@@ -80,6 +88,7 @@ _NORMAL_SYSTEM_PROMPT_TEMPLATE = """\
 - 始终使用简体中文，直接回答用户当前问题。
 - 围绕编程学习与考试表现提供帮助：解释、对比、诊断、建议。
 - 回复清晰、简洁，避免空泛套话。
+- 维护一份跨会话的「长期笔记」：在适当时机用 `update_notes` 增量记录关键摘要、知识点、用户偏好与阶段性总结，让未来的自己延续上下文。
 
 {tool_rules}
 
@@ -102,6 +111,7 @@ _PROACTIVE_ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """\
 4. 基于工具事实输出目标考试的 Rating 变化、五维指标表现、同场对比和进步/退步解释。
 5. 给出 2-3 条可执行、可落地的改进建议，并明确心理支持模式（recovery/steady/reinforce）和下一步训练动作。
 6. 最后提出 1 个简短追问，帮助学生进入下一步训练。
+7. 若得出可沿用至后续会话的关键结论或训练计划，调用 `update_notes` 追加到长期笔记，便于下一次延续。
 
 {tool_rules}
 
@@ -126,6 +136,7 @@ _TARGET_EXAM_ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """\
 4. 基于工具事实说明该场考试的 Rating 变化、五大指标表现、同场排名/分数对比，以及与上一场可比考试的关键变化。
 5. 给出 2-3 条可执行、可落地的改进建议，优先针对本场退步项或短板项。
 6. 结尾给出一句适合教师查看的总结，不要追加面向学生的追问。
+7. 若发现可沉淀的知识点或共性短板，调用 `update_notes` 增量记录到长期笔记。
 
 {tool_rules}
 
@@ -176,6 +187,14 @@ _TARGET_EXAM_CONTEXT_TEMPLATE = """\
 _NO_STUDENT_CONTEXT = """\
 ## 当前学生身份
 当前用户尚未绑定学号，无法查询学生数据。请提示用户先在「设置」中关联自己的学号或 PTA 昵称。\
+"""
+
+_NOTES_CONTEXT_TEMPLATE = """\
+## 长期笔记（跨会话持久；当前激活：{notes_title}）
+{notes_content}
+
+注意：以上是用户当前激活的那一份长期笔记。需要核对最新版本时调用 `read_notes`；
+得出值得沉淀的结论后调用 `update_notes` 写回，保留仍有价值的内容。\
 """
 
 _AUTO_ANALYSIS_USER_MESSAGE_TEMPLATE = """\
@@ -278,6 +297,19 @@ PROMPT_DEFINITIONS: tuple[PromptDefinition, ...] = (
         allowed_variables=("target_exam_id",),
         required_variables=("target_exam_id",),
         sample_variables={"target_exam_id": "3"},
+    ),
+    PromptDefinition(
+        key="chat.notes_context",
+        title="长期笔记上下文",
+        description="将用户当前激活的长期笔记（标题与正文）注入系统提示。",
+        category="context",
+        default_content=_NOTES_CONTEXT_TEMPLATE,
+        allowed_variables=("notes_title", "notes_content"),
+        required_variables=("notes_title", "notes_content"),
+        sample_variables={
+            "notes_title": "刷题策略",
+            "notes_content": "- 图论是当前弱项\n- 习惯遗漏边界条件",
+        },
     ),
     PromptDefinition(
         key="chat.auto_analysis_user_message",
@@ -409,6 +441,8 @@ class PromptService:
         role_id: str = "xiaoD",
         role_name: str = "小D",
         custom_role_style_prompt: str = "",
+        notes: str = "",
+        notes_title: str = "",
     ) -> str:
         tool_rules = await self._render_prompt("chat.tool_rules", {})
         base_prompt = await self._render_prompt(
@@ -423,6 +457,8 @@ class PromptService:
             identity=identity,
             role_id=role_id,
             custom_role_style_prompt=custom_role_style_prompt,
+            notes=notes,
+            notes_title=notes_title,
         )
 
     async def build_proactive_analysis_system_prompt(
@@ -431,6 +467,8 @@ class PromptService:
         role_id: str = "xiaoD",
         role_name: str = "小D",
         custom_role_style_prompt: str = "",
+        notes: str = "",
+        notes_title: str = "",
     ) -> str:
         tool_rules = await self._render_prompt("chat.tool_rules", {})
         base_prompt = "\n\n".join(
@@ -450,6 +488,8 @@ class PromptService:
             identity=identity,
             role_id=role_id,
             custom_role_style_prompt=custom_role_style_prompt,
+            notes=notes,
+            notes_title=notes_title,
         )
 
     async def build_exam_analysis_system_prompt(
@@ -459,6 +499,8 @@ class PromptService:
         role_id: str = "xiaoD",
         role_name: str = "小D",
         custom_role_style_prompt: str = "",
+        notes: str = "",
+        notes_title: str = "",
     ) -> str:
         tool_rules = await self._render_prompt("chat.tool_rules", {})
         base_prompt = "\n\n".join(
@@ -480,6 +522,8 @@ class PromptService:
             role_id=role_id,
             custom_role_style_prompt=custom_role_style_prompt,
             target_exam_id=target_exam_id,
+            notes=notes,
+            notes_title=notes_title,
         )
 
     async def build_auto_analysis_user_message(
@@ -501,6 +545,8 @@ class PromptService:
         role_id: str,
         custom_role_style_prompt: str = "",
         target_exam_id: int | None = None,
+        notes: str = "",
+        notes_title: str = "",
     ) -> str:
         sections: list[str] = [base_prompt]
         if identity is not None and not identity.no_submission_records:
@@ -514,6 +560,7 @@ class PromptService:
                     {"target_exam_id": target_exam_id},
                 )
             )
+        sections.append(await self._build_notes_context(notes, notes_title))
         style = await self._build_role_style_prompt(role_id)
         if style:
             sections.append(style)
@@ -521,6 +568,17 @@ class PromptService:
         if custom_style:
             sections.append(custom_style)
         return "\n\n".join(sections)
+
+    async def _build_notes_context(self, notes: str, notes_title: str) -> str:
+        title = (notes_title or "").strip() or "未命名笔记"
+        body = (notes or "").strip() or "（暂无笔记内容；可在得出值得沉淀的结论后调用 update_notes 写入。）"
+        return await self._render_prompt(
+            "chat.notes_context",
+            {
+                "notes_title": title,
+                "notes_content": body,
+            },
+        )
 
     async def _build_student_context(self, identity: ResolvedIdentity) -> str:
         student_entity_ids = identity.student_entity_ids or (

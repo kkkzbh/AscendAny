@@ -187,8 +187,15 @@ async def _prepare_chat_runtime(
         role_id=role_id,
         role_name=role_name,
         custom_role_style_prompt=role_system_prompt,
+        notes=payload.notes,
+        notes_title=payload.notesTitle,
     )
-    tool_executor = ToolExecutor(repository=repository, identity=identity)
+    tool_executor = ToolExecutor(
+        repository=repository,
+        identity=identity,
+        notes_content=payload.notes,
+        notes_title=payload.notesTitle,
+    )
     return effective_payload, identity, system_prompt, tool_executor
 
 
@@ -244,10 +251,17 @@ async def chat_reply(
         role_id=role_id,
         role_name=role_name,
         custom_role_style_prompt=role_system_prompt,
+        notes=payload.notes,
+        notes_title=payload.notesTitle,
     )
 
     # ── 4. Create tool executor ──
-    tool_executor = ToolExecutor(repository=repository, identity=identity)
+    tool_executor = ToolExecutor(
+        repository=repository,
+        identity=identity,
+        notes_content=payload.notes,
+        notes_title=payload.notesTitle,
+    )
 
     # ── 5. Generate LLM reply ──
     result = await llm_service.generate_reply(
@@ -388,6 +402,8 @@ async def chat_auto_analysis(
         role_id=role_id,
         role_name=role_name,
         custom_role_style_prompt=role_system_prompt,
+        notes=payload.notes,
+        notes_title=payload.notesTitle,
     )
 
     # ── 3. Build the hidden user trigger message ──
@@ -402,10 +418,17 @@ async def chat_auto_analysis(
         roleId=role_id,
         roleName=role_name,
         roleSystemPrompt=role_system_prompt,
+        notes=payload.notes,
+        notesTitle=payload.notesTitle,
     )
 
     # ── 5. Generate reply with tools ──
-    tool_executor = ToolExecutor(repository=repository, identity=identity)
+    tool_executor = ToolExecutor(
+        repository=repository,
+        identity=identity,
+        notes_content=payload.notes,
+        notes_title=payload.notesTitle,
+    )
     result = await llm_service.generate_reply(
         synthetic_request,
         system_prompt=system_prompt,
@@ -435,6 +458,7 @@ async def chat_auto_analysis(
         provider=result.provider,
         model=result.model,
         requestMode=result.requestMode,
+        updatedNotes=getattr(tool_executor, "pending_notes_update", None),
     )
 
 
@@ -521,6 +545,8 @@ async def chat_auto_analysis_stream(
                 role_id=role_id,
                 role_name=role_name,
                 custom_role_style_prompt=role_system_prompt,
+                notes=payload.notes,
+                notes_title=payload.notesTitle,
             )
             synthetic_request = ChatReplyRequest(
                 studentId=student_id,
@@ -537,8 +563,15 @@ async def chat_auto_analysis_stream(
                 roleId=role_id,
                 roleName=role_name,
                 roleSystemPrompt=role_system_prompt,
+                notes=payload.notes,
+                notesTitle=payload.notesTitle,
             )
-            tool_executor = ToolExecutor(repository=repository, identity=identity)
+            tool_executor = ToolExecutor(
+                repository=repository,
+                identity=identity,
+                notes_content=payload.notes,
+                notes_title=payload.notesTitle,
+            )
             final_reply = ""
             final_provider = "server_default"
             async for event in llm_service.stream_reply(

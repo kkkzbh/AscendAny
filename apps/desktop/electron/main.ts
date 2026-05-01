@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage, type Rectangle } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, type Rectangle } from "electron";
 import fs from "node:fs";
 import path from "path";
 import nodemailer from "nodemailer";
@@ -562,6 +562,136 @@ ipcMain.handle("local-state-bind-profile", (_event, value: unknown) => {
   } catch (error) {
     console.error("[AscendAny] Failed to bind local profile:", error);
     return null;
+  }
+});
+
+ipcMain.handle("local-state-upsert-note", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().upsertNote(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to upsert note:", error);
+    return null;
+  }
+});
+
+ipcMain.handle("local-state-create-note", () => {
+  try {
+    return getLocalStateService().createNote();
+  } catch (error) {
+    console.error("[AscendAny] Failed to create note:", error);
+    return null;
+  }
+});
+
+ipcMain.handle("local-state-delete-note", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().deleteNote(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to delete note:", error);
+    return null;
+  }
+});
+
+ipcMain.handle("local-state-set-active-note", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().setActiveNote(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to set active note:", error);
+    return false;
+  }
+});
+
+ipcMain.handle("local-state-clear-note-content", (_event, value: unknown) => {
+  try {
+    return getLocalStateService().clearNoteContent(value);
+  } catch (error) {
+    console.error("[AscendAny] Failed to clear note content:", error);
+    return null;
+  }
+});
+
+interface NotesExportPdfPayload {
+  html: string;
+  defaultFilename?: string;
+}
+
+function parseNotesExportPdfPayload(value: unknown): NotesExportPdfPayload | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<NotesExportPdfPayload>;
+  if (typeof candidate.html !== "string" || !candidate.html.trim()) {
+    return null;
+  }
+  return {
+    html: candidate.html,
+    defaultFilename:
+      typeof candidate.defaultFilename === "string" && candidate.defaultFilename.trim()
+        ? candidate.defaultFilename.trim()
+        : "notes.pdf",
+  };
+}
+
+async function exportNotesAsPdf(
+  payload: NotesExportPdfPayload,
+  parentWindow: BrowserWindow | null,
+): Promise<{ success: boolean; canceled?: boolean; path?: string; message?: string }> {
+  const offscreen = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    const dataUrl = "data:text/html;charset=utf-8," + encodeURIComponent(payload.html);
+    await offscreen.loadURL(dataUrl);
+    const pdf = await offscreen.webContents.printToPDF({
+      printBackground: true,
+      pageSize: "A4",
+      margins: { marginType: "default" },
+    });
+    const filenameSuggestion = payload.defaultFilename ?? "notes.pdf";
+    const target = parentWindow ?? mainWindow;
+    const result = target
+      ? await dialog.showSaveDialog(target, {
+          title: "导出笔记为 PDF",
+          defaultPath: filenameSuggestion,
+          filters: [{ name: "PDF", extensions: ["pdf"] }],
+        })
+      : await dialog.showSaveDialog({
+          title: "导出笔记为 PDF",
+          defaultPath: filenameSuggestion,
+          filters: [{ name: "PDF", extensions: ["pdf"] }],
+        });
+    if (result.canceled || !result.filePath) {
+      return { success: false, canceled: true };
+    }
+    const finalPath = result.filePath.toLowerCase().endsWith(".pdf")
+      ? result.filePath
+      : `${result.filePath}.pdf`;
+    fs.writeFileSync(finalPath, pdf);
+    return { success: true, path: finalPath };
+  } finally {
+    offscreen.destroy();
+  }
+}
+
+ipcMain.handle("notes-export-pdf", async (event, value: unknown) => {
+  const payload = parseNotesExportPdfPayload(value);
+  if (!payload) {
+    return { success: false, message: "Invalid PDF export payload." };
+  }
+  try {
+    const sender = BrowserWindow.fromWebContents(event.sender);
+    return await exportNotesAsPdf(payload, sender ?? mainWindow);
+  } catch (error) {
+    console.error("[AscendAny] Notes PDF export failed:", error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : "Notes PDF export failed.",
+    };
   }
 });
 

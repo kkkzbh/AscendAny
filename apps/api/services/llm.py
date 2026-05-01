@@ -18,12 +18,22 @@ from .tools import TOOL_DEFINITIONS, ToolExecutor
 logger = logging.getLogger(__name__)
 
 _MAX_TOOL_ROUNDS = 5
+_EXAM_TITLE_MAX_LENGTH = 32
 
 
 @dataclass(slots=True)
 class ParsedTextToolCall:
     tool_name: str
     arguments: dict[str, Any]
+
+
+@dataclass(slots=True)
+class ToolExecutionResult:
+    tool_call_id: str
+    activity_id: str
+    tool_name: str
+    arguments: dict[str, Any]
+    result: str
 
 
 class LLMService:
@@ -54,12 +64,18 @@ class LLMService:
                 code="EMPTY_LLM_REPLY",
                 message="LLM provider returned an empty reply.",
             )
+        updated_notes = (
+            getattr(tool_executor, "pending_notes_update", None)
+            if tool_executor is not None
+            else None
+        )
         return ChatReplyResponse(
             reply=reply,
             summary=request.summary,
             provider=profile.id,
             model=profile.transport_model,
             requestMode=profile.request_mode,
+            updatedNotes=updated_notes,
         )
 
     async def stream_reply(
@@ -96,7 +112,7 @@ class LLMService:
                 code="EMPTY_LLM_REPLY",
                 message="LLM provider returned an empty reply.",
             )
-        yield {
+        done_event: dict[str, Any] = {
             "type": "done",
             "reply": reply,
             "summary": request.summary,
@@ -104,6 +120,14 @@ class LLMService:
             "model": profile.transport_model,
             "requestMode": profile.request_mode,
         }
+        pending_notes = (
+            getattr(tool_executor, "pending_notes_update", None)
+            if tool_executor is not None
+            else None
+        )
+        if pending_notes is not None:
+            done_event["updatedNotes"] = pending_notes
+        yield done_event
 
     def _resolve_active_profile(self):
         profile = build_provider_profile(self._settings)
@@ -258,9 +282,10 @@ class LLMService:
             ):
                 assistant_message["reasoning_content"] = reasoning_content
             messages.append(assistant_message)
-            yield {"type": "tool_start"}
-            await self._append_tool_results(messages, tool_executor, tool_calls)
-            yield {"type": "tool_done"}
+            async for tool_event in self._append_tool_results_with_activity(
+                messages, tool_executor, tool_calls
+            ):
+                yield tool_event
 
         async for event in adapter.stream(
             ProviderRequest(
@@ -303,24 +328,151 @@ class LLMService:
         tool_calls: list[Any],
     ) -> None:
         for tc in tool_calls:
-            if not isinstance(tc, dict):
+            execution = await self._execute_tool_call(tool_executor, tc, len(messages))
+            if execution is None:
                 continue
-            tc_id = str(tc.get("id", ""))
-            func = tc.get("function", {})
-            tool_name = ""
-            arguments: dict[str, Any] = {}
-            if isinstance(func, dict):
-                tool_name = str(func.get("name", ""))
-                arguments = self._parse_tool_arguments(func.get("arguments"))
-            logger.info("Tool call: %s(%s)", tool_name, arguments)
-            result = await tool_executor.execute(tool_name, arguments)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": result,
-                }
+            self._append_tool_message(messages, execution)
+
+    async def _append_tool_results_with_activity(
+        self,
+        messages: list[dict[str, Any]],
+        tool_executor: ToolExecutor,
+        tool_calls: list[Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        for index, tc in enumerate(tool_calls):
+            parsed = self._parse_tool_call(tc, fallback_index=len(messages) + index)
+            if parsed is None:
+                continue
+            activity_label = self._tool_activity_label(
+                parsed.tool_name,
+                arguments=parsed.arguments,
             )
+            if activity_label is not None:
+                yield {
+                    "type": "tool_activity_start",
+                    "activityId": parsed.activity_id,
+                    "label": activity_label,
+                    "status": "running",
+                }
+
+            execution = await self._execute_parsed_tool_call(tool_executor, parsed)
+            self._append_tool_message(messages, execution)
+
+            if activity_label is None:
+                continue
+            done_label = self._tool_activity_label(
+                execution.tool_name,
+                arguments=execution.arguments,
+                result=execution.result,
+            ) or activity_label
+            if self._tool_result_has_error(execution.result):
+                yield {
+                    "type": "tool_activity_error",
+                    "activityId": execution.activity_id,
+                    "label": done_label,
+                    "status": "error",
+                }
+            else:
+                yield {
+                    "type": "tool_activity_done",
+                    "activityId": execution.activity_id,
+                    "label": done_label,
+                    "status": "done",
+                }
+
+    async def _execute_tool_call(
+        self,
+        tool_executor: ToolExecutor,
+        tool_call: Any,
+        fallback_index: int,
+    ) -> ToolExecutionResult | None:
+        parsed = self._parse_tool_call(tool_call, fallback_index=fallback_index)
+        if parsed is None:
+            return None
+        return await self._execute_parsed_tool_call(tool_executor, parsed)
+
+    async def _execute_parsed_tool_call(
+        self,
+        tool_executor: ToolExecutor,
+        parsed: ToolExecutionResult,
+    ) -> ToolExecutionResult:
+        logger.info("Tool call: %s(%s)", parsed.tool_name, parsed.arguments)
+        result = await tool_executor.execute(parsed.tool_name, parsed.arguments)
+        return ToolExecutionResult(
+            tool_call_id=parsed.tool_call_id,
+            activity_id=parsed.activity_id,
+            tool_name=parsed.tool_name,
+            arguments=parsed.arguments,
+            result=result,
+        )
+
+    def _parse_tool_call(
+        self,
+        tool_call: Any,
+        *,
+        fallback_index: int,
+    ) -> ToolExecutionResult | None:
+        if not isinstance(tool_call, dict):
+            return None
+        raw_id = str(tool_call.get("id", "")).strip()
+        activity_id = raw_id or f"tool_activity_{fallback_index}"
+        func = tool_call.get("function", {})
+        tool_name = ""
+        arguments: dict[str, Any] = {}
+        if isinstance(func, dict):
+            tool_name = str(func.get("name", "")).strip()
+            arguments = self._parse_tool_arguments(func.get("arguments"))
+        if not tool_name:
+            return None
+        return ToolExecutionResult(
+            tool_call_id=raw_id,
+            activity_id=activity_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            result="",
+        )
+
+    @staticmethod
+    def _append_tool_message(
+        messages: list[dict[str, Any]],
+        execution: ToolExecutionResult,
+    ) -> None:
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": execution.tool_call_id,
+                "content": execution.result,
+            }
+        )
+
+    @staticmethod
+    def _tool_activity_label(
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        result: str | None = None,
+    ) -> str | None:
+        if tool_name == "get_student_learning_profile":
+            return "查看学习画像"
+        if tool_name == "get_exam_participant_metrics":
+            title = _extract_exam_title(result) if result else None
+            return f"查看《{title}》数据" if title else "查看考试数据"
+        if tool_name == "get_exam_submissions":
+            return "核对提交记录"
+        if tool_name == "read_notes":
+            if arguments and arguments.get("mode") == "search":
+                return "搜索学习笔记"
+            return "读取学习笔记"
+        if tool_name == "update_notes":
+            return "更新学习笔记"
+        return None
+
+    @staticmethod
+    def _tool_result_has_error(result: str) -> bool:
+        try:
+            parsed = json.loads(result)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(parsed, dict) and isinstance(parsed.get("error"), str)
 
     async def _append_text_tool_results(
         self,
@@ -454,3 +606,26 @@ class LLMService:
             except ValueError:
                 return value
         return value
+
+
+def _extract_exam_title(result: str | None) -> str | None:
+    if not result:
+        return None
+    try:
+        parsed = json.loads(result)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    exam = parsed.get("exam")
+    if not isinstance(exam, dict):
+        return None
+    title = exam.get("title")
+    if not isinstance(title, str):
+        return None
+    cleaned = re.sub(r"\s+", " ", title).strip(" 《》")
+    if not cleaned:
+        return None
+    if len(cleaned) > _EXAM_TITLE_MAX_LENGTH:
+        return f"{cleaned[:_EXAM_TITLE_MAX_LENGTH]}..."
+    return cleaned

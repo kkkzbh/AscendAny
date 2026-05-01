@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatMessage, ChatSession } from "@/types/chat";
+import type { ChatMessage, ChatSession, ChatToolActivity } from "@/types/chat";
 
 interface ChatState {
   sessions: ChatSession[];
@@ -20,6 +20,10 @@ interface ChatState {
   createAssistantDraft: (roleId: string) => string;
   appendMessageContent: (messageId: string, contentDelta: string) => void;
   appendMessageReasoning: (messageId: string, reasoningDelta: string) => void;
+  upsertMessageToolActivity: (
+    messageId: string,
+    activity: ChatToolActivity,
+  ) => void;
   finalizeMessageReasoning: (messageId: string) => void;
   finalizeMessage: (messageId: string) => void;
   removeMessage: (messageId: string) => void;
@@ -70,6 +74,27 @@ function formatSessionTitle(messages: ChatMessage[]): string {
   return content.length > 18 ? `${content.slice(0, 18)}...` : content;
 }
 
+function normalizeToolActivities(value: unknown): ChatToolActivity[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value
+    .filter((item): item is Partial<ChatToolActivity> =>
+      Boolean(item) && typeof item === "object",
+    )
+    .map((item): ChatToolActivity | null => {
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const label = typeof item.label === "string" ? item.label.trim() : "";
+      if (!id || !label) {
+        return null;
+      }
+      const status: ChatToolActivity["status"] = item.status === "error" ? "error" : "done";
+      return { id, label, status };
+    })
+    .filter((item): item is ChatToolActivity => item !== null);
+  return items.length > 0 ? items : undefined;
+}
+
 function normalizeMessages(value: unknown): ChatMessage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -104,6 +129,7 @@ function normalizeMessages(value: unknown): ChatMessage[] {
         Number.isFinite(message.reasoningEndedAt)
           ? message.reasoningEndedAt
           : undefined,
+      toolActivities: normalizeToolActivities(message.toolActivities),
       timestamp:
         typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
           ? message.timestamp
@@ -363,6 +389,37 @@ export const useChatStore = create<ChatState>()(
                   }
                 : message,
             ),
+            updatedAt: session.messages.some((message) => message.id === messageId)
+              ? Date.now()
+              : session.updatedAt,
+          })),
+        }));
+        persistChatSnapshot(pickChatSnapshot(get()));
+      },
+
+      upsertMessageToolActivity: (messageId, activity) => {
+        const id = activity.id.trim();
+        const label = activity.label.trim();
+        if (!id || !label) return;
+        set((state) => ({
+          sessions: state.sessions.map((session) => ({
+            ...session,
+            messages: session.messages.map((message) => {
+              if (message.id !== messageId) {
+                return message;
+              }
+              const current = message.toolActivities ?? [];
+              const nextActivity = {
+                id,
+                label,
+                status: activity.status,
+              } satisfies ChatToolActivity;
+              const exists = current.some((item) => item.id === id);
+              const toolActivities = exists
+                ? current.map((item) => (item.id === id ? nextActivity : item))
+                : [...current, nextActivity];
+              return { ...message, toolActivities };
+            }),
             updatedAt: session.messages.some((message) => message.id === messageId)
               ? Date.now()
               : session.updatedAt,

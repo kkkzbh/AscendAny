@@ -64,4 +64,28 @@ describe("MessageBubble reasoning panel", () => {
 
     expect(screen.getByRole("button", { name: /思考中/ })).toBeTruthy();
   });
+
+  it("renders non-clickable public tool activity summaries", () => {
+    const message: ChatMessage = {
+      id: "msg_3",
+      role: "assistant",
+      content: "最终回答",
+      timestamp: 1710000000000,
+      streaming: false,
+      reasoningStreaming: false,
+      toolActivities: [
+        { id: "call_1", label: "查看学习画像", status: "done" },
+        { id: "call_2", label: "查看考试数据", status: "running" },
+        { id: "call_3", label: "核对提交记录", status: "error" },
+      ],
+    };
+
+    render(<MessageBubble message={message} />);
+
+    expect(screen.getByText("查看学习画像")).toBeTruthy();
+    expect(screen.getByText("正在查看考试数据...")).toBeTruthy();
+    expect(screen.getByText("核对提交记录失败")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /查看学习画像/ })).toBeNull();
+    expect(screen.queryByText(/get_student_learning_profile/)).toBeNull();
+  });
 });

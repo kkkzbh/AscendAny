@@ -128,6 +128,8 @@ export interface ChatReplyRequestPayload {
   roleId?: string;
   roleName?: string;
   roleSystemPrompt?: string;
+  notes?: string;
+  notesTitle?: string;
 }
 
 export interface AutoAnalysisRequestPayload {
@@ -137,6 +139,8 @@ export interface AutoAnalysisRequestPayload {
   roleName?: string;
   roleSystemPrompt?: string;
   latestExamId?: string;
+  notes?: string;
+  notesTitle?: string;
 }
 
 export interface AutoAnalysisResponsePayload {
@@ -144,6 +148,7 @@ export interface AutoAnalysisResponsePayload {
   provider: ProviderType;
   model?: string;
   requestMode?: string;
+  updatedNotes?: string | null;
 }
 
 export interface LatestExamImportedAtPayload {
@@ -156,15 +161,28 @@ export interface ChatReplyResponsePayload {
   provider: ProviderType;
   model?: string;
   requestMode?: string;
+  updatedNotes?: string | null;
 }
 
 export type ChatStreamEvent =
   | { type: "meta"; provider?: string; model?: string; requestMode?: string; summary?: string }
   | { type: "delta"; text: string }
   | { type: "reasoning_delta"; text: string }
-  | { type: "tool_start" }
-  | { type: "tool_done" }
-  | { type: "done"; reply: string; summary?: string; provider?: string; model?: string; requestMode?: string }
+  | {
+      type: "tool_activity_start" | "tool_activity_done" | "tool_activity_error";
+      activityId: string;
+      label: string;
+      status: "running" | "done" | "error";
+    }
+  | {
+      type: "done";
+      reply: string;
+      summary?: string;
+      provider?: string;
+      model?: string;
+      requestMode?: string;
+      updatedNotes?: string | null;
+    }
   | { type: "error"; code?: string; message: string };
 
 export class ApiError extends Error {
@@ -623,15 +641,42 @@ async function streamJsonEvents(
     } else if (type === "reasoning_delta") {
       onEvent({ type: "reasoning_delta", text: String(parsed.text ?? "") });
     } else if (type === "done") {
-      onEvent({ type: "done", reply: String(parsed.reply ?? ""), summary: typeof parsed.summary === "string" ? parsed.summary : undefined, provider: typeof parsed.provider === "string" ? parsed.provider : undefined, model: typeof parsed.model === "string" ? parsed.model : undefined, requestMode: typeof parsed.requestMode === "string" ? parsed.requestMode : undefined });
+      onEvent({
+        type: "done",
+        reply: String(parsed.reply ?? ""),
+        summary: typeof parsed.summary === "string" ? parsed.summary : undefined,
+        provider: typeof parsed.provider === "string" ? parsed.provider : undefined,
+        model: typeof parsed.model === "string" ? parsed.model : undefined,
+        requestMode: typeof parsed.requestMode === "string" ? parsed.requestMode : undefined,
+        updatedNotes:
+          typeof parsed.updatedNotes === "string" ? parsed.updatedNotes : undefined,
+      });
     } else if (type === "error") {
       throw new ApiError(
         String(parsed.message ?? "流式请求失败"),
         response.status,
         typeof parsed.code === "string" ? parsed.code : undefined,
       );
+    } else if (
+      type === "tool_activity_start" ||
+      type === "tool_activity_done" ||
+      type === "tool_activity_error"
+    ) {
+      const activityId = typeof parsed.activityId === "string" ? parsed.activityId.trim() : "";
+      const label = typeof parsed.label === "string" ? parsed.label.trim() : "";
+      const status =
+        parsed.status === "running" || parsed.status === "done" || parsed.status === "error"
+          ? parsed.status
+          : type === "tool_activity_start"
+            ? "running"
+            : type === "tool_activity_error"
+              ? "error"
+              : "done";
+      if (activityId && label) {
+        onEvent({ type, activityId, label, status });
+      }
     } else if (type === "tool_start" || type === "tool_done") {
-      onEvent({ type });
+      return;
     } else {
       onEvent({ type: "meta", provider: typeof parsed.provider === "string" ? parsed.provider : undefined, model: typeof parsed.model === "string" ? parsed.model : undefined, requestMode: typeof parsed.requestMode === "string" ? parsed.requestMode : undefined, summary: typeof parsed.summary === "string" ? parsed.summary : undefined });
     }

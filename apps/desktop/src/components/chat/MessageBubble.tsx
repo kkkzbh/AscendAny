@@ -1,4 +1,5 @@
 import type { ChatMessage } from "@/types/chat";
+import type { ChatToolActivity } from "@/types/chat";
 import { DEFAULT_ROLE_ID, findRole } from "@/types/role";
 import { useAuthStore } from "@/stores/authStore";
 import { useAvatarStore } from "@/stores/avatarStore";
@@ -34,6 +35,16 @@ function formatReasoningStatus(message: ChatMessage): string {
   return `思考结束(${durationSeconds}s)`;
 }
 
+function formatToolActivity(activity: ChatToolActivity): string {
+  if (activity.status === "running") {
+    return `正在${activity.label}...`;
+  }
+  if (activity.status === "error") {
+    return `${activity.label}失败`;
+  }
+  return activity.label;
+}
+
 function MessageBubbleComponent({ message }: MessageBubbleProps) {
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const isUser = message.role === "user";
@@ -50,6 +61,7 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
   const reasoningContent = message.reasoningContent ?? "";
   const hasReasoning = Boolean(reasoningContent.trim()) || Boolean(message.reasoningStreaming);
   const reasoningStatus = hasReasoning ? formatReasoningStatus(message) : "";
+  const toolActivities = message.toolActivities ?? [];
 
   if (isSystem) {
     return (
@@ -99,6 +111,18 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
                   ) : null}
                 </div>
               </div>
+            </div>
+          ) : null}
+          {toolActivities.length > 0 ? (
+            <div className="assistant-tool-activities" aria-label="工具调用摘要">
+              {toolActivities.map((activity) => (
+                <span
+                  key={activity.id}
+                  className={`assistant-tool-activity assistant-tool-activity-${activity.status}`}
+                >
+                  {formatToolActivity(activity)}
+                </span>
+              ))}
             </div>
           ) : null}
           <div className="assistant-message-text chat-markdown chat-markdown-assistant break-words leading-6">

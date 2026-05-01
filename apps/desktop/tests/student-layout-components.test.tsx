@@ -165,6 +165,8 @@ describe("student shell components", () => {
     expect(activeRule).not.toContain("background");
     const hoverRule = getCssRule(".student-session-item:hover");
     expect(hoverRule).toContain("background: var(--student-control-hover)");
+    const transparentAppRule = getCssRule(':root[data-opaque-sidebar="false"] .student-app');
+    expect(transparentAppRule).toContain("--student-control-hover: var(--student-transparent-control-hover)");
     const selectRule = getCssRule(".student-session-select");
     expect(selectRule).toContain("align-items: center");
   });
@@ -187,6 +189,7 @@ describe("student shell components", () => {
     expect(collapsedRule).toContain("width: 0");
     expect(collapsedRule).toContain("padding: 0");
     expect(collapsedRule).toContain("border-right: 0");
+    expect(collapsedRule).toContain("box-shadow: none");
   });
 
   it("resizes the student sidebar with pointer and keyboard controls", () => {
@@ -207,11 +210,12 @@ describe("student shell components", () => {
     expect(useLayoutStore.getState().leftSidebarRatio).toBe(0.32);
   });
 
-  it("shows only ability and history tabs in the right panel", () => {
+  it("shows the ability, history, and notes tabs in the right panel", () => {
     render(<MetricsPanel />);
 
     expect(screen.getByRole("button", { name: "能力" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "历史" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "笔记" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "导入" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "历史" }));

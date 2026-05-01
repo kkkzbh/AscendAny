@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -19,6 +20,8 @@ from .identity import ResolvedIdentity
 logger = logging.getLogger(__name__)
 
 _METRIC_KEYS = ("knowledge", "accuracy", "quality", "flexibility", "proficiency")
+
+NOTES_MAX_LENGTH = 32_768
 
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
@@ -99,6 +102,71 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_notes",
+            "description": (
+                "读取当前激活的长期笔记内容（跨会话持久化、由用户与你共同维护）。"
+                "可整篇读取，也可按关键词搜索。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["full", "search"],
+                        "description": "读取模式：full 整篇读取；search 按关键词搜索。默认 full。",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词。mode 为 search 时必填。",
+                    },
+                    "max_matches": {
+                        "type": "integer",
+                        "description": "最多返回多少条命中，默认 10，硬上限 30。",
+                    },
+                    "context_lines": {
+                        "type": "integer",
+                        "description": "每条命中前后各返回多少行上下文，默认 2，硬上限 5。",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_notes",
+            "description": (
+                "修改当前激活长期笔记。小范围修改使用 unified diff patch；"
+                "大幅重构或全文改写使用完整 Markdown 替换。上限 32 KB。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["patch", "replace"],
+                        "description": "写入模式：patch 局部修改；replace 整段替换。",
+                    },
+                    "patch": {
+                        "type": "string",
+                        "description": (
+                            "mode 为 patch 时必填。标准 unified diff，文件名固定为 notes.md，"
+                            "必须包含 --- notes.md、+++ notes.md 和 @@ hunk。"
+                        ),
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "mode 为 replace 时必填。笔记的完整 Markdown 文本。",
+                    },
+                },
+                "required": ["mode"],
+            },
+        },
+    },
 ]
 
 
@@ -109,9 +177,14 @@ class ToolExecutor:
         self,
         repository: ApiRepository,
         identity: ResolvedIdentity | None,
+        notes_content: str = "",
+        notes_title: str = "",
     ) -> None:
         self._repository = repository
         self._identity = identity
+        self.notes_content = notes_content
+        self.notes_title = notes_title
+        self.pending_notes_update: str | None = None
 
     async def execute(self, tool_name: str, arguments: dict[str, Any]) -> str:
         handler = _HANDLERS.get(tool_name)
@@ -374,6 +447,47 @@ class ToolExecutor:
             ],
         }
 
+    async def _read_notes(self, args: dict[str, Any]) -> Any:
+        mode = args.get("mode", "full")
+        if mode not in ("full", "search"):
+            return {"error": "参数 mode 必须是 full 或 search。"}
+        if mode == "search":
+            return _search_notes(self.notes_title, self.notes_content, args)
+        return {
+            "title": self.notes_title,
+            "content": self.notes_content,
+            "line_count": len(self.notes_content.splitlines()),
+        }
+
+    async def _update_notes(self, args: dict[str, Any]) -> Any:
+        mode = args.get("mode")
+        if mode == "replace":
+            content = args.get("content")
+            if not isinstance(content, str):
+                return {"error": "replace 模式下参数 content 必须是字符串。"}
+            next_content = content
+        elif mode == "patch":
+            patch = args.get("patch")
+            if not isinstance(patch, str):
+                return {"error": "patch 模式下参数 patch 必须是字符串。"}
+            patch_result = _apply_notes_patch(self.notes_content, patch)
+            if isinstance(patch_result, dict):
+                return patch_result
+            next_content = patch_result
+        else:
+            return {"error": "参数 mode 必须是 patch 或 replace。"}
+
+        if len(next_content) > NOTES_MAX_LENGTH:
+            return {
+                "error": (
+                    f"笔记内容过长（{len(next_content)} 字符）。"
+                    f"上限为 {NOTES_MAX_LENGTH} 字符，请精简后再写入。"
+                ),
+            }
+        self.notes_content = next_content
+        self.pending_notes_update = next_content
+        return {"ok": True, "mode": mode, "length": len(next_content)}
+
     async def _resolve_submission_student_ids(
         self, args: dict[str, Any]
     ) -> list[int] | dict[str, str]:
@@ -408,6 +522,135 @@ def _bounded_int(
     return max(min_value, min(parsed, max_value))
 
 
+def _search_notes(
+    title: str,
+    content: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return {"error": "search 模式下参数 query 必须是非空字符串。"}
+
+    max_matches = _bounded_int(
+        args.get("max_matches"),
+        default=10,
+        min_value=1,
+        max_value=30,
+    )
+    context_lines = _bounded_int(
+        args.get("context_lines"),
+        default=2,
+        min_value=0,
+        max_value=5,
+    )
+    lines = content.splitlines()
+    needle = query.strip().casefold()
+    matches = []
+
+    for index, line in enumerate(lines):
+        if needle not in line.casefold():
+            continue
+        start = max(0, index - context_lines)
+        end = min(len(lines), index + context_lines + 1)
+        matches.append(
+            {
+                "line": index + 1,
+                "text": line,
+                "before": lines[start:index],
+                "after": lines[index + 1 : end],
+            }
+        )
+        if len(matches) >= max_matches:
+            break
+
+    return {
+        "title": title,
+        "query": query.strip(),
+        "matches": matches,
+        "truncated": len(matches) >= max_matches
+        and any(needle in line.casefold() for line in lines[matches[-1]["line"] :]),
+    }
+
+
+_HUNK_HEADER_RE = re.compile(
+    r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
+    r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@"
+)
+
+
+def _apply_notes_patch(content: str, patch: str) -> str | dict[str, str]:
+    patch_lines = patch.splitlines()
+    if len(patch_lines) < 3:
+        return {"error": "patch 必须包含文件头和至少一个 hunk。"}
+    header_index = next(
+        (
+            index
+            for index, line in enumerate(patch_lines[:-1])
+            if line.startswith("--- notes.md")
+            and patch_lines[index + 1].startswith("+++ notes.md")
+        ),
+        -1,
+    )
+    if header_index < 0:
+        return {"error": "patch 必须包含 --- notes.md 和 +++ notes.md 文件头。"}
+    if not any(line.startswith("@@") for line in patch_lines[header_index + 2 :]):
+        return {"error": "patch 必须包含 @@ hunk。"}
+
+    base_lines = content.splitlines()
+    output: list[str] = []
+    source_index = 0
+    patch_index = header_index + 2
+
+    while patch_index < len(patch_lines):
+        header = patch_lines[patch_index]
+        match = _HUNK_HEADER_RE.match(header)
+        if match is None:
+            return {"error": f"无效 hunk 头：{header}"}
+
+        old_start = int(match.group("old_start"))
+        target_index = max(0, old_start - 1)
+        if target_index < source_index:
+            return {"error": "patch hunk 顺序无效。"}
+        if target_index > len(base_lines):
+            return {"error": "patch hunk 行号超出笔记范围。"}
+
+        output.extend(base_lines[source_index:target_index])
+        source_index = target_index
+        patch_index += 1
+
+        while patch_index < len(patch_lines) and not patch_lines[
+            patch_index
+        ].startswith("@@"):
+            line = patch_lines[patch_index]
+            patch_index += 1
+            if line == r"\ No newline at end of file":
+                continue
+            if not line:
+                return {"error": "patch hunk 行缺少操作前缀。"}
+
+            prefix = line[0]
+            value = line[1:]
+            if prefix == " ":
+                if source_index >= len(base_lines) or base_lines[source_index] != value:
+                    return {"error": "patch context 不匹配，笔记未修改。"}
+                output.append(value)
+                source_index += 1
+            elif prefix == "-":
+                if source_index >= len(base_lines) or base_lines[source_index] != value:
+                    return {"error": "patch 删除行不匹配，笔记未修改。"}
+                source_index += 1
+            elif prefix == "+":
+                output.append(value)
+            else:
+                return {"error": f"无效 patch 行前缀：{prefix}"}
+
+    output.extend(base_lines[source_index:])
+    result = "\n".join(output)
+    if content.endswith("\n") and output:
+        result += "\n"
+    return result
+
+
 def _date_str(value: datetime) -> str:
     return value.strftime("%Y-%m-%d")
 
@@ -428,4 +671,6 @@ _HANDLERS: dict[str, Any] = {
     "get_student_learning_profile": ToolExecutor._get_student_learning_profile,
     "get_exam_participant_metrics": ToolExecutor._get_exam_participant_metrics,
     "get_exam_submissions": ToolExecutor._get_exam_submissions,
+    "read_notes": ToolExecutor._read_notes,
+    "update_notes": ToolExecutor._update_notes,
 }

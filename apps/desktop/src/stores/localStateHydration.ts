@@ -1,5 +1,6 @@
 import { useChatStore } from "@/stores/chatStore";
 import { useLayoutStore } from "@/stores/layoutStore";
+import { useNotesStore } from "@/stores/notesStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 export async function hydrateLocalStateFromDesktop(): Promise<void> {
@@ -16,6 +17,7 @@ export async function hydrateLocalStateFromDesktop(): Promise<void> {
   useSettingsStore.getState().hydrateFromLocalState(snapshot.settings);
   useLayoutStore.getState().hydrateFromLocalState(snapshot.layout);
   useChatStore.getState().hydrateFromLocalState(snapshot.chat);
+  useNotesStore.getState().hydrateFromLocalState(snapshot.notes ?? null);
 }
 
 export async function bindCurrentLocalProfile(params: {
