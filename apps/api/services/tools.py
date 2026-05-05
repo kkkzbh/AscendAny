@@ -105,6 +105,41 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_problem_recommendations",
+            "description": (
+                "获取当前绑定学生的个性化题目推荐快照。只返回已由推荐模型生成的"
+                "题目推荐事实，不返回学习路径，不触发训练。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "top_k": {
+                        "type": "integer",
+                        "description": "最多返回多少道题，默认 10，硬上限 50。",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_learning_path",
+            "description": (
+                "获取当前绑定学生的知识点学习路径快照。只返回知识点路径事实，"
+                "不返回题目推荐，不触发训练。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_notes",
             "description": (
                 "读取当前激活的长期笔记内容（跨会话持久化、由用户与你共同维护）。"
@@ -447,6 +482,65 @@ class ToolExecutor:
             ],
         }
 
+    async def _get_problem_recommendations(self, args: dict[str, Any]) -> Any:
+        if self._identity is None:
+            return {"error": "当前未绑定学生身份，无法查询个性化题目推荐。"}
+        top_k = _bounded_int(
+            args.get("top_k"),
+            default=10,
+            min_value=1,
+            max_value=50,
+        )
+        student_ids = list(
+            self._identity.student_entity_ids or (self._identity.student_entity_id,)
+        )
+        snapshot = await self._repository.fetch_latest_problem_recommendations(
+            student_ids,
+            top_k=top_k,
+        )
+        if snapshot is None:
+            return {
+                "student_entity_ids": student_ids,
+                "items": [],
+                "error": "当前学生尚无推荐快照，请先运行推荐模型训练与推理任务。",
+            }
+        return {
+            "student_entity_id": snapshot.student_id,
+            "student_entity_ids": student_ids,
+            "model_run_id": snapshot.model_run_id,
+            "generated_at": snapshot.generated_at.isoformat()
+            if snapshot.generated_at
+            else None,
+            "items": snapshot.items[:top_k],
+        }
+
+    async def _get_learning_path(self, args: dict[str, Any]) -> Any:
+        _ = args
+        if self._identity is None:
+            return {"error": "当前未绑定学生身份，无法查询学习路径。"}
+        student_ids = list(
+            self._identity.student_entity_ids or (self._identity.student_entity_id,)
+        )
+        snapshot = await self._repository.fetch_latest_learning_path(student_ids)
+        if snapshot is None:
+            return {
+                "student_entity_ids": student_ids,
+                "targets": [],
+                "path": [],
+                "error": "当前学生尚无学习路径快照，请先运行推荐模型训练与推理任务。",
+            }
+        return {
+            "student_entity_id": snapshot.student_id,
+            "student_entity_ids": student_ids,
+            "model_run_id": snapshot.model_run_id,
+            "generated_at": snapshot.generated_at.isoformat()
+            if snapshot.generated_at
+            else None,
+            "targets": snapshot.targets,
+            "path": snapshot.path,
+            "explanations": snapshot.explanations,
+        }
+
     async def _read_notes(self, args: dict[str, Any]) -> Any:
         mode = args.get("mode", "full")
         if mode not in ("full", "search"):
@@ -671,6 +765,8 @@ _HANDLERS: dict[str, Any] = {
     "get_student_learning_profile": ToolExecutor._get_student_learning_profile,
     "get_exam_participant_metrics": ToolExecutor._get_exam_participant_metrics,
     "get_exam_submissions": ToolExecutor._get_exam_submissions,
+    "get_problem_recommendations": ToolExecutor._get_problem_recommendations,
+    "get_learning_path": ToolExecutor._get_learning_path,
     "read_notes": ToolExecutor._read_notes,
     "update_notes": ToolExecutor._update_notes,
 }

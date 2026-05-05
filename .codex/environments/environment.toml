@@ -265,3 +265,127 @@ open_admin_url "$admin_open_url"
 wait "$web_pid"
 '
 '''
+
+[[actions]]
+name = "启动 Web 端"
+icon = "run"
+command = '''bash -lc '
+set -euo pipefail
+
+for env_file in .env.local .env; do
+  if [ -f "$env_file" ]; then
+    set -a
+    . "$env_file"
+    set +a
+  fi
+done
+
+for tool in pnpm curl; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "[AscendAny] Missing command: $tool" >&2
+    exit 1
+  fi
+done
+
+if [ ! -x .venv/bin/python ]; then
+  echo "[AscendAny] Missing .venv/bin/python. Run: uv venv .venv && uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt" >&2
+  exit 1
+fi
+
+if [ ! -d node_modules ] || [ ! -d apps/web/node_modules ]; then
+  echo "[AscendAny] Node dependencies missing. Run: pnpm install" >&2
+  exit 1
+fi
+
+api_host="${ASCENDANY_LOCAL_API_HOST:-127.0.0.1}"
+api_port="${ASCENDANY_LOCAL_API_PORT:-8000}"
+api_url="http://${api_host}:${api_port}"
+api_health="${api_url}/api/v1/healthz"
+
+web_host="${ASCENDANY_WEB_HOST:-127.0.0.1}"
+web_port="${ASCENDANY_WEB_PORT:-5175}"
+web_url="http://${web_host}:${web_port}/"
+
+api_pid=""
+web_pid=""
+
+cleanup() {
+  if [ -n "${web_pid:-}" ] && kill -0 "$web_pid" 2>/dev/null; then
+    kill "$web_pid" 2>/dev/null || true
+  fi
+  if [ -n "${api_pid:-}" ] && kill -0 "$api_pid" 2>/dev/null; then
+    kill "$api_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+open_web_url() {
+  target_url="${1:-$web_url}"
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$target_url" >/dev/null 2>&1 || true
+  elif command -v gio >/dev/null 2>&1; then
+    gio open "$target_url" >/dev/null 2>&1 || true
+  else
+    echo "[AscendAny] Open manually: $target_url"
+  fi
+}
+
+if curl -fsS "$api_health" >/dev/null 2>&1; then
+  echo "[AscendAny] API already running at $api_url"
+else
+  echo "[AscendAny] Starting API at $api_url"
+  .venv/bin/python -m uvicorn apps.api.main:app --host "$api_host" --port "$api_port" --reload &
+  api_pid=$!
+
+  for _ in $(seq 1 60); do
+    if curl -fsS "$api_health" >/dev/null 2>&1; then
+      break
+    fi
+    if ! kill -0 "$api_pid" 2>/dev/null; then
+      echo "[AscendAny] API process exited before becoming healthy" >&2
+      wait "$api_pid"
+    fi
+    sleep 1
+  done
+
+  if ! curl -fsS "$api_health" >/dev/null 2>&1; then
+    echo "[AscendAny] API did not become healthy: $api_health" >&2
+    exit 1
+  fi
+fi
+
+if curl -fsS "$web_url" >/dev/null 2>&1; then
+  echo "[AscendAny] Web already running at $web_url"
+  open_web_url "$web_url"
+  if [ -n "${api_pid:-}" ]; then
+    wait "$api_pid"
+  fi
+  exit 0
+fi
+
+echo "[AscendAny] Starting Web at $web_url"
+VITE_BACKEND_ORIGIN="$api_url" \
+pnpm --filter @ascendany/web dev --host "$web_host" --port "$web_port" --strictPort &
+web_pid=$!
+
+for _ in $(seq 1 60); do
+  if curl -fsS "$web_url" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$web_pid" 2>/dev/null; then
+    echo "[AscendAny] Web exited before becoming reachable" >&2
+    wait "$web_pid"
+  fi
+  sleep 1
+done
+
+if ! curl -fsS "$web_url" >/dev/null 2>&1; then
+  echo "[AscendAny] Web did not become reachable: $web_url" >&2
+  exit 1
+fi
+
+echo "[AscendAny] Opening $web_url"
+open_web_url "$web_url"
+wait "$web_pid"
+'
+'''

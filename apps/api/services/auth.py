@@ -38,7 +38,7 @@ from ..schemas.auth import (
     SignupPolicy,
 )
 
-_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 _DISPLAY_NAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _PHONE_RE = re.compile(r"^[0-9+][0-9\-\s]{5,31}$")

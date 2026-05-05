@@ -1,0 +1,99 @@
+# Knowledge tree migrated from x/code/django_project/Ascend/config/knowledge_tree.yaml.
+# AscendAny owns this copy; runtime never reads the old x project.
+
+knowledge_tree:
+  基本概念:
+    - 时间复杂度
+    - 空间复杂度
+    - 递归
+
+  线性结构:
+    数组:
+      - 多维数组
+      - 矩阵
+    链表: null
+    栈:
+      - 单调栈
+    队列:
+      - 单调队列
+    字符串:
+      - KMP算法
+
+  树:
+    二叉树: null
+    树的遍历:
+      - 先序遍历
+      - 中序遍历
+      - 后序遍历
+      - 层次遍历
+    森林: null
+    哈夫曼树: null
+    堆: null
+
+  模拟:
+    - 基础模拟
+    - 高级模拟
+
+  搜索:
+    DFS: null
+    BFS:
+      - 双向BFS
+
+  图:
+    邻接矩阵: null
+    邻接表: null
+    最短路:
+      - Dijkstra
+      - SPFA
+      - Floyd
+    拓扑排序: null
+    最小生成树:
+      - Kruskal
+      - Prim
+
+  数据结构:
+    - 线段树
+    - 对顶堆
+    - STL
+    - 平衡树
+    - 并查集
+
+  算法:
+    - 贪心
+    - 动态规划
+    - 二分
+    - 双指针
+    - 前缀和
+    - 差分
+
+prerequisites:
+  - [链表, 数组]
+  - [栈, 数组]
+  - [队列, 数组]
+  - [单调栈, 栈]
+  - [单调队列, 队列]
+  - [KMP算法, 字符串]
+  - [二叉树, 链表]
+  - [树的遍历, 二叉树]
+  - [森林, 二叉树]
+  - [哈夫曼树, 二叉树]
+  - [堆, 二叉树]
+  - [DFS, 递归]
+  - [BFS, 队列]
+  - [双向BFS, BFS]
+  - [最短路, 邻接表]
+  - [Dijkstra, 最短路]
+  - [SPFA, 最短路]
+  - [Floyd, 最短路]
+  - [拓扑排序, 邻接表]
+  - [最小生成树, 邻接表]
+  - [Kruskal, 最小生成树]
+  - [Prim, 最小生成树]
+  - [线段树, 二叉树]
+  - [对顶堆, 堆]
+  - [并查集, 数组]
+  - [动态规划, 递归]
+  - [二分, 数组]
+  - [双指针, 数组]
+  - [前缀和, 数组]
+  - [差分, 前缀和]

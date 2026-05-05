@@ -61,4 +61,5 @@ tmp/
 output/
 # Local artifacts
 artifacts/
+var/
 *.snap

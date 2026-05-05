@@ -132,6 +132,44 @@ class SSOConfig:
 
 
 @dataclass(slots=True)
+class RecommendationConfig:
+    python_path: str = "services/recommendation/.venv/bin/python"
+    module: str = "recommendation.pipeline"
+    artifacts_dir: str = "var/recommendation/artifacts"
+    subprocess_timeout_seconds: float = 5.0
+
+
+@dataclass(slots=True)
+class EmailConfig:
+    host: str = "smtp.qq.com"
+    port: int = 465
+    user_env: str = "EMAIL_USER"
+    password_env: str = "EMAIL_PASS"
+    from_env: str = "EMAIL_FROM"
+    from_name: str = "用户验证系统"
+    timeout_seconds: int = 10
+    use_ssl: bool | None = None
+    use_tls: bool | None = None
+    registration_ttl_seconds: int = 600
+    registration_cooldown_seconds: int = 60
+    reset_ttl_seconds: int = 900
+    reset_cooldown_seconds: int = 120
+
+
+@dataclass(slots=True)
+class OjConfig:
+    runtime: str = "podman"
+    image: str = "ascendany-oj-cpp-python:latest"
+    work_dir: str = "var/oj/runs"
+    compile_timeout_seconds: float = 15.0
+    time_buffer_seconds: float = 0.5
+    cpus: float = 1.0
+    memory_mb: int = 512
+    output_limit_bytes: int = 65536
+    clangd_path: str = "clangd"
+
+
+@dataclass(slots=True)
 class Settings:
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
@@ -139,6 +177,9 @@ class Settings:
     llm: LLMConfig = field(default_factory=LLMConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     sso: SSOConfig = field(default_factory=SSOConfig)
+    recommendation: RecommendationConfig = field(default_factory=RecommendationConfig)
+    email: EmailConfig = field(default_factory=EmailConfig)
+    oj: OjConfig = field(default_factory=OjConfig)
 
 
 def _merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -239,6 +280,38 @@ def _as_dict(settings: Settings) -> dict[str, Any]:
             "clock_skew_seconds": settings.sso.clock_skew_seconds,
             "max_token_ttl_seconds": settings.sso.max_token_ttl_seconds,
         },
+        "recommendation": {
+            "python_path": settings.recommendation.python_path,
+            "module": settings.recommendation.module,
+            "artifacts_dir": settings.recommendation.artifacts_dir,
+            "subprocess_timeout_seconds": settings.recommendation.subprocess_timeout_seconds,
+        },
+        "email": {
+            "host": settings.email.host,
+            "port": settings.email.port,
+            "user_env": settings.email.user_env,
+            "password_env": settings.email.password_env,
+            "from_env": settings.email.from_env,
+            "from_name": settings.email.from_name,
+            "timeout_seconds": settings.email.timeout_seconds,
+            "use_ssl": settings.email.use_ssl,
+            "use_tls": settings.email.use_tls,
+            "registration_ttl_seconds": settings.email.registration_ttl_seconds,
+            "registration_cooldown_seconds": settings.email.registration_cooldown_seconds,
+            "reset_ttl_seconds": settings.email.reset_ttl_seconds,
+            "reset_cooldown_seconds": settings.email.reset_cooldown_seconds,
+        },
+        "oj": {
+            "runtime": settings.oj.runtime,
+            "image": settings.oj.image,
+            "work_dir": settings.oj.work_dir,
+            "compile_timeout_seconds": settings.oj.compile_timeout_seconds,
+            "time_buffer_seconds": settings.oj.time_buffer_seconds,
+            "cpus": settings.oj.cpus,
+            "memory_mb": settings.oj.memory_mb,
+            "output_limit_bytes": settings.oj.output_limit_bytes,
+            "clangd_path": settings.oj.clangd_path,
+        },
     }
 
 
@@ -262,6 +335,19 @@ def _build_llm_provider_configs(llm_data: dict[str, Any]) -> dict[str, LLMProvid
     return providers
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _from_dict(raw: dict[str, Any]) -> Settings:
     db = raw.get("db", {})
     api = raw.get("api", {})
@@ -269,6 +355,9 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
     llm = raw.get("llm", {})
     auth = raw.get("auth", {})
     sso = raw.get("sso", {})
+    recommendation = raw.get("recommendation", {})
+    email = raw.get("email", {})
+    oj = raw.get("oj", {})
 
     llm_providers = _build_llm_provider_configs(llm)
     active_provider = str(llm.get("active_provider", "deepseek")).strip() or "deepseek"
@@ -343,6 +432,67 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             or "ASCENDANY_SSO_EXTERNAL_APP_SECRET",
             clock_skew_seconds=max(0, int(sso.get("clock_skew_seconds", 15))),
             max_token_ttl_seconds=max(1, int(sso.get("max_token_ttl_seconds", 60))),
+        ),
+        recommendation=RecommendationConfig(
+            python_path=str(
+                recommendation.get(
+                    "python_path", "services/recommendation/.venv/bin/python"
+                )
+            ).strip()
+            or "services/recommendation/.venv/bin/python",
+            module=str(
+                recommendation.get("module", "recommendation.pipeline")
+            ).strip()
+            or "recommendation.pipeline",
+            artifacts_dir=str(
+                recommendation.get(
+                    "artifacts_dir", "var/recommendation/artifacts"
+                )
+            ).strip()
+            or "var/recommendation/artifacts",
+            subprocess_timeout_seconds=max(
+                0.1,
+                float(recommendation.get("subprocess_timeout_seconds", 5.0)),
+            ),
+        ),
+        email=EmailConfig(
+            host=str(email.get("host", "smtp.qq.com")).strip() or "smtp.qq.com",
+            port=int(email.get("port", 465)),
+            user_env=str(email.get("user_env", "EMAIL_USER")).strip()
+            or "EMAIL_USER",
+            password_env=str(email.get("password_env", "EMAIL_PASS")).strip()
+            or "EMAIL_PASS",
+            from_env=str(email.get("from_env", "EMAIL_FROM")).strip()
+            or "EMAIL_FROM",
+            from_name=str(email.get("from_name", "用户验证系统")),
+            timeout_seconds=max(1, int(email.get("timeout_seconds", 10))),
+            use_ssl=_optional_bool(email.get("use_ssl")),
+            use_tls=_optional_bool(email.get("use_tls")),
+            registration_ttl_seconds=max(
+                1, int(email.get("registration_ttl_seconds", 600))
+            ),
+            registration_cooldown_seconds=max(
+                0, int(email.get("registration_cooldown_seconds", 60))
+            ),
+            reset_ttl_seconds=max(1, int(email.get("reset_ttl_seconds", 900))),
+            reset_cooldown_seconds=max(
+                0, int(email.get("reset_cooldown_seconds", 120))
+            ),
+        ),
+        oj=OjConfig(
+            runtime=str(oj.get("runtime", "podman")).strip() or "podman",
+            image=str(oj.get("image", "ascendany-oj-cpp-python:latest")).strip()
+            or "ascendany-oj-cpp-python:latest",
+            work_dir=str(oj.get("work_dir", "var/oj/runs")).strip()
+            or "var/oj/runs",
+            compile_timeout_seconds=max(
+                0.5, float(oj.get("compile_timeout_seconds", 15.0))
+            ),
+            time_buffer_seconds=max(0.0, float(oj.get("time_buffer_seconds", 0.5))),
+            cpus=max(0.1, float(oj.get("cpus", 1.0))),
+            memory_mb=max(64, int(oj.get("memory_mb", 512))),
+            output_limit_bytes=max(1024, int(oj.get("output_limit_bytes", 65536))),
+            clangd_path=str(oj.get("clangd_path", "clangd")).strip() or "clangd",
         ),
     )
 
@@ -433,6 +583,49 @@ def _apply_env_overrides(settings: Settings) -> None:
     env_sso_max_ttl = os.getenv("ASCENDANY_SSO_MAX_TOKEN_TTL_SECONDS", "").strip()
     if env_sso_max_ttl:
         settings.sso.max_token_ttl_seconds = max(1, int(env_sso_max_ttl))
+    env_rec_python = os.getenv("ASCENDANY_RECOMMENDATION_PYTHON", "").strip()
+    if env_rec_python:
+        settings.recommendation.python_path = env_rec_python
+    env_rec_module = os.getenv("ASCENDANY_RECOMMENDATION_MODULE", "").strip()
+    if env_rec_module:
+        settings.recommendation.module = env_rec_module
+    env_rec_artifacts = os.getenv("ASCENDANY_RECOMMENDATION_ARTIFACTS_DIR", "").strip()
+    if env_rec_artifacts:
+        settings.recommendation.artifacts_dir = env_rec_artifacts
+    env_email_host = os.getenv("EMAIL_HOST", "").strip()
+    if env_email_host:
+        settings.email.host = env_email_host
+    env_email_port = os.getenv("EMAIL_PORT", "").strip()
+    if env_email_port:
+        settings.email.port = int(env_email_port)
+    env_email_timeout = os.getenv("EMAIL_TIMEOUT", "").strip()
+    if env_email_timeout:
+        settings.email.timeout_seconds = max(1, int(env_email_timeout))
+    env_email_ssl = os.getenv("EMAIL_USE_SSL", "").strip().lower()
+    if env_email_ssl in {"1", "true", "yes", "on"}:
+        settings.email.use_ssl = True
+    elif env_email_ssl in {"0", "false", "no", "off"}:
+        settings.email.use_ssl = False
+    env_email_tls = os.getenv("EMAIL_USE_TLS", "").strip().lower()
+    if env_email_tls in {"1", "true", "yes", "on"}:
+        settings.email.use_tls = True
+    elif env_email_tls in {"0", "false", "no", "off"}:
+        settings.email.use_tls = False
+    env_email_from_name = os.getenv("EMAIL_FROM_NAME", "").strip()
+    if env_email_from_name:
+        settings.email.from_name = env_email_from_name
+    env_oj_runtime = os.getenv("ASCENDANY_OJ_RUNTIME", "").strip()
+    if env_oj_runtime:
+        settings.oj.runtime = env_oj_runtime
+    env_oj_image = os.getenv("ASCENDANY_OJ_IMAGE", "").strip()
+    if env_oj_image:
+        settings.oj.image = env_oj_image
+    env_oj_work_dir = os.getenv("ASCENDANY_OJ_WORK_DIR", "").strip()
+    if env_oj_work_dir:
+        settings.oj.work_dir = env_oj_work_dir
+    env_oj_clangd = os.getenv("ASCENDANY_OJ_CLANGD_PATH", "").strip()
+    if env_oj_clangd:
+        settings.oj.clangd_path = env_oj_clangd
 
 
 def load_settings(config_path: Path | None = None) -> Settings:

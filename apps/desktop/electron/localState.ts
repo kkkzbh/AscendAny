@@ -30,7 +30,7 @@ export interface LocalLayoutSnapshot {
   leftSidebarRatio: number;
   isMetricsPanelVisible: boolean;
   activeRightPanelTab: RightPanelTab;
-  splitRatio: number;
+  rightPanelRatio: number;
   activeFullscreenView: "none" | "achievements";
 }
 
@@ -107,7 +107,7 @@ const DEFAULT_LAYOUT: LocalLayoutSnapshot = {
   leftSidebarRatio: 0.22,
   isMetricsPanelVisible: true,
   activeRightPanelTab: "ability",
-  splitRatio: 0.55,
+  rightPanelRatio: 0.36,
   activeFullscreenView: "none",
 };
 
@@ -174,11 +174,11 @@ function normalizeLeftSidebarRatio(value: unknown): number {
   return Math.max(0.17, Math.min(0.32, value));
 }
 
-function normalizeSplitRatio(value: unknown): number {
+function normalizeRightPanelRatio(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_LAYOUT.splitRatio;
+    return DEFAULT_LAYOUT.rightPanelRatio;
   }
-  return Math.max(0.3, Math.min(0.7, value));
+  return Math.max(0.32, Math.min(0.5, value));
 }
 
 function normalizeLayout(value: unknown): LocalLayoutSnapshot {
@@ -199,7 +199,7 @@ function normalizeLayout(value: unknown): LocalLayoutSnapshot {
         : input.activeRightPanelTab === "notes"
         ? "notes"
         : "ability",
-    splitRatio: normalizeSplitRatio(input.splitRatio),
+    rightPanelRatio: normalizeRightPanelRatio(input.rightPanelRatio ?? input.splitRatio),
     activeFullscreenView: input.activeFullscreenView === "achievements" ? "achievements" : "none",
   };
 }

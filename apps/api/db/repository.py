@@ -308,6 +308,37 @@ class AdminStudentExamReportRow:
 
 
 @dataclass(slots=True)
+class ProblemRecommendationSnapshotRow:
+    student_id: int
+    model_run_id: int
+    items: list[dict[str, object]]
+    generated_at: datetime | None
+
+
+@dataclass(slots=True)
+class LearningPathSnapshotRow:
+    student_id: int
+    model_run_id: int
+    targets: list[str]
+    path: list[str]
+    explanations: dict[str, object]
+    generated_at: datetime | None
+
+
+@dataclass(slots=True)
+class RecommendationRunRow:
+    model_run_id: int
+    status: str
+    model_type: str
+    metrics: dict[str, object]
+    artifact_path: str | None
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+@dataclass(slots=True)
 class AdminAccountSummaryRow:
     account_id: int
     username: str
@@ -3532,3 +3563,186 @@ class ApiRepository:
                 )
             )
         return history
+
+    async def fetch_latest_problem_recommendations(
+        self, student_ids: list[int], top_k: int = 10
+    ) -> ProblemRecommendationSnapshotRow | None:
+        if not student_ids:
+            return None
+        query = """
+            SELECT student_id, model_run_id, items, generated_at
+            FROM ascendany.student_recommendation_snapshots
+            WHERE student_id = ANY(%s::bigint[])
+            ORDER BY generated_at DESC, model_run_id DESC
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (student_ids,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        raw_items = _json_value(row.get("items"), [])
+        items = raw_items if isinstance(raw_items, list) else []
+        normalized_items = [
+            item for item in items[: max(1, int(top_k))] if isinstance(item, dict)
+        ]
+        generated_at = row.get("generated_at")
+        return ProblemRecommendationSnapshotRow(
+            student_id=int(row["student_id"]),
+            model_run_id=int(row["model_run_id"]),
+            items=normalized_items,
+            generated_at=generated_at if isinstance(generated_at, datetime) else None,
+        )
+
+    async def fetch_latest_learning_path(
+        self, student_ids: list[int]
+    ) -> LearningPathSnapshotRow | None:
+        if not student_ids:
+            return None
+        query = """
+            SELECT student_id, model_run_id, targets, path, explanations, generated_at
+            FROM ascendany.student_learning_path_snapshots
+            WHERE student_id = ANY(%s::bigint[])
+            ORDER BY generated_at DESC, model_run_id DESC
+            LIMIT 1
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (student_ids,))
+                row = await cursor.fetchone()
+        if not row:
+            return None
+        targets_raw = _json_value(row.get("targets"), [])
+        path_raw = _json_value(row.get("path"), [])
+        explanations_raw = _json_value(row.get("explanations"), {})
+        generated_at = row.get("generated_at")
+        return LearningPathSnapshotRow(
+            student_id=int(row["student_id"]),
+            model_run_id=int(row["model_run_id"]),
+            targets=[str(item) for item in targets_raw]
+            if isinstance(targets_raw, list)
+            else [],
+            path=[str(item) for item in path_raw] if isinstance(path_raw, list) else [],
+            explanations=explanations_raw if isinstance(explanations_raw, dict) else {},
+            generated_at=generated_at if isinstance(generated_at, datetime) else None,
+        )
+
+    async def create_recommendation_model_run(
+        self,
+        *,
+        model_type: str,
+        config: dict[str, object],
+        created_by_account_id: int | None,
+    ) -> int:
+        query = """
+            INSERT INTO ascendany.recommendation_model_runs (
+                status, model_type, config, created_by_account_id
+            )
+            VALUES ('queued', %s, %s::jsonb, %s)
+            RETURNING model_run_id
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        model_type,
+                        json.dumps(config, ensure_ascii=False),
+                        created_by_account_id,
+                    ),
+                )
+                row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError("failed to create recommendation model run")
+        return int(row[0])
+
+    async def add_recommendation_model_event(
+        self,
+        *,
+        model_run_id: int,
+        level: str,
+        message: str,
+        data: dict[str, object] | None = None,
+    ) -> None:
+        query = """
+            INSERT INTO ascendany.recommendation_model_events (
+                model_run_id, level, message, data
+            )
+            VALUES (%s, %s, %s, %s::jsonb)
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    query,
+                    (
+                        model_run_id,
+                        level,
+                        message,
+                        json.dumps(data or {}, ensure_ascii=False),
+                    ),
+                )
+
+    async def fetch_recommendation_model_runs(
+        self, limit: int = 50
+    ) -> list[RecommendationRunRow]:
+        query = """
+            SELECT
+                model_run_id,
+                status,
+                model_type,
+                metrics,
+                artifact_path,
+                error_message,
+                created_at,
+                started_at,
+                finished_at
+            FROM ascendany.recommendation_model_runs
+            ORDER BY created_at DESC, model_run_id DESC
+            LIMIT %s
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(query, (max(1, int(limit)),))
+                rows = await cursor.fetchall()
+        result: list[RecommendationRunRow] = []
+        for row in rows:
+            created_at = row.get("created_at")
+            if not isinstance(created_at, datetime):
+                continue
+            started_at = row.get("started_at")
+            finished_at = row.get("finished_at")
+            metrics = _json_value(row.get("metrics"), {})
+            result.append(
+                RecommendationRunRow(
+                    model_run_id=int(row["model_run_id"]),
+                    status=str(row["status"]),
+                    model_type=str(row["model_type"]),
+                    metrics=metrics if isinstance(metrics, dict) else {},
+                    artifact_path=str(row["artifact_path"])
+                    if row.get("artifact_path")
+                    else None,
+                    error_message=str(row["error_message"])
+                    if row.get("error_message")
+                    else None,
+                    created_at=created_at,
+                    started_at=started_at if isinstance(started_at, datetime) else None,
+                    finished_at=finished_at
+                    if isinstance(finished_at, datetime)
+                    else None,
+                )
+            )
+        return result
+
+
+def _json_value(value: object, fallback: object) -> object:
+    if value is None:
+        return fallback
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return fallback
+    return fallback

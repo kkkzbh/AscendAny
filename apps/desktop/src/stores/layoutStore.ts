@@ -7,7 +7,7 @@ export interface LayoutSnapshot {
   leftSidebarRatio: number;
   isMetricsPanelVisible: boolean;
   activeRightPanelTab: RightPanelTab;
-  splitRatio: number;
+  rightPanelRatio: number;
   activeFullscreenView: "none" | "achievements";
 }
 
@@ -19,7 +19,7 @@ interface LayoutState extends LayoutSnapshot {
   setLeftSidebarRatio: (ratio: number) => void;
   toggleMetricsPanel: () => void;
   setActiveRightPanelTab: (tab: RightPanelTab) => void;
-  setSplitRatio: (ratio: number) => void;
+  setRightPanelRatio: (ratio: number) => void;
   setActiveFullscreenView: (view: "none" | "achievements") => void;
   closeFullscreenView: () => void;
 }
@@ -28,9 +28,11 @@ export const DEFAULT_LEFT_SIDEBAR_RATIO = 0.22;
 export const MIN_LEFT_SIDEBAR_RATIO = 0.17;
 export const MAX_LEFT_SIDEBAR_RATIO = 0.32;
 
-const DEFAULT_SPLIT_RATIO = 0.55;
-const MIN_SPLIT_RATIO = 0.3;
-const MAX_SPLIT_RATIO = 1 - MIN_SPLIT_RATIO;
+export const DEFAULT_RIGHT_PANEL_RATIO = 0.36;
+export const MIN_RIGHT_PANEL_RATIO = 0.32;
+export const MAX_RIGHT_PANEL_RATIO = 0.5;
+export const RIGHT_PANEL_MIN_WIDTH = 320;
+export const RIGHT_PANEL_MAX_WIDTH = 520;
 
 function normalizeLeftSidebarRatio(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -39,11 +41,11 @@ function normalizeLeftSidebarRatio(value: unknown): number {
   return Math.max(MIN_LEFT_SIDEBAR_RATIO, Math.min(MAX_LEFT_SIDEBAR_RATIO, value));
 }
 
-function normalizeSplitRatio(value: unknown): number {
+function normalizeRightPanelRatio(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_SPLIT_RATIO;
+    return DEFAULT_RIGHT_PANEL_RATIO;
   }
-  return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, value));
+  return Math.max(MIN_RIGHT_PANEL_RATIO, Math.min(MAX_RIGHT_PANEL_RATIO, value));
 }
 
 function normalizeLayoutSnapshot(value: unknown, fallback: LayoutSnapshot): LayoutSnapshot {
@@ -64,7 +66,9 @@ function normalizeLayoutSnapshot(value: unknown, fallback: LayoutSnapshot): Layo
       || persisted.activeRightPanelTab === "notes"
         ? persisted.activeRightPanelTab
         : fallback.activeRightPanelTab,
-    splitRatio: normalizeSplitRatio(persisted.splitRatio),
+    rightPanelRatio: normalizeRightPanelRatio(
+      persisted.rightPanelRatio ?? (persisted as { splitRatio?: unknown }).splitRatio,
+    ),
     activeFullscreenView:
       persisted.activeFullscreenView === "achievements" ? "achievements" : fallback.activeFullscreenView,
   };
@@ -76,7 +80,7 @@ function pickLayoutSnapshot(state: LayoutState): LayoutSnapshot {
     leftSidebarRatio: state.leftSidebarRatio,
     isMetricsPanelVisible: state.isMetricsPanelVisible,
     activeRightPanelTab: state.activeRightPanelTab,
-    splitRatio: state.splitRatio,
+    rightPanelRatio: state.rightPanelRatio,
     activeFullscreenView: state.activeFullscreenView,
   };
 }
@@ -97,7 +101,7 @@ export const useLayoutStore = create<LayoutState>()(
       leftSidebarRatio: DEFAULT_LEFT_SIDEBAR_RATIO,
       isMetricsPanelVisible: true,
       activeRightPanelTab: "ability",
-      splitRatio: DEFAULT_SPLIT_RATIO,
+      rightPanelRatio: DEFAULT_RIGHT_PANEL_RATIO,
       activeFullscreenView: "none",
       resetForAccount: () =>
         set({
@@ -105,7 +109,7 @@ export const useLayoutStore = create<LayoutState>()(
           leftSidebarRatio: DEFAULT_LEFT_SIDEBAR_RATIO,
           isMetricsPanelVisible: true,
           activeRightPanelTab: "ability",
-          splitRatio: DEFAULT_SPLIT_RATIO,
+          rightPanelRatio: DEFAULT_RIGHT_PANEL_RATIO,
           activeFullscreenView: "none",
         }),
       hydrateFromLocalState: (layout) =>
@@ -142,9 +146,9 @@ export const useLayoutStore = create<LayoutState>()(
         });
         persistLayoutSnapshot(pickLayoutSnapshot(get()));
       },
-      setSplitRatio: (ratio) => {
+      setRightPanelRatio: (ratio) => {
         set({
-          splitRatio: normalizeSplitRatio(ratio),
+          rightPanelRatio: normalizeRightPanelRatio(ratio),
         });
         persistLayoutSnapshot(pickLayoutSnapshot(get()));
       },

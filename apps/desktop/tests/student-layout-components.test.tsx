@@ -15,6 +15,7 @@ import { useMetricsStore } from "@/stores/metricsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const STUDENT_CSS = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
+const localStateSaveLayout = vi.fn().mockResolvedValue(true);
 
 function getCssRule(selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -28,9 +29,24 @@ function dispatchPointerEvent(target: EventTarget, type: string, clientX: number
   target.dispatchEvent(event);
 }
 
+function mockRect(element: Element, width: number) {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: 600,
+    width,
+    height: 600,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
 describe("student shell components", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    localStateSaveLayout.mockClear();
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -64,6 +80,7 @@ describe("student shell components", () => {
       minimize: vi.fn(),
       maximize: vi.fn(),
       close: vi.fn(),
+      localStateSaveLayout,
       updaterGetState: vi.fn().mockResolvedValue({
         status: "idle",
         currentVersion: "0.1.0",
@@ -255,6 +272,73 @@ describe("student shell components", () => {
 
     fireEvent.keyDown(resizer, { key: "ArrowRight", shiftKey: true });
     expect(useLayoutStore.getState().leftSidebarRatio).toBe(0.32);
+  });
+
+  it("resizes the right panel with pointer and keyboard controls", () => {
+    render(<AppLayout />);
+
+    const workspace = document.querySelector(".student-workspace");
+    expect(workspace).toBeTruthy();
+    mockRect(workspace!, 1000);
+
+    const resizer = screen.getByRole("separator", { name: "调整右侧栏宽度" });
+    dispatchPointerEvent(resizer, "pointerdown", 600);
+    vi.advanceTimersByTime(16);
+    expect(workspace!.classList.contains("is-right-resizing")).toBe(true);
+    expect((workspace as HTMLElement).style.getPropertyValue("--student-right-panel-ratio")).toBe("0.4");
+    expect(useLayoutStore.getState().rightPanelRatio).toBe(0.36);
+    expect(localStateSaveLayout).not.toHaveBeenCalled();
+
+    dispatchPointerEvent(window, "pointermove", 560);
+    vi.advanceTimersByTime(16);
+    expect((workspace as HTMLElement).style.getPropertyValue("--student-right-panel-ratio")).toBe("0.44");
+    expect(useLayoutStore.getState().rightPanelRatio).toBe(0.36);
+    expect(localStateSaveLayout).not.toHaveBeenCalled();
+
+    dispatchPointerEvent(window, "pointerup", 560);
+    expect(useLayoutStore.getState().rightPanelRatio).toBe(0.44);
+    expect(workspace!.classList.contains("is-right-resizing")).toBe(false);
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
+    expect(localStateSaveLayout).toHaveBeenCalledTimes(1);
+    expect(localStateSaveLayout.mock.calls.at(-1)?.[0].rightPanelRatio).toBe(0.44);
+
+    fireEvent.keyDown(resizer, { key: "ArrowLeft" });
+    expect(useLayoutStore.getState().rightPanelRatio).toBe(0.45);
+
+    fireEvent.keyDown(resizer, { key: "ArrowRight", shiftKey: true });
+    expect(useLayoutStore.getState().rightPanelRatio).toBeCloseTo(0.42);
+
+    dispatchPointerEvent(resizer, "pointerdown", 720);
+    dispatchPointerEvent(window, "pointerup", 720);
+    expect(useLayoutStore.getState().rightPanelRatio).toBe(0.32);
+
+    dispatchPointerEvent(resizer, "pointerdown", 420);
+    dispatchPointerEvent(window, "pointerup", 420);
+    expect(useLayoutStore.getState().rightPanelRatio).toBe(0.5);
+  });
+
+  it("hides the right panel resizer when the right panel is collapsed", () => {
+    useLayoutStore.getState().toggleMetricsPanel();
+
+    render(<AppLayout />);
+
+    expect(screen.queryByRole("separator", { name: "调整右侧栏宽度" })).toBeNull();
+  });
+
+  it("keeps the right panel width constrained by CSS", () => {
+    const workspaceRule = getCssRule(".student-workspace");
+    expect(workspaceRule).toContain("grid-template-columns: minmax(0, 1fr) 8px clamp(320px");
+    expect(workspaceRule).toContain("min(520px, 50%)");
+    expect(workspaceRule).toContain("transition: grid-template-columns 280ms");
+
+    const resizingRule = getCssRule(".student-workspace.is-right-resizing");
+    expect(resizingRule).toContain("transition: none");
+
+    const rightPanelRule = getCssRule(".student-right-panel");
+    expect(rightPanelRule).toContain("width: 100%");
+
+    expect(STUDENT_CSS).toContain(".student-right-resizer {\n    display: none;");
   });
 
   it("shows the ability, history, and notes tabs in the right panel", () => {

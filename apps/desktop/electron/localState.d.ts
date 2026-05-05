@@ -22,7 +22,7 @@ export interface LocalLayoutSnapshot {
     leftSidebarRatio: number;
     isMetricsPanelVisible: boolean;
     activeRightPanelTab: RightPanelTab;
-    splitRatio: number;
+    rightPanelRatio: number;
     activeFullscreenView: "none" | "achievements";
 }
 export interface LocalChatMessageSnapshot {

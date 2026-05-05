@@ -12,6 +12,8 @@ from apps.api.db.repository import (
     ExamMetricHistoryRow,
     ExamParticipantMetricRow,
     ExamSubmissionRow,
+    LearningPathSnapshotRow,
+    ProblemRecommendationSnapshotRow,
     RatingHistoryRow,
     StudentIdentityMatch,
 )
@@ -33,6 +35,12 @@ class FakeFactRepo:
             tuple[int, int], list[ExamSubmissionRow]
         ] = {}
         self.student_matches_by_no: dict[str, list[StudentIdentityMatch]] = {}
+        self.problem_recommendations_by_students: dict[
+            tuple[int, ...], ProblemRecommendationSnapshotRow
+        ] = {}
+        self.learning_paths_by_students: dict[
+            tuple[int, ...], LearningPathSnapshotRow
+        ] = {}
 
     async def fetch_current_metrics(
         self, student_id: int
@@ -66,6 +74,24 @@ class FakeFactRepo:
         self, student_no: str
     ) -> list[StudentIdentityMatch]:
         return self.student_matches_by_no.get(student_no, [])
+
+    async def fetch_latest_problem_recommendations(
+        self, student_ids: list[int], top_k: int = 10
+    ) -> ProblemRecommendationSnapshotRow | None:
+        snapshot = self.problem_recommendations_by_students.get(tuple(student_ids))
+        if snapshot is None:
+            return None
+        return ProblemRecommendationSnapshotRow(
+            student_id=snapshot.student_id,
+            model_run_id=snapshot.model_run_id,
+            items=snapshot.items[:top_k],
+            generated_at=snapshot.generated_at,
+        )
+
+    async def fetch_latest_learning_path(
+        self, student_ids: list[int]
+    ) -> LearningPathSnapshotRow | None:
+        return self.learning_paths_by_students.get(tuple(student_ids))
 
 
 class ExplodingRepo:
@@ -358,6 +384,8 @@ def test_tool_definitions_only_expose_fact_tools() -> None:
         "get_student_learning_profile",
         "get_exam_participant_metrics",
         "get_exam_submissions",
+        "get_problem_recommendations",
+        "get_learning_path",
         "read_notes",
         "update_notes",
     ]
@@ -461,6 +489,58 @@ def test_tool_executor_exam_submissions_can_target_student_no() -> None:
 
     assert payload["student_entity_ids"] == [303]
     assert payload["submissions"][0]["problem_code"] == "B"
+
+
+def test_tool_executor_problem_recommendations_do_not_return_path() -> None:
+    repo = _build_repo()
+    repo.problem_recommendations_by_students[(101, 202)] = (
+        ProblemRecommendationSnapshotRow(
+            student_id=101,
+            model_run_id=7,
+            items=[
+                {
+                    "problemId": "P1001",
+                    "title": "最短路",
+                    "knowledgePoints": ["图论"],
+                    "score": 0.91,
+                    "rank": 1,
+                }
+            ],
+            generated_at=_dt(9),
+        )
+    )
+    executor = ToolExecutor(repository=repo, identity=_build_identity())
+
+    result = asyncio.run(
+        executor.execute("get_problem_recommendations", {"top_k": 5})
+    )
+    payload = json.loads(result)
+
+    assert payload["model_run_id"] == 7
+    assert payload["items"][0]["problemId"] == "P1001"
+    assert "path" not in payload
+    assert "targets" not in payload
+
+
+def test_tool_executor_learning_path_does_not_return_recommendations() -> None:
+    repo = _build_repo()
+    repo.learning_paths_by_students[(101, 202)] = LearningPathSnapshotRow(
+        student_id=101,
+        model_run_id=8,
+        targets=["动态规划"],
+        path=["递推", "背包", "区间 DP"],
+        explanations={"递推": "基础状态转移不稳定。"},
+        generated_at=_dt(10),
+    )
+    executor = ToolExecutor(repository=repo, identity=_build_identity())
+
+    result = asyncio.run(executor.execute("get_learning_path", {}))
+    payload = json.loads(result)
+
+    assert payload["model_run_id"] == 8
+    assert payload["path"] == ["递推", "背包", "区间 DP"]
+    assert "items" not in payload
+    assert "recommendations" not in payload
 
 
 def test_tool_executor_requires_identity_for_default_student_tools() -> None:

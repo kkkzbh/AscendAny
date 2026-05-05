@@ -1,0 +1,35 @@
+model_type: rgcn
+device: cuda
+hidden_dim: 64
+num_layers: 2
+decoder_type: bilinear
+loss: listwise
+epochs: 50
+batch_size: 128
+num_negatives: 3
+learning_rate: 0.005
+weight_decay: 0.00001
+patience: 6
+seed: 42
+split: leave_k
+leave_k: 1
+val_ratio: 0.1
+use_score_rate_weight: true
+aux_score_rate_weight: 0.1
+graph_reg_weight: 0.001
+contrastive_weight: 0.0
+eval_ignore_empty: true
+path_top_n_targets: 5
+path_max_len: 8
+path_min_evidence: 1
+path_include_mastered: false
+path_mastered_threshold: 0.8
+recommendation:
+  difficulty_tolerance: 0.35
+  target_knowledge_weight: 0.35
+  similarity_weight: 0.2
+  difficulty_weight: 0.2
+  popularity_weight: 0.15
+  model_score_weight: 0.5
+  mmr_lambda: 0.72
+  strict_target_match: false

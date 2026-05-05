@@ -20,7 +20,10 @@ from .api.routes import (
     health_router,
     import_router,
     meta_router,
+    recommendations_router,
     students_router,
+    web_router,
+    web_ws_router,
 )
 from .core.config import Settings, load_settings
 from .core.errors import AppError
@@ -139,7 +142,10 @@ def create_app(
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(exam_analysis_router, prefix="/api/v1")
     app.include_router(import_router, prefix="/api/v1")
+    app.include_router(recommendations_router, prefix="/api/v1")
     app.include_router(admin_router, prefix="/api/v1")
+    app.include_router(web_router, prefix="/api")
+    app.include_router(web_ws_router)
 
     return app
 

@@ -69,3 +69,32 @@ sso:
   hs256_secret_env: ASCENDANY_SSO_EXTERNAL_APP_SECRET
   clock_skew_seconds: 15
   max_token_ttl_seconds: 60
+recommendation:
+  python_path: services/recommendation/.venv/bin/python
+  module: recommendation.pipeline
+  artifacts_dir: var/recommendation/artifacts
+  subprocess_timeout_seconds: 5
+email:
+  host: smtp.qq.com
+  port: 465
+  user_env: EMAIL_USER
+  password_env: EMAIL_PASS
+  from_env: EMAIL_FROM
+  from_name: 用户验证系统
+  timeout_seconds: 10
+  use_ssl: null
+  use_tls: null
+  registration_ttl_seconds: 600
+  registration_cooldown_seconds: 60
+  reset_ttl_seconds: 900
+  reset_cooldown_seconds: 120
+oj:
+  runtime: podman
+  image: ascendany-oj-cpp-python:latest
+  work_dir: var/oj/runs
+  compile_timeout_seconds: 15
+  time_buffer_seconds: 0.5
+  cpus: 1
+  memory_mb: 512
+  output_limit_bytes: 65536
+  clangd_path: clangd
