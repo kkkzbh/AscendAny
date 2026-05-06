@@ -1,5 +1,4 @@
-import type { ChatMessage } from "@/types/chat";
-import type { ChatToolActivity } from "@/types/chat";
+import type { ChatBlock, ChatMessage, ChatToolActivity } from "@/types/chat";
 import { DEFAULT_ROLE_ID, findRole } from "@/types/role";
 import { useAuthStore } from "@/stores/authStore";
 import { useAvatarStore } from "@/stores/avatarStore";
@@ -7,7 +6,11 @@ import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import { memo, useState } from "react";
+
+const ASSISTANT_MARKDOWN_PLUGINS = [remarkGfm, remarkBreaks];
+const USER_MARKDOWN_PLUGINS = [remarkGfm];
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -61,7 +64,19 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
   const reasoningContent = message.reasoningContent ?? "";
   const hasReasoning = Boolean(reasoningContent.trim()) || Boolean(message.reasoningStreaming);
   const reasoningStatus = hasReasoning ? formatReasoningStatus(message) : "";
-  const toolActivities = message.toolActivities ?? [];
+  const blocks: ChatBlock[] = (() => {
+    if (message.blocks && message.blocks.length > 0) return message.blocks;
+    const fallback: ChatBlock[] = [];
+    for (const a of message.toolActivities ?? []) {
+      fallback.push({ kind: "tool", activity: a });
+    }
+    if (message.content) {
+      fallback.push({ kind: "text", text: message.content });
+    }
+    return fallback;
+  })();
+  const lastBlock = blocks[blocks.length - 1];
+  const isLastBlockText = lastBlock?.kind === "text";
 
   if (isSystem) {
     return (
@@ -113,30 +128,49 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
               </div>
             </div>
           ) : null}
-          {toolActivities.length > 0 ? (
-            <div className="assistant-tool-activities" aria-label="工具调用摘要">
-              {toolActivities.map((activity) => (
-                <span
-                  key={activity.id}
-                  className={`assistant-tool-activity assistant-tool-activity-${activity.status}`}
+          {blocks.map((block, idx) => {
+            if (block.kind === "tool") {
+              return (
+                <div
+                  key={`tool-${block.activity.id}`}
+                  className="assistant-tool-activities"
+                  aria-label="工具调用摘要"
                 >
-                  {formatToolActivity(activity)}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <div className="assistant-message-text chat-markdown chat-markdown-assistant break-words leading-6">
-            {message.streaming ? (
+                  <span
+                    className={`assistant-tool-activity assistant-tool-activity-${block.activity.status}`}
+                  >
+                    {formatToolActivity(block.activity)}
+                  </span>
+                </div>
+              );
+            }
+            const isStreamingText =
+              message.streaming && idx === blocks.length - 1 && isLastBlockText;
+            return (
+              <div
+                key={`text-${idx}`}
+                className="assistant-message-text chat-markdown chat-markdown-assistant break-words"
+              >
+                {isStreamingText ? (
+                  <div className="streaming-message-text">
+                    {block.text}
+                    <span className="streaming-caret" aria-hidden="true" />
+                  </div>
+                ) : (
+                  <ReactMarkdown remarkPlugins={ASSISTANT_MARKDOWN_PLUGINS}>
+                    {block.text}
+                  </ReactMarkdown>
+                )}
+              </div>
+            );
+          })}
+          {message.streaming && !isLastBlockText ? (
+            <div className="assistant-message-text chat-markdown chat-markdown-assistant break-words">
               <div className="streaming-message-text">
-                {message.content}
                 <span className="streaming-caret" aria-hidden="true" />
               </div>
-            ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {message.content}
-              </ReactMarkdown>
-            )}
-          </div>
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -147,7 +181,7 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
       <div className="flex max-w-[72%] flex-col gap-1">
         <div className="message-bubble message-bubble-user rounded-[18px] text-[13px] leading-5 text-white">
           <div className="chat-markdown chat-markdown-user break-words leading-5">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={USER_MARKDOWN_PLUGINS}>
               {message.content}
             </ReactMarkdown>
           </div>

@@ -247,4 +247,89 @@ describe("chatStore sessions", () => {
     expect(message?.streaming).toBe(false);
     expect(message?.reasoningStreaming).toBe(false);
   });
+
+  it("interleaves text and tool blocks in SSE arrival order", () => {
+    const store = useChatStore.getState();
+    store.createSession();
+    const id = store.createAssistantDraft("Sakiko");
+
+    // Simulate the SSE stream:
+    // delta("先瞅瞅") delta("画像哈") tool_start(call_1) tool_done(call_1)
+    // delta("再翻下") tool_start(call_2) tool_done(call_2) delta("分析完了")
+    store.appendMessageContent(id, "先瞅瞅");
+    store.appendMessageContent(id, "画像哈");
+    store.upsertMessageToolActivity(id, {
+      id: "call_1",
+      label: "查看学习画像",
+      status: "running",
+    });
+    store.upsertMessageToolActivity(id, {
+      id: "call_1",
+      label: "查看学习画像",
+      status: "done",
+    });
+    store.appendMessageContent(id, "再翻下");
+    store.upsertMessageToolActivity(id, {
+      id: "call_2",
+      label: "核对提交记录",
+      status: "running",
+    });
+    store.upsertMessageToolActivity(id, {
+      id: "call_2",
+      label: "核对提交记录",
+      status: "done",
+    });
+    store.appendMessageContent(id, "分析完了");
+
+    const message = useChatStore
+      .getState()
+      .getActiveSession()
+      ?.messages.find((m) => m.id === id);
+    expect(message?.blocks).toEqual([
+      { kind: "text", text: "先瞅瞅画像哈" },
+      { kind: "tool", activity: { id: "call_1", label: "查看学习画像", status: "done" } },
+      { kind: "text", text: "再翻下" },
+      { kind: "tool", activity: { id: "call_2", label: "核对提交记录", status: "done" } },
+      { kind: "text", text: "分析完了" },
+    ]);
+    // Derived content concatenates all text blocks.
+    expect(message?.content).toBe("先瞅瞅画像哈再翻下分析完了");
+    // Derived toolActivities preserves status per id.
+    expect(message?.toolActivities?.map((a) => a.id)).toEqual(["call_1", "call_2"]);
+  });
+
+  it("migrates persisted legacy messages (content + toolActivities) into blocks", () => {
+    useChatStore.getState().hydrateFromLocalState({
+      sessions: [
+        {
+          id: "legacy_session",
+          title: "旧会话",
+          messages: [
+            {
+              id: "legacy_msg",
+              role: "assistant",
+              content: "整体看下来你最近 Rating 涨了 165 分",
+              toolActivities: [
+                { id: "call_a", label: "查看学习画像", status: "done" },
+                { id: "call_b", label: "核对提交记录", status: "done" },
+              ],
+              timestamp: 1710000000000,
+            },
+          ],
+          summary: "",
+          createdAt: 1710000000000,
+          updatedAt: 1710000000000,
+        },
+      ],
+      activeSessionId: "legacy_session",
+    });
+
+    const message = useChatStore.getState().getActiveSession()?.messages[0];
+    expect(message?.blocks).toEqual([
+      { kind: "tool", activity: { id: "call_a", label: "查看学习画像", status: "done" } },
+      { kind: "tool", activity: { id: "call_b", label: "核对提交记录", status: "done" } },
+      { kind: "text", text: "整体看下来你最近 Rating 涨了 165 分" },
+    ]);
+    expect(message?.content).toBe("整体看下来你最近 Rating 涨了 165 分");
+  });
 });

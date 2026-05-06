@@ -1,5 +1,10 @@
 import { create } from "zustand";
-import type { ChatMessage, ChatSession, ChatToolActivity } from "@/types/chat";
+import type {
+  ChatBlock,
+  ChatMessage,
+  ChatSession,
+  ChatToolActivity,
+} from "@/types/chat";
 
 interface ChatState {
   sessions: ChatSession[];
@@ -79,6 +84,88 @@ function formatSessionTitle(messages: ChatMessage[]): string {
   return content.length > 18 ? `${content.slice(0, 18)}...` : content;
 }
 
+function deriveContent(blocks: ChatBlock[]): string {
+  let out = "";
+  for (const b of blocks) if (b.kind === "text") out += b.text;
+  return out;
+}
+
+function deriveToolActivities(blocks: ChatBlock[]): ChatToolActivity[] | undefined {
+  const list: ChatToolActivity[] = [];
+  for (const b of blocks) if (b.kind === "tool") list.push(b.activity);
+  return list.length > 0 ? list : undefined;
+}
+
+function appendTextBlock(blocks: ChatBlock[], text: string): ChatBlock[] {
+  if (!text) return blocks;
+  const last = blocks[blocks.length - 1];
+  if (last && last.kind === "text") {
+    return [
+      ...blocks.slice(0, -1),
+      { kind: "text", text: last.text + text },
+    ];
+  }
+  return [...blocks, { kind: "text", text }];
+}
+
+function upsertToolBlock(blocks: ChatBlock[], activity: ChatToolActivity): ChatBlock[] {
+  const idx = blocks.findIndex(
+    (b) => b.kind === "tool" && b.activity.id === activity.id,
+  );
+  if (idx >= 0) {
+    return blocks.map((b, i) =>
+      i === idx ? { kind: "tool", activity } : b,
+    );
+  }
+  return [...blocks, { kind: "tool", activity }];
+}
+
+function normalizeBlocks(value: unknown): ChatBlock[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: ChatBlock[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const kind = (item as { kind?: unknown }).kind;
+    if (kind === "text") {
+      const text = (item as { text?: unknown }).text;
+      if (typeof text === "string" && text.length > 0) {
+        out.push({ kind: "text", text });
+      }
+    } else if (kind === "tool") {
+      const raw = (item as { activity?: unknown }).activity;
+      if (raw && typeof raw === "object") {
+        const id = typeof (raw as Partial<ChatToolActivity>).id === "string"
+          ? (raw as ChatToolActivity).id.trim()
+          : "";
+        const label = typeof (raw as Partial<ChatToolActivity>).label === "string"
+          ? (raw as ChatToolActivity).label.trim()
+          : "";
+        if (id && label) {
+          const status: ChatToolActivity["status"] =
+            (raw as Partial<ChatToolActivity>).status === "running"
+              ? "running"
+              : (raw as Partial<ChatToolActivity>).status === "error"
+                ? "error"
+                : "done";
+          out.push({ kind: "tool", activity: { id, label, status } });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function blocksFromLegacy(message: Partial<ChatMessage>): ChatBlock[] {
+  const blocks: ChatBlock[] = [];
+  for (const a of message.toolActivities ?? []) {
+    blocks.push({ kind: "tool", activity: a });
+  }
+  if (typeof message.content === "string" && message.content.length > 0) {
+    blocks.push({ kind: "text", text: message.content });
+  }
+  return blocks;
+}
+
 function normalizeToolActivities(value: unknown): ChatToolActivity[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -108,41 +195,60 @@ function normalizeMessages(value: unknown): ChatMessage[] {
     .filter((message): message is Partial<ChatMessage> =>
       Boolean(message) && typeof message === "object",
     )
-    .map((message) => ({
-      id:
-        typeof message.id === "string" && message.id.trim()
-          ? message.id
-          : generateId(),
-      role:
+    .map((message) => {
+      const role: ChatMessage["role"] =
         message.role === "user" ||
         message.role === "assistant" ||
         message.role === "system"
           ? message.role
-          : "system",
-      content: typeof message.content === "string" ? message.content : "",
-      reasoningContent:
-        typeof message.reasoningContent === "string"
-          ? message.reasoningContent
-          : undefined,
-      reasoningStartedAt:
-        typeof message.reasoningStartedAt === "number" &&
-        Number.isFinite(message.reasoningStartedAt)
-          ? message.reasoningStartedAt
-          : undefined,
-      reasoningEndedAt:
-        typeof message.reasoningEndedAt === "number" &&
-        Number.isFinite(message.reasoningEndedAt)
-          ? message.reasoningEndedAt
-          : undefined,
-      toolActivities: normalizeToolActivities(message.toolActivities),
-      timestamp:
-        typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
-          ? message.timestamp
-          : Date.now(),
-      roleId: typeof message.roleId === "string" ? message.roleId : undefined,
-      streaming: false,
-      reasoningStreaming: false,
-    }));
+          : "system";
+      const legacyContent =
+        typeof message.content === "string" ? message.content : "";
+      const legacyToolActivities = normalizeToolActivities(message.toolActivities);
+      const persistedBlocks = normalizeBlocks((message as { blocks?: unknown }).blocks);
+      let blocks =
+        persistedBlocks && persistedBlocks.length > 0
+          ? persistedBlocks
+          : blocksFromLegacy({
+              ...message,
+              content: legacyContent,
+              toolActivities: legacyToolActivities,
+            });
+      // Empty assistant/system messages keep an empty blocks array.
+      if (!Array.isArray(blocks)) blocks = [];
+      const content = persistedBlocks ? deriveContent(blocks) : legacyContent;
+      return {
+        id:
+          typeof message.id === "string" && message.id.trim()
+            ? message.id
+            : generateId(),
+        role,
+        content,
+        blocks,
+        reasoningContent:
+          typeof message.reasoningContent === "string"
+            ? message.reasoningContent
+            : undefined,
+        reasoningStartedAt:
+          typeof message.reasoningStartedAt === "number" &&
+          Number.isFinite(message.reasoningStartedAt)
+            ? message.reasoningStartedAt
+            : undefined,
+        reasoningEndedAt:
+          typeof message.reasoningEndedAt === "number" &&
+          Number.isFinite(message.reasoningEndedAt)
+            ? message.reasoningEndedAt
+            : undefined,
+        toolActivities: deriveToolActivities(blocks) ?? legacyToolActivities,
+        timestamp:
+          typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+            ? message.timestamp
+            : Date.now(),
+        roleId: typeof message.roleId === "string" ? message.roleId : undefined,
+        streaming: false,
+        reasoningStreaming: false,
+      };
+    });
 }
 
 function normalizeSession(value: unknown): ChatSession {
@@ -350,10 +456,14 @@ export const useChatStore = create<ChatState>()(
       addMessage: (role, content, options) => {
         set((state) => {
           const activeSession = getActiveSessionFromState(state);
+          const initialBlocks: ChatBlock[] = content
+            ? [{ kind: "text", text: content }]
+            : [];
           const nextMessage: ChatMessage = {
             id: generateId(),
             role,
             content,
+            blocks: initialBlocks,
             timestamp: Date.now(),
             roleId: role === "assistant" ? options?.roleId : undefined,
             streaming: false,
@@ -407,6 +517,7 @@ export const useChatStore = create<ChatState>()(
             id: messageId,
             role: "assistant",
             content: "",
+            blocks: [],
             timestamp: Date.now(),
             roleId,
             streaming: true,
@@ -435,11 +546,15 @@ export const useChatStore = create<ChatState>()(
         set((state) => ({
           sessions: state.sessions.map((session) => ({
             ...session,
-            messages: session.messages.map((message) =>
-              message.id === messageId
-                ? { ...message, content: message.content + contentDelta }
-                : message,
-            ),
+            messages: session.messages.map((message) => {
+              if (message.id !== messageId) return message;
+              const blocks = appendTextBlock(message.blocks ?? [], contentDelta);
+              return {
+                ...message,
+                blocks,
+                content: message.content + contentDelta,
+              };
+            }),
             updatedAt: session.messages.some((message) => message.id === messageId)
               ? Date.now()
               : session.updatedAt,
@@ -483,17 +598,17 @@ export const useChatStore = create<ChatState>()(
               if (message.id !== messageId) {
                 return message;
               }
-              const current = message.toolActivities ?? [];
-              const nextActivity = {
+              const nextActivity: ChatToolActivity = {
                 id,
                 label,
                 status: activity.status,
-              } satisfies ChatToolActivity;
-              const exists = current.some((item) => item.id === id);
-              const toolActivities = exists
-                ? current.map((item) => (item.id === id ? nextActivity : item))
-                : [...current, nextActivity];
-              return { ...message, toolActivities };
+              };
+              const blocks = upsertToolBlock(message.blocks ?? [], nextActivity);
+              return {
+                ...message,
+                blocks,
+                toolActivities: deriveToolActivities(blocks),
+              };
             }),
             updatedAt: session.messages.some((message) => message.id === messageId)
               ? Date.now()

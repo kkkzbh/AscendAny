@@ -8,24 +8,28 @@ export interface ChatToolActivity {
   status: ToolActivityStatus;
 }
 
+export type ChatBlock =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; activity: ChatToolActivity };
+
 export interface ChatMessage {
   id: string;
   role: Role;
   content: string;
   timestamp: number;
-  /** Assistant role id snapshot when this message was generated. */
+  /**
+   * Ordered text/tool segments preserving SSE arrival order so the bubble
+   * can render text and tool chips interleaved instead of grouped. Optional
+   * for legacy/in-test messages built without going through the store.
+   */
+  blocks?: ChatBlock[];
   roleId?: string;
-  /** Provider reasoning text shown separately from the final answer. */
   reasoningContent?: string;
-  /** Timestamp when provider reasoning first started streaming. */
   reasoningStartedAt?: number;
-  /** Timestamp when provider reasoning stopped streaming. */
   reasoningEndedAt?: number;
-  /** Public, user-facing summaries for assistant tool calls. */
+  /** Derived from blocks; kept for legacy persistence compatibility. */
   toolActivities?: ChatToolActivity[];
-  /** Transient flag for an assistant message currently receiving streamed text. */
   streaming?: boolean;
-  /** Transient flag for an assistant message currently receiving streamed reasoning. */
   reasoningStreaming?: boolean;
 }
 

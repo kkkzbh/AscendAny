@@ -3565,7 +3565,7 @@ class ApiRepository:
         return history
 
     async def fetch_latest_problem_recommendations(
-        self, student_ids: list[int], top_k: int = 10
+        self, student_ids: list[int], top_k: int | None = 10
     ) -> ProblemRecommendationSnapshotRow | None:
         if not student_ids:
             return None
@@ -3584,9 +3584,11 @@ class ApiRepository:
             return None
         raw_items = _json_value(row.get("items"), [])
         items = raw_items if isinstance(raw_items, list) else []
-        normalized_items = [
-            item for item in items[: max(1, int(top_k))] if isinstance(item, dict)
-        ]
+        if top_k is None:
+            sliced_items = items
+        else:
+            sliced_items = items[: max(1, int(top_k))]
+        normalized_items = [item for item in sliced_items if isinstance(item, dict)]
         generated_at = row.get("generated_at")
         return ProblemRecommendationSnapshotRow(
             student_id=int(row["student_id"]),
