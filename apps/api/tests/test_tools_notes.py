@@ -228,3 +228,74 @@ def test_pending_notes_update_starts_none() -> None:
     _execute(executor, "read_notes", {})
 
     assert executor.pending_notes_update is None
+
+
+def test_update_notes_emits_pending_event_for_replace() -> None:
+    executor = ToolExecutor(
+        repository=_NullRepo(),  # type: ignore[arg-type]
+        identity=None,
+        notes_content="old",
+    )
+
+    _execute(executor, "update_notes", {"mode": "replace", "content": "new"})
+
+    assert executor.notes_pending_events == [
+        {
+            "mode": "replace",
+            "previous": "old",
+            "next": "new",
+            "patch": None,
+        }
+    ]
+
+
+def test_update_notes_emits_pending_event_for_patch_with_diff_text() -> None:
+    executor = ToolExecutor(
+        repository=_NullRepo(),  # type: ignore[arg-type]
+        identity=None,
+        notes_content="A\nB\nC",
+    )
+    patch_text = "--- notes.md\n+++ notes.md\n@@ -1,3 +1,3 @@\n A\n-B\n+B2\n C"
+
+    _execute(executor, "update_notes", {"mode": "patch", "patch": patch_text})
+
+    assert executor.notes_pending_events == [
+        {
+            "mode": "patch",
+            "previous": "A\nB\nC",
+            "next": "A\nB2\nC",
+            "patch": patch_text,
+        }
+    ]
+
+
+def test_update_notes_when_locked_returns_error_and_no_event() -> None:
+    executor = ToolExecutor(
+        repository=_NullRepo(),  # type: ignore[arg-type]
+        identity=None,
+        notes_content="seed",
+        notes_locked=True,
+    )
+
+    payload = _execute(executor, "update_notes", {"mode": "replace", "content": "x"})
+
+    assert "error" in payload
+    assert "正在编辑" in payload["error"]
+    assert executor.notes_content == "seed"
+    assert executor.pending_notes_update is None
+    assert executor.notes_pending_events == []
+
+
+def test_read_notes_still_works_when_locked() -> None:
+    executor = ToolExecutor(
+        repository=_NullRepo(),  # type: ignore[arg-type]
+        identity=None,
+        notes_content="A\nB",
+        notes_title="t",
+        notes_locked=True,
+    )
+
+    payload = _execute(executor, "read_notes", {})
+
+    assert payload["content"] == "A\nB"
+    assert payload["title"] == "t"

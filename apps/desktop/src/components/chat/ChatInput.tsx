@@ -128,6 +128,12 @@ export function ChatInput({
         bufferedReasoning = "";
         appendMessageReasoning(draftMessageId, nextReasoning);
       };
+      const flushTextSync = () => {
+        if (!draftMessageId || !bufferedText) return;
+        const next = bufferedText;
+        bufferedText = "";
+        appendMessageContent(draftMessageId, next);
+      };
       const ensureDraft = () => {
         if (!draftMessageId) {
           draftMessageId = createAssistantDraft(roleIdAtSend);
@@ -141,6 +147,7 @@ export function ChatInput({
 
       const notesState = useNotesStore.getState();
       const activeNote = notesState.activeId ? notesState.items[notesState.activeId] ?? null : null;
+      const notesLocked = notesState.isEditingContent && notesState.isDirty;
       await streamChatReply({
           studentId: normalizeIdentifier(account?.studentId ?? ""),
           ptaNickname: normalizeIdentifier(account?.ptaNickname ?? ""),
@@ -151,6 +158,7 @@ export function ChatInput({
           roleSystemPrompt: roleAtSend.systemPromptExtra || undefined,
           notes: activeNote?.content ?? "",
           notesTitle: activeNote?.title ?? "",
+          notesLocked,
         },
         accessToken ?? undefined,
         (event) => {
@@ -180,10 +188,19 @@ export function ChatInput({
             const activeDraftId = ensureDraft();
             flushReasoning();
             finalizeMessageReasoning(activeDraftId);
+            flushTextSync();
             upsertMessageToolActivity(activeDraftId, {
               id: event.activityId,
               label: event.label,
               status: event.status,
+            });
+            return;
+          }
+          if (event.type === "notes_update") {
+            useNotesStore.getState().streamRemoteUpdate({
+              mode: event.mode,
+              previous: event.previous,
+              next: event.next,
             });
             return;
           }
@@ -196,7 +213,7 @@ export function ChatInput({
               setSummary(event.summary);
             }
             if (typeof event.updatedNotes === "string") {
-              useNotesStore.getState().applyRemoteUpdate(event.updatedNotes);
+              useNotesStore.getState().reconcileRemoteUpdate(event.updatedNotes);
             }
             if (draftMessageId) {
               if (!event.reply.trim()) {

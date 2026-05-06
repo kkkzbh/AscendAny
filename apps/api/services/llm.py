@@ -358,6 +358,14 @@ class LLMService:
             execution = await self._execute_parsed_tool_call(tool_executor, parsed)
             self._append_tool_message(messages, execution)
 
+            pending_notes_events = getattr(
+                tool_executor, "notes_pending_events", None
+            )
+            if isinstance(pending_notes_events, list) and pending_notes_events:
+                for note_event in pending_notes_events:
+                    yield {"type": "notes_update", **note_event}
+                pending_notes_events.clear()
+
             if activity_label is None:
                 continue
             done_label = self._tool_activity_label(

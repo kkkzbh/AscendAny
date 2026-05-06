@@ -83,11 +83,18 @@ export function useAutoAnalysis(params: {
           bufferedReasoning = "";
           onStreamReasoning?.(draftMessageId, nextReasoning);
         };
+        const flushTextSync = () => {
+          if (!draftMessageId || !bufferedText) return;
+          const next = bufferedText;
+          bufferedText = "";
+          onStreamDelta?.(draftMessageId, next);
+        };
 
         const notesState = useNotesStore.getState();
         const activeNote = notesState.activeId
           ? notesState.items[notesState.activeId] ?? null
           : null;
+        const notesLocked = notesState.isEditingContent && notesState.isDirty;
         await streamAutoAnalysis(
           {
             studentId: account.studentId ?? undefined,
@@ -98,6 +105,7 @@ export function useAutoAnalysis(params: {
             latestExamId,
             notes: activeNote?.content ?? "",
             notesTitle: activeNote?.title ?? "",
+            notesLocked,
           },
           accessToken,
           (event) => {
@@ -144,6 +152,7 @@ export function useAutoAnalysis(params: {
               if (draftMessageId) {
                 flushReasoning();
                 onStreamReasoningDone?.(draftMessageId);
+                flushTextSync();
                 onStreamToolActivity?.(draftMessageId, {
                   id: event.activityId,
                   label: event.label,
@@ -152,13 +161,21 @@ export function useAutoAnalysis(params: {
               }
               return;
             }
+            if (event.type === "notes_update") {
+              useNotesStore.getState().streamRemoteUpdate({
+                mode: event.mode,
+                previous: event.previous,
+                next: event.next,
+              });
+              return;
+            }
             if (event.type === "done") {
               if (rafId) {
                 window.cancelAnimationFrame(rafId);
                 flush();
               }
               if (typeof event.updatedNotes === "string") {
-                useNotesStore.getState().applyRemoteUpdate(event.updatedNotes);
+                useNotesStore.getState().reconcileRemoteUpdate(event.updatedNotes);
               }
               const reply = event.reply.trim();
               if (draftMessageId) {

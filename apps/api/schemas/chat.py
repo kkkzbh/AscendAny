@@ -27,6 +27,7 @@ class ChatReplyRequest(BaseModel):
     roleSystemPrompt: str | None = None
     notes: str = Field(default="", max_length=32_768)
     notesTitle: str = Field(default="", max_length=120)
+    notesLocked: bool = False
 
 
 class ChatReplyResponse(BaseModel):
@@ -49,6 +50,7 @@ class AutoAnalysisRequest(BaseModel):
     roleSystemPrompt: str | None = None
     notes: str = Field(default="", max_length=32_768)
     notesTitle: str = Field(default="", max_length=120)
+    notesLocked: bool = False
 
 
 class AutoAnalysisResponse(BaseModel):

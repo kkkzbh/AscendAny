@@ -8,6 +8,7 @@ import {
   deriveAutoNoteTitle,
 } from "@/stores/notesStore";
 import { NotesActionsButton } from "./NotesActionsButton";
+import { NotesStreamingView } from "./NotesStreamingView";
 import { safeMarkdownUrl } from "./notesUtils";
 
 const PLACEHOLDER_HEADING = "未命名笔记";
@@ -23,6 +24,7 @@ export function NotesDetailView() {
   const pendingRemoteUpdate = useNotesStore((state) => state.pendingRemoteUpdate);
   const acceptPendingRemoteUpdate = useNotesStore((state) => state.acceptPendingRemoteUpdate);
   const dismissPendingRemoteUpdate = useNotesStore((state) => state.dismissPendingRemoteUpdate);
+  const streaming = useNotesStore((state) => state.streaming);
 
   const [creating, setCreating] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
@@ -137,6 +139,8 @@ export function NotesDetailView() {
             maxLength={NOTES_LIMITS.CONTENT_MAX_LENGTH}
             onChange={(event) => setContent(event.target.value)}
           />
+        ) : streaming && streaming.noteId === activeNote.id ? (
+          <NotesStreamingView streaming={streaming} />
         ) : (
           <div ref={previewRef} className="notes-preview chat-markdown">
             {activeNote.content.trim() ? (

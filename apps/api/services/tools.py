@@ -108,14 +108,35 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "get_problem_recommendations",
             "description": (
                 "获取当前绑定学生的个性化题目推荐快照。只返回已由推荐模型生成的"
-                "题目推荐事实，不返回学习路径，不触发训练。"
+                "题目推荐事实，不返回学习路径，不触发训练。可选过滤参数仅在已生成"
+                "的快照上做客户端裁剪，不会重新跑模型。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "top_k": {
                         "type": "integer",
-                        "description": "最多返回多少道题，默认 10，硬上限 50。",
+                        "description": "过滤后最多返回多少道题，默认 10，硬上限 50。",
+                    },
+                    "knowledge_point": {
+                        "type": "string",
+                        "description": (
+                            "可选。仅保留 knowledgePoints 中包含该字符串的题目，"
+                            "大小写不敏感、子串匹配。例如传 'DP' 可命中 '动态规划 DP'。"
+                        ),
+                    },
+                    "min_difficulty": {
+                        "type": "number",
+                        "description": "可选。仅保留 difficulty >= 该值的题目。缺失难度的题目会被过滤掉。",
+                    },
+                    "max_difficulty": {
+                        "type": "number",
+                        "description": "可选。仅保留 difficulty <= 该值的题目。缺失难度的题目会被过滤掉。",
+                    },
+                    "exclude_problem_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选。要排除的 problemId 列表，常用于学生说\"刚做过这几道\"。",
                     },
                 },
                 "required": [],
@@ -128,11 +149,29 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "get_learning_path",
             "description": (
                 "获取当前绑定学生的知识点学习路径快照。只返回知识点路径事实，"
-                "不返回题目推荐，不触发训练。"
+                "不返回题目推荐，不触发训练。可选过滤参数仅在已生成的快照上做"
+                "客户端裁剪，不会重新跑模型。"
             ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": (
+                            "可选。仅返回路径中匹配该主题的那一项以及对应解释，"
+                            "大小写不敏感、子串匹配。命中 0 项时 path 为空并附说明。"
+                            "与 limit 同时给时优先使用 topic。"
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "可选。仅返回 path 的前 N 项及对应 explanations，1–50。",
+                    },
+                    "include_explanations": {
+                        "type": "boolean",
+                        "description": "可选。默认 true；设为 false 时丢弃 explanations 字段，仅返回主题序列以节省 token。",
+                    },
+                },
                 "required": [],
             },
         },
@@ -214,12 +253,15 @@ class ToolExecutor:
         identity: ResolvedIdentity | None,
         notes_content: str = "",
         notes_title: str = "",
+        notes_locked: bool = False,
     ) -> None:
         self._repository = repository
         self._identity = identity
         self.notes_content = notes_content
         self.notes_title = notes_title
+        self.notes_locked = notes_locked
         self.pending_notes_update: str | None = None
+        self.notes_pending_events: list[dict[str, Any]] = []
 
     async def execute(self, tool_name: str, arguments: dict[str, Any]) -> str:
         handler = _HANDLERS.get(tool_name)
@@ -491,12 +533,29 @@ class ToolExecutor:
             min_value=1,
             max_value=50,
         )
+        knowledge_point = args.get("knowledge_point")
+        if knowledge_point is not None and not isinstance(knowledge_point, str):
+            return {"error": "参数 knowledge_point 必须是字符串。"}
+        kp_needle = knowledge_point.strip().lower() if knowledge_point else None
+
+        min_difficulty = _safe_float(args.get("min_difficulty"))
+        max_difficulty = _safe_float(args.get("max_difficulty"))
+
+        raw_exclude = args.get("exclude_problem_ids")
+        if raw_exclude is not None and not isinstance(raw_exclude, list):
+            return {"error": "参数 exclude_problem_ids 必须是字符串数组。"}
+        exclude_ids = {
+            str(pid).strip()
+            for pid in (raw_exclude or [])
+            if isinstance(pid, (str, int)) and str(pid).strip()
+        }
+
         student_ids = list(
             self._identity.student_entity_ids or (self._identity.student_entity_id,)
         )
         snapshot = await self._repository.fetch_latest_problem_recommendations(
             student_ids,
-            top_k=top_k,
+            top_k=None,
         )
         if snapshot is None:
             return {
@@ -504,6 +563,26 @@ class ToolExecutor:
                 "items": [],
                 "error": "当前学生尚无推荐快照，请先运行推荐模型训练与推理任务。",
             }
+
+        all_items = snapshot.items
+        filtered = [
+            item
+            for item in all_items
+            if _matches_recommendation_filters(
+                item,
+                knowledge_point=kp_needle,
+                min_difficulty=min_difficulty,
+                max_difficulty=max_difficulty,
+                exclude_ids=exclude_ids,
+            )
+        ]
+        items = filtered[:top_k]
+        filters_active = bool(
+            kp_needle
+            or min_difficulty is not None
+            or max_difficulty is not None
+            or exclude_ids
+        )
         return {
             "student_entity_id": snapshot.student_id,
             "student_entity_ids": student_ids,
@@ -511,13 +590,37 @@ class ToolExecutor:
             "generated_at": snapshot.generated_at.isoformat()
             if snapshot.generated_at
             else None,
-            "items": snapshot.items[:top_k],
+            "items": items,
+            "filter_summary": {
+                "snapshot_total": len(all_items),
+                "matched_after_filters": len(filtered),
+                "returned": len(items),
+                "filters_active": filters_active,
+            },
         }
 
     async def _get_learning_path(self, args: dict[str, Any]) -> Any:
-        _ = args
         if self._identity is None:
             return {"error": "当前未绑定学生身份，无法查询学习路径。"}
+
+        topic = args.get("topic")
+        if topic is not None and not isinstance(topic, str):
+            return {"error": "参数 topic 必须是字符串。"}
+        topic_needle = topic.strip().lower() if topic else None
+
+        limit_raw = args.get("limit")
+        limit_value: int | None
+        if limit_raw is None:
+            limit_value = None
+        else:
+            limit_value = _bounded_int(
+                limit_raw, default=50, min_value=1, max_value=50
+            )
+
+        include_explanations = args.get("include_explanations", True)
+        if not isinstance(include_explanations, bool):
+            return {"error": "参数 include_explanations 必须是布尔值。"}
+
         student_ids = list(
             self._identity.student_entity_ids or (self._identity.student_entity_id,)
         )
@@ -529,7 +632,26 @@ class ToolExecutor:
                 "path": [],
                 "error": "当前学生尚无学习路径快照，请先运行推荐模型训练与推理任务。",
             }
-        return {
+
+        full_path = snapshot.path
+        full_explanations = snapshot.explanations or {}
+
+        if topic_needle:
+            scoped_path = [t for t in full_path if topic_needle in t.lower()]
+            scope_note: str | None = None
+            if not scoped_path:
+                scope_note = (
+                    f"路径中未找到包含 '{topic}' 的知识点；"
+                    f"路径共 {len(full_path)} 项。"
+                )
+        elif limit_value is not None:
+            scoped_path = full_path[:limit_value]
+            scope_note = None
+        else:
+            scoped_path = full_path
+            scope_note = None
+
+        result: dict[str, Any] = {
             "student_entity_id": snapshot.student_id,
             "student_entity_ids": student_ids,
             "model_run_id": snapshot.model_run_id,
@@ -537,9 +659,21 @@ class ToolExecutor:
             if snapshot.generated_at
             else None,
             "targets": snapshot.targets,
-            "path": snapshot.path,
-            "explanations": snapshot.explanations,
+            "path": scoped_path,
+            "path_total": len(full_path),
         }
+        if include_explanations:
+            if topic_needle or limit_value is not None:
+                result["explanations"] = {
+                    t: full_explanations[t]
+                    for t in scoped_path
+                    if t in full_explanations
+                }
+            else:
+                result["explanations"] = full_explanations
+        if scope_note:
+            result["note"] = scope_note
+        return result
 
     async def _read_notes(self, args: dict[str, Any]) -> Any:
         mode = args.get("mode", "full")
@@ -554,7 +688,15 @@ class ToolExecutor:
         }
 
     async def _update_notes(self, args: dict[str, Any]) -> Any:
+        if self.notes_locked:
+            return {
+                "error": (
+                    "用户当前正在编辑笔记，待用户保存编辑后再尝试。"
+                    "在此期间你只能调用 read_notes 查看，不可写入。"
+                )
+            }
         mode = args.get("mode")
+        patch_text: str | None = None
         if mode == "replace":
             content = args.get("content")
             if not isinstance(content, str):
@@ -568,6 +710,7 @@ class ToolExecutor:
             if isinstance(patch_result, dict):
                 return patch_result
             next_content = patch_result
+            patch_text = patch
         else:
             return {"error": "参数 mode 必须是 patch 或 replace。"}
 
@@ -578,8 +721,17 @@ class ToolExecutor:
                     f"上限为 {NOTES_MAX_LENGTH} 字符，请精简后再写入。"
                 ),
             }
+        previous_content = self.notes_content
         self.notes_content = next_content
         self.pending_notes_update = next_content
+        self.notes_pending_events.append(
+            {
+                "mode": mode,
+                "previous": previous_content,
+                "next": next_content,
+                "patch": patch_text,
+            }
+        )
         return {"ok": True, "mode": mode, "length": len(next_content)}
 
     async def _resolve_submission_student_ids(
@@ -758,7 +910,45 @@ def _safe_int(value: Any) -> int | None:
 def _safe_float(value: Any) -> float | None:
     if value is None:
         return None
-    return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _matches_recommendation_filters(
+    item: dict[str, Any],
+    *,
+    knowledge_point: str | None,
+    min_difficulty: float | None,
+    max_difficulty: float | None,
+    exclude_ids: set[str],
+) -> bool:
+    if exclude_ids:
+        problem_id = str(
+            item.get("problemId") or item.get("problem_id") or ""
+        ).strip()
+        if problem_id and problem_id in exclude_ids:
+            return False
+    if knowledge_point:
+        raw_points = (
+            item.get("knowledgePoints") or item.get("knowledge_points") or []
+        )
+        if not isinstance(raw_points, list):
+            return False
+        if not any(
+            knowledge_point in str(p).lower() for p in raw_points if p is not None
+        ):
+            return False
+    if min_difficulty is not None or max_difficulty is not None:
+        difficulty = _safe_float(item.get("difficulty"))
+        if difficulty is None:
+            return False
+        if min_difficulty is not None and difficulty < min_difficulty:
+            return False
+        if max_difficulty is not None and difficulty > max_difficulty:
+            return False
+    return True
 
 
 _HANDLERS: dict[str, Any] = {

@@ -1,8 +1,15 @@
 import { create } from "zustand";
 
+import { diffLines, type DiffSegment } from "@/lib/notesDiff";
+
 const NOTES_MAX_LENGTH = 32_768;
 const NOTES_TITLE_MAX_LENGTH = 120;
 const PERSIST_DEBOUNCE_MS = 500;
+const STREAM_DELETE_MS = 350;
+const STREAM_TYPING_TICK_MS = 30;
+const STREAM_TYPING_BUDGET_MS = 2500;
+const STREAM_TYPING_MIN_CHARS_PER_TICK = 1;
+const STREAM_FADE_MS = 1200;
 const STRIP_MD_PATTERNS: Array<[RegExp, string]> = [
   [/^#{1,6}\s+/m, ""],
   [/^>\s+/gm, ""],
@@ -40,6 +47,27 @@ interface NotesElectronApi {
 
 type NotesView = "detail" | "list";
 
+export type NoteStreamPhase = "deleting" | "typing" | "fading";
+
+export interface NoteStreamState {
+  noteId: string;
+  mode: "patch" | "replace";
+  baseContent: string;
+  targetContent: string;
+  segments: DiffSegment[];
+  totalAddedChars: number;
+  charsPerTick: number;
+  typedChars: number;
+  phase: NoteStreamPhase;
+  startedAt: number;
+}
+
+export interface NotesUpdateEvent {
+  mode: "patch" | "replace";
+  previous: string;
+  next: string;
+}
+
 interface NotesState {
   items: Record<string, NoteRecord>;
   order: string[];
@@ -48,6 +76,7 @@ interface NotesState {
   isEditingContent: boolean;
   isDirty: boolean;
   pendingRemoteUpdate: string | null;
+  streaming: NoteStreamState | null;
 
   hydrateFromLocalState: (snapshot: unknown) => void;
   resetForAccount: () => void;
@@ -61,6 +90,9 @@ interface NotesState {
   setTitle: (title: string) => void;
   setContent: (content: string) => void;
   applyRemoteUpdate: (content: string) => void;
+  streamRemoteUpdate: (event: NotesUpdateEvent) => void;
+  reconcileRemoteUpdate: (content: string) => void;
+  cancelStream: () => void;
   acceptPendingRemoteUpdate: () => void;
   dismissPendingRemoteUpdate: () => void;
   clearActiveContent: () => Promise<void>;
@@ -169,6 +201,135 @@ function flushPendingPersist(): void {
   }
 }
 
+let streamDeletingTimer: ReturnType<typeof setTimeout> | null = null;
+let streamTypingTimer: ReturnType<typeof setInterval> | null = null;
+let streamFadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearStreamTimers(): void {
+  if (streamDeletingTimer) {
+    clearTimeout(streamDeletingTimer);
+    streamDeletingTimer = null;
+  }
+  if (streamTypingTimer) {
+    clearInterval(streamTypingTimer);
+    streamTypingTimer = null;
+  }
+  if (streamFadingTimer) {
+    clearTimeout(streamFadingTimer);
+    streamFadingTimer = null;
+  }
+}
+
+function buildStreamState(
+  noteId: string,
+  event: NotesUpdateEvent,
+): NoteStreamState {
+  const segments = diffLines(event.previous, event.next);
+  let totalAddedChars = 0;
+  for (const segment of segments) {
+    if (segment.kind === "added") {
+      for (const line of segment.lines) {
+        totalAddedChars += line.length;
+      }
+      totalAddedChars += Math.max(segment.lines.length - 1, 0);
+    }
+  }
+  const ticks = Math.max(1, Math.floor(STREAM_TYPING_BUDGET_MS / STREAM_TYPING_TICK_MS));
+  const charsPerTick = Math.max(
+    STREAM_TYPING_MIN_CHARS_PER_TICK,
+    Math.ceil(totalAddedChars / ticks),
+  );
+  return {
+    noteId,
+    mode: event.mode,
+    baseContent: event.previous,
+    targetContent: event.next,
+    segments,
+    totalAddedChars,
+    charsPerTick,
+    typedChars: 0,
+    phase: "deleting",
+    startedAt: Date.now(),
+  };
+}
+
+function commitStreamingUpdate(streaming: NoteStreamState): void {
+  const state = useNotesStore.getState();
+  if (!state.activeId || state.activeId !== streaming.noteId) {
+    useNotesStore.setState({ streaming: null });
+    return;
+  }
+  const active = state.items[streaming.noteId];
+  if (!active) {
+    useNotesStore.setState({ streaming: null });
+    return;
+  }
+  flushPendingPersist();
+  const safe = clampContent(streaming.targetContent);
+  const titleIsAuto = active.titleIsAuto;
+  const nextTitle = titleIsAuto ? deriveAutoNoteTitle(safe) : active.title;
+  const next: NoteRecord = {
+    ...active,
+    content: safe,
+    title: nextTitle,
+    updatedAt: Date.now(),
+  };
+  useNotesStore.setState((current) => ({
+    items: { ...current.items, [next.id]: next },
+    order: buildOrder({ ...current.items, [next.id]: next }),
+    pendingRemoteUpdate: null,
+    isDirty: false,
+    streaming: null,
+  }));
+  void persistNote(next);
+}
+
+function scheduleStreamFade(streaming: NoteStreamState): void {
+  clearStreamTimers();
+  useNotesStore.setState({ streaming: { ...streaming, phase: "fading" } });
+  streamFadingTimer = setTimeout(() => {
+    streamFadingTimer = null;
+    const current = useNotesStore.getState().streaming;
+    if (!current || current.startedAt !== streaming.startedAt) {
+      return;
+    }
+    commitStreamingUpdate(current);
+  }, STREAM_FADE_MS);
+}
+
+function tickStreamTyping(): void {
+  const current = useNotesStore.getState().streaming;
+  if (!current || current.phase !== "typing") {
+    if (streamTypingTimer) {
+      clearInterval(streamTypingTimer);
+      streamTypingTimer = null;
+    }
+    return;
+  }
+  const nextTyped = Math.min(
+    current.totalAddedChars,
+    current.typedChars + current.charsPerTick,
+  );
+  const updated: NoteStreamState = { ...current, typedChars: nextTyped };
+  useNotesStore.setState({ streaming: updated });
+  if (nextTyped >= current.totalAddedChars) {
+    if (streamTypingTimer) {
+      clearInterval(streamTypingTimer);
+      streamTypingTimer = null;
+    }
+    scheduleStreamFade(updated);
+  }
+}
+
+function startStreamTyping(streaming: NoteStreamState): void {
+  if (streaming.totalAddedChars === 0) {
+    scheduleStreamFade({ ...streaming, phase: "fading" });
+    return;
+  }
+  useNotesStore.setState({ streaming: { ...streaming, phase: "typing" } });
+  streamTypingTimer = setInterval(tickStreamTyping, STREAM_TYPING_TICK_MS);
+}
+
 export const useNotesStore = create<NotesState>()((set, get) => ({
   items: {},
   order: [],
@@ -177,9 +338,11 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
   isEditingContent: false,
   isDirty: false,
   pendingRemoteUpdate: null,
+  streaming: null,
 
   hydrateFromLocalState: (snapshot) => {
     flushPendingPersist();
+    clearStreamTimers();
     const incoming = (snapshot ?? null) as NotesSnapshot | null;
     if (!incoming || !Array.isArray(incoming.items)) {
       set({
@@ -189,6 +352,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
         isEditingContent: false,
         isDirty: false,
         pendingRemoteUpdate: null,
+        streaming: null,
       });
       return;
     }
@@ -211,11 +375,13 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
       isEditingContent: false,
       isDirty: false,
       pendingRemoteUpdate: null,
+      streaming: null,
     });
   },
 
   resetForAccount: () => {
     flushPendingPersist();
+    clearStreamTimers();
     set({
       items: {},
       order: [],
@@ -224,6 +390,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
       isEditingContent: false,
       isDirty: false,
       pendingRemoteUpdate: null,
+      streaming: null,
     });
   },
 
@@ -232,6 +399,13 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
   },
 
   setIsEditingContent: (value) => {
+    if (value) {
+      const current = get().streaming;
+      if (current) {
+        clearStreamTimers();
+        commitStreamingUpdate(current);
+      }
+    }
     set({ isEditingContent: value });
     if (!value) {
       set({ isDirty: false });
@@ -245,12 +419,14 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
       return;
     }
     flushPendingPersist();
+    clearStreamTimers();
     set({
       activeId: id,
       view: "detail",
       isEditingContent: false,
       isDirty: false,
       pendingRemoteUpdate: null,
+      streaming: null,
     });
     const api = getElectronNotesApi();
     if (api?.localStateSetActiveNote) {
@@ -294,6 +470,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
 
   deleteNote: async (id) => {
     flushPendingPersist();
+    clearStreamTimers();
     const api = getElectronNotesApi();
     if (!api?.localStateDeleteNote) {
       return;
@@ -319,6 +496,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
           isEditingContent: false,
           isDirty: false,
           pendingRemoteUpdate: null,
+          streaming: null,
         };
       });
     } catch (error) {
@@ -392,6 +570,7 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
       return;
     }
     flushPendingPersist();
+    clearStreamTimers();
     const titleIsAuto = active.titleIsAuto;
     const nextTitle = titleIsAuto ? deriveAutoNoteTitle(safe) : active.title;
     const next: NoteRecord = {
@@ -405,8 +584,68 @@ export const useNotesStore = create<NotesState>()((set, get) => ({
       order: buildOrder({ ...current.items, [next.id]: next }),
       pendingRemoteUpdate: null,
       isDirty: false,
+      streaming: null,
     }));
     void persistNote(next);
+  },
+
+  streamRemoteUpdate: (event) => {
+    const state = get();
+    if (!state.activeId) {
+      return;
+    }
+    const active = state.items[state.activeId];
+    if (!active) {
+      return;
+    }
+    if (state.isEditingContent && state.isDirty) {
+      console.warn(
+        "[notes] received notes_update while user is editing — backend should have rejected; ignoring",
+      );
+      return;
+    }
+    if (state.streaming) {
+      clearStreamTimers();
+      commitStreamingUpdate(state.streaming);
+    }
+    const safeNext = clampContent(event.next);
+    const streaming = buildStreamState(state.activeId, {
+      mode: event.mode,
+      previous: active.content,
+      next: safeNext,
+    });
+    set({ streaming });
+    streamDeletingTimer = setTimeout(() => {
+      streamDeletingTimer = null;
+      const current = useNotesStore.getState().streaming;
+      if (!current || current.startedAt !== streaming.startedAt) {
+        return;
+      }
+      startStreamTyping(current);
+    }, STREAM_DELETE_MS);
+  },
+
+  reconcileRemoteUpdate: (content) => {
+    const state = get();
+    const safe = clampContent(content);
+    const streaming = state.streaming;
+    if (streaming && streaming.targetContent === safe) {
+      return;
+    }
+    if (streaming) {
+      clearStreamTimers();
+    }
+    state.applyRemoteUpdate(safe);
+  },
+
+  cancelStream: () => {
+    const state = get();
+    const streaming = state.streaming;
+    if (!streaming) {
+      return;
+    }
+    clearStreamTimers();
+    commitStreamingUpdate(streaming);
   },
 
   acceptPendingRemoteUpdate: () => {

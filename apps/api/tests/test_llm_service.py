@@ -8,6 +8,12 @@ from collections.abc import AsyncIterator
 from apps.api.core.config import LLMProviderConfig, Settings
 from apps.api.schemas.chat import ChatMessageRequest, ChatReplyRequest
 from apps.api.services.llm import LLMService
+from apps.api.services.tools import ToolExecutor
+
+
+class _NullRepo:
+    def __getattr__(self, name: str):
+        raise AssertionError(f"Notes tool tests should not query repository: {name}")
 
 
 def _build_service(settings: Settings) -> LLMService:
@@ -684,3 +690,276 @@ def test_streaming_deepseek_reasoning_delta_and_tool_replay(monkeypatch) -> None
     )
     assert replayed_assistant["reasoning_content"] == "先看榜单。"
     assert replayed_assistant["tool_calls"]
+
+
+def test_streaming_interleaves_text_and_tool_across_rounds(monkeypatch) -> None:
+    """每一轮 LLM 调用都先吐 content delta 再发 tool_calls，最终事件流按时序交错。"""
+    request_count = {"value": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["value"] += 1
+        round_index = request_count["value"]
+        if round_index == 1:
+            tool_args = json.dumps({"exam_id": 32})
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=_SseStream(
+                    [
+                        'data: {"choices":[{"delta":{"content":"先瞅瞅"}}]}\n\n',
+                        'data: {"choices":[{"delta":{"content":"画像哈"}}]}\n\n',
+                        (
+                            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                            '"id":"call_1","type":"function","function":{'
+                            '"name":"get_exam_participant_metrics","arguments":'
+                            f"{json.dumps(tool_args)}"
+                            "}}]}}]}\n\n"
+                        ),
+                        "data: [DONE]\n\n",
+                    ]
+                ),
+            )
+        if round_index == 2:
+            tool_args = json.dumps({"exam_id": 32})
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=_SseStream(
+                    [
+                        'data: {"choices":[{"delta":{"content":"再翻下"}}]}\n\n',
+                        (
+                            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                            '"id":"call_2","type":"function","function":{'
+                            '"name":"get_exam_submissions","arguments":'
+                            f"{json.dumps(tool_args)}"
+                            "}}]}}]}\n\n"
+                        ),
+                        "data: [DONE]\n\n",
+                    ]
+                ),
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_SseStream(
+                [
+                    'data: {"choices":[{"delta":{"content":"分析完了"}}]}\n\n',
+                    "data: [DONE]\n\n",
+                ]
+            ),
+        )
+
+    transport = httpx.MockTransport(handler)
+    settings = Settings()
+    settings.llm.active_provider = "deepseek"
+    settings.llm.providers["deepseek"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="deepseek-v4-flash",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
+    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "test-key")
+
+    async def run_case() -> list[dict[str, object]]:
+        async with httpx.AsyncClient(transport=transport) as client:
+            service = LLMService(settings=settings, http_client=client)
+            events: list[dict[str, object]] = []
+            async for event in service.stream_reply(
+                ChatReplyRequest(
+                    messages=[ChatMessageRequest(role="user", content="看看考试")],
+                    summary="",
+                ),
+                system_prompt="test prompt",
+                tool_executor=FakeToolExecutor(),  # type: ignore[arg-type]
+            ):
+                events.append(event)
+            return events
+
+    events = asyncio.run(run_case())
+
+    # Filter out meta/done so we can assert on the streaming-segment ordering.
+    timeline = [
+        event["type"]
+        for event in events
+        if event.get("type")
+        in {"delta", "tool_activity_start", "tool_activity_done"}
+    ]
+
+    # First round: two text deltas, then a tool start+done.
+    # Second round: one text delta, then a tool start+done.
+    # Final round: one text delta.
+    expected_prefix = [
+        "delta",
+        "delta",
+        "tool_activity_start",
+        "tool_activity_done",
+        "delta",
+        "tool_activity_start",
+        "tool_activity_done",
+        "delta",
+    ]
+    assert timeline == expected_prefix, timeline
+
+    delta_texts = [event["text"] for event in events if event.get("type") == "delta"]
+    assert delta_texts == ["先瞅瞅", "画像哈", "再翻下", "分析完了"]
+    assert events[-1]["type"] == "done"
+    assert events[-1]["reply"] == "先瞅瞅画像哈再翻下分析完了"
+
+
+def test_streaming_emits_notes_update_before_tool_activity_done(monkeypatch) -> None:
+    request_count = {"value": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["value"] += 1
+        if request_count["value"] == 1:
+            tool_args = json.dumps({"mode": "replace", "content": "新版笔记"})
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=_SseStream(
+                    [
+                        (
+                            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                            '"id":"call_notes_1","type":"function","function":{'
+                            '"name":"update_notes","arguments":'
+                            f"{json.dumps(tool_args)}"
+                            "}}]}}]}\n\n"
+                        ),
+                        "data: [DONE]\n\n",
+                    ]
+                ),
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_SseStream(
+                [
+                    'data: {"choices":[{"delta":{"content":"已更新"}}]}\n\n',
+                    "data: [DONE]\n\n",
+                ]
+            ),
+        )
+
+    transport = httpx.MockTransport(handler)
+    settings = Settings()
+    settings.llm.active_provider = "deepseek"
+    settings.llm.providers["deepseek"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="deepseek-v4-flash",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
+    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "test-key")
+
+    async def run_case() -> list[dict[str, object]]:
+        async with httpx.AsyncClient(transport=transport) as client:
+            service = LLMService(settings=settings, http_client=client)
+            tool_executor = ToolExecutor(
+                repository=_NullRepo(),  # type: ignore[arg-type]
+                identity=None,
+                notes_content="旧版笔记",
+                notes_title="学习笔记",
+            )
+            events: list[dict[str, object]] = []
+            async for event in service.stream_reply(
+                ChatReplyRequest(
+                    messages=[ChatMessageRequest(role="user", content="更新笔记")],
+                    summary="",
+                ),
+                system_prompt="test prompt",
+                tool_executor=tool_executor,
+            ):
+                events.append(event)
+            return events
+
+    events = asyncio.run(run_case())
+
+    types_in_order = [event.get("type") for event in events]
+    notes_index = types_in_order.index("notes_update")
+    done_index = types_in_order.index("tool_activity_done")
+    assert notes_index < done_index, types_in_order
+
+    notes_event = events[notes_index]
+    assert notes_event["mode"] == "replace"
+    assert notes_event["previous"] == "旧版笔记"
+    assert notes_event["next"] == "新版笔记"
+    assert notes_event["patch"] is None
+
+    final = events[-1]
+    assert final["type"] == "done"
+    assert final.get("updatedNotes") == "新版笔记"
+
+
+def test_streaming_skips_notes_update_when_locked(monkeypatch) -> None:
+    request_count = {"value": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["value"] += 1
+        if request_count["value"] == 1:
+            tool_args = json.dumps({"mode": "replace", "content": "新版笔记"})
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=_SseStream(
+                    [
+                        (
+                            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                            '"id":"call_notes_1","type":"function","function":{'
+                            '"name":"update_notes","arguments":'
+                            f"{json.dumps(tool_args)}"
+                            "}}]}}]}\n\n"
+                        ),
+                        "data: [DONE]\n\n",
+                    ]
+                ),
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_SseStream(
+                [
+                    'data: {"choices":[{"delta":{"content":"好的"}}]}\n\n',
+                    "data: [DONE]\n\n",
+                ]
+            ),
+        )
+
+    transport = httpx.MockTransport(handler)
+    settings = Settings()
+    settings.llm.active_provider = "deepseek"
+    settings.llm.providers["deepseek"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="deepseek-v4-flash",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
+    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "test-key")
+
+    async def run_case() -> tuple[list[dict[str, object]], ToolExecutor]:
+        async with httpx.AsyncClient(transport=transport) as client:
+            service = LLMService(settings=settings, http_client=client)
+            tool_executor = ToolExecutor(
+                repository=_NullRepo(),  # type: ignore[arg-type]
+                identity=None,
+                notes_content="旧版笔记",
+                notes_locked=True,
+            )
+            events: list[dict[str, object]] = []
+            async for event in service.stream_reply(
+                ChatReplyRequest(
+                    messages=[ChatMessageRequest(role="user", content="更新笔记")],
+                    summary="",
+                ),
+                system_prompt="test prompt",
+                tool_executor=tool_executor,
+            ):
+                events.append(event)
+            return events, tool_executor
+
+    events, executor = asyncio.run(run_case())
+
+    assert not any(event.get("type") == "notes_update" for event in events)
+    assert any(event.get("type") == "tool_activity_error" for event in events)
+    assert executor.notes_content == "旧版笔记"
+    assert executor.pending_notes_update is None
+    assert events[-1].get("updatedNotes") is None

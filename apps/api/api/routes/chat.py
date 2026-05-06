@@ -195,6 +195,7 @@ async def _prepare_chat_runtime(
         identity=identity,
         notes_content=payload.notes,
         notes_title=payload.notesTitle,
+        notes_locked=payload.notesLocked,
     )
     return effective_payload, identity, system_prompt, tool_executor
 
@@ -261,6 +262,7 @@ async def chat_reply(
         identity=identity,
         notes_content=payload.notes,
         notes_title=payload.notesTitle,
+        notes_locked=payload.notesLocked,
     )
 
     # ── 5. Generate LLM reply ──
@@ -420,6 +422,7 @@ async def chat_auto_analysis(
         roleSystemPrompt=role_system_prompt,
         notes=payload.notes,
         notesTitle=payload.notesTitle,
+        notesLocked=payload.notesLocked,
     )
 
     # ── 5. Generate reply with tools ──
@@ -428,6 +431,7 @@ async def chat_auto_analysis(
         identity=identity,
         notes_content=payload.notes,
         notes_title=payload.notesTitle,
+        notes_locked=payload.notesLocked,
     )
     result = await llm_service.generate_reply(
         synthetic_request,
@@ -565,12 +569,14 @@ async def chat_auto_analysis_stream(
                 roleSystemPrompt=role_system_prompt,
                 notes=payload.notes,
                 notesTitle=payload.notesTitle,
+                notesLocked=payload.notesLocked,
             )
             tool_executor = ToolExecutor(
                 repository=repository,
                 identity=identity,
                 notes_content=payload.notes,
                 notes_title=payload.notesTitle,
+                notes_locked=payload.notesLocked,
             )
             final_reply = ""
             final_provider = "server_default"

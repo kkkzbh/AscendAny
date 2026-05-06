@@ -130,6 +130,7 @@ export interface ChatReplyRequestPayload {
   roleSystemPrompt?: string;
   notes?: string;
   notesTitle?: string;
+  notesLocked?: boolean;
 }
 
 export interface AutoAnalysisRequestPayload {
@@ -141,6 +142,7 @@ export interface AutoAnalysisRequestPayload {
   latestExamId?: string;
   notes?: string;
   notesTitle?: string;
+  notesLocked?: boolean;
 }
 
 export interface AutoAnalysisResponsePayload {
@@ -173,6 +175,13 @@ export type ChatStreamEvent =
       activityId: string;
       label: string;
       status: "running" | "done" | "error";
+    }
+  | {
+      type: "notes_update";
+      mode: "patch" | "replace";
+      previous: string;
+      next: string;
+      patch: string | null;
     }
   | {
       type: "done";
@@ -674,6 +683,21 @@ async function streamJsonEvents(
               : "done";
       if (activityId && label) {
         onEvent({ type, activityId, label, status });
+      }
+    } else if (type === "notes_update") {
+      const mode = parsed.mode === "patch" || parsed.mode === "replace" ? parsed.mode : null;
+      if (
+        mode
+        && typeof parsed.previous === "string"
+        && typeof parsed.next === "string"
+      ) {
+        onEvent({
+          type: "notes_update",
+          mode,
+          previous: parsed.previous,
+          next: parsed.next,
+          patch: typeof parsed.patch === "string" ? parsed.patch : null,
+        });
       }
     } else if (type === "tool_start" || type === "tool_done") {
       return;
