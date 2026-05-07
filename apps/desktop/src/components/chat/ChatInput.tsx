@@ -1,16 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  getApiErrorMessage,
-  streamChatReply,
-  type ChatMessagePayload,
-} from "@/lib/api";
-import { useAuthStore } from "@/stores/authStore";
+import { useCallback, useEffect, useRef } from "react";
 import { useChatStore } from "@/stores/chatStore";
-import { useNotesStore } from "@/stores/notesStore";
-import { useSettingsStore } from "@/stores/settingsStore";
-import { useCustomRoleStore } from "@/stores/customRoleStore";
-import { findRole } from "@/types/role";
-import type { ChatMessage } from "@/types/chat";
+import {
+  toOutboundChatMessage,
+  useChatStreamSender,
+} from "@/hooks/useChatStreamSender";
+
+export { toOutboundChatMessage };
 
 export interface ChatInputProps {
   showClearButton?: boolean;
@@ -18,58 +13,21 @@ export interface ChatInputProps {
   sendLabel?: string;
 }
 
-function normalizeIdentifier(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-export function toOutboundChatMessage(message: ChatMessage): ChatMessagePayload | null {
-  if (message.role === "system") return null;
-  const content = message.content.trim();
-  if (!content) return null;
-  const payload: ChatMessagePayload = {
-    role: message.role,
-    content,
-  };
-  const reasoningContent = message.reasoningContent?.trim();
-  if (message.role === "assistant" && reasoningContent) {
-    payload.reasoningContent = reasoningContent;
-  }
-  return payload;
-}
-
 export function ChatInput({
   showClearButton = false,
   sendVariant = "icon",
   sendLabel = "发送",
 }: ChatInputProps = {}) {
-  const [isSending, setIsSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { isBlocked, sendManual } = useChatStreamSender();
 
   const text = useChatStore((s) =>
     s.activeSessionId
       ? s.sessions.find((session) => session.id === s.activeSessionId)?.draft ?? ""
       : s.newSessionDraft,
   );
-  const addMessage = useChatStore((s) => s.addMessage);
   const setText = useChatStore((s) => s.setCurrentDraft);
-  const createAssistantDraft = useChatStore((s) => s.createAssistantDraft);
-  const appendMessageContent = useChatStore((s) => s.appendMessageContent);
-  const appendMessageReasoning = useChatStore((s) => s.appendMessageReasoning);
-  const upsertMessageToolActivity = useChatStore((s) => s.upsertMessageToolActivity);
-  const finalizeMessageReasoning = useChatStore((s) => s.finalizeMessageReasoning);
-  const finalizeMessage = useChatStore((s) => s.finalizeMessage);
-  const removeMessage = useChatStore((s) => s.removeMessage);
   const clearContext = useChatStore((s) => s.clearContext);
-  const setSummary = useChatStore((s) => s.setSummary);
-  const isAiWorking = useChatStore((s) => s.isAiWorking);
-  const startAiWork = useChatStore((s) => s.startAiWork);
-  const finishAiWork = useChatStore((s) => s.finishAiWork);
-
-  const account = useAuthStore((s) => s.account);
-  const accessToken = useAuthStore((s) => s.accessToken);
-  const activeRole = useSettingsStore((s) => s.activeRole);
-  const customRoles = useCustomRoleStore((s) => s.customRoles);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -80,193 +38,25 @@ export function ChatInput({
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || isSending || isAiWorking) return;
-    const roleIdAtSend = activeRole;
-    const roleAtSend = findRole(roleIdAtSend, customRoles);
-
-    setIsSending(true);
-    const workTaskId = startAiWork("manual");
-
-    addMessage("user", trimmed);
+    if (!trimmed || isBlocked) return;
     setText("");
 
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
 
-    try {
-      const latestSession = useChatStore.getState().getActiveSession();
-      if (!latestSession) {
-        throw new Error("未能创建对话，请重试。");
-      }
-      const messages: ChatMessagePayload[] = latestSession.messages
-        .map(toOutboundChatMessage)
-        .filter((message): message is ChatMessagePayload => message !== null);
-
-      let draftMessageId: string | null = null;
-      let workFinishedForOutput = false;
-      let bufferedText = "";
-      let bufferedReasoning = "";
-      let rafId = 0;
-      const flush = () => {
-        rafId = 0;
-        if (!draftMessageId) return;
-        if (bufferedReasoning) {
-          const nextReasoning = bufferedReasoning;
-          bufferedReasoning = "";
-          appendMessageReasoning(draftMessageId, nextReasoning);
-        }
-        if (bufferedText) {
-          const next = bufferedText;
-          bufferedText = "";
-          appendMessageContent(draftMessageId, next);
-        }
-      };
-      const flushReasoning = () => {
-        if (!draftMessageId || !bufferedReasoning) return;
-        const nextReasoning = bufferedReasoning;
-        bufferedReasoning = "";
-        appendMessageReasoning(draftMessageId, nextReasoning);
-      };
-      const flushTextSync = () => {
-        if (!draftMessageId || !bufferedText) return;
-        const next = bufferedText;
-        bufferedText = "";
-        appendMessageContent(draftMessageId, next);
-      };
-      const ensureDraft = () => {
-        if (!draftMessageId) {
-          draftMessageId = createAssistantDraft(roleIdAtSend);
-        }
-        if (!workFinishedForOutput) {
-          finishAiWork(workTaskId);
-          workFinishedForOutput = true;
-        }
-        return draftMessageId;
-      };
-
-      const notesState = useNotesStore.getState();
-      const activeNote = notesState.activeId ? notesState.items[notesState.activeId] ?? null : null;
-      const notesLocked = notesState.isEditingContent && notesState.isDirty;
-      await streamChatReply({
-          studentId: normalizeIdentifier(account?.studentId ?? ""),
-          ptaNickname: normalizeIdentifier(account?.ptaNickname ?? ""),
-          messages,
-          summary: latestSession.summary,
-          roleId: roleIdAtSend,
-          roleName: roleAtSend.name,
-          roleSystemPrompt: roleAtSend.systemPromptExtra || undefined,
-          notes: activeNote?.content ?? "",
-          notesTitle: activeNote?.title ?? "",
-          notesLocked,
-        },
-        accessToken ?? undefined,
-        (event) => {
-          if (event.type === "delta" && event.text) {
-            const activeDraftId = ensureDraft();
-            flushReasoning();
-            finalizeMessageReasoning(activeDraftId);
-            bufferedText += event.text;
-            if (!rafId) {
-              rafId = window.requestAnimationFrame(flush);
-            }
-            return;
-          }
-          if (event.type === "reasoning_delta" && event.text) {
-            ensureDraft();
-            bufferedReasoning += event.text;
-            if (!rafId) {
-              rafId = window.requestAnimationFrame(flush);
-            }
-            return;
-          }
-          if (
-            event.type === "tool_activity_start" ||
-            event.type === "tool_activity_done" ||
-            event.type === "tool_activity_error"
-          ) {
-            const activeDraftId = ensureDraft();
-            flushReasoning();
-            finalizeMessageReasoning(activeDraftId);
-            flushTextSync();
-            upsertMessageToolActivity(activeDraftId, {
-              id: event.activityId,
-              label: event.label,
-              status: event.status,
-            });
-            return;
-          }
-          if (event.type === "notes_update") {
-            useNotesStore.getState().streamRemoteUpdate({
-              mode: event.mode,
-              previous: event.previous,
-              next: event.next,
-            });
-            return;
-          }
-          if (event.type === "done") {
-            if (rafId) {
-              window.cancelAnimationFrame(rafId);
-              flush();
-            }
-            if (event.summary !== undefined && event.summary !== latestSession.summary) {
-              setSummary(event.summary);
-            }
-            if (typeof event.updatedNotes === "string") {
-              useNotesStore.getState().reconcileRemoteUpdate(event.updatedNotes);
-            }
-            if (draftMessageId) {
-              if (!event.reply.trim()) {
-                removeMessage(draftMessageId);
-              } else {
-                finalizeMessage(draftMessageId);
-              }
-            } else if (event.reply.trim()) {
-              const id = createAssistantDraft(roleIdAtSend);
-              appendMessageContent(id, event.reply);
-              finalizeMessage(id);
-            }
-            return;
-          }
-          if (event.type === "error") {
-            throw new Error(event.message);
-          }
-        },
-      );
-    } catch (error) {
-      addMessage(
-        "system",
-        getApiErrorMessage(error, "请求失败，请检查后端服务后重试。"),
-      );
-    } finally {
-      setIsSending(false);
-      finishAiWork(workTaskId);
-    }
+    await sendManual(trimmed);
   }, [
     text,
-    isSending,
-    isAiWorking,
-    activeRole,
-    customRoles,
-    addMessage,
-    createAssistantDraft,
-    appendMessageContent,
-    appendMessageReasoning,
-    finalizeMessageReasoning,
-    finalizeMessage,
-    removeMessage,
-    account?.studentId,
-    account?.ptaNickname,
-    accessToken,
-    setSummary,
-    startAiWork,
-    finishAiWork,
+    isBlocked,
+    sendManual,
+    setText,
   ]);
 
   const handleClear = useCallback(() => {
-    if (isSending || isAiWorking) return;
+    if (isBlocked) return;
     clearContext();
-  }, [clearContext, isSending, isAiWorking]);
+  }, [clearContext, isBlocked]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -307,7 +97,7 @@ export function ChatInput({
           {showClearButton && (
             <button
               onClick={handleClear}
-              disabled={isSending || isAiWorking}
+              disabled={isBlocked}
               className="ui-icon-button"
               title="清空上下文"
             >
@@ -328,9 +118,9 @@ export function ChatInput({
           )}
           <button
             onClick={handleSend}
-            disabled={!text.trim() || isSending || isAiWorking}
+            disabled={!text.trim() || isBlocked}
             className={sendButtonClassName}
-            title={isAiWorking ? "助手处理中" : sendLabel}
+            title={isBlocked ? "助手处理中" : sendLabel}
           >
             {sendVariant === "pill" ? (
               <span>{sendLabel}</span>

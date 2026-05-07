@@ -15,6 +15,7 @@ import { HelpDrawer } from "../components/HelpDrawer";
 /* ── Exam type display mapping ────────────────────────── */
 
 const EXAM_TYPE_LABELS: Record<string, { label: string; icon: string }> = {
+  pintia: { label: "Pintia JSON", icon: "⬆" },
   datastructure: { label: "数据结构月测", icon: "📚" },
   pta_icpc: { label: "PTA ICPC 题目集", icon: "🏆" },
   pta_ioi: { label: "PTA IOI 题目集", icon: "📝" },
@@ -102,10 +103,10 @@ export function ConsolePage({ account, onLogout }: Props) {
     setDragOver(false);
 
     const files = Array.from(e.dataTransfer.files).filter(
-      (f) => f.name.toLowerCase().endsWith(".zip"),
+      (f) => f.name.toLowerCase().endsWith(".json") || f.name.toLowerCase().endsWith(".zip"),
     );
     if (files.length === 0) {
-      setUploadError("请拖入 .zip 文件");
+      setUploadError("请拖入 Pintia .json 或旧格式 .zip 文件");
       return;
     }
 
@@ -217,7 +218,7 @@ export function ConsolePage({ account, onLogout }: Props) {
 
           {/* Exam type selector */}
           <div className="upload-type-selector">
-            <label className="upload-label">考试类型</label>
+            <label className="upload-label">旧 ZIP 类型</label>
             <select
               className="upload-select"
               value={selectedType}
@@ -241,7 +242,7 @@ export function ConsolePage({ account, onLogout }: Props) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".zip"
+              accept=".json,.zip"
               multiple
               style={{ display: "none" }}
               onChange={handleFileSelect}
@@ -257,8 +258,8 @@ export function ConsolePage({ account, onLogout }: Props) {
             ) : (
               <>
                 <span className="drop-zone-icon">📁</span>
-                <span className="drop-zone-text">拖入 .zip 文件</span>
-                <span className="drop-zone-hint">或点击选择文件</span>
+                <span className="drop-zone-text">拖入 Pintia JSON</span>
+                <span className="drop-zone-hint">也支持旧格式 ZIP</span>
               </>
             )}
           </div>
@@ -435,7 +436,7 @@ export function ConsolePage({ account, onLogout }: Props) {
                 <div className="log-body">
                   {stream.logs.length === 0 && (
                     <div className="log-empty">
-                      上传 .zip 后点击「开始增量导入」，日志将在此处实时显示...
+                      上传 Pintia JSON 后点击「开始增量导入」，日志将在此处实时显示...
                     </div>
                   )}
                   {stream.logs.map((log, i) => (

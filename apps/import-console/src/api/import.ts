@@ -7,6 +7,7 @@ import { apiFetch, getStoredToken, apiUrl } from "./client";
 // ── Types ────────────────────────────────────────────────
 
 export const EXAM_TYPES = [
+  { value: "pintia", label: "Pintia JSON" },
   { value: "datastructure", label: "数据结构" },
   { value: "pta_icpc", label: "PTA ICPC" },
   { value: "pta_ioi", label: "PTA IOI" },
@@ -61,7 +62,7 @@ export interface IngestHistoryResponse {
 // ── API calls ────────────────────────────────────────────
 
 /**
- * Upload a .zip file with the given exam type.
+ * Upload a Pintia JSON file or a legacy .zip file with the given exam type.
  * Uses raw fetch (FormData) since apiFetch auto-sets Content-Type.
  */
 export async function uploadExamZip(
@@ -107,7 +108,9 @@ export async function uploadExamZip(
 
     const form = new FormData();
     form.append("file", file);
-    form.append("examType", examType);
+    if (!file.name.toLowerCase().endsWith(".json")) {
+      form.append("examType", examType);
+    }
     xhr.send(form);
   });
 }

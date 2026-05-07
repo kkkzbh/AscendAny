@@ -4,7 +4,6 @@ import argparse
 import csv
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,15 +12,14 @@ from typing import Any
 import psycopg
 
 from ..config import load_db_config
-
-_SPLIT_RE = re.compile(r"[,，;；|/]+")
-_SPACE_RE = re.compile(r"\s+")
+from ..knowledge import RejectedKnowledgeTag, canonicalize_knowledge_tags
 
 
 @dataclass(frozen=True)
 class PracticeProblemTagsRow:
     practice_problem_id: str
     tags: list[str]
+    rejected_tags: list[RejectedKnowledgeTag]
     source_hash: str
     meta: dict[str, Any]
 
@@ -32,40 +30,13 @@ def _clean(value: Any) -> str:
     return str(value).strip().rstrip("\t").strip()
 
 
-def _normalize_tag(value: Any) -> str | None:
-    tag = _SPACE_RE.sub(" ", _clean(value))
-    if not tag or len(tag) > 64:
-        return None
-    if any(ord(ch) < 32 for ch in tag):
-        return None
-    return tag
-
-
 def _parse_tags(value: Any) -> list[str]:
-    if isinstance(value, list):
-        raw_items = value
-    else:
-        text = _clean(value)
-        if not text:
-            raw_items = []
-        elif text.startswith("["):
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError:
-                raw_items = _SPLIT_RE.split(text)
-            else:
-                raw_items = parsed if isinstance(parsed, list) else [parsed]
-        else:
-            raw_items = _SPLIT_RE.split(text)
-    tags: list[str] = []
-    seen: set[str] = set()
-    for item in raw_items:
-        tag = _normalize_tag(item)
-        if tag is None or tag in seen:
-            continue
-        tags.append(tag)
-        seen.add(tag)
-    return tags
+    return canonicalize_knowledge_tags(value).tags
+
+
+def _parse_tags_with_rejections(value: Any) -> tuple[list[str], list[RejectedKnowledgeTag]]:
+    normalized = canonicalize_knowledge_tags(value)
+    return normalized.tags, normalized.rejected
 
 
 def _source_hash(problem_id: str, tags: list[str]) -> str:
@@ -87,15 +58,20 @@ def _read_mapping(path: Path) -> list[PracticeProblemTagsRow]:
         problem_id = _clean(raw_problem_id)
         if not problem_id:
             continue
-        tags = _parse_tags(raw_tags)
+        tags, rejected_tags = _parse_tags_with_rejections(raw_tags)
         rows.append(
             PracticeProblemTagsRow(
                 practice_problem_id=problem_id,
                 tags=tags,
+                rejected_tags=rejected_tags,
                 source_hash=_source_hash(problem_id, tags),
                 meta={
                     "legacy_imported_at": imported_at,
                     "legacy_source": str(path),
+                    "rejected_tags": [
+                        {"value": item.value, "reason": item.reason}
+                        for item in rejected_tags
+                    ],
                 },
             )
         )
@@ -107,27 +83,12 @@ def _existing_practice_problem_ids(conn: psycopg.Connection) -> set[str]:
         cur.execute(
             """
             SELECT DISTINCT
-                COALESCE(
-                    NULLIF(s.raw->>'global_problem_id', ''),
-                    NULLIF(s.raw->>'problem_id', ''),
-                    NULLIF(ep.meta->>'global_problem_id', ''),
-                    NULLIF(ep.meta->>'problem_id', ''),
-                    CASE
-                        WHEN COALESCE(s.problem_code, '') <> ''
-                         AND e.source_path LIKE e.exam_type || '/%'
-                        THEN replace(e.source_path, '/', '_') || '_' || s.problem_code
-                        WHEN COALESCE(s.problem_code, '') <> ''
-                        THEN e.exam_type || '_' || replace(e.source_path, '/', '_') || '_' || s.problem_code
-                        ELSE NULL
-                    END,
-                    NULLIF(s.problem_code, '')
-                ) AS practice_problem_id
+                epl.source_platform || ':' || epl.external_problem_id AS practice_problem_id
             FROM ascendany.submissions s
-            JOIN ascendany.exams e ON e.exam_id = s.exam_id
-            LEFT JOIN ascendany.exam_problems ep
-              ON ep.exam_id = s.exam_id
-             AND ep.problem_code = s.problem_code
-            WHERE COALESCE(s.problem_code, '') <> ''
+            JOIN ascendany.exam_problem_external_links epl
+              ON epl.exam_id = s.exam_id
+             AND epl.problem_set_problem_id = s.problem_code
+            WHERE s.student_id IS NOT NULL
             """
         )
         return {str(row[0]) for row in cur.fetchall() if row[0]}
@@ -184,6 +145,15 @@ def _write_report(
                 "matched_problem_rows": len(matched),
                 "unmatched_problem_rows": len(unmatched),
                 "unmatched_problem_ids": unmatched[:200],
+                "rejected_tags": [
+                    {
+                        "practice_problem_id": row.practice_problem_id,
+                        "value": item.value,
+                        "reason": item.reason,
+                    }
+                    for row in rows
+                    for item in row.rejected_tags
+                ],
             },
             ensure_ascii=False,
             indent=2,
@@ -225,6 +195,7 @@ def import_practice_problem_tags(
         "tag_rows": tag_count,
         "matched_problem_rows": len(matched),
         "unmatched_problem_rows": len(unmatched),
+        "rejected_tag_rows": sum(len(row.rejected_tags) for row in rows),
     }
     if report:
         _write_report(

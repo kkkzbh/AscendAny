@@ -1,0 +1,24 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "模拟"
+  ],
+  "created_at": "2026-01-24 19:21:43.894806",
+  "description": "# P5635 【CSGRound1】天下第一\n\n## 题目背景\n\n天下第一的 cbw 以主席的身份在 8102 年统治全宇宙后，开始了自己休闲的生活，并邀请自己的好友每天都来和他做游戏。由于 cbw 想要显出自己平易近人，所以 zhouwc 虽然是一个蒟蒻，也有能和 cbw 玩游戏的机会。\n\n## 题目描述\n\n游戏是这样的：\n\n给定两个数 $x$，$y$，与一个模数 $p$。\n\ncbw 拥有数 $x$，zhouwc 拥有数 $y$。\n\n第一个回合：$x\\leftarrow(x+y)\\bmod p$。\n\n第二个回合：$y\\leftarrow(x+y)\\bmod p$。\n\n第三个回合：$x\\leftarrow(x+y)\\bmod p$。\n\n第四个回合：$y\\leftarrow(x+y)\\bmod p$。\n\n以此类推....\n\n如果 $x$ 先到 $0$，则 cbw 胜利。如果 $y$ 先到 $0$，则 zhouwc 胜利。如果 $x,y$ 都不能到 $0$，则为平局。\n\ncbw 为了捍卫自己主席的尊严，想要提前知道游戏的结果，并且可以趁机动点手脚，所以他希望你来告诉他结果。\n\n## 输入格式\n\n有多组数据。\n\n第一行：$T$ 和 $p$ 表示一共有 $T$ 组数据且模数都为 $p$。\n\n以下 $T$ 行，每行两个数 $x,y$。\n\n## 输出格式\n\n共 $T$ 行\n\n$1$ 表示 cbw 获胜，$2$ 表示 zhouwc 获胜，```error``` 表示平局。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n1 10\n1 3\n```\n\n### 输出 #1\n\n```\nerror\n```\n\n## 输入输出样例 #2\n\n### 输入 #2\n\n```\n1 10\n4 5\n```\n\n### 输出 #2\n\n```\n1\n```\n\n## 说明/提示\n\n$1 \\leq T \\leq 200$。\n\n$1 \\leq x,y,p \\leq 10000$。",
+  "link": "https://www.luogu.com.cn/problem/P5635",
+  "pass_count": 5.4,
+  "problem_id": "bank_whrlg_P5635",
+  "raw_category_tags": "模拟",
+  "rejected_tags": [],
+  "solution_1": "这题一看，第一反应记忆化搜索。看完标签，坚定了信心（但洛谷标签很多时候都是骗人的）。\n\n记忆化搜索的好处：如果搜到以前的便无需再搜，直接返回。对每一个点最多只需找一次。极大的节省了时间。\n话不多说上一开始的代码，注释嘛，请您看下去。\n\n#include <cstdio>\n#include <iostream>\n#include <cmath>\n#include <algorithm>\nusing namespace std;\nint t,x,y,mod,book[10010][10010]; \nint rem(int x,int y)\n{\n if(book[x][y] == -1) return -1;\n if(book[x][y]) return book[x][y];\n book[x][y]=-1;\n if(!x) return book[x][y]=1;\n if(!y) return book[x][y]=2;\n int num=(x+y)%mod;\n return book[x][y]=rem(num,(num%mod+y)%mod); \n}\nint main()\n{\n scanf(\"%d %d\",&t,&mod);\n for(int i=0;i<t;i++) \n {\n  scanf(\"%d %d\",&x,&y); \n  int ans=rem(x,y);\n  if(ans == -1) puts(\"error\");\n  else if(ans == 1) puts(\"1\");\n  else puts(\"2\");\n }\n return 0;\n}\n\n为什么煤油注释？因为这个代码连窝本地编译都过不了！\n\n一看数据范围，这样肯定会炸呀！\n\n什么？连int都炸？那怎么办办呢？\n\n作者在深思熟虑一秒钟后，打开了度娘。\n\n原来还有个叫short的东西！！！\nshort只占用两个字节，而int需要4个。\n\n于是修改代码后就可以愉快地AC啦！\n\n#include <cstdio>\n#include <iostream>\n#include <cmath>\n#include <algorithm>\nusing namespace std;\nint t,x,y,mod;//定义\nshort book[10010][10010]; \nint rem(int x,int y)\n{\n if(book[x][y] == -1) return -1;//不行\n if(book[x][y]) return book[x][y];//如果之前搜到过\n book[x][y]=-1;//标记\n if(!x) return book[x][y]=1;//zhouwc赢\n if(!y) return book[x][y]=2;//cbw赢\n int num=(x+y)%mod;//num=处理后的x\n     //(num+y)%mod=处理后的y\n return book[x][y]=rem(num,(num%mod+y)%mod);//记忆化核心\n}\nint main()\n{\n scanf(\"%d %d\",&t,&mod);//读入\n for(int i=0;i<t;i++) \n {\n  scanf(\"%d %d\",&x,&y); \n  int ans=rem(x,y);//搜索\n         //输出\n  if(ans == -1) puts(\"error\");\n  else if(ans == 1) puts(\"1\");\n  else puts(\"2\");\n }\n return 0;\n}\n\n话说zhouwc说踏寄几是蒟蒻你信吗？\n\n写题解不易，点个赞好不好嘛。——滚去写作业之前还厚颜无耻要赞的作者",
+  "solution_2": "首先，看到这个方程就联想到了斐波那契数列。  \n实际上，这里采用的是暴力搜索方法，但需要判断循环，因此借助了斐波那契数列的性质。\n\n定义初始值：  \n x_0 = x ,  y_0 = y \n\n一次操作后：  \n x = x_0 + y_0 \\mod \\text{Mod}   \n\\( y = (x_0 + y_0) + y_0 = x_0 + 2y_0 \\mod \\text{Mod} \\)\n\n继续操作：  \n\\( x = (x_0 + y_0) + (x_0 + 2y_0) = 2x_0 + 3y_0 \\mod \\text{Mod} \\)  \n\\( y = (2x_0 + 3y_0) + (x_0 + 2y_0) = 3x_0 + 5y_0 \\mod \\text{Mod} \\)\n\n再次操作：  \n\\( x = (3x_0 + 5y_0) + (2x_0 + 3y_0) = 5x_0 + 8y_0 \\mod \\text{Mod} \\)  \n\\( y = (5x_0 + 8y_0) + (3x_0 + 5y_0) = 8x_0 + 13y_0 \\mod \\text{Mod} \\)\n\n……\n\n可以看出，系数构成了斐波那契数列。  \n由于斐波那契数列在模 Mod 下是循环的，因此  x, y  模 Mod 后的值也是循环的。  \n进一步可以证明，斐波那契数列模 Mod 确实存在循环节，所以 \\( (x, y) \\) 最终会回到初始值。\n\n这里采用斐波那契数列进行循环判断。  \n其他方面，数据不会超出 int 范围，且斐波那契数列模 10000 的循环节仅为 15000，因此可以放心进行暴力搜索。\n\n代码实现如下：\n#include <bits/stdc++.h>\nusing namespace std;\n\nint T, x, y, mod, a, b, c, n;  // a, b 存储斐波那契数列的值，c 用于辅助，其余变量如题意所示\n\nint main() {\n    cin >> T >> mod;\n    for (int i = 1; i <= T; ++i) {\n        cin >> x >> y;\n        if ((x + y) % mod == 0) {  // 初次判断\n            cout << 1 << endl;\n            continue;\n        }\n        a = 1;\n        b = 2;\n        n = 1;\n        while (a != 1 || b != 1) {  // 判断是否循环\n            n++;\n            c = b;\n            b = (a + b) % mod;\n            a = c;  // 更新斐波那契数列\n            if ((a * x + b * y) % mod == 0) {\n                cout << n % 2 + 1 << endl;\n                break;\n            }\n        }\n        if (a == 1 && b == 1)  // 特判\n            cout << \"error\\n\";\n    }\n}",
+  "source_hash": "7cc16d6c85f8dd612a8c474cc347d3c91d98dfecbfa22a9a837c716ffa47e5b7",
+  "source_meta": {
+    "legacy_id": 27,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 20.89,
+  "title": null
+}

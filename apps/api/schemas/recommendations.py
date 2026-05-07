@@ -63,3 +63,53 @@ class RecommendationRunItem(BaseModel):
 
 class RecommendationRunsResponse(BaseModel):
     items: list[RecommendationRunItem]
+
+
+class LearningPathStatusItem(BaseModel):
+    point: str
+    mastery: float = 0.0
+    attempted: int = 0
+    correct: int = 0
+    lastTriedAt: datetime | None = None
+
+
+class LearningPathStatusResponse(BaseModel):
+    studentEntityId: int
+    studentEntityIds: list[int]
+    items: list[LearningPathStatusItem] = Field(default_factory=list)
+
+
+class KnowledgeNodeRecentDay(BaseModel):
+    date: str
+    attempted: int = 0
+    correct: int = 0
+
+
+class KnowledgeNodeStats(BaseModel):
+    attempted: int = 0
+    correct: int = 0
+    accuracy: float = 0.0
+    lastTriedAt: datetime | None = None
+    recentSeries: list[KnowledgeNodeRecentDay] = Field(default_factory=list)
+
+
+class KnowledgeNodeProblem(BaseModel):
+    problemId: str
+    title: str | None = None
+    difficulty: float | None = None
+    knowledgePoints: list[str] = Field(default_factory=list)
+    score: float | None = None
+    reason: str | None = None
+
+
+class KnowledgeNodeDetailResponse(BaseModel):
+    point: str
+    level: str | None = None
+    parents: list[str] = Field(default_factory=list)
+    children: list[str] = Field(default_factory=list)
+    prerequisites: list[str] = Field(default_factory=list)
+    successors: list[str] = Field(default_factory=list)
+    description: str | None = None
+    mastery: float = 0.0
+    stats: KnowledgeNodeStats = Field(default_factory=KnowledgeNodeStats)
+    problems: list[KnowledgeNodeProblem] = Field(default_factory=list)

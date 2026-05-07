@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-path",
         action="append",
         default=None,
-        help="only process specific source_path(s), e.g. datastructure/2023秋学期第1次月测",
+        help="only process specific source_path(s), e.g. exports/pintia-unit.json",
     )
     run_parser.add_argument("--limit", type=int)
     run_parser.add_argument("--dry-run", action="store_true")

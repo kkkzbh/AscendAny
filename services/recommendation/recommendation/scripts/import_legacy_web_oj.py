@@ -8,6 +8,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import psycopg
 
@@ -17,6 +18,8 @@ from .import_legacy_problem_bank import (
     _to_problem,
     _upsert as _upsert_problem_bank,
 )
+
+BUNDLE_SCHEMA_VERSION = "legacy-web-oj.problem-bank.v1"
 
 
 def _clean(value: Any) -> str:
@@ -72,6 +75,123 @@ def _rows(path: Path | None) -> list[dict[str, Any]]:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             return [dict(row) for row in csv.DictReader(handle)]
     raise ValueError(f"unsupported input format: {path}")
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return raw
+
+
+def _read_jsonl_objects(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        item = json.loads(text)
+        if not isinstance(item, dict):
+            raise ValueError(f"{path} must contain one JSON object per non-empty line")
+        rows.append(item)
+    return rows
+
+
+def _read_bundle(
+    bundle_path: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    if not bundle_path.exists():
+        raise FileNotFoundError(bundle_path)
+    if not bundle_path.is_dir():
+        raise ValueError(f"bundle path must be a directory: {bundle_path}")
+
+    manifest_path = bundle_path / "manifest.json"
+    checksums_path = bundle_path / "checksums.sha256"
+    manifest = _read_json_object(manifest_path)
+    if manifest.get("schema_version") != BUNDLE_SCHEMA_VERSION:
+        raise ValueError(
+            f"unsupported bundle schema_version: {manifest.get('schema_version')!r}"
+        )
+    _verify_bundle_checksums(bundle_path, checksums_path)
+
+    problem_rows: list[dict[str, Any]] = []
+    problems_dir = bundle_path / "problems"
+    for path in sorted(problems_dir.glob("*.json")):
+        item = _read_json_object(path)
+        problem_id = _clean(item.get("problem_id")) or unquote(path.stem)
+        problem_rows.append(
+            {
+                "problem_id": problem_id,
+                "title": item.get("title"),
+                "description": item.get("description"),
+                "category_tags": item.get("raw_category_tags")
+                if item.get("raw_category_tags") is not None
+                else " ".join(str(tag) for tag in item.get("canonical_tags", [])),
+                "solution_1": item.get("solution_1"),
+                "solution_2": item.get("solution_2"),
+                "link": item.get("link"),
+                "active": item.get("active"),
+                "submission_count": item.get("submission_count"),
+                "pass_count": item.get("pass_count"),
+                "created_at": item.get("created_at"),
+                "__bundle_problem_path": str(path.relative_to(bundle_path)),
+            }
+        )
+
+    testcase_rows: list[dict[str, Any]] = []
+    testcases_dir = bundle_path / "testcases"
+    for path in sorted(testcases_dir.glob("*.jsonl")):
+        for item in _read_jsonl_objects(path):
+            item["__bundle_testcase_path"] = str(path.relative_to(bundle_path))
+            testcase_rows.append(item)
+
+    expected_problem_count = manifest.get("problem_count")
+    if expected_problem_count is not None and int(expected_problem_count) != len(problem_rows):
+        raise ValueError(
+            f"bundle problem_count mismatch: manifest={expected_problem_count}, files={len(problem_rows)}"
+        )
+    expected_testcase_count = manifest.get("testcase_count")
+    if expected_testcase_count is not None and int(expected_testcase_count) != len(testcase_rows):
+        raise ValueError(
+            f"bundle testcase_count mismatch: manifest={expected_testcase_count}, rows={len(testcase_rows)}"
+        )
+    return problem_rows, testcase_rows, manifest
+
+
+def _verify_bundle_checksums(bundle_path: Path, checksums_path: Path) -> None:
+    if not checksums_path.exists():
+        raise FileNotFoundError(checksums_path)
+
+    declared: dict[str, str] = {}
+    for line in checksums_path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        digest, relative = text.split(None, 1)
+        declared[relative.strip()] = digest
+
+    payload_paths = [
+        path
+        for path in [
+            bundle_path / "manifest.json",
+            *sorted((bundle_path / "problems").glob("*.json")),
+            *sorted((bundle_path / "testcases").glob("*.jsonl")),
+        ]
+        if path.exists()
+    ]
+    expected = {str(path.relative_to(bundle_path)) for path in payload_paths}
+    missing = sorted(expected - set(declared))
+    if missing:
+        raise ValueError(f"bundle checksums missing entries: {missing}")
+    extra = sorted(set(declared) - expected)
+    if extra:
+        raise ValueError(f"bundle checksums contain unknown entries: {extra}")
+
+    for relative, expected_digest in sorted(declared.items()):
+        path = bundle_path / relative
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected_digest:
+            raise ValueError(f"bundle checksum mismatch for {relative}")
 
 
 def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -132,15 +252,160 @@ def _read_sqlite_testcases(path: Path) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _read_mysql_dump_tables(
+    path: Path, table_names: set[str]
+) -> dict[str, list[dict[str, Any]]]:
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    columns: dict[str, list[str]] = {name: [] for name in table_names}
+    rows: dict[str, list[dict[str, Any]]] = {name: [] for name in table_names}
+    current_table: str | None = None
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip("\r\n")
+            if line.startswith("CREATE TABLE `"):
+                table_name = line.split("`", 2)[1]
+                current_table = table_name if table_name in table_names else None
+                continue
+            if current_table is not None:
+                stripped = line.strip()
+                if stripped.startswith("`"):
+                    columns[current_table].append(stripped.split("`", 2)[1])
+                    continue
+                if stripped.startswith(")"):
+                    current_table = None
+                    continue
+            if not line.startswith("INSERT INTO `"):
+                continue
+            table_name = line.split("`", 2)[1]
+            if table_name not in table_names:
+                continue
+            table_columns = columns.get(table_name) or []
+            if not table_columns:
+                raise ValueError(f"MySQL dump table {table_name!r} has no parsed columns")
+            values_sql = line.split(" VALUES ", 1)[1].strip()
+            for values in _parse_mysql_values(values_sql):
+                if len(values) != len(table_columns):
+                    raise ValueError(
+                        f"MySQL dump row for {table_name!r} has {len(values)} values, "
+                        f"expected {len(table_columns)}"
+                    )
+                row = dict(zip(table_columns, values, strict=True))
+                row["__mysql_dump_table"] = table_name
+                rows[table_name].append(row)
+    return rows
+
+
+def _parse_mysql_values(values_sql: str) -> list[list[Any]]:
+    sql = values_sql.strip()
+    if sql.endswith(";"):
+        sql = sql[:-1]
+
+    rows: list[list[Any]] = []
+    index = 0
+    length = len(sql)
+    while index < length:
+        index = _skip_mysql_ws(sql, index)
+        if index >= length:
+            break
+        if sql[index] != "(":
+            raise ValueError("MySQL INSERT VALUES must contain parenthesized rows")
+        index += 1
+        values: list[Any] = []
+        while True:
+            index = _skip_mysql_ws(sql, index)
+            value, index = _parse_mysql_value(sql, index)
+            values.append(value)
+            index = _skip_mysql_ws(sql, index)
+            if index >= length:
+                raise ValueError("unterminated MySQL INSERT row")
+            if sql[index] == ",":
+                index += 1
+                continue
+            if sql[index] == ")":
+                index += 1
+                break
+            raise ValueError(f"unexpected MySQL INSERT character: {sql[index]!r}")
+        rows.append(values)
+        index = _skip_mysql_ws(sql, index)
+        if index < length and sql[index] == ",":
+            index += 1
+    return rows
+
+
+def _skip_mysql_ws(sql: str, index: int) -> int:
+    while index < len(sql) and sql[index].isspace():
+        index += 1
+    return index
+
+
+def _parse_mysql_value(sql: str, index: int) -> tuple[Any, int]:
+    if index < len(sql) and sql[index] == "'":
+        return _parse_mysql_string(sql, index + 1)
+
+    start = index
+    while index < len(sql) and sql[index] not in ",)":
+        index += 1
+    token = sql[start:index].strip()
+    upper = token.upper()
+    if upper == "NULL":
+        return None, index
+    if upper in {"TRUE", "FALSE"}:
+        return upper == "TRUE", index
+    if token.startswith(("0x", "0X")):
+        try:
+            return bytes.fromhex(token[2:]).decode("utf-8"), index
+        except (UnicodeDecodeError, ValueError):
+            return token, index
+    try:
+        return int(token), index
+    except ValueError:
+        pass
+    try:
+        return float(token), index
+    except ValueError:
+        return token, index
+
+
+def _parse_mysql_string(sql: str, index: int) -> tuple[str, int]:
+    out: list[str] = []
+    while index < len(sql):
+        char = sql[index]
+        if char == "'":
+            return "".join(out), index + 1
+        if char == "\\" and index + 1 < len(sql):
+            escaped = sql[index + 1]
+            out.append(
+                {
+                    "0": "\0",
+                    "b": "\b",
+                    "n": "\n",
+                    "r": "\r",
+                    "t": "\t",
+                    "Z": "\x1a",
+                }.get(escaped, escaped)
+            )
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    raise ValueError("unterminated MySQL string literal")
+
+
 def _testcase_hash(row: dict[str, Any]) -> str:
-    raw = "\0".join(
-        [
-            _problem_id(row),
-            _clean(row.get("input_data")),
-            _clean(row.get("output_data")),
-            "1" if _bool(row.get("is_sample")) else "0",
-        ]
-    )
+    source_hash = _clean(row.get("source_hash"))
+    if source_hash:
+        return source_hash
+    parts = [
+        _problem_id(row),
+        _clean(row.get("input_data")),
+        _clean(row.get("output_data")),
+        "1" if _bool(row.get("is_sample")) else "0",
+    ]
+    if row.get("__mysql_dump_table") == "problem_testcase":
+        parts.append(_clean(row.get("legacy_id") or row.get("id")))
+    raw = "\0".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -329,23 +594,54 @@ def _import_submits(conn: psycopg.Connection, rows: list[dict[str, Any]]) -> int
 
 def import_legacy_web_oj(
     *,
+    bundle_path: Path | None = None,
     problem_bank_path: Path | None = None,
     testcases_path: Path | None,
     submits_path: Path | None,
     sqlite_path: Path | None = None,
+    mysql_dump_path: Path | None = None,
     report_path: Path,
     dry_run: bool,
 ) -> dict[str, Any]:
-    if problem_bank_path is not None:
+    bundle_manifest: dict[str, Any] | None = None
+    bundle_problem_rows: list[dict[str, Any]] = []
+    bundle_testcase_rows: list[dict[str, Any]] = []
+    if bundle_path is not None:
+        bundle_problem_rows, bundle_testcase_rows, bundle_manifest = _read_bundle(
+            bundle_path
+        )
+
+    mysql_tables = (
+        _read_mysql_dump_tables(
+            mysql_dump_path,
+            {"problem_set", "problem_testcase", "pta_submit_record"},
+        )
+        if mysql_dump_path is not None
+        else {}
+    )
+    if bundle_path is not None:
+        problem_rows = bundle_problem_rows
+    elif problem_bank_path is not None:
         problem_rows = _read_problem_bank_rows(problem_bank_path)
+    elif mysql_dump_path is not None:
+        problem_rows = mysql_tables.get("problem_set", [])
     elif sqlite_path is not None:
         problem_rows = _read_sqlite_table(sqlite_path, "problem_set")
     else:
         problem_rows = []
-    problem_validation_available = problem_bank_path is not None or sqlite_path is not None
+    problem_validation_available = (
+        bundle_path is not None
+        or problem_bank_path is not None
+        or mysql_dump_path is not None
+        or sqlite_path is not None
+    )
 
-    if testcases_path is not None:
+    if bundle_path is not None:
+        testcase_rows = bundle_testcase_rows
+    elif testcases_path is not None:
         testcase_rows = _rows(testcases_path)
+    elif mysql_dump_path is not None:
+        testcase_rows = mysql_tables.get("problem_testcase", [])
     elif sqlite_path is not None:
         testcase_rows = _read_sqlite_testcases(sqlite_path)
     else:
@@ -388,11 +684,21 @@ def import_legacy_web_oj(
         ]
 
     report = {
+        "bundle_path": str(bundle_path) if bundle_path else None,
+        "mysql_dump_path": str(mysql_dump_path) if mysql_dump_path else None,
         "sqlite_path": str(sqlite_path) if sqlite_path else None,
         "problem_bank_path": str(problem_bank_path) if problem_bank_path else None,
         "testcases_path": str(testcases_path) if testcases_path else None,
         "submits_path": str(submits_path) if submits_path else None,
         "dry_run": dry_run,
+        "ignored_pta_submit_rows": _bundle_ignored_table_rows(
+            bundle_manifest, "pta_submit_record"
+        )
+        if bundle_manifest is not None
+        else len(mysql_tables.get("pta_submit_record", [])),
+        "bundle_schema_version": bundle_manifest.get("schema_version")
+        if bundle_manifest is not None
+        else None,
         "input_problem_rows": len(problem_rows),
         "valid_problem_rows": len(problems),
         "unique_problem_ids": len(imported_problem_ids),
@@ -406,7 +712,9 @@ def import_legacy_web_oj(
         "missing_problem_testcases": missing_problem_testcases,
         "missing_problem_testcase_rows": len(missing_problem_testcases),
         "input_submit_rows": len(submit_rows),
-        "processed_testcase_rows": testcase_count if not dry_run else len(valid_testcase_rows),
+        "processed_testcase_rows": testcase_count
+        if not dry_run
+        else len(valid_testcase_rows),
         "processed_submit_rows": submit_count if not dry_run else len(submit_rows),
         "generated_at": datetime.now(UTC).isoformat(),
     }
@@ -417,6 +725,16 @@ def import_legacy_web_oj(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--bundle",
+        type=Path,
+        help="AscendAny legacy Web OJ 题库备份包目录，读取 manifest/problems/testcases。",
+    )
+    parser.add_argument(
+        "--mysql-dump",
+        type=Path,
+        help="旧 x MySQL dump；只读取旧 OJ 的 problem_set/problem_testcase，并统计但不导入 pta_submit_record。",
+    )
     parser.add_argument(
         "--sqlite-db",
         type=Path,
@@ -437,24 +755,49 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     if (
+        args.bundle is None
+        and
         args.sqlite_db is None
+        and args.mysql_dump is None
         and args.problem_bank is None
         and args.testcases is None
         and args.submits is None
     ):
         parser.error(
-            "at least one of --sqlite-db, --problem-bank, --testcases or --submits is required"
+            "at least one of --mysql-dump, --sqlite-db, --problem-bank, --testcases or --submits is required"
+        )
+    if args.bundle is not None and any(
+        item is not None
+        for item in (args.sqlite_db, args.mysql_dump, args.problem_bank, args.testcases)
+    ):
+        parser.error(
+            "--bundle cannot be combined with --mysql-dump, --sqlite-db, "
+            "--problem-bank or --testcases"
         )
     report = import_legacy_web_oj(
+        bundle_path=args.bundle,
         problem_bank_path=args.problem_bank,
         testcases_path=args.testcases,
         submits_path=args.submits,
         sqlite_path=args.sqlite_db,
+        mysql_dump_path=args.mysql_dump,
         report_path=args.report,
         dry_run=args.dry_run,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
+
+
+def _bundle_ignored_table_rows(manifest: dict[str, Any] | None, table_name: str) -> int:
+    if not isinstance(manifest, dict):
+        return 0
+    rows = manifest.get("ignored_table_rows")
+    if not isinstance(rows, dict):
+        return 0
+    try:
+        return int(rows.get(table_name) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 if __name__ == "__main__":

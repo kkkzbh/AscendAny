@@ -4,6 +4,12 @@ import { useAuthStore } from "@/stores/authStore";
 import { useAvatarStore } from "@/stores/avatarStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { AvatarDisplay } from "@/components/common/AvatarDisplay";
+import { CalloutBlock } from "@/components/chat/blocks/CalloutBlock";
+import { ChoiceBlock } from "@/components/chat/blocks/ChoiceBlock";
+import { CodeBlock } from "@/components/chat/blocks/CodeBlock";
+import { MathStepsBlock } from "@/components/chat/blocks/MathStepsBlock";
+import { NodeRefBlock } from "@/components/chat/blocks/NodeRefBlock";
+import { ProblemBlock } from "@/components/chat/blocks/ProblemBlock";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -77,6 +83,9 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
   })();
   const lastBlock = blocks[blocks.length - 1];
   const isLastBlockText = lastBlock?.kind === "text";
+  // Inline node_ref tokens piggyback on the preceding text block so the
+  // assistant can drop "look at [概率论]" without breaking flow. Standalone
+  // node_ref blocks render as a button row.
 
   if (isSystem) {
     return (
@@ -144,25 +153,84 @@ function MessageBubbleComponent({ message }: MessageBubbleProps) {
                 </div>
               );
             }
-            const isStreamingText =
-              message.streaming && idx === blocks.length - 1 && isLastBlockText;
-            return (
-              <div
-                key={`text-${idx}`}
-                className="assistant-message-text chat-markdown chat-markdown-assistant break-words"
-              >
-                {isStreamingText ? (
-                  <div className="streaming-message-text">
-                    {block.text}
-                    <span className="streaming-caret" aria-hidden="true" />
-                  </div>
-                ) : (
-                  <ReactMarkdown remarkPlugins={ASSISTANT_MARKDOWN_PLUGINS}>
-                    {block.text}
-                  </ReactMarkdown>
-                )}
-              </div>
-            );
+            if (block.kind === "text") {
+              const isStreamingText =
+                message.streaming && idx === blocks.length - 1 && isLastBlockText;
+              return (
+                <div
+                  key={`text-${idx}`}
+                  className="assistant-message-text chat-markdown chat-markdown-assistant break-words"
+                >
+                  {isStreamingText ? (
+                    <div className="streaming-message-text">
+                      {block.text}
+                      <span className="streaming-caret" aria-hidden="true" />
+                    </div>
+                  ) : (
+                    <ReactMarkdown remarkPlugins={ASSISTANT_MARKDOWN_PLUGINS}>
+                      {block.text}
+                    </ReactMarkdown>
+                  )}
+                </div>
+              );
+            }
+            if (block.kind === "problem") {
+              return (
+                <ProblemBlock
+                  key={`problem-${idx}-${block.problem.problemId}`}
+                  problem={block.problem}
+                />
+              );
+            }
+            if (block.kind === "choice") {
+              return (
+                <ChoiceBlock
+                  key={`choice-${idx}`}
+                  messageId={message.id}
+                  blockIndex={idx}
+                  question={block.question}
+                  options={block.options}
+                  answerIdx={block.answerIdx}
+                  explanation={block.explanation}
+                />
+              );
+            }
+            if (block.kind === "math_steps") {
+              return (
+                <MathStepsBlock
+                  key={`math-${idx}`}
+                  steps={block.steps}
+                />
+              );
+            }
+            if (block.kind === "code") {
+              return (
+                <CodeBlock
+                  key={`code-${idx}`}
+                  lang={block.lang}
+                  code={block.code}
+                />
+              );
+            }
+            if (block.kind === "node_ref") {
+              return (
+                <NodeRefBlock
+                  key={`node-ref-${idx}-${block.point}`}
+                  point={block.point}
+                  label={block.label}
+                />
+              );
+            }
+            if (block.kind === "callout") {
+              return (
+                <CalloutBlock
+                  key={`callout-${idx}`}
+                  tone={block.tone}
+                  markdown={block.markdown}
+                />
+              );
+            }
+            return null;
           })}
           {message.streaming && !isLastBlockText ? (
             <div className="assistant-message-text chat-markdown chat-markdown-assistant break-words">

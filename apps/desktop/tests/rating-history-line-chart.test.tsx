@@ -46,10 +46,11 @@ describe("RatingHistoryLineChart helpers", () => {
     ]);
   });
 
-  it("computes chart width by point count and viewport width", () => {
+  it("keeps chart width within the visible viewport for dense history", () => {
     expect(computeTrendChartWidth(0, 0)).toBe(320);
     expect(computeTrendChartWidth(4, 360)).toBe(360);
-    expect(computeTrendChartWidth(12, 360)).toBe(744);
+    expect(computeTrendChartWidth(12, 360)).toBe(360);
+    expect(computeTrendChartWidth(40, 360)).toBe(360);
   });
 });
 
@@ -57,5 +58,14 @@ describe("RatingHistoryLineChart", () => {
   it("renders empty state when there is no history", () => {
     render(<RatingHistoryLineChart history={[]} />);
     expect(screen.getByText("暂无 rating 历史数据")).toBeTruthy();
+  });
+
+  it("renders controlled point details for a highlighted exam", () => {
+    render(<RatingHistoryLineChart history={SAMPLE_HISTORY} activeExamId="2" />);
+
+    const details = screen.getByRole("status", { name: "考试详情" });
+    expect(details.textContent).toContain("第2场");
+    expect(details.textContent).toContain("Rating: 980");
+    expect(details.textContent).toContain("变化: +18");
   });
 });

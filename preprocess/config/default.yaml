@@ -14,9 +14,7 @@ ingest:
     - utf-8-sig
     - gb18030
   fingerprint_roles:
-    - answer_html
-    - submission_csv
-    - scoreboard_xlsx
+    - ascendany_pintia_unit_json
   timezone: Asia/Shanghai
 
 metrics:
@@ -36,6 +34,8 @@ mapping:
     - student_no
     - name
   actor_sources:
+    - pintia_student_no
+    - pintia_user_id
     - datastructure_nickname
     - pta_*_account
   strict_mode: true

@@ -11,6 +11,7 @@ interface UploadedExam {
 }
 
 const EXAM_TYPE_LABELS: Record<string, string> = {
+  pintia: "Pintia",
   datastructure: "数据结构",
   pta_icpc: "PTA ICPC",
   pta_ioi: "PTA IOI",
@@ -33,7 +34,7 @@ function formatTime(value: string | null): string {
 }
 
 export function ImportPage() {
-  const [selectedType, setSelectedType] = useState<string>(EXAM_TYPES[0]?.value ?? "datastructure");
+  const [selectedType, setSelectedType] = useState<string>(EXAM_TYPES[0]?.value ?? "pintia");
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
@@ -109,10 +110,10 @@ export function ImportPage() {
       event.stopPropagation();
       setDragOver(false);
       const files = Array.from(event.dataTransfer.files).filter((file) =>
-        file.name.toLowerCase().endsWith(".zip"),
+        file.name.toLowerCase().endsWith(".json") || file.name.toLowerCase().endsWith(".zip"),
       );
       if (!files.length) {
-        setUploadError("请拖入 .zip 文件");
+        setUploadError("请拖入 Pintia .json 或旧格式 .zip 文件");
         return;
       }
       await doUpload(files);
@@ -159,7 +160,7 @@ export function ImportPage() {
         <section className="panel upload-panel">
           <div className="panel-title">上传队列</div>
           <label className="field">
-            <span className="field-label">考试类型</span>
+            <span className="field-label">旧 ZIP 类型</span>
             <select value={selectedType} onChange={(event) => setSelectedType(event.target.value)} disabled={uploading}>
               {EXAM_TYPES.map((item) => (
                 <option key={item.value} value={item.value}>
@@ -184,7 +185,7 @@ export function ImportPage() {
             role="button"
             tabIndex={0}
           >
-            <input ref={fileInputRef} type="file" accept=".zip" multiple hidden onChange={handleFileSelect} />
+            <input ref={fileInputRef} type="file" accept=".json,.zip" multiple hidden onChange={handleFileSelect} />
             {uploading ? (
               <>
                 <strong>上传中 {uploadPct}%</strong>
@@ -194,8 +195,8 @@ export function ImportPage() {
               </>
             ) : (
               <>
-                <strong>拖入 .zip 文件</strong>
-                <span>或点击选择一个或多个考试压缩包</span>
+                <strong>拖入 Pintia JSON</strong>
+                <span>也支持选择旧格式 ZIP 包</span>
               </>
             )}
           </div>
@@ -228,7 +229,7 @@ export function ImportPage() {
                 </div>
               ))
             ) : (
-              <EmptyState>没有待处理上传。未上传时会按所选考试类型扫描增量数据。</EmptyState>
+              <EmptyState>没有待处理上传。未上传时默认扫描 Pintia JSON 增量数据。</EmptyState>
             )}
           </div>
         </section>
@@ -279,7 +280,7 @@ export function ImportPage() {
               <span>
                 {isStreaming
                   ? "进度会显示在上方，详细输出在底部终端。"
-                  : "设置考试类型和导入选项后启动任务。实时日志会在底部终端显示。"}
+                  : "上传 Pintia JSON 或设置导入选项后启动任务。实时日志会在底部终端显示。"}
               </span>
             </div>
           )}

@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "字符串",
+    "模拟"
+  ],
+  "created_at": "2026-01-24 19:21:43.916799",
+  "description": "# P5000 Hillwer编码\n\n## 题目背景\n\n在 Z 国的高科技研究中心，科研人员使用的都是最“先进”的 Hillwer 编码（毕竟这里可是国家机密库，储存着最重要的机密资料~~QwQ）。\n\n## 题目描述\n\nZ 国的科技十分发达，一直是各国觊觎的目标，Y 国就是其中之一。经过 Y 国黑客夜以继日的奋斗，终于获得了 Z 国 **Hillwer** 编码的转换方式，并且截获了 $n$ 条原码。BUT（总是有那么多但是~），Y 国的黑客们呕心沥血研究 **Hillwer**，都累得趴下了……所以，转换 **Hillwer** 编码的任务他们就无法完成。\n\nY 国元首听说在遥远的东方国度，有一群才华横溢的少年——就是坐在电脑前的你们！元首希望你能够帮助 Y 国转换编码，他将赠予你 **NOIP_AK 荣耀桂冠**！\n\n**Hillwer** 编码的转换规则如下： 对于每一条原码 $ S $，保证仅由 $ 26 $ 个大写字母组成。将每个字母后移 $ R $ 位，得到中转码 $ S1 $（当 $ S $=`XYZ`,$R=2$ 时，$ S1 $=`ZAB`。即变成当前字母后 $ R $ 个字母，超过 `Z` 则从 `A` 开始）。接着，将中转码进行“符转数”操作，将 $ S1 $ 每一位的 ASCII 码相乘，得到数串 $ Q $。转换后的编码即为 $ Q $。\n\n元首为了检查你是不是偷懒，还要求你把中转码 $ S1 $ 也输出。\n\n## 输入格式\n\n第 $ 1 $ 行，读入 $ n , R $。\n\n第 $2 \\sim n+1$ 行，每行一条编码 $S$。\n\n## 输出格式\n\n共 $ 2 \\times n $ 行:\n\n- 奇数行，每行一条中转码 $ S1 $；\n\n- 偶数行，每行一条转换后的编码 $ Q $。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n2 6\nHELLOWORLD\nLETUSGO\n```\n\n### 输出 #1\n\n```\nNKRRUCUXRJ\n10167740864629920000\nRKZAYMU\n20957073637500\n```\n\n## 说明/提示\n\n对于 $ 30\\% $ 的数据，$ 1 \\leq n \\leq 10 ,1 \\leq R \\leq 10 $；\n\n对于 $ 50\\% $ 的数据，$ 1 \\leq n \\leq 500 ,1 \\leq R \\leq 10^3 $；\n\n对于 $ 100\\% $ 的数据，$ 1 \\leq n \\leq 500 ,1 \\leq R \\leq 10^5 $，原码长度小于 $600$。",
+  "link": "https://www.luogu.com.cn/problem/P5000",
+  "pass_count": 2.6,
+  "problem_id": "bank_whrlg_P5000",
+  "raw_category_tags": "字符串 模拟",
+  "rejected_tags": [],
+  "solution_1": "这题不是很简单吗？？？怎么被评成蓝色的？？？？\n\n首先第一个偏移处理，由于R比较大，可以先取模\n\n第二个处理不就是裸的高精吗？？\n\nAC代码\n\n#include<bits/stdc++.h>\nconst int mod=26;\nconst int maxl=610;\nusing namespace std;\n\nint n,r;\nstring s;\nint ans[maxl<<1];\n\nvoid init()\n{\n    memset(ans,0,sizeof(ans));\n    ans[0]=1;\n}\n\nint main()\n{\n    scanf(\"%d%d\",&n,&r);r%=mod;\n    for(int i=1;i<=n;i++)\n    {\n        init();\n        cin>>s;\n        for(int j=0;j<s.size();j++) s[j]=((s[j]-'A')+r)%mod+'A';\n        cout<<s<<endl;\n        for(int j=0;j<s.size();j++)\n        {\n            for(int k=0;k<=1210;k++) ans[k]*=s[j];\n            for(int k=0;k<=1210;k++) ans[k+1]+=ans[k]/10,ans[k]%=10;\n        }\n        int p=1215;\n        while(!ans[p] && p) p--;\n        for(p;p>=0;p--) cout<<ans[p];\n        cout<<endl;\n    }\n    return 0;\n}",
+  "solution_2": "这样的高精度题，怎么没有一篇python题解呢\n顺便我们来学习一下python的一些基本入门操作，这样以后就可以虐高精度的模板题了\n\n这道题的题意很简单，就是把字符串的每个位往后推R位，然后再把各个位上的Ascii码乘起来\n\n话说我是比赛前这题第一个验题的人诶qwq，当时我高精度半个小时没调出来\n\n# python的注释是用#号的\nn,m=input().split() #读入部分，用这样的方式在同一行读入多个字符，但是都是字符串形式的\nt=int(n)\nr=int(m)%26 #必须用int，这里的int不是指换为ascii码，而是直接转为数字，就和pascal的val相似；对26取模，因为26个字母一循环\nwhile (t>0): #while语句是这么打的\n    s=input()\n    t=t-1\n    ans=1 #答案在这里哟\n    s1=\"\" #python不支持简单的字符串其中一位的修改操作，所以我们新开一个列表\n    for i in range(0,len(s)-1): #for循环是这么打的，len函数等于pascal中的length，这里如果右边范围取len(s)的话会多出一个奇奇怪怪的字符\n        x=chr(ord(s[i])+r) #往后推r位，ord和chr这两个函数P党都懂吧\n        if (x>'Z'): #if语句是这么打的\n            x=chr(ord(x)-26) #如果超出Z了就取模\n        ans*=ord(x)\n        s1=s1+x #把答案存入列表\n    print(s1) #愉快输出\n    print(ans)\n\n这种方式应该不是最短的，但已经是很短了qwq",
+  "source_hash": "4cba02df6f863a2f7c6273a8d4c8e676496c71af0ccba74750e16aeabf9e22ff",
+  "source_meta": {
+    "legacy_id": 30,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 4.83,
+  "title": null
+}

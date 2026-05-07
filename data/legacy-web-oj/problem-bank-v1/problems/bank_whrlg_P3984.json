@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "数组",
+    "模拟"
+  ],
+  "created_at": "2026-01-24 19:21:43.858422",
+  "description": "# P3984 高兴的津津\n\n## 题目描述\n\n津津上高中了。她在自己的妈妈的魔鬼训练下，成为了一个神犇，每次参加一次 OI 比赛必拿 Au 虐全场。每次她拿到一个 Au 后就很高兴。假设津津不会因为其它事高兴，并且她的高兴会持续 $T$ 天（包含获奖当天。就算在高兴的时候再次拿到 Au，她的高兴也只能维持包括这次拿奖之日起 $T$ 天，而不是额外增加 $T$ 天的高兴时间，除非之后再拿奖）。请你帮忙检查一下津津接下来的的日程安排，要参加 $n$ 场比赛，看看接下来的几天，津津会累计开心多久？\n\n## 输入格式\n\n第一行两个整数 $n$ 和 $T$。\n\n接下来一行，$n$ 个单调递增整数 $t_i$，表示她在第 $t_i$ 天的时候拿了一个 Au。\n\n## 输出格式\n\n一个整数表示，津津累计开心多久。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n3 5\n1 2 10\n```\n\n### 输出 #1\n\n```\n11\n```\n\n## 说明/提示\n\n#### 数据规模与约定\n\n对于 $100\\%$ 的数据，保证：\n\n- $1\\le n\\le2\\times10^5$。\n- $1\\le T\\le10^9$。\n- $1\\le t_i\\le 10^9$，$t_i$ 单调递增。",
+  "link": "https://www.luogu.com.cn/problem/P3984",
+  "pass_count": 9.84,
+  "problem_id": "bank_whrlg_P3984",
+  "raw_category_tags": "数组 模拟",
+  "rejected_tags": [],
+  "solution_1": "我要是说我这题3分钟码完代码一遍就过了，会不会有人打我。。无辜脸\n咳咳，还是说题目吧\n这题的思路真心很简单，因为题目保证输入数据递增，所以可以边读边做，O(n)的算法，具体在代码中解释\n不说废话，直接上代码：\n#include<cmath>\n#include<cstdio>\n#include<iostream>\n#include<cstring>\n#include<algorithm>\nusing namespace std;\n\nint n,t,ans;//ans是答案，answer，显得我英语很好（划掉）\nint a[200005];\n\nint main(){\n scanf(\"%d%d\",&n,&t);//读入不解释\n scanf(\"%d\",&a[1]);//先读入第一个数据\n for(int i=2;i<=n;i++){//从第二个数开始读，并加上判断\n  scanf(\"%d\",&a[i]);\n  if(a[i]-a[i-1]<t){//如果前一次与这次时间间隔不大于t天，加上相隔的时间\n      ans+=a[i]-a[i-1];\n  }\n  else{//如果大于t天，因为快乐只能持续t天，所以答案加一\n      ans+=t;\n  }\n }\n printf(\"%d\\n\",ans+t);//因为最后一天的快乐肯定能持续t天，所以直接输出ans+t就好\n return 0;\n}",
+  "solution_2": "这一题模拟过的（最简思路\n这一题首先注意输入的数组已经是递增整数了；\n只用两个判断，若后面的数与前面的数差大于等于获一次奖高兴的天数，就加获一次奖高兴的天数\n代码实现：if(a[i+1]-a[i]>=n)sum+=n;\n若后面的数与前面的数差小于获一次奖高兴的天数，就加两数之差\n代码实现：sum+=a[i+1]-a[i];\n#include<iostream>\nusing namespace std;\nint m,n,a[200001],i,sum;\nint main(){\n cin>>m>>n;\n for(i=1;i<=m;i++)cin>>a[i];//输入\n for(i=1;i<m;i++){\n  if(a[i+1]-a[i]>=n)sum+=n;\n  else sum+=a[i+1]-a[i];\n }\n cout<<sum+n;//最后别忘加n\n}",
+  "source_hash": "1ca08b46a3d469c589a0af517f40c25fc4b41a1635ac575908640e24846384c9",
+  "source_meta": {
+    "legacy_id": 21,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 24.25,
+  "title": null
+}

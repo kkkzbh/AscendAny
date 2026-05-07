@@ -36,7 +36,7 @@ class DatabaseConfig:
 class IngestConfig:
     encodings: list[str] = field(default_factory=lambda: ["utf-8", "utf-8-sig", "gb18030"])
     fingerprint_roles: list[str] = field(
-        default_factory=lambda: ["answer_html", "submission_csv", "scoreboard_xlsx"]
+        default_factory=lambda: ["ascendany_pintia_unit_json"]
     )
     timezone: str = "Asia/Shanghai"
 
@@ -60,6 +60,8 @@ class MappingConfig:
     primary_keys: list[str] = field(default_factory=lambda: ["student_no", "name"])
     actor_sources: list[str] = field(
         default_factory=lambda: [
+            "pintia_student_no",
+            "pintia_user_id",
             "datastructure_nickname",
             "pta_*_account",
         ]
@@ -201,7 +203,7 @@ def _from_dict(data: dict[str, Any]) -> Settings:
         ingest=IngestConfig(
             encodings=list(ingest.get("encodings", ["utf-8", "utf-8-sig", "gb18030"])),
             fingerprint_roles=list(
-                ingest.get("fingerprint_roles", ["answer_html", "submission_csv", "scoreboard_xlsx"])
+                ingest.get("fingerprint_roles", ["ascendany_pintia_unit_json"])
             ),
             timezone=ingest.get("timezone", "Asia/Shanghai"),
         ),
@@ -225,7 +227,17 @@ def _from_dict(data: dict[str, Any]) -> Settings:
         ),
         mapping=MappingConfig(
             primary_keys=list(mapping.get("primary_keys", ["student_no", "name"])),
-            actor_sources=list(mapping.get("actor_sources", ["datastructure_nickname", "pta_*_account"])),
+            actor_sources=list(
+                mapping.get(
+                    "actor_sources",
+                    [
+                        "pintia_student_no",
+                        "pintia_user_id",
+                        "datastructure_nickname",
+                        "pta_*_account",
+                    ],
+                )
+            ),
             strict_mode=bool(mapping.get("strict_mode", True)),
             auto_bind_on_ingest=bool(mapping.get("auto_bind_on_ingest", True)),
             claim_identity_source=str(mapping.get("claim_identity_source", "pta_nickname")),

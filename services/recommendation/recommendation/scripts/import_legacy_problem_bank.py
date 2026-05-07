@@ -14,6 +14,7 @@ from typing import Any, Iterable
 import psycopg
 
 from ..config import load_db_config
+from ..knowledge import canonicalize_knowledge_tags
 
 _SPLIT_RE = re.compile(r"[,，;；|/]+")
 _SPACE_RE = re.compile(r"\s+")
@@ -96,19 +97,11 @@ def _parse_tags(value: Any) -> tuple[list[str], list[dict[str, str]]]:
         else:
             raw_items = _SPLIT_RE.split(text)
 
-    tags: list[str] = []
-    invalid: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for item in raw_items:
-        tag, reason = _normalize_tag(item)
-        if tag is None:
-            invalid.append({"value": _clean_text(item), "reason": reason or "invalid"})
-            continue
-        if tag in seen:
-            continue
-        seen.add(tag)
-        tags.append(tag)
-    return tags, invalid
+    normalized = canonicalize_knowledge_tags(list(raw_items))
+    return normalized.tags, [
+        {"value": item.value, "reason": item.reason}
+        for item in normalized.rejected
+    ]
 
 
 def _source_hash(row: dict[str, Any]) -> str:

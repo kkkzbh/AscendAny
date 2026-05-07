@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type RightPanelTab = "ability" | "history" | "notes";
+export type RightPanelTab = "ability" | "history" | "path" | "notes";
 
 export interface LayoutSnapshot {
   isLeftSidebarCollapsed: boolean;
@@ -63,6 +63,7 @@ function normalizeLayoutSnapshot(value: unknown, fallback: LayoutSnapshot): Layo
     activeRightPanelTab:
       persisted.activeRightPanelTab === "ability"
       || persisted.activeRightPanelTab === "history"
+      || persisted.activeRightPanelTab === "path"
       || persisted.activeRightPanelTab === "notes"
         ? persisted.activeRightPanelTab
         : fallback.activeRightPanelTab,

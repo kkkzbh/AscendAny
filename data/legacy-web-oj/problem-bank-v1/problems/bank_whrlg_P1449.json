@@ -1,0 +1,29 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "栈",
+    "数组",
+    "字符串",
+    "线性结构",
+    "模拟",
+    "数据结构"
+  ],
+  "created_at": "2026-01-24 19:21:43.935305",
+  "description": "# P1449 后缀表达式\n\n## 题目描述\n\n所谓后缀表达式是指这样的一个表达式：式中不再引用括号，运算符号放在两个运算对象之后，所有计算按运算符号出现的顺序，严格地由左而右新进行（不用考虑运算符的优先级）。\n\n本题中运算符仅包含 $\\texttt{+-*/}$。保证对于 $\\texttt{/}$ 运算除数不为 0。特别地，其中 $\\texttt{/}$ 运算的结果需要**向 0 取整**（即与 C++ `/` 运算的规则一致）。\n\n如：$\\texttt{3*(5-2)+7}$ 对应的后缀表达式为：$\\texttt{3.5.2.-*7.+@}$。在该式中，`@` 为表达式的结束符号。`.` 为操作数的结束符号。\n\n## 输入格式\n\n输入一行一个字符串 $s$，表示后缀表达式。\n\n## 输出格式\n\n输出一个整数，表示表达式的值。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n3.5.2.-*7.+@\n```\n\n### 输出 #1\n\n```\n16\n```\n\n## 输入输出样例 #2\n\n### 输入 #2\n\n```\n10.28.30./*7.-@\n```\n\n### 输出 #2\n\n```\n-7\n```\n\n## 说明/提示\n\n数据保证，$1 \\leq |s| \\leq 50$，答案和计算过程中的每一个值的绝对值不超过 $10^9$。",
+  "link": "https://www.luogu.com.cn/problem/P1449",
+  "pass_count": 92.62,
+  "problem_id": "bank_whrlg_P1449",
+  "raw_category_tags": "栈 数组 字符串 线性结构 模拟 数据结构",
+  "rejected_tags": [],
+  "solution_1": "题目分析\n题目让我们读入后缀表达式，计算最后的答案，无视负数、小数、long long肯定不会爆\n\n我们采用一种用数组模拟栈的方法\n\n读入\nchar op;\nint now=0;\nwhile((op=getchar())!='@'){\n    if(op>='0'&&op<='9') now*=10,now+=op-'0';\n    else if(op=='.'){\n        stk[++i]=now;\n        now=0;\n        }\n}\n\n这是本蒟蒻的读入代码，读取数字，类似于手写的快读 比如读入12345\n\nstep1 0-->0-->1\n\nstep2 1-->10-->12\n\nstep3 12-->120-->123\n\nstep4 123-->1230-->1234\n\nstep5 1234-->12340-->12345\n\n一旦读取的不是数字就把这个数字压入模拟栈\n\n运算\n        else if(op=='+'){\n            stk[i-1]=stk[i-1]+stk[i];\n            stk[i]=0;\n            i--;\n        }\n        else if(op=='-'){\n            stk[i-1]=stk[i-1]-stk[i];\n            stk[i]=0;\n            i--;\n        }\n        else if(op=='*'){\n            stk[i-1]=stk[i-1]*stk[i];\n            stk[i]=0;\n            i--;\n        }\n        else if(op=='/'){\n            stk[i-1]=stk[i-1]/stk[i];\n            stk[i]=0;\n            i--;\n        }\n\n读到运算符就把栈顶上两个数做运算（做减法时减数和被减数要正确） 然后弹出栈顶两个元素 再将结果压入栈顶\n\nAC代码\n    #include<iostream>\n    #include<cstdio>\n    using namespace std;\n    long long stk[1000];\n    int main(){\n    long long i=0,now=0;\n    char op;\n    while((op=getchar())!='@'){\n        if(op>='0'&&op<='9') now*=10,now+=op-'0';\n        else if(op=='.'){\n            stk[++i]=now;\n            now=0;\n        }\n        else if(op=='+'){\n            stk[i-1]=stk[i-1]+stk[i];\n            stk[i]=0;\n            i--;\n        }\n        else if(op=='-'){\n            stk[i-1]=stk[i-1]-stk[i];\n            stk[i]=0;\n            i--;\n        }\n        else if(op=='*'){\n            stk[i-1]=stk[i-1]*stk[i];\n            stk[i]=0;\n            i--;\n        }\n        else if(op=='/'){\n            stk[i-1]=stk[i-1]/stk[i];\n            stk[i]=0;\n            i--;\n        }\n    }\n    cout<<stk[1];\n    return 0;\n}",
+  "solution_2": "时间O（n），空间O（n）\n\n这一题可以直接在读的时候判\n\n并不需要什么字符串\n\n+和*没有什么可说的\n\n重点是-和/\n\n是n[top-1]-n[top]\n\n原因很简单，就是后缀表达式里的定义\n\n#include <bits/stdc++.h>\nusing namespace std;\nstack<int> n;\nchar ch;\nint s,x,y;\nint main()\n{\n    while(ch!='@')\n    {\n        ch=getchar();\n        switch(ch)\n        {\n            case '+':x=n.top();n.pop();y=n.top();n.pop();n.push(x+y);break;\n            case '-':x=n.top();n.pop();y=n.top();n.pop();n.push(y-x);break;\n            case '*':x=n.top();n.pop();y=n.top();n.pop();n.push(x*y);break;\n            case '/':x=n.top();n.pop();y=n.top();n.pop();n.push(y/x);break;\n            case '.':n.push(s);s=0;break;\n            default :s=s*10+ch-'0';break;\n        }\n    }\n    printf(\"%d\\n\",n.top());\n    return 0;\n}",
+  "source_hash": "e8dee919bc77ea72bb1659875b814a94e4cad583fa8831f98ca33b96d43f922c",
+  "source_meta": {
+    "legacy_id": 31,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 176.99,
+  "title": null
+}

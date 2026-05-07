@@ -12,7 +12,7 @@ def test_read_practice_problem_mapping_normalizes_tags(tmp_path: Path) -> None:
         json.dumps(
             {
                 "datastructure_2021第一次月测_6-1-1": ["数组", "数组", " 线性结构\t"],
-                "datastructure_2021第一次月测_6-1-2": "链表，双指针",
+                "datastructure_2021第一次月测_6-1-2": "链表，双指针，循环数组，C程序设计",
             },
             ensure_ascii=False,
         ),
@@ -23,4 +23,7 @@ def test_read_practice_problem_mapping_normalizes_tags(tmp_path: Path) -> None:
 
     assert rows[0].practice_problem_id == "datastructure_2021第一次月测_6-1-1"
     assert rows[0].tags == ["数组", "线性结构"]
-    assert rows[1].tags == ["链表", "双指针"]
+    assert rows[1].tags == ["链表", "双指针", "数组"]
+    assert [(item.value, item.reason) for item in rows[1].rejected_tags] == [
+        ("C程序设计", "out_of_scope")
+    ]

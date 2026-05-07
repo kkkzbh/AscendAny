@@ -187,8 +187,83 @@ class IngestService:
                         unit.exam_type, unit.source_path, bundle.exam_meta
                     )
                     self.repo.insert_exam_files(exam_id, unit.files)
+
+                    external_problem_ids: dict[tuple[str, str], int] = {}
+                    for external_problem in bundle.external_problems:
+                        external_problem_ids[
+                            (
+                                external_problem.source_platform,
+                                external_problem.external_problem_id,
+                            )
+                        ] = self.repo.upsert_external_problem(external_problem)
+
+                    external_problem_version_ids: dict[tuple[str, str, str], int] = {}
+                    for version in bundle.external_problem_versions:
+                        external_problem_pk = external_problem_ids.get(
+                            (version.source_platform, version.external_problem_id)
+                        )
+                        if external_problem_pk is None:
+                            raise RuntimeError(
+                                f"missing external problem for version {version.external_problem_id}"
+                            )
+                        external_problem_version_ids[
+                            (
+                                version.source_platform,
+                                version.external_problem_id,
+                                version.content_sha256,
+                            )
+                        ] = self.repo.upsert_external_problem_version(
+                            version,
+                            external_problem_pk=external_problem_pk,
+                        )
+
+                    for tag in bundle.external_problem_tags:
+                        external_problem_pk = external_problem_ids.get(
+                            (tag.source_platform, tag.external_problem_id)
+                        )
+                        if external_problem_pk is None:
+                            raise RuntimeError(
+                                f"missing external problem for tag {tag.external_problem_id}"
+                            )
+                        self.repo.upsert_external_problem_tag(
+                            tag,
+                            external_problem_pk=external_problem_pk,
+                        )
+
+                    exam_problem_ids: dict[str, int] = {}
                     for problem in bundle.problems:
-                        self.repo.upsert_exam_problem(exam_id, problem)
+                        exam_problem_ids[problem.problem_code] = self.repo.upsert_exam_problem(
+                            exam_id,
+                            problem,
+                        )
+
+                    for link in bundle.exam_problem_external_links:
+                        exam_problem_id = exam_problem_ids.get(link.problem_code)
+                        external_problem_pk = external_problem_ids.get(
+                            (link.source_platform, link.external_problem_id)
+                        )
+                        external_problem_version_id = external_problem_version_ids.get(
+                            (
+                                link.source_platform,
+                                link.external_problem_id,
+                                link.content_sha256,
+                            )
+                        )
+                        if (
+                            exam_problem_id is None
+                            or external_problem_pk is None
+                            or external_problem_version_id is None
+                        ):
+                            raise RuntimeError(
+                                f"missing external problem link target for {link.problem_code}"
+                            )
+                        self.repo.upsert_exam_problem_external_link(
+                            exam_id=exam_id,
+                            exam_problem_id=exam_problem_id,
+                            external_problem_pk=external_problem_pk,
+                            external_problem_version_id=external_problem_version_id,
+                            link=link,
+                        )
 
                     participants = self._materialize_participants(bundle.participants)
                     for participant in participants:
@@ -202,8 +277,18 @@ class IngestService:
                     submissions_pending_claim += pending_count
                     nickname_conflicts += conflict_count
 
+                    code_by_submission_hash = {
+                        item.submission_row_hash: item
+                        for item in bundle.submission_codes
+                    }
                     for submission in bundle.submissions:
-                        self.repo.insert_submission(exam_id, submission)
+                        submission_id = self.repo.insert_submission(exam_id, submission)
+                        submission_code = code_by_submission_hash.get(submission.row_hash)
+                        if submission_code is not None:
+                            self.repo.upsert_external_submission_code(
+                                submission_id=submission_id,
+                                row=submission_code,
+                            )
 
                     timeline_by_student = self._build_submission_timeline(
                         bundle.submissions

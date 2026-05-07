@@ -1,4 +1,4 @@
-import type { Role } from "@/types/chat";
+import type { ChatBlock, Role } from "@/types/chat";
 import type { LeaderboardEntry } from "@/types/leaderboard";
 import {
   createEmptyMilestoneStreak,
@@ -29,6 +29,15 @@ import type {
   AchievementSummary,
   StudentAchievementsData,
 } from "@/types/achievements";
+import type {
+  KnowledgeNodeDetail,
+  KnowledgeNodeProblem,
+  KnowledgeNodeRecentDay,
+  KnowledgeNodeStats,
+  LearningPathSnapshot,
+  LearningPathStatusItem,
+  LearningPathStatusSnapshot,
+} from "@/types/path";
 
 const DEFAULT_API_BASE_URL = __ASCENDANY_WEB_BUILD__
   ? ""
@@ -183,6 +192,15 @@ export type ChatStreamEvent =
       next: string;
       patch: string | null;
     }
+  | {
+      type: "path_update";
+      mode: "patch" | "replace";
+      previous: LearningPathSnapshot | null;
+      next: LearningPathSnapshot;
+    }
+  | { type: "node_focus"; point: string }
+  | { type: "node_status"; point: string; mastery: number }
+  | { type: "block_append"; block: ChatBlock }
   | {
       type: "done";
       reply: string;
@@ -699,6 +717,39 @@ async function streamJsonEvents(
           patch: typeof parsed.patch === "string" ? parsed.patch : null,
         });
       }
+    } else if (type === "path_update") {
+      const mode = parsed.mode === "patch" || parsed.mode === "replace" ? parsed.mode : "replace";
+      const next = parsed.next as LearningPathPayload | undefined;
+      if (next && typeof next === "object") {
+        onEvent({
+          type: "path_update",
+          mode,
+          previous:
+            parsed.previous && typeof parsed.previous === "object"
+              ? normalizeLearningPath(parsed.previous as LearningPathPayload)
+              : null,
+          next: normalizeLearningPath(next),
+        });
+      }
+    } else if (type === "node_focus") {
+      const point = typeof parsed.point === "string" ? parsed.point.trim() : "";
+      if (point) {
+        onEvent({ type: "node_focus", point });
+      }
+    } else if (type === "node_status") {
+      const point = typeof parsed.point === "string" ? parsed.point.trim() : "";
+      const mastery =
+        typeof parsed.mastery === "number" && Number.isFinite(parsed.mastery)
+          ? parsed.mastery
+          : null;
+      if (point && mastery !== null) {
+        onEvent({ type: "node_status", point, mastery });
+      }
+    } else if (type === "block_append") {
+      const block = parseStreamBlock(parsed.block);
+      if (block) {
+        onEvent({ type: "block_append", block });
+      }
     } else if (type === "tool_start" || type === "tool_done") {
       return;
     } else {
@@ -951,6 +1002,333 @@ export async function fetchLatestExamImportedAt(): Promise<LatestExamImportedAtP
   return requestJson<LatestExamImportedAtPayload>(
     "/api/v1/meta/latest_exam_imported_at",
   );
+}
+
+function parseStreamBlock(value: unknown): ChatBlock | null {
+  if (!value || typeof value !== "object") return null;
+  const kind = (value as { kind?: unknown }).kind;
+  if (kind === "text") {
+    const text = (value as { text?: unknown }).text;
+    return typeof text === "string" && text.length > 0
+      ? { kind: "text", text }
+      : null;
+  }
+  if (kind === "problem") {
+    const problemRaw = (value as { problem?: unknown }).problem;
+    if (!problemRaw || typeof problemRaw !== "object") return null;
+    const problem = problemRaw as Record<string, unknown>;
+    const problemId =
+      typeof problem.problemId === "string" ? problem.problemId.trim() : "";
+    if (!problemId) return null;
+    const knowledgePoints = Array.isArray(problem.knowledgePoints)
+      ? problem.knowledgePoints
+          .filter((point): point is string => typeof point === "string")
+          .map((point) => point.trim())
+          .filter(Boolean)
+      : [];
+    return {
+      kind: "problem",
+      problem: {
+        problemId,
+        title: typeof problem.title === "string" ? problem.title : null,
+        difficulty:
+          typeof problem.difficulty === "number" ? problem.difficulty : null,
+        knowledgePoints,
+        reason: typeof problem.reason === "string" ? problem.reason : null,
+      },
+    };
+  }
+  if (kind === "choice") {
+    const question = (value as { question?: unknown }).question;
+    const optionsRaw = (value as { options?: unknown }).options;
+    if (typeof question !== "string" || !question.trim()) return null;
+    if (!Array.isArray(optionsRaw)) return null;
+    const options: { id: string; label: string }[] = [];
+    for (const option of optionsRaw) {
+      if (!option || typeof option !== "object") continue;
+      const candidate = option as Record<string, unknown>;
+      const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+      const label =
+        typeof candidate.label === "string" ? candidate.label.trim() : "";
+      if (id && label) options.push({ id, label });
+    }
+    if (options.length === 0) return null;
+    const answerIdxRaw = (value as { answerIdx?: unknown }).answerIdx;
+    const explanationRaw = (value as { explanation?: unknown }).explanation;
+    return {
+      kind: "choice",
+      question: question.trim(),
+      options,
+      answerIdx:
+        typeof answerIdxRaw === "number" &&
+        answerIdxRaw >= 0 &&
+        answerIdxRaw < options.length
+          ? answerIdxRaw
+          : undefined,
+      explanation:
+        typeof explanationRaw === "string" && explanationRaw.trim()
+          ? explanationRaw.trim()
+          : undefined,
+    };
+  }
+  if (kind === "math_steps") {
+    const stepsRaw = (value as { steps?: unknown }).steps;
+    if (!Array.isArray(stepsRaw)) return null;
+    const steps: Array<{ title?: string; tex: string; note?: string }> = [];
+    for (const step of stepsRaw) {
+      if (!step || typeof step !== "object") continue;
+      const candidate = step as Record<string, unknown>;
+      const tex = typeof candidate.tex === "string" ? candidate.tex.trim() : "";
+      if (!tex) continue;
+      const result: { title?: string; tex: string; note?: string } = { tex };
+      if (typeof candidate.title === "string" && candidate.title.trim()) {
+        result.title = candidate.title.trim();
+      }
+      if (typeof candidate.note === "string" && candidate.note.trim()) {
+        result.note = candidate.note.trim();
+      }
+      steps.push(result);
+    }
+    return steps.length > 0 ? { kind: "math_steps", steps } : null;
+  }
+  if (kind === "code") {
+    const code = (value as { code?: unknown }).code;
+    if (typeof code !== "string" || !code) return null;
+    const langRaw = (value as { lang?: unknown }).lang;
+    const lang = typeof langRaw === "string" ? langRaw.trim() : "";
+    return { kind: "code", lang: lang || "text", code };
+  }
+  if (kind === "node_ref") {
+    const point = (value as { point?: unknown }).point;
+    if (typeof point !== "string" || !point.trim()) return null;
+    const labelRaw = (value as { label?: unknown }).label;
+    return {
+      kind: "node_ref",
+      point: point.trim(),
+      label:
+        typeof labelRaw === "string" && labelRaw.trim()
+          ? labelRaw.trim()
+          : undefined,
+    };
+  }
+  if (kind === "callout") {
+    const tone = (value as { tone?: unknown }).tone;
+    const markdown = (value as { markdown?: unknown }).markdown;
+    if (typeof markdown !== "string" || !markdown.trim()) return null;
+    const safeTone = tone === "warn" ? "warn" : tone === "tip" ? "tip" : "info";
+    return { kind: "callout", tone: safeTone, markdown: markdown.trim() };
+  }
+  return null;
+}
+
+interface LearningPathPayload {
+  studentEntityId?: number;
+  studentEntityIds?: number[];
+  modelRunId?: number | null;
+  generatedAt?: string | null;
+  targets?: string[];
+  path?: string[];
+  explanations?: Record<string, unknown>;
+}
+
+interface LearningPathStatusItemPayload {
+  point?: string;
+  mastery?: number;
+  attempted?: number;
+  correct?: number;
+  lastTriedAt?: string | null;
+}
+
+interface LearningPathStatusPayload {
+  studentEntityId?: number;
+  studentEntityIds?: number[];
+  items?: LearningPathStatusItemPayload[];
+}
+
+interface KnowledgeNodeRecentDayPayload {
+  date?: string;
+  attempted?: number;
+  correct?: number;
+}
+
+interface KnowledgeNodeStatsPayload {
+  attempted?: number;
+  correct?: number;
+  accuracy?: number;
+  lastTriedAt?: string | null;
+  recentSeries?: KnowledgeNodeRecentDayPayload[];
+}
+
+interface KnowledgeNodeProblemPayload {
+  problemId?: string;
+  title?: string | null;
+  difficulty?: number | null;
+  knowledgePoints?: string[];
+  score?: number | null;
+  reason?: string | null;
+}
+
+interface KnowledgeNodeDetailPayload {
+  point?: string;
+  level?: string | null;
+  parents?: string[];
+  children?: string[];
+  prerequisites?: string[];
+  successors?: string[];
+  description?: string | null;
+  mastery?: number;
+  stats?: KnowledgeNodeStatsPayload;
+  problems?: KnowledgeNodeProblemPayload[];
+}
+
+function normalizeLearningPath(payload: LearningPathPayload): LearningPathSnapshot {
+  return {
+    studentEntityId: Number(payload.studentEntityId ?? 0),
+    studentEntityIds: Array.isArray(payload.studentEntityIds)
+      ? payload.studentEntityIds.map((value) => Number(value))
+      : [],
+    modelRunId:
+      typeof payload.modelRunId === "number" ? payload.modelRunId : null,
+    generatedAt:
+      typeof payload.generatedAt === "string" ? payload.generatedAt : null,
+    targets: Array.isArray(payload.targets)
+      ? payload.targets.map((value) => String(value))
+      : [],
+    path: Array.isArray(payload.path)
+      ? payload.path.map((value) => String(value))
+      : [],
+    explanations:
+      payload.explanations && typeof payload.explanations === "object"
+        ? (payload.explanations as Record<string, unknown>)
+        : {},
+  };
+}
+
+function normalizeLearningPathStatus(
+  payload: LearningPathStatusPayload,
+): LearningPathStatusSnapshot {
+  const items: LearningPathStatusItem[] = Array.isArray(payload.items)
+    ? payload.items
+        .map((item) => ({
+          point: String(item.point ?? "").trim(),
+          mastery: Number(item.mastery ?? 0),
+          attempted: Number(item.attempted ?? 0),
+          correct: Number(item.correct ?? 0),
+          lastTriedAt:
+            typeof item.lastTriedAt === "string" ? item.lastTriedAt : null,
+        }))
+        .filter((item) => item.point.length > 0)
+    : [];
+  return {
+    studentEntityId: Number(payload.studentEntityId ?? 0),
+    studentEntityIds: Array.isArray(payload.studentEntityIds)
+      ? payload.studentEntityIds.map((value) => Number(value))
+      : [],
+    items,
+  };
+}
+
+function normalizeKnowledgeNodeStats(
+  payload: KnowledgeNodeStatsPayload | undefined,
+): KnowledgeNodeStats {
+  const recent: KnowledgeNodeRecentDay[] = Array.isArray(payload?.recentSeries)
+    ? payload.recentSeries.map((day) => ({
+        date: String(day?.date ?? ""),
+        attempted: Number(day?.attempted ?? 0),
+        correct: Number(day?.correct ?? 0),
+      }))
+    : [];
+  return {
+    attempted: Number(payload?.attempted ?? 0),
+    correct: Number(payload?.correct ?? 0),
+    accuracy: Number(payload?.accuracy ?? 0),
+    lastTriedAt:
+      typeof payload?.lastTriedAt === "string" ? payload.lastTriedAt : null,
+    recentSeries: recent,
+  };
+}
+
+function normalizeKnowledgeNodeDetail(
+  payload: KnowledgeNodeDetailPayload,
+): KnowledgeNodeDetail {
+  const problems: KnowledgeNodeProblem[] = Array.isArray(payload.problems)
+    ? payload.problems
+        .map((problem) => ({
+          problemId: String(problem?.problemId ?? "").trim(),
+          title:
+            typeof problem?.title === "string" && problem.title.trim()
+              ? problem.title
+              : null,
+          difficulty:
+            typeof problem?.difficulty === "number" ? problem.difficulty : null,
+          knowledgePoints: Array.isArray(problem?.knowledgePoints)
+            ? problem.knowledgePoints.map((value) => String(value))
+            : [],
+          score: typeof problem?.score === "number" ? problem.score : null,
+          reason:
+            typeof problem?.reason === "string" && problem.reason.trim()
+              ? problem.reason
+              : null,
+        }))
+        .filter((problem) => problem.problemId.length > 0)
+    : [];
+  return {
+    point: String(payload.point ?? "").trim(),
+    level: typeof payload.level === "string" ? payload.level : null,
+    parents: Array.isArray(payload.parents)
+      ? payload.parents.map((value) => String(value))
+      : [],
+    children: Array.isArray(payload.children)
+      ? payload.children.map((value) => String(value))
+      : [],
+    prerequisites: Array.isArray(payload.prerequisites)
+      ? payload.prerequisites.map((value) => String(value))
+      : [],
+    successors: Array.isArray(payload.successors)
+      ? payload.successors.map((value) => String(value))
+      : [],
+    description:
+      typeof payload.description === "string" && payload.description.trim()
+        ? payload.description
+        : null,
+    mastery: Number(payload.mastery ?? 0),
+    stats: normalizeKnowledgeNodeStats(payload.stats),
+    problems,
+  };
+}
+
+export async function fetchLearningPath(
+  authToken?: string,
+): Promise<LearningPathSnapshot> {
+  const payload = await requestJson<LearningPathPayload>(
+    "/api/v1/recommendations/path/me",
+    { authToken },
+  );
+  return normalizeLearningPath(payload);
+}
+
+export async function fetchLearningPathStatus(
+  authToken?: string,
+): Promise<LearningPathStatusSnapshot> {
+  const payload = await requestJson<LearningPathStatusPayload>(
+    "/api/v1/recommendations/path/me/status",
+    { authToken },
+  );
+  return normalizeLearningPathStatus(payload);
+}
+
+export async function fetchKnowledgeNodeDetail(
+  point: string,
+  options?: { topK?: number; authToken?: string },
+): Promise<KnowledgeNodeDetail> {
+  const payload = await requestJson<KnowledgeNodeDetailPayload>(
+    `/api/v1/recommendations/knowledge/${encodeURIComponent(point)}`,
+    {
+      query: options?.topK ? { topK: options.topK } : undefined,
+      authToken: options?.authToken,
+    },
+  );
+  return normalizeKnowledgeNodeDetail(payload);
 }
 
 export function getApiErrorMessage(error: unknown, fallback: string): string {

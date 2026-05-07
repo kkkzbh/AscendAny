@@ -82,7 +82,7 @@ describe("StudentReportsPage", () => {
 
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     const table = await screen.findByRole("table");
-    expect(within(table).getByText("Contest 11")).toBeInTheDocument();
+    expect(await within(table).findByText("Contest 11")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "分析" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("搜索学生"), {

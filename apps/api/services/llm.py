@@ -13,7 +13,7 @@ from ..core.errors import AppError
 from ..schemas.chat import ChatReplyRequest, ChatReplyResponse
 from .llm_providers.registry import build_provider_profile, get_adapter
 from .llm_providers.types import ProviderRequest
-from .tools import TOOL_DEFINITIONS, ToolExecutor
+from .tools import TOOL_CONTRACTS_BY_NAME, TOOL_DEFINITIONS, ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -366,6 +366,37 @@ class LLMService:
                     yield {"type": "notes_update", **note_event}
                 pending_notes_events.clear()
 
+            pending_block_events = getattr(
+                tool_executor, "chat_block_events", None
+            )
+            if isinstance(pending_block_events, list) and pending_block_events:
+                for block in pending_block_events:
+                    yield {"type": "block_append", "block": block}
+                pending_block_events.clear()
+
+            pending_path_events = getattr(
+                tool_executor, "path_visualization_events", None
+            )
+            if isinstance(pending_path_events, list) and pending_path_events:
+                for event in pending_path_events:
+                    name = event.get("event")
+                    if name == "node_focus" and event.get("point"):
+                        yield {"type": "node_focus", "point": event["point"]}
+                    elif name == "node_status" and event.get("point") is not None:
+                        yield {
+                            "type": "node_status",
+                            "point": event["point"],
+                            "mastery": event.get("mastery", 0.0),
+                        }
+                    elif name == "path_update" and event.get("next") is not None:
+                        yield {
+                            "type": "path_update",
+                            "mode": event.get("mode", "replace"),
+                            "previous": event.get("previous"),
+                            "next": event["next"],
+                        }
+                pending_path_events.clear()
+
             if activity_label is None:
                 continue
             done_label = self._tool_activity_label(
@@ -469,9 +500,9 @@ class LLMService:
         if tool_name == "read_notes":
             if arguments and arguments.get("mode") == "search":
                 return "搜索学习笔记"
-            return "读取学习笔记"
-        if tool_name == "update_notes":
-            return "更新学习笔记"
+        contract = TOOL_CONTRACTS_BY_NAME.get(tool_name)
+        if contract is not None:
+            return contract.activity_label
         return None
 
     @staticmethod

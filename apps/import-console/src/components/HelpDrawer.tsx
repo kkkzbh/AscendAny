@@ -20,11 +20,11 @@ export function HelpDrawer({ open, onClose }: Props) {
             <h3>🚀 快速开始</h3>
             <ol className="help-steps">
               <li>
-                <strong>选择类型</strong> — 在左侧面板的下拉框中选择考试类型（数据结构 / PTA ICPC / PTA IOI）
+                <strong>导出 JSON</strong> — 在 Pintia 题目集页面使用 AscendAny 浏览器插件导出单 JSON 文件。
               </li>
               <li>
-                <strong>上传 ZIP</strong> — 将打包好的 .zip 文件拖入上传区域，或点击区域选择文件。
-                ZIP 内应为完整的考试目录（含提交记录、成绩单等子目录）
+                <strong>上传 JSON</strong> — 将插件导出的 .json 文件拖入上传区域，或点击区域选择文件。
+                Pintia JSON 会自动识别考试类型，不需要手工选择。
               </li>
               <li>
                 <strong>点击导入</strong> — 上传完成后点击「开始增量导入」按钮，日志区实时显示导入进度，完成后查看汇总报告
@@ -32,56 +32,36 @@ export function HelpDrawer({ open, onClose }: Props) {
             </ol>
           </section>
 
-          {/* ZIP Format */}
+          {/* JSON Format */}
           <section className="help-section">
-            <h3>📦 ZIP 打包规范</h3>
+            <h3>📦 Pintia JSON 规范</h3>
             <div className="help-cards">
               <div className="help-card">
-                <h4>目录结构</h4>
-                <p>将一场考试的完整目录打成 .zip，例如：</p>
+                <h4>主入口</h4>
+                <p>默认只需要上传浏览器插件生成的单 JSON 文件。顶层必须包含：</p>
                 <ul>
-                  <li><code>月测1/提交记录/*.csv</code></li>
-                  <li><code>月测1/成绩单/*.xlsx</code></li>
-                  <li><code>月测1/答卷/*.html</code>（可选）</li>
+                  <li><code>schema: "ascendany.pintia.unit.v1"</code></li>
+                  <li><code>problems</code> / <code>participants</code> / <code>submissions</code></li>
+                  <li><code>integrity</code> 完整性计数</li>
                 </ul>
-                <p className="help-note">ZIP 文件名即为考试名称（去掉 .zip 后缀）。可一次上传多个 .zip。</p>
+                <p className="help-note">JSON 会递归落到 PRACTICE_DATA_ROOT 后被预处理识别为 Pintia 考试。</p>
               </div>
             </div>
           </section>
 
-          {/* Exam Types */}
+          {/* Legacy Types */}
           <section className="help-section">
-            <h3>📂 三种考试类型</h3>
+            <h3>📂 Legacy ZIP</h3>
             <div className="help-cards">
               <div className="help-card">
-                <h4>📚 数据结构月测</h4>
-                <p>随机组卷模式的月度测验。每场考试包含：</p>
+                <h4>旧兼容格式</h4>
+                <p>旧 CSV/XLSX/HTML ZIP 入口仅用于历史数据维护，不再作为推荐训练和 Pintia 外部考试的主链路。</p>
                 <ul>
-                  <li><code>答卷/*.html</code> — 题目抽签信息</li>
-                  <li><code>提交记录/*.csv</code> — 提交数据 (UTF-8)</li>
-                  <li><code>成绩单/*.xlsx</code> — 成绩汇总</li>
+                  <li><code>答卷/*.html</code></li>
+                  <li><code>提交记录/*.csv</code></li>
+                  <li><code>成绩单/*.xlsx</code></li>
                 </ul>
-                <p className="help-note">提交者使用短昵称；系统会在导入时自动尝试按昵称认领绑定。</p>
-              </div>
-
-              <div className="help-card">
-                <h4>🏆 PTA ICPC 题目集</h4>
-                <p>ICPC 计分规则的编程练习。特点：</p>
-                <ul>
-                  <li>CSV 编码为 <code>gb18030</code></li>
-                  <li>成绩单为 ICPC 榜单格式 (<code>+1\n61</code>)</li>
-                  <li>提交记录含学号信息</li>
-                </ul>
-              </div>
-
-              <div className="help-card">
-                <h4>📝 PTA IOI 题目集</h4>
-                <p>IOI 分数制的编程练习。特点：</p>
-                <ul>
-                  <li>CSV 编码为 <code>gb18030</code></li>
-                  <li>IOI 计分，最高分取优</li>
-                  <li>与数据结构月测类似的成绩单格式</li>
-                </ul>
+                <p className="help-note">新数据请优先使用 Pintia JSON。</p>
               </div>
             </div>
           </section>
@@ -128,7 +108,7 @@ export function HelpDrawer({ open, onClose }: Props) {
 
               <dt>数据在哪里？</dt>
               <dd>
-                上传的 ZIP 会解压到服务器的 <code>PRACTICE_DATA_ROOT</code> 对应的考试类型目录下。
+                上传的 JSON 或 legacy ZIP 会写入服务器的 <code>PRACTICE_DATA_ROOT</code>。
                 导入后的结构化数据存储在 PostgreSQL 数据库中。
               </dd>
 
@@ -145,12 +125,12 @@ export function HelpDrawer({ open, onClose }: Props) {
             <h3>🔧 技术架构</h3>
             <p>
               本控制台通过 FastAPI 后端的 <code>/api/v1/import/*</code> 系列端点操作。
-              上传的 ZIP 文件会在服务端解压到 practice 目录，然后在线程池中调用
+              上传的 Pintia JSON 会保存到 practice 目录，legacy ZIP 会在服务端解压，然后在线程池中调用
               <code>preprocess</code> 模块执行增量导入。
               导入进度通过 Server-Sent Events (SSE) 实时推送到前端。
             </p>
             <p>
-              导入流程：上传 → 解压 → 指纹比对 → 解析 CSV/XLSX/HTML → 写入考试/题目/参赛者/提交记录
+              导入流程：上传 → 指纹比对 → 解析 Pintia JSON → 写入外部考试/题目/参赛者/提交/代码
               → 计算五维能力指标 → 计算 Rating → 更新学生当前画像
             </p>
           </section>

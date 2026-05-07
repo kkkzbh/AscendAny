@@ -29,6 +29,8 @@ class SubmissionRecord:
     score_rate: float
     verdict: str | None
     is_correct: bool
+    source_platform: str = "external_exam"
+    problem_instance_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -158,21 +160,6 @@ class RecommendationRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    WITH resolved_submissions AS (
-                        SELECT
-                            COALESCE(s.student_id, resolved.student_id) AS student_id
-                        FROM ascendany.submissions AS s
-                        LEFT JOIN LATERAL (
-                            SELECT MIN(ep.student_id) AS student_id
-                            FROM ascendany.exam_participants AS ep
-                            JOIN ascendany.student_identities AS si
-                              ON si.student_id = ep.student_id
-                             AND si.external_name = s.actor_name
-                            WHERE ep.exam_id = s.exam_id
-                            HAVING COUNT(DISTINCT ep.student_id) = 1
-                        ) AS resolved ON TRUE
-                        WHERE COALESCE(s.problem_code, '') <> ''
-                    )
                     SELECT
                         s.student_id,
                         si.external_id AS student_no,
@@ -191,7 +178,10 @@ class RecommendationRepository:
                       ON scm.student_id = s.student_id
                     WHERE EXISTS (
                         SELECT 1
-                        FROM resolved_submissions AS sub
+                        FROM ascendany.submissions AS sub
+                        JOIN ascendany.exam_problem_external_links AS epl
+                          ON epl.exam_id = sub.exam_id
+                         AND epl.problem_set_problem_id = sub.problem_code
                         WHERE sub.student_id = s.student_id
                     )
                     ORDER BY s.student_id
@@ -214,39 +204,11 @@ class RecommendationRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    WITH resolved_submissions AS (
-                        SELECT
-                            s.*,
-                            COALESCE(s.student_id, resolved.student_id) AS resolved_student_id
-                        FROM ascendany.submissions AS s
-                        LEFT JOIN LATERAL (
-                            SELECT MIN(ep.student_id) AS student_id
-                            FROM ascendany.exam_participants AS ep
-                            JOIN ascendany.student_identities AS si
-                              ON si.student_id = ep.student_id
-                             AND si.external_name = s.actor_name
-                            WHERE ep.exam_id = s.exam_id
-                            HAVING COUNT(DISTINCT ep.student_id) = 1
-                        ) AS resolved ON TRUE
-                    )
                     SELECT
-                        s.resolved_student_id AS student_id,
-                        COALESCE(
-                            NULLIF(s.raw->>'global_problem_id', ''),
-                            NULLIF(s.raw->>'problem_id', ''),
-                            NULLIF(ep.meta->>'global_problem_id', ''),
-                            NULLIF(ep.meta->>'problem_id', ''),
-                            CASE
-                                WHEN COALESCE(s.problem_code, '') <> ''
-                                 AND e.source_path LIKE e.exam_type || '/%'
-                                    THEN replace(e.source_path, '/', '_') || '_' || s.problem_code
-                                WHEN COALESCE(s.problem_code, '') <> ''
-                                    THEN e.exam_type || '_' || replace(e.source_path, '/', '_') || '_' || s.problem_code
-                                ELSE NULL
-                            END,
-                            NULLIF(s.problem_code, ''),
-                            ('exam:' || s.exam_id::text || ':' || COALESCE(s.problem_code, ''))
-                        ) AS practice_problem_id,
+                        s.student_id AS student_id,
+                        epl.source_platform || ':' || epl.external_problem_id AS practice_problem_id,
+                        epl.source_platform || ':' || epl.problem_set_id || ':' || epl.problem_set_problem_id AS problem_instance_id,
+                        epl.source_platform AS source_platform,
                         COALESCE(ep.problem_title, s.problem_code) AS problem_title,
                         s.submitted_at,
                         COALESCE(s.score, 0)::float AS score,
@@ -265,14 +227,14 @@ class RecommendationRepository:
                                 THEN s.score >= ep.points
                             ELSE FALSE
                         END AS is_correct
-                    FROM resolved_submissions AS s
-                    JOIN ascendany.exams AS e
-                      ON e.exam_id = s.exam_id
+                    FROM ascendany.submissions AS s
+                    JOIN ascendany.exam_problem_external_links AS epl
+                      ON epl.exam_id = s.exam_id
+                     AND epl.problem_set_problem_id = s.problem_code
                     LEFT JOIN ascendany.exam_problems AS ep
                       ON ep.exam_id = s.exam_id
                      AND ep.problem_code = s.problem_code
-                    WHERE s.resolved_student_id IS NOT NULL
-                      AND COALESCE(s.problem_code, '') <> ''
+                    WHERE s.student_id IS NOT NULL
                     """
                 )
                 rows = cur.fetchall()
@@ -290,15 +252,23 @@ class RecommendationRepository:
                 score_rate=float(row["score_rate"]),
                 verdict=str(row["verdict"]) if row.get("verdict") else None,
                 is_correct=bool(row["is_correct"]),
+                source_platform=str(row["source_platform"]),
+                problem_instance_id=str(row["problem_instance_id"])
+                if row.get("problem_instance_id")
+                else None,
             )
             for row in rows
-            ]
+        ]
 
     def load_practice_problem_tags(self) -> dict[str, list[str]]:
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    SELECT source_platform || ':' || external_problem_id AS practice_problem_id,
+                           knowledge_point
+                    FROM ascendany.external_problem_tags
+                    UNION
                     SELECT practice_problem_id,
                            knowledge_point
                     FROM ascendany.recommendation_practice_problem_tags

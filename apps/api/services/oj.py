@@ -17,6 +17,7 @@ from psycopg.rows import dict_row
 
 from ..core.config import PROJECT_ROOT, Settings
 from .auth import AuthenticatedAccount
+from services.recommendation.recommendation.knowledge import canonicalize_knowledge_tags
 
 
 def _normalize_output(output: str) -> str:
@@ -168,19 +169,14 @@ def _blank_none(value: Any) -> str | None:
 
 
 def _parse_tags(payload: dict[str, Any]) -> list[str]:
-    raw = payload.get("tags")
-    if isinstance(raw, list):
-        values = [str(item).strip() for item in raw]
-    else:
-        category_tags = str(payload.get("categoryTags") or "").strip()
-        values = re.split(r"[\s,，;；]+", category_tags) if category_tags else []
-    out: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value and value not in seen:
-            out.append(value)
-            seen.add(value)
-    return out
+    values: Any = payload.get("tags")
+    if values is None:
+        values = payload.get("knowledgePoints")
+    if values is None:
+        values = payload.get("knowledge_points")
+    if values is None:
+        values = str(payload.get("categoryTags") or "").strip()
+    return canonicalize_knowledge_tags(values).tags
 
 
 def _row_tags(row: dict[str, Any]) -> list[str]:
@@ -981,7 +977,10 @@ class OjProblemService:
         if "description" in payload:
             fields.append("source_hash = %s")
             params.append(_problem_source_hash(problem_id, str(payload.get("description") or "")))
-        tags_changed = "categoryTags" in payload or "tags" in payload
+        tags_changed = any(
+            key in payload
+            for key in ("categoryTags", "tags", "knowledgePoints", "knowledge_points")
+        )
         if not fields and not tags_changed:
             return _admin_resp(request_id, 400, None, "没有需要更新的字段")
 

@@ -248,6 +248,52 @@ describe("chatStore sessions", () => {
     expect(message?.reasoningStreaming).toBe(false);
   });
 
+  it("hydrates persisted rich blocks with reasoning while clearing stream flags", () => {
+    useChatStore.getState().hydrateFromLocalState({
+      sessions: [
+        {
+          id: "session_rich",
+          title: "rich",
+          messages: [
+            {
+              id: "msg_rich",
+              role: "assistant",
+              content: "旧纯文本",
+              blocks: [
+                { kind: "text", text: "最终回答" },
+                { kind: "callout", tone: "tip", markdown: "**先补数组**" },
+                { kind: "code", lang: "python", code: "print('ok')" },
+              ],
+              reasoningContent: "先看画像，再看提交记录。",
+              reasoningStartedAt: 1710000000100,
+              reasoningEndedAt: 1710000005100,
+              timestamp: 1710000000000,
+              streaming: true,
+              reasoningStreaming: true,
+            },
+          ],
+          summary: "",
+          createdAt: 1710000000000,
+          updatedAt: 1710000001000,
+        },
+      ],
+      activeSessionId: "session_rich",
+    });
+
+    const message = useChatStore.getState().getActiveSession()?.messages[0];
+    expect(message?.content).toBe("最终回答");
+    expect(message?.blocks).toEqual([
+      { kind: "text", text: "最终回答" },
+      { kind: "callout", tone: "tip", markdown: "**先补数组**" },
+      { kind: "code", lang: "python", code: "print('ok')" },
+    ]);
+    expect(message?.reasoningContent).toBe("先看画像，再看提交记录。");
+    expect(message?.reasoningStartedAt).toBe(1710000000100);
+    expect(message?.reasoningEndedAt).toBe(1710000005100);
+    expect(message?.streaming).toBe(false);
+    expect(message?.reasoningStreaming).toBe(false);
+  });
+
   it("interleaves text and tool blocks in SSE arrival order", () => {
     const store = useChatStore.getState();
     store.createSession();

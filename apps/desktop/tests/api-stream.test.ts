@@ -112,6 +112,39 @@ describe("chat stream API", () => {
     expect(events).toEqual([{ type: "delta", text: "ok" }]);
   });
 
+  it("parses choice block append events", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        eventStream([
+          'event: block_append\ndata: {"block":{"kind":"choice","question":"练什么？","options":[{"id":"A","label":"数组"},{"id":"B","label":"链表"}]}}\n\n',
+        ]),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      ),
+    );
+    const events: ChatStreamEvent[] = [];
+
+    await streamChatReply({ messages: [], summary: "" }, undefined, (event) => events.push(event));
+
+    expect(events).toEqual([
+      {
+        type: "block_append",
+        block: {
+          kind: "choice",
+          question: "练什么？",
+          options: [
+            { id: "A", label: "数组" },
+            { id: "B", label: "链表" },
+          ],
+          answerIdx: undefined,
+          explanation: undefined,
+        },
+      },
+    ]);
+  });
+
   it("does not swallow consumer callback errors", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

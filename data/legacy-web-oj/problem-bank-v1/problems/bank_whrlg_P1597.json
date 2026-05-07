@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "字符串",
+    "模拟"
+  ],
+  "created_at": "2026-01-24 19:21:43.722977",
+  "description": "# P1597 语句解析\n\n## 题目背景\n\n木有背景……\n\n## 题目描述\n\n一串长度不超过 $255$ 的 PASCAL 语言代码，只有 $a,b,c$ 三个变量，而且只有赋值语句，赋值只能是一个一位的数字或一个变量，每条赋值语句的格式是 `[变量]:=[变量或一位整数];`。未赋值的变量值为 $0$ 输出 $a,b,c$ 的值。\n\n## 输入格式\n\n一串符合语法的 PASCAL 语言，只有 $a,b,c$ 三个变量，而且只有赋值语句，赋值只能是一个一位的数字或一个变量，未赋值的变量值为 $0$。\n\n## 输出格式\n\n输出 $a,b,c$ 最终的值。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\na:=3;b:=4;c:=5;\n```\n\n### 输出 #1\n\n```\n3 4 5\n```\n\n## 说明/提示\n\n输入的 PASCAL 语言长度不超过 $255$。",
+  "link": "https://www.luogu.com.cn/problem/P1597",
+  "pass_count": 64.65,
+  "problem_id": "bank_whrlg_P1597",
+  "raw_category_tags": "字符串 模拟",
+  "rejected_tags": [],
+  "solution_1": "史上最短p1597代码\n\n#include<cstdio>\nusing namespace std;\nint a[3];char s1,s2;\nint main()\n{\n    while (scanf(\"%c:=%c;\",&s1,&s2)==2)//充分利用c++语言优势\n     a[s1-'a']=s2>='0' && s2<='9' ? s2-'0' : a[s2-'a']; //赋值语句简洁明了\n    printf(\"%d %d %d\",a[0],a[1],a[2]);\n}",
+  "solution_2": "比第一篇 C++ 题解代码还短的 Python 代码。\n\n题目要求让我们执行一段代码，不难想到 Python 中的 exec() 正好就可以帮我们执行字符串中的代码。不过因为 Pascal 和 Python 语法的不同，需要先将输入中的冒号删掉，这里可以用 str.replace(':','') 实现。\n\na=b=c=0\nexec(input().replace(':',''))\nprint(a,b,c)\n\n需要注意的是，题目中说到没有赋值的变量默认为 0，所以需要先定义 a,b,c 三个变量。",
+  "source_hash": "0e859c8863b07ba9569860a0a7bf141d7947cd8cc67f641cde85311443116606",
+  "source_meta": {
+    "legacy_id": 7,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 193.11,
+  "title": null
+}

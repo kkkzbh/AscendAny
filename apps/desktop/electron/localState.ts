@@ -7,6 +7,7 @@ type ThemeMode = "light" | "dark";
 type RightPanelTab = "ability" | "history" | "notes";
 type ChatRole = "user" | "assistant" | "system";
 type ToolActivityStatus = "running" | "done" | "error";
+type ChatCalloutTone = "info" | "warn" | "tip";
 
 export interface LocalProfileSnapshot {
   id: string;
@@ -39,9 +40,14 @@ export interface LocalChatMessageSnapshot {
   role: ChatRole;
   content: string;
   timestamp: number;
+  blocks?: LocalChatBlockSnapshot[];
   roleId?: string;
+  reasoningContent?: string;
+  reasoningStartedAt?: number;
+  reasoningEndedAt?: number;
   toolActivities?: LocalToolActivitySnapshot[];
   streaming?: boolean;
+  reasoningStreaming?: boolean;
 }
 
 export interface LocalToolActivitySnapshot {
@@ -49,6 +55,41 @@ export interface LocalToolActivitySnapshot {
   label: string;
   status: ToolActivityStatus;
 }
+
+export interface LocalProblemRefSnapshot {
+  problemId: string;
+  title: string | null;
+  difficulty: number | null;
+  knowledgePoints: string[];
+  reason: string | null;
+}
+
+export interface LocalChoiceOptionSnapshot {
+  id: string;
+  label: string;
+}
+
+export interface LocalMathStepSnapshot {
+  title?: string;
+  tex: string;
+  note?: string;
+}
+
+export type LocalChatBlockSnapshot =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; activity: LocalToolActivitySnapshot }
+  | { kind: "problem"; problem: LocalProblemRefSnapshot }
+  | {
+      kind: "choice";
+      question: string;
+      options: LocalChoiceOptionSnapshot[];
+      answerIdx?: number;
+      explanation?: string;
+    }
+  | { kind: "math_steps"; steps: LocalMathStepSnapshot[] }
+  | { kind: "code"; lang: string; code: string }
+  | { kind: "node_ref"; point: string; label?: string }
+  | { kind: "callout"; tone: ChatCalloutTone; markdown: string };
 
 export interface LocalChatSessionSnapshot {
   id: string;
@@ -210,6 +251,14 @@ function normalizeMessage(value: unknown): LocalChatMessageSnapshot {
     input.role === "user" || input.role === "assistant" || input.role === "system"
       ? input.role
       : "system";
+  const reasoningStartedAt =
+    typeof input.reasoningStartedAt === "number" && Number.isFinite(input.reasoningStartedAt)
+      ? input.reasoningStartedAt
+      : undefined;
+  const reasoningEndedAt =
+    typeof input.reasoningEndedAt === "number" && Number.isFinite(input.reasoningEndedAt)
+      ? input.reasoningEndedAt
+      : undefined;
   return {
     id: stringOrNull(input.id) ?? newId("msg"),
     role,
@@ -218,10 +267,134 @@ function normalizeMessage(value: unknown): LocalChatMessageSnapshot {
       typeof input.timestamp === "number" && Number.isFinite(input.timestamp)
         ? input.timestamp
         : nowMs(),
+    blocks: normalizeChatBlocks(input.blocks),
     roleId: typeof input.roleId === "string" ? input.roleId : undefined,
+    reasoningContent:
+      typeof input.reasoningContent === "string" ? input.reasoningContent : undefined,
+    reasoningStartedAt,
+    reasoningEndedAt,
     toolActivities: normalizeToolActivities(input.toolActivities),
     streaming: typeof input.streaming === "boolean" ? input.streaming : false,
+    reasoningStreaming:
+      typeof input.reasoningStreaming === "boolean" ? input.reasoningStreaming : false,
   };
+}
+
+function normalizeChatBlocks(value: unknown): LocalChatBlockSnapshot[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const blocks = value
+    .map(normalizeChatBlock)
+    .filter((block): block is LocalChatBlockSnapshot => block !== null);
+  return blocks.length > 0 ? blocks : undefined;
+}
+
+function normalizeChatBlock(value: unknown): LocalChatBlockSnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value.kind === "text") {
+    return typeof value.text === "string" && value.text.length > 0
+      ? { kind: "text", text: value.text }
+      : null;
+  }
+  if (value.kind === "tool") {
+    const activity = normalizeToolActivity(value.activity, { allowRunning: true });
+    return activity ? { kind: "tool", activity } : null;
+  }
+  if (value.kind === "problem") {
+    const raw = isRecord(value.problem) ? value.problem : null;
+    if (!raw) return null;
+    const problemId = stringOrNull(raw.problemId);
+    if (!problemId) return null;
+    const knowledgePoints = Array.isArray(raw.knowledgePoints)
+      ? raw.knowledgePoints
+          .filter((point): point is string => typeof point === "string")
+          .map((point) => point.trim())
+          .filter(Boolean)
+      : [];
+    return {
+      kind: "problem",
+      problem: {
+        problemId,
+        title: typeof raw.title === "string" ? raw.title : null,
+        difficulty: typeof raw.difficulty === "number" ? raw.difficulty : null,
+        knowledgePoints,
+        reason: typeof raw.reason === "string" ? raw.reason : null,
+      },
+    };
+  }
+  if (value.kind === "choice") {
+    const question = stringOrNull(value.question);
+    const optionsRaw = Array.isArray(value.options) ? value.options : [];
+    if (!question || optionsRaw.length === 0) return null;
+    const options = optionsRaw
+      .filter((option): option is Record<string, unknown> => isRecord(option))
+      .map((option): LocalChoiceOptionSnapshot | null => {
+        const id = stringOrNull(option.id);
+        const label = stringOrNull(option.label);
+        return id && label ? { id, label } : null;
+      })
+      .filter((option): option is LocalChoiceOptionSnapshot => option !== null);
+    if (options.length === 0) return null;
+    const answerIdx =
+      typeof value.answerIdx === "number" &&
+      value.answerIdx >= 0 &&
+      value.answerIdx < options.length
+        ? value.answerIdx
+        : undefined;
+    const explanation = stringOrNull(value.explanation) ?? undefined;
+    return {
+      kind: "choice",
+      question,
+      options,
+      answerIdx,
+      explanation,
+    };
+  }
+  if (value.kind === "math_steps") {
+    const stepsRaw = Array.isArray(value.steps) ? value.steps : [];
+    const steps = stepsRaw
+      .filter((step): step is Record<string, unknown> => isRecord(step))
+      .map((step): LocalMathStepSnapshot | null => {
+        const tex = stringOrNull(step.tex);
+        if (!tex) return null;
+        const out: LocalMathStepSnapshot = { tex };
+        const title = stringOrNull(step.title);
+        const note = stringOrNull(step.note);
+        if (title) out.title = title;
+        if (note) out.note = note;
+        return out;
+      })
+      .filter((step): step is LocalMathStepSnapshot => step !== null);
+    return steps.length > 0 ? { kind: "math_steps", steps } : null;
+  }
+  if (value.kind === "code") {
+    if (typeof value.code !== "string" || !value.code) return null;
+    return {
+      kind: "code",
+      lang: stringOrNull(value.lang) ?? "text",
+      code: value.code,
+    };
+  }
+  if (value.kind === "node_ref") {
+    const point = stringOrNull(value.point);
+    if (!point) return null;
+    return {
+      kind: "node_ref",
+      point,
+      label: stringOrNull(value.label) ?? undefined,
+    };
+  }
+  if (value.kind === "callout") {
+    const markdown = stringOrNull(value.markdown);
+    if (!markdown) return null;
+    const tone: ChatCalloutTone =
+      value.tone === "warn" ? "warn" : value.tone === "tip" ? "tip" : "info";
+    return { kind: "callout", tone, markdown };
+  }
+  return null;
 }
 
 function normalizeToolActivities(value: unknown): LocalToolActivitySnapshot[] | undefined {
@@ -230,18 +403,30 @@ function normalizeToolActivities(value: unknown): LocalToolActivitySnapshot[] | 
   }
   const items = value
     .filter((item): item is Record<string, unknown> => isRecord(item))
-    .map((item): LocalToolActivitySnapshot | null => {
-      const id = stringOrNull(item.id);
-      const label = stringOrNull(item.label);
-      if (!id || !label) {
-        return null;
-      }
-      const status: ToolActivityStatus =
-        item.status === "done" || item.status === "error" ? item.status : "done";
-      return { id, label, status };
-    })
+    .map((item): LocalToolActivitySnapshot | null => normalizeToolActivity(item))
     .filter((item): item is LocalToolActivitySnapshot => item !== null);
   return items.length > 0 ? items : undefined;
+}
+
+function normalizeToolActivity(
+  value: unknown,
+  options: { allowRunning?: boolean } = {},
+): LocalToolActivitySnapshot | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = stringOrNull(value.id);
+  const label = stringOrNull(value.label);
+  if (!id || !label) {
+    return null;
+  }
+  const status: ToolActivityStatus =
+    value.status === "error"
+      ? "error"
+      : options.allowRunning && value.status === "running"
+        ? "running"
+        : "done";
+  return { id, label, status };
 }
 
 function normalizeSession(value: unknown): LocalChatSessionSnapshot {

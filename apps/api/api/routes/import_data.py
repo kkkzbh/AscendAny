@@ -3,7 +3,7 @@
 All endpoints require admin authentication.
 
 Flow:
-  1. POST /import/upload  — Upload .zip, select examType → extract to practice_root
+  1. POST /import/upload  — Upload Pintia JSON or legacy .zip into practice_root
   2. POST /import/run     — Run incremental import (SSE progress)
   3. GET  /import/history  — Ingest run history
   4. GET  /import/tasks    — In-memory tasks (debug)
@@ -48,7 +48,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-VALID_EXAM_TYPES = {"datastructure", "pta_icpc", "pta_ioi"}
+VALID_EXAM_TYPES = {"datastructure", "pintia", "pta_icpc", "pta_ioi"}
 PREPROCESS_CONFIG_ENV = "ASCENDANY_PREPROCESS_CONFIG"
 
 
@@ -105,6 +105,8 @@ def _normalize_single_source_path(exam_type: str, source_path: str) -> str:
     normalized = source_path.strip().replace("\\", "/").strip("/")
     if not normalized:
         raise HTTPException(status_code=400, detail="sourcePath 不能为空")
+    if exam_type == "pintia":
+        return normalized
     if normalized.startswith(f"{exam_type}/"):
         return normalized
     top = normalized.split("/", 1)[0]
@@ -122,25 +124,60 @@ def _normalize_single_source_path(exam_type: str, source_path: str) -> str:
 @router.post("/upload", response_model=UploadResponse)
 async def upload_exam_zip(
     file: UploadFile = File(...),
-    examType: str = Form(...),
+    examType: str | None = Form(None),
     _admin: AuthenticatedAccount = Depends(get_admin_account),
 ) -> UploadResponse:
-    """Upload a .zip containing exam data.
+    """Upload a Pintia JSON unit or a legacy .zip containing exam data."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="缺少文件名")
 
-    Extracts to ``practice_root/{examType}/{zip_stem}/``.
-    """
-    if examType not in VALID_EXAM_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"无效的考试类型 '{examType}'，可选: {', '.join(sorted(VALID_EXAM_TYPES))}",
-        )
-
-    if not file.filename or not file.filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="只支持 .zip 文件")
-
-    exam_name = Path(file.filename).stem
     practice_root = await asyncio.to_thread(_get_practice_root)
     await asyncio.to_thread(_ensure_practice_root_writable, practice_root)
+    filename = Path(file.filename).name
+    filename_lower = filename.lower()
+
+    if filename_lower.endswith(".json"):
+        raw = await file.read()
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="上传的 JSON 无效") from exc
+        if not isinstance(payload, dict) or payload.get("schema") != "ascendany.pintia.unit.v1":
+            raise HTTPException(
+                status_code=400,
+                detail="只支持 schema=ascendany.pintia.unit.v1 的 JSON",
+            )
+        target_dir = practice_root / "pintia"
+        target_path = target_dir / filename
+        if target_path.exists():
+            raise HTTPException(status_code=409, detail="该 JSON 文件名已存在，请换一个")
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(raw)
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"上传目录不可写：{target_dir}",
+            ) from exc
+        source_path = str(target_path.relative_to(practice_root))
+        return UploadResponse(
+            examType="pintia",
+            examName=Path(filename).stem,
+            sourcePath=source_path,
+            fileCount=1,
+            message=f"已上传 Pintia JSON 到 {source_path}",
+        )
+
+    if examType is None or examType not in VALID_EXAM_TYPES or examType == "pintia":
+        raise HTTPException(
+            status_code=400,
+            detail=f"ZIP 上传需要有效的旧考试类型，可选: datastructure, pta_icpc, pta_ioi",
+        )
+
+    if not filename_lower.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="只支持 Pintia JSON 或旧格式 .zip 文件")
+
+    exam_name = Path(filename).stem
     target_dir = practice_root / examType / exam_name
     if target_dir.exists():
         raise HTTPException(

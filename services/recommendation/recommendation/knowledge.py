@@ -1,25 +1,65 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 import math
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
 
 
 KNOWLEDGE_TREE_PATH = Path(__file__).resolve().parent / "data" / "knowledge_tree.yaml"
+_TAG_SPLIT_RE = re.compile(r"[\s,，、;；|/\\]+")
+_SPACE_RE = re.compile(r"\s+")
+
+_TAG_ALIASES: dict[str, str | None] = {
+    "循环数组": "数组",
+    "中缀表达式": "栈",
+    "后缀表达式": "栈",
+    "二叉搜索树": "二叉树",
+    "二叉查找树": "二叉树",
+    "堆排序": "算法",
+    "插入排序": "算法",
+    "排序": "算法",
+    "哈希表": "STL",
+    "图论": "图",
+    "最长公共子序列": "动态规划",
+    "LCS": "动态规划",
+    "DP": "动态规划",
+    "数学": "算法",
+    "组合数学": "算法",
+    "卢卡斯定理": "算法",
+    "几何": "算法",
+    "位运算": "算法",
+    "C程序设计": None,
+    "输入输出": None,
+}
+
+
+@dataclass(frozen=True)
+class RejectedKnowledgeTag:
+    value: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class CanonicalKnowledgeTags:
+    tags: list[str]
+    rejected: list[RejectedKnowledgeTag]
 
 
 @lru_cache(maxsize=1)
 def load_knowledge_tree() -> dict[str, Any]:
     if not KNOWLEDGE_TREE_PATH.exists():
-        return {"knowledge_tree": {}, "prerequisites": []}
+        return {"knowledge_tree": {}, "prerequisites": [], "descriptions": {}}
     with KNOWLEDGE_TREE_PATH.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
     return {
         "knowledge_tree": payload.get("knowledge_tree", {}) or {},
         "prerequisites": payload.get("prerequisites", []) or [],
+        "descriptions": payload.get("descriptions", {}) or {},
     }
 
 
@@ -42,6 +82,65 @@ def get_all_knowledge_points() -> list[str]:
 
     visit(load_knowledge_tree().get("knowledge_tree", {}))
     return points
+
+
+def canonical_knowledge_point_set() -> set[str]:
+    return set(get_all_knowledge_points())
+
+
+def canonicalize_knowledge_tags(value: Any) -> CanonicalKnowledgeTags:
+    canonical = canonical_knowledge_point_set()
+    by_casefold = {point.casefold(): point for point in canonical}
+    tags: list[str] = []
+    rejected: list[RejectedKnowledgeTag] = []
+    seen: set[str] = set()
+
+    for raw in _iter_raw_tag_tokens(value):
+        tag = _SPACE_RE.sub(" ", str(raw or "").strip().rstrip("\t").strip())
+        if not tag:
+            continue
+        if len(tag) > 64:
+            rejected.append(RejectedKnowledgeTag(tag, "too_long"))
+            continue
+        if any(ord(ch) < 32 for ch in tag):
+            rejected.append(RejectedKnowledgeTag(tag, "control_character"))
+            continue
+
+        mapped = _TAG_ALIASES.get(tag, tag)
+        if mapped is None:
+            rejected.append(RejectedKnowledgeTag(tag, "out_of_scope"))
+            continue
+        canonical_tag = by_casefold.get(str(mapped).casefold())
+        if canonical_tag is None:
+            rejected.append(RejectedKnowledgeTag(tag, "unknown"))
+            continue
+        if canonical_tag in seen:
+            continue
+        seen.add(canonical_tag)
+        tags.append(canonical_tag)
+
+    return CanonicalKnowledgeTags(tags=tags, rejected=rejected)
+
+
+def _iter_raw_tag_tokens(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        out: list[Any] = []
+        for item in value:
+            out.extend(_iter_raw_tag_tokens(item))
+        return out
+    text = str(value).strip().rstrip("\t").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            parsed = yaml.safe_load(text)
+        except yaml.YAMLError:
+            parsed = None
+        if isinstance(parsed, list):
+            return _iter_raw_tag_tokens(parsed)
+    return [item for item in _TAG_SPLIT_RE.split(text) if item]
 
 
 def build_parent_edges(knowledge_to_idx: dict[str, int]) -> list[tuple[int, int]]:

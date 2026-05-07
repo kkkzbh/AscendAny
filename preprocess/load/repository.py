@@ -6,7 +6,18 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from ..models import ExamMeta, ParticipantRow, ProblemInfo, SourceFile, SubmissionRow
+from ..models import (
+    ExamMeta,
+    ExamProblemExternalLinkRow,
+    ExternalProblemRow,
+    ExternalProblemTagRow,
+    ExternalProblemVersionRow,
+    ParticipantRow,
+    ProblemInfo,
+    SourceFile,
+    SubmissionCodeRow,
+    SubmissionRow,
+)
 from .achievements import AchievementDefinition, build_state_rows
 
 
@@ -239,7 +250,7 @@ class Repository:
             )
             return student_id
 
-    def upsert_exam_problem(self, exam_id: int, problem: ProblemInfo) -> None:
+    def upsert_exam_problem(self, exam_id: int, problem: ProblemInfo) -> int:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -264,6 +275,7 @@ class Repository:
                     points = COALESCE(EXCLUDED.points, ascendany.exam_problems.points),
                     order_idx = COALESCE(EXCLUDED.order_idx, ascendany.exam_problems.order_idx),
                     meta = ascendany.exam_problems.meta || EXCLUDED.meta
+                RETURNING exam_problem_id
                 """,
                 (
                     exam_id,
@@ -275,6 +287,172 @@ class Repository:
                     problem.points,
                     problem.order_idx,
                     json.dumps(problem.meta, ensure_ascii=False),
+                ),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise RuntimeError("failed to upsert exam problem")
+            return int(row[0])
+
+    def upsert_external_problem(self, problem: ExternalProblemRow) -> int:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO ascendany.external_problems (
+                    source_platform,
+                    external_problem_id,
+                    title,
+                    problem_type,
+                    difficulty,
+                    meta
+                )
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (source_platform, external_problem_id)
+                DO UPDATE SET
+                    title = COALESCE(EXCLUDED.title, ascendany.external_problems.title),
+                    problem_type = COALESCE(EXCLUDED.problem_type, ascendany.external_problems.problem_type),
+                    difficulty = COALESCE(EXCLUDED.difficulty, ascendany.external_problems.difficulty),
+                    meta = ascendany.external_problems.meta || EXCLUDED.meta,
+                    updated_at = now()
+                RETURNING external_problem_pk
+                """,
+                (
+                    problem.source_platform,
+                    problem.external_problem_id,
+                    problem.title,
+                    problem.problem_type,
+                    problem.difficulty,
+                    json.dumps(problem.meta, ensure_ascii=False),
+                ),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise RuntimeError("failed to upsert external problem")
+            return int(row[0])
+
+    def upsert_external_problem_version(
+        self, version: ExternalProblemVersionRow, external_problem_pk: int
+    ) -> int:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO ascendany.external_problem_versions (
+                    external_problem_pk,
+                    content_sha256,
+                    title,
+                    problem_type,
+                    score,
+                    meta
+                )
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (external_problem_pk, content_sha256)
+                DO UPDATE SET
+                    title = COALESCE(EXCLUDED.title, ascendany.external_problem_versions.title),
+                    problem_type = COALESCE(EXCLUDED.problem_type, ascendany.external_problem_versions.problem_type),
+                    score = COALESCE(EXCLUDED.score, ascendany.external_problem_versions.score),
+                    meta = ascendany.external_problem_versions.meta || EXCLUDED.meta
+                RETURNING external_problem_version_id
+                """,
+                (
+                    external_problem_pk,
+                    version.content_sha256,
+                    version.title,
+                    version.problem_type,
+                    version.score,
+                    json.dumps(version.meta, ensure_ascii=False),
+                ),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise RuntimeError("failed to upsert external problem version")
+            return int(row[0])
+
+    def upsert_external_problem_tag(
+        self,
+        tag: ExternalProblemTagRow,
+        external_problem_pk: int,
+    ) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO ascendany.external_problem_tags (
+                    external_problem_pk,
+                    source_platform,
+                    external_problem_id,
+                    knowledge_point,
+                    source,
+                    confidence,
+                    raw
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (source_platform, external_problem_id, knowledge_point)
+                DO UPDATE SET
+                    external_problem_pk = EXCLUDED.external_problem_pk,
+                    source = EXCLUDED.source,
+                    confidence = EXCLUDED.confidence,
+                    raw = ascendany.external_problem_tags.raw || EXCLUDED.raw,
+                    updated_at = now()
+                """,
+                (
+                    external_problem_pk,
+                    tag.source_platform,
+                    tag.external_problem_id,
+                    tag.knowledge_point,
+                    tag.source,
+                    tag.confidence,
+                    json.dumps(tag.raw, ensure_ascii=False),
+                ),
+            )
+
+    def upsert_exam_problem_external_link(
+        self,
+        exam_id: int,
+        exam_problem_id: int,
+        external_problem_pk: int,
+        external_problem_version_id: int,
+        link: ExamProblemExternalLinkRow,
+    ) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO ascendany.exam_problem_external_links (
+                    exam_id,
+                    exam_problem_id,
+                    external_problem_pk,
+                    external_problem_version_id,
+                    source_platform,
+                    problem_set_id,
+                    problem_set_problem_id,
+                    external_problem_id,
+                    content_sha256,
+                    display_code,
+                    raw
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (exam_problem_id)
+                DO UPDATE SET
+                    external_problem_pk = EXCLUDED.external_problem_pk,
+                    external_problem_version_id = EXCLUDED.external_problem_version_id,
+                    source_platform = EXCLUDED.source_platform,
+                    problem_set_id = EXCLUDED.problem_set_id,
+                    problem_set_problem_id = EXCLUDED.problem_set_problem_id,
+                    external_problem_id = EXCLUDED.external_problem_id,
+                    content_sha256 = EXCLUDED.content_sha256,
+                    display_code = EXCLUDED.display_code,
+                    raw = EXCLUDED.raw
+                """,
+                (
+                    exam_id,
+                    exam_problem_id,
+                    external_problem_pk,
+                    external_problem_version_id,
+                    link.source_platform,
+                    link.problem_set_id,
+                    link.problem_set_problem_id,
+                    link.external_problem_id,
+                    link.content_sha256,
+                    link.display_code,
+                    json.dumps(link.raw, ensure_ascii=False),
                 ),
             )
 
@@ -321,7 +499,7 @@ class Repository:
                 ),
             )
 
-    def insert_submission(self, exam_id: int, row: SubmissionRow) -> None:
+    def insert_submission(self, exam_id: int, row: SubmissionRow) -> int:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -342,7 +520,21 @@ class Repository:
                     raw
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                ON CONFLICT (exam_id, row_hash) DO NOTHING
+                ON CONFLICT (exam_id, row_hash)
+                DO UPDATE SET
+                    student_id = COALESCE(EXCLUDED.student_id, ascendany.submissions.student_id),
+                    actor_source = EXCLUDED.actor_source,
+                    actor_external_id = EXCLUDED.actor_external_id,
+                    actor_name = COALESCE(EXCLUDED.actor_name, ascendany.submissions.actor_name),
+                    submitted_at = COALESCE(EXCLUDED.submitted_at, ascendany.submissions.submitted_at),
+                    problem_code = COALESCE(EXCLUDED.problem_code, ascendany.submissions.problem_code),
+                    verdict = COALESCE(EXCLUDED.verdict, ascendany.submissions.verdict),
+                    score = COALESCE(EXCLUDED.score, ascendany.submissions.score),
+                    language = COALESCE(EXCLUDED.language, ascendany.submissions.language),
+                    time_ms = COALESCE(EXCLUDED.time_ms, ascendany.submissions.time_ms),
+                    memory_kb = COALESCE(EXCLUDED.memory_kb, ascendany.submissions.memory_kb),
+                    raw = ascendany.submissions.raw || EXCLUDED.raw
+                RETURNING submission_id
                 """,
                 (
                     exam_id,
@@ -358,6 +550,51 @@ class Repository:
                     row.time_ms,
                     row.memory_kb,
                     row.row_hash,
+                    json.dumps(row.raw, ensure_ascii=False),
+                ),
+            )
+            result = cursor.fetchone()
+            if result is None:
+                raise RuntimeError("failed to insert submission")
+            return int(result[0])
+
+    def upsert_external_submission_code(
+        self, submission_id: int, row: SubmissionCodeRow
+    ) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO ascendany.external_submission_codes (
+                    submission_id,
+                    source_platform,
+                    external_submission_id,
+                    language,
+                    code_content,
+                    code_sha256,
+                    compile_log,
+                    case_results,
+                    raw
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (source_platform, external_submission_id)
+                DO UPDATE SET
+                    submission_id = EXCLUDED.submission_id,
+                    language = COALESCE(EXCLUDED.language, ascendany.external_submission_codes.language),
+                    code_content = EXCLUDED.code_content,
+                    code_sha256 = EXCLUDED.code_sha256,
+                    compile_log = EXCLUDED.compile_log,
+                    case_results = EXCLUDED.case_results,
+                    raw = ascendany.external_submission_codes.raw || EXCLUDED.raw
+                """,
+                (
+                    submission_id,
+                    row.source_platform,
+                    row.external_submission_id,
+                    row.language,
+                    row.code_content,
+                    row.code_sha256,
+                    row.compile_log,
+                    json.dumps(row.case_results, ensure_ascii=False),
                     json.dumps(row.raw, ensure_ascii=False),
                 ),
             )

@@ -8,9 +8,42 @@ export interface ChatToolActivity {
   status: ToolActivityStatus;
 }
 
+export interface ChatProblemRef {
+  problemId: string;
+  title: string | null;
+  difficulty: number | null;
+  knowledgePoints: string[];
+  reason: string | null;
+}
+
+export interface ChatChoiceOption {
+  id: string;
+  label: string;
+}
+
+export interface ChatMathStep {
+  title?: string;
+  tex: string;
+  note?: string;
+}
+
+export type ChatCalloutTone = "info" | "warn" | "tip";
+
 export type ChatBlock =
   | { kind: "text"; text: string }
-  | { kind: "tool"; activity: ChatToolActivity };
+  | { kind: "tool"; activity: ChatToolActivity }
+  | { kind: "problem"; problem: ChatProblemRef }
+  | {
+      kind: "choice";
+      question: string;
+      options: ChatChoiceOption[];
+      answerIdx?: number;
+      explanation?: string;
+    }
+  | { kind: "math_steps"; steps: ChatMathStep[] }
+  | { kind: "code"; lang: string; code: string }
+  | { kind: "node_ref"; point: string; label?: string }
+  | { kind: "callout"; tone: ChatCalloutTone; markdown: string };
 
 export interface ChatMessage {
   id: string;

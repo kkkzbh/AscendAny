@@ -2,6 +2,7 @@ type ThemeMode = "light" | "dark";
 type RightPanelTab = "ability" | "history" | "notes";
 type ChatRole = "user" | "assistant" | "system";
 type ToolActivityStatus = "running" | "done" | "error";
+type ChatCalloutTone = "info" | "warn" | "tip";
 export interface LocalProfileSnapshot {
     id: string;
     accountId: string | null;
@@ -30,15 +31,67 @@ export interface LocalChatMessageSnapshot {
     role: ChatRole;
     content: string;
     timestamp: number;
+    blocks?: LocalChatBlockSnapshot[];
     roleId?: string;
+    reasoningContent?: string;
+    reasoningStartedAt?: number;
+    reasoningEndedAt?: number;
     toolActivities?: LocalToolActivitySnapshot[];
     streaming?: boolean;
+    reasoningStreaming?: boolean;
 }
 export interface LocalToolActivitySnapshot {
     id: string;
     label: string;
     status: ToolActivityStatus;
 }
+export interface LocalProblemRefSnapshot {
+    problemId: string;
+    title: string | null;
+    difficulty: number | null;
+    knowledgePoints: string[];
+    reason: string | null;
+}
+export interface LocalChoiceOptionSnapshot {
+    id: string;
+    label: string;
+}
+export interface LocalMathStepSnapshot {
+    title?: string;
+    tex: string;
+    note?: string;
+}
+export type LocalChatBlockSnapshot = {
+    kind: "text";
+    text: string;
+} | {
+    kind: "tool";
+    activity: LocalToolActivitySnapshot;
+} | {
+    kind: "problem";
+    problem: LocalProblemRefSnapshot;
+} | {
+    kind: "choice";
+    question: string;
+    options: LocalChoiceOptionSnapshot[];
+    answerIdx?: number;
+    explanation?: string;
+} | {
+    kind: "math_steps";
+    steps: LocalMathStepSnapshot[];
+} | {
+    kind: "code";
+    lang: string;
+    code: string;
+} | {
+    kind: "node_ref";
+    point: string;
+    label?: string;
+} | {
+    kind: "callout";
+    tone: ChatCalloutTone;
+    markdown: string;
+};
 export interface LocalChatSessionSnapshot {
     id: string;
     title: string;

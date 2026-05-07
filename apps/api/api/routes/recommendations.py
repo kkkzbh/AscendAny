@@ -11,7 +11,13 @@ from ..deps import get_admin_account, get_current_account, get_repository, get_s
 from ...core.config import PROJECT_ROOT, Settings
 from ...core.errors import AppError
 from ...schemas.recommendations import (
+    KnowledgeNodeDetailResponse,
+    KnowledgeNodeProblem,
+    KnowledgeNodeRecentDay,
+    KnowledgeNodeStats,
     LearningPathResponse,
+    LearningPathStatusItem,
+    LearningPathStatusResponse,
     ProblemRecommendationItem,
     ProblemRecommendationsResponse,
     RecommendationRunItem,
@@ -21,6 +27,7 @@ from ...schemas.recommendations import (
 )
 from ...services.auth import AuthenticatedAccount
 from ...services.identity import StudentIdentityService
+from ...services.path_visualization import PathVisualizationService
 
 router = APIRouter(tags=["recommendations"])
 
@@ -150,6 +157,70 @@ async def recommendation_path_me(
 ) -> LearningPathResponse:
     identity = await _identity_for_account(repository, current_account)
     return await _build_path_response(repository, identity)
+
+
+@router.get(
+    "/recommendations/path/me/status",
+    response_model=LearningPathStatusResponse,
+)
+async def recommendation_path_status_me(
+    repository=Depends(get_repository),
+    settings: Settings = Depends(get_settings),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> LearningPathStatusResponse:
+    identity = await _identity_for_account(repository, current_account)
+    student_ids = _student_ids(identity)
+    snapshot = await repository.fetch_latest_learning_path(student_ids)
+    points = list(snapshot.path) if snapshot is not None else []
+    service = PathVisualizationService(repository, settings)
+    raw_items = await service.path_status(identity.student_entity_id, points)
+    return LearningPathStatusResponse(
+        studentEntityId=identity.student_entity_id,
+        studentEntityIds=student_ids,
+        items=[LearningPathStatusItem(**item) for item in raw_items],
+    )
+
+
+@router.get(
+    "/recommendations/knowledge/{point}",
+    response_model=KnowledgeNodeDetailResponse,
+)
+async def recommendation_knowledge_node(
+    point: str,
+    top_k: int = Query(default=5, alias="topK", ge=1, le=20),
+    repository=Depends(get_repository),
+    settings: Settings = Depends(get_settings),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> KnowledgeNodeDetailResponse:
+    identity = await _identity_for_account(repository, current_account)
+    service = PathVisualizationService(repository, settings)
+    raw = await service.node_detail(
+        identity.student_entity_id, point, top_k=_bounded_top_k(top_k)
+    )
+    stats_raw = raw.get("stats") or {}
+    return KnowledgeNodeDetailResponse(
+        point=raw["point"],
+        level=raw.get("level"),
+        parents=raw.get("parents") or [],
+        children=raw.get("children") or [],
+        prerequisites=raw.get("prerequisites") or [],
+        successors=raw.get("successors") or [],
+        description=raw.get("description"),
+        mastery=float(raw.get("mastery") or 0.0),
+        stats=KnowledgeNodeStats(
+            attempted=int(stats_raw.get("attempted") or 0),
+            correct=int(stats_raw.get("correct") or 0),
+            accuracy=float(stats_raw.get("accuracy") or 0.0),
+            lastTriedAt=stats_raw.get("lastTriedAt"),
+            recentSeries=[
+                KnowledgeNodeRecentDay(**day)
+                for day in (stats_raw.get("recentSeries") or [])
+            ],
+        ),
+        problems=[
+            KnowledgeNodeProblem(**problem) for problem in (raw.get("problems") or [])
+        ],
+    )
 
 
 @router.get("/recommendations/path/student", response_model=LearningPathResponse)

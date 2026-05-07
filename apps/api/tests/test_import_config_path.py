@@ -58,6 +58,14 @@ def test_normalize_single_source_path_prepends_exam_type() -> None:
     assert result == "datastructure/2023秋学期第1次月测"
 
 
+def test_normalize_single_source_path_keeps_pintia_json_path() -> None:
+    result = import_data._normalize_single_source_path(
+        exam_type="pintia",
+        source_path="exports/unit.json",
+    )
+    assert result == "exports/unit.json"
+
+
 def test_normalize_single_source_path_rejects_mismatched_type() -> None:
     with pytest.raises(HTTPException) as exc_info:
         import_data._normalize_single_source_path(

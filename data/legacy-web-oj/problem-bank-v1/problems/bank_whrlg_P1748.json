@@ -1,0 +1,27 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "单调队列",
+    "数组",
+    "线性结构",
+    "模拟"
+  ],
+  "created_at": "2026-01-24 19:21:43.964259",
+  "description": "# P1748 H 数\n\n## 题目描述\n\n所谓 H 数，是指只含有 $2,3,5,7$ 这些质因数的数，如 $630$ 是 H 数，而 $22$ 不是。\n\n（特别地，$1$ 是最小的 H 数）\n\n现在要求输出第 $n$ 小的 H 数。\n\n## 输入格式\n\n一个正整数 $n\\ (1 \\le n \\le 10^4)$。\n\n## 输出格式\n\n一个正整数表示答案。\n\n可以证明，答案不会超过 $2^{63}-1$。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n30\n```\n\n### 输出 #1\n\n```\n49\n```\n\n## 输入输出样例 #2\n\n### 输入 #2\n\n```\n1\n```\n\n### 输出 #2\n\n```\n1\n```",
+  "link": "https://www.luogu.com.cn/problem/P1748",
+  "pass_count": 3.14,
+  "problem_id": "bank_whrlg_P1748",
+  "raw_category_tags": "单调队列 数组 线性结构 模拟",
+  "rejected_tags": [],
+  "solution_1": "作为一名实际上已退役的前选手，这是近一段时间里做的第一题，当然要发题解了。\n\n曾经也算有点水平，但现在这种水题都错了半天。\n\n如果打过cf的话应该挺熟悉这种题，Div2的AB题都可能是这类，基本就是构造。\n\n对于本题而言，只需要在之前的所有H数上各乘上2、3、5或7，取未出现的最小值就可以，但很明显，有很多多余的计算。\n\n我们设立4个变量a,b,c,d，初始时都为1，a记录上一个被2乘所得到的H数的序号，b记录上一个被3乘所得到的H数的序号，以此类推，那么H[1]=1，之后的每个H[i]都等于min(a×2,b×3,c×5,d×7)，随时更新a、b、c、d，一重循环即可求出H(n)。\n\n由于本题多组数据，所以很自然地想到在程序开头预处理出10000个H数，之后读入后直接输出对应的H数即可。\n\n说了半天，其实和楼下的方法一样，放上C++代码，或许可供后来者借鉴。\n\n    #include<bits/stdc++.h>\n    using namespace std;\n    int n,a=1,b=1,c=1,d=1;\n    long long w[10090];\n    int main(){\n        w[1]=1;\n        for(int i=2;i<=10000;++i){\n            w[i]=w[a]*2;\n            if(w[i]>w[b]*3)w[i]=w[b]*3;\n            if(w[i]>w[c]*5)w[i]=w[c]*5;\n            if(w[i]>w[d]*7)w[i]=w[d]*7;\n            if(w[i]==w[a]*2)a++;\n            if(w[i]==w[b]*3)b++;\n            if(w[i]==w[c]*5)c++;\n            if(w[i]==w[d]*7)d++;\n        }\n        while(scanf(\"%d\",&n)!=EOF)\n            cout<<w[n]<<\"\\n\";\n        return 0;\n}",
+  "solution_2": "本蒟蒻来发表我的第一篇题解。\n\n这一题可以说是一道队列的题目，准确来说是单调队列。\n\n手动数组模拟一个队列，一个四指针队列。其head只有一个，但是其tail变量有四个（2，3，5，7各一个）\n\n每次取四个队尾变量分别乘上2，3，5，7，将其进行比较，取其中最小加入队列并将其队尾加一；这样就可以满足队列的单调性，去除重复；\n\nps：记得long long\n\n代码如下：\n\n#include <iostream>\n#include <cstring>\n#define _for(i,a,b) for (int i=(a); i<=(b); ++i)\n\nusing namespace std;\nint n;\nlong long q[20000];\nint z[5]={0,2,3,5,7};\n\nlong long _min(long long a,long long b,long long c,long long d)\n{\n long long cnt=a; //这个判断最小值要注意，因为后面数据特别大，干脆就取其中一个值作为初始值，开始我在这个坑跌了好几遍；\n if(b<cnt) cnt=b;\n if(c<cnt) cnt=c;\n if(d<cnt) cnt=d;\n return cnt;\n}\nint main()\n{\n cin >> n;\n q[1]=1;\n int t1=1,t2=1,t3=1,t4=1,head=1;\n while(head<n)\n {\n  long long a=q[t1]*2,b=q[t2]*3,c=q[t3]*5,d=q[t4]*7;\n  long long m=_min(a,b,c,d);\n  q[++head]=m;\n  if(a==m) ++t1; //有相同的值就同时加\n  if(b==m) ++t2;\n  if(c==m) ++t3;\n  if(d==m) ++t4;\n }\n cout << q[n] << '\\n';\n return 0;\n}",
+  "source_hash": "d7320a6eebfdce70b5eb095837bdb3999c65eaf6aaa109adf3a78ddeb99689fc",
+  "source_meta": {
+    "legacy_id": 35,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 8.39,
+  "title": null
+}

@@ -22,6 +22,7 @@ const streamState = vi.hoisted(() => ({
 
 vi.mock("../api/import", () => ({
   EXAM_TYPES: [
+    { value: "pintia", label: "Pintia JSON" },
     { value: "datastructure", label: "数据结构" },
     { value: "pta_icpc", label: "PTA ICPC" },
   ],
@@ -81,7 +82,7 @@ describe("ImportPage", () => {
 
     await waitFor(() => {
       expect(importMocks.startImportRun).toHaveBeenCalledWith({
-        examTypes: ["datastructure"],
+        examTypes: ["pintia"],
         dryRun: false,
         force: false,
       });

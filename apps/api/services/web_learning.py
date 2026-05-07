@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from psycopg.errors import UndefinedTable
 from psycopg.rows import dict_row
 
 from ..core.config import Settings
@@ -200,17 +201,41 @@ class WebLearningService:
         top_k = max(1, min(int(payload.get("top_k") or 6), 50))
         identity = await self._resolve_identity_or_none(student)
         student_entity_id = identity.student_entity_id if identity is not None else None
-        stats = await self._fetch_one(
-            """
-            SELECT COUNT(DISTINCT r.problem_id) AS attempted,
-                   COUNT(DISTINCT r.problem_id) FILTER (WHERE r.status = 'AC') AS solved
-            FROM ascendany.oj_submit_records r
-            JOIN ascendany.recommendation_problem_tags t ON t.problem_id = r.problem_id
-            WHERE (%s::bigint IS NULL OR r.student_entity_id = %s)
-              AND t.knowledge_point = %s
-            """,
-            (student_entity_id, student_entity_id, knowledge_point),
-        )
+        try:
+            stats = await self._fetch_one(
+                """
+                SELECT COUNT(DISTINCT attempts.problem_id) AS attempted,
+                       COUNT(DISTINCT attempts.problem_id)
+                           FILTER (WHERE attempts.is_correct) AS solved
+                FROM (
+                    SELECT s.student_id AS student_entity_id,
+                           epl.source_platform || ':' || epl.external_problem_id AS problem_id,
+                           CASE
+                               WHEN lower(COALESCE(s.verdict, '')) IN ('accepted', 'ac', '答案正确') THEN TRUE
+                               WHEN ep.points IS NOT NULL AND ep.points > 0 AND s.score IS NOT NULL
+                                   THEN s.score >= ep.points
+                               ELSE FALSE
+                           END AS is_correct
+                    FROM ascendany.submissions s
+                    JOIN ascendany.exam_problem_external_links epl
+                      ON epl.exam_id = s.exam_id
+                     AND epl.problem_set_problem_id = s.problem_code
+                    LEFT JOIN ascendany.exam_problems ep
+                      ON ep.exam_id = s.exam_id
+                     AND ep.problem_code = s.problem_code
+                    WHERE s.student_id IS NOT NULL
+                ) AS attempts
+                JOIN ascendany.external_problem_tags t
+                  ON t.source_platform || ':' || t.external_problem_id = attempts.problem_id
+                WHERE (%s::bigint IS NULL OR attempts.student_entity_id = %s)
+                  AND t.knowledge_point = %s
+                """,
+                (student_entity_id, student_entity_id, knowledge_point),
+            )
+        except UndefinedTable as exc:
+            if not _is_external_schema_missing(exc):
+                raise
+            stats = None
         recs = await self._recommendations(
             student_entity_id,
             top_k=top_k,
@@ -292,20 +317,46 @@ class WebLearningService:
         ]
 
     async def _fetch_tag_stats(self, student_entity_id: int | None) -> list[dict[str, Any]]:
-        return await self._fetch_all(
-            """
-            SELECT t.knowledge_point,
-                   COUNT(DISTINCT r.problem_id) AS attempted,
-                   COUNT(DISTINCT r.problem_id) FILTER (WHERE r.status = 'AC') AS solved
-            FROM ascendany.recommendation_problem_tags t
-            LEFT JOIN ascendany.oj_submit_records r
-              ON r.problem_id = t.problem_id
-             AND (%s::bigint IS NULL OR r.student_entity_id = %s)
-            GROUP BY t.knowledge_point
-            ORDER BY t.knowledge_point
-            """,
-            (student_entity_id, student_entity_id),
-        )
+        try:
+            return await self._fetch_all(
+                """
+                SELECT t.knowledge_point,
+                       COUNT(DISTINCT attempts.problem_id) AS attempted,
+                       COUNT(DISTINCT attempts.problem_id)
+                           FILTER (WHERE attempts.is_correct) AS solved
+                FROM ascendany.external_problem_tags t
+                LEFT JOIN (
+                    SELECT s.student_id AS student_entity_id,
+                           epl.source_platform,
+                           epl.external_problem_id,
+                           epl.source_platform || ':' || epl.external_problem_id AS problem_id,
+                           CASE
+                               WHEN lower(COALESCE(s.verdict, '')) IN ('accepted', 'ac', '答案正确') THEN TRUE
+                               WHEN ep.points IS NOT NULL AND ep.points > 0 AND s.score IS NOT NULL
+                                   THEN s.score >= ep.points
+                               ELSE FALSE
+                           END AS is_correct
+                    FROM ascendany.submissions s
+                    JOIN ascendany.exam_problem_external_links epl
+                      ON epl.exam_id = s.exam_id
+                     AND epl.problem_set_problem_id = s.problem_code
+                    LEFT JOIN ascendany.exam_problems ep
+                      ON ep.exam_id = s.exam_id
+                     AND ep.problem_code = s.problem_code
+                    WHERE s.student_id IS NOT NULL
+                ) AS attempts
+                  ON attempts.source_platform = t.source_platform
+                 AND attempts.external_problem_id = t.external_problem_id
+                 AND (%s::bigint IS NULL OR attempts.student_entity_id = %s)
+                GROUP BY t.knowledge_point
+                ORDER BY t.knowledge_point
+                """,
+                (student_entity_id, student_entity_id),
+            )
+        except UndefinedTable as exc:
+            if not _is_external_schema_missing(exc):
+                raise
+            return []
 
     async def _build_path_planner(
         self,
@@ -333,57 +384,55 @@ class WebLearningService:
         )
 
     async def _fetch_attempt_rows(self, student_entity_id: int) -> list[dict[str, Any]]:
-        return await self._fetch_all(
-            """
-            SELECT s.student_id AS student_entity_id,
-                   COALESCE(
-                       NULLIF(s.raw->>'global_problem_id', ''),
-                       NULLIF(s.raw->>'problem_id', ''),
-                       NULLIF(ep.meta->>'global_problem_id', ''),
-                       NULLIF(ep.meta->>'problem_id', ''),
-                       NULLIF(s.problem_code, ''),
-                       ('exam:' || s.exam_id::text || ':' || COALESCE(s.problem_code, ''))
-                   ) AS problem_id,
-                   CASE
-                       WHEN ep.points IS NOT NULL AND ep.points > 0 AND s.score IS NOT NULL
-                           THEN LEAST(1.0, GREATEST(0.0, (s.score::numeric / ep.points::numeric)))::float
-                       WHEN lower(COALESCE(s.verdict, '')) IN ('accepted', 'ac', '答案正确')
-                           THEN 1.0
-                       ELSE 0.0
-                   END AS score_rate,
-                   CASE
-                       WHEN lower(COALESCE(s.verdict, '')) IN ('accepted', 'ac', '答案正确') THEN TRUE
-                       WHEN ep.points IS NOT NULL AND ep.points > 0 AND s.score IS NOT NULL
-                           THEN s.score >= ep.points
-                       ELSE FALSE
-                   END AS is_correct
-            FROM ascendany.submissions s
-            LEFT JOIN ascendany.exam_problems ep
-              ON ep.exam_id = s.exam_id
-             AND ep.problem_code = s.problem_code
-            WHERE s.student_id = %s
-              AND COALESCE(s.problem_code, '') <> ''
-            UNION ALL
-            SELECT r.student_entity_id,
-                   r.problem_id,
-                   LEAST(1.0, GREATEST(0.0, COALESCE(r.score_rate, 0)))::float AS score_rate,
-                   COALESCE(r.is_correct, lower(COALESCE(r.status, '')) IN ('accepted', 'ac')) AS is_correct
-            FROM ascendany.oj_submit_records r
-            WHERE r.student_entity_id = %s
-              AND COALESCE(r.problem_id, '') <> ''
-            """,
-            (student_entity_id, student_entity_id),
-        )
+        try:
+            return await self._fetch_all(
+                """
+                SELECT s.student_id AS student_entity_id,
+                       epl.source_platform || ':' || epl.external_problem_id AS problem_id,
+                       CASE
+                           WHEN ep.points IS NOT NULL AND ep.points > 0 AND s.score IS NOT NULL
+                               THEN LEAST(1.0, GREATEST(0.0, (s.score::numeric / ep.points::numeric)))::float
+                           WHEN lower(COALESCE(s.verdict, '')) IN ('accepted', 'ac', '答案正确')
+                               THEN 1.0
+                           ELSE 0.0
+                       END AS score_rate,
+                       CASE
+                           WHEN lower(COALESCE(s.verdict, '')) IN ('accepted', 'ac', '答案正确') THEN TRUE
+                           WHEN ep.points IS NOT NULL AND ep.points > 0 AND s.score IS NOT NULL
+                               THEN s.score >= ep.points
+                           ELSE FALSE
+                       END AS is_correct
+                FROM ascendany.submissions s
+                JOIN ascendany.exam_problem_external_links epl
+                  ON epl.exam_id = s.exam_id
+                 AND epl.problem_set_problem_id = s.problem_code
+                LEFT JOIN ascendany.exam_problems ep
+                  ON ep.exam_id = s.exam_id
+                 AND ep.problem_code = s.problem_code
+                WHERE s.student_id = %s
+                """,
+                (student_entity_id,),
+            )
+        except UndefinedTable as exc:
+            if not _is_external_schema_missing(exc):
+                raise
+            return []
 
     async def _fetch_problem_tags(self) -> dict[str, list[str]]:
-        rows = await self._fetch_all(
-            """
-            SELECT problem_id, knowledge_point
-            FROM ascendany.recommendation_problem_tags
-            ORDER BY problem_id, knowledge_point
-            """,
-            (),
-        )
+        try:
+            rows = await self._fetch_all(
+                """
+                SELECT source_platform || ':' || external_problem_id AS problem_id,
+                       knowledge_point
+                FROM ascendany.external_problem_tags
+                ORDER BY problem_id, knowledge_point
+                """,
+                (),
+            )
+        except UndefinedTable as exc:
+            if not _is_external_schema_missing(exc):
+                raise
+            return {}
         tags: dict[str, list[str]] = {}
         for row in rows:
             problem_id = str(row.get("problem_id") or "").strip()
@@ -484,3 +533,22 @@ class WebLearningService:
                 await cursor.execute(query, params)
                 rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+def _is_external_schema_missing(exc: UndefinedTable) -> bool:
+    table_name = getattr(getattr(exc, "diag", None), "table_name", None)
+    if table_name in {
+        "external_problem_tags",
+        "exam_problem_external_links",
+        "external_problems",
+    }:
+        return True
+    message = str(exc)
+    return any(
+        name in message
+        for name in (
+            "external_problem_tags",
+            "exam_problem_external_links",
+            "external_problems",
+        )
+    )

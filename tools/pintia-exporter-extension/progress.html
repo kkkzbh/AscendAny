@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AscendAny Pintia Export Progress</title>
+    <link rel="stylesheet" href="popup.css" />
+    <link rel="stylesheet" href="progress.css" />
+  </head>
+  <body>
+    <main class="progress-shell">
+      <header>
+        <div class="title">AscendAny</div>
+        <div class="subtitle">Pintia Exporter</div>
+      </header>
+      <section id="status" class="status">Starting</section>
+      <div class="progress-bar" aria-hidden="true">
+        <div id="progressFill"></div>
+      </div>
+      <pre id="log" aria-live="polite"></pre>
+    </main>
+    <script src="progress.js"></script>
+  </body>
+</html>

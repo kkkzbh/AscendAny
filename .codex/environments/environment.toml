@@ -10,7 +10,15 @@ icon = "run"
 command = '''bash -lc '
 set -euo pipefail
 
-for tool in uv pnpm curl; do
+for env_file in .env.local .env; do
+  if [ -f "$env_file" ]; then
+    set -a
+    . "$env_file"
+    set +a
+  fi
+done
+
+for tool in uv pnpm curl ss; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "[AscendAny] Missing command: $tool" >&2
     exit 1
@@ -40,11 +48,100 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if curl -fsS "$api_health" >/dev/null 2>&1; then
-  echo "[AscendAny] API already running at $api_url"
-else
+append_unique_pid() {
+  local pid="$1"
+  local existing
+  for existing in "${api_pids[@]:-}"; do
+    if [ "$existing" = "$pid" ]; then
+      return 0
+    fi
+  done
+  api_pids+=("$pid")
+}
+
+is_current_repo_api_process() {
+  local pid="$1"
+  local cmd
+  local cwd
+  cmd="$(tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+
+  if [[ "$cmd" == *"uvicorn"* && "$cmd" == *"apps.api.main:app"* ]] \
+    && [[ "$cwd" = "$repo_root" || "$cmd" == *"$repo_root"* ]]; then
+    return 0
+  fi
+  if [[ "$cwd" = "$repo_root" && "$cmd" == *"multiprocessing.spawn"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+collect_related_api_processes() {
+  local pid="$1"
+  local ppid
+  append_unique_pid "$pid"
+  ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d " " || true)"
+  if [ -n "$ppid" ] && [ "$ppid" != "1" ] && is_current_repo_api_process "$ppid"; then
+    append_unique_pid "$ppid"
+  fi
+}
+
+stop_existing_api() {
+  repo_root="$(pwd -P)"
+  api_pids=()
+
+  local listener_pids
+  listener_pids="$(ss -H -ltnp "sport = :$api_port" 2>/dev/null | sed -n "s/.*pid=\([0-9]\+\).*/\1/p" | sort -u)"
+
+  if [ -z "$listener_pids" ]; then
+    if curl -fsS "$api_health" >/dev/null 2>&1; then
+      echo "[AscendAny] API port $api_port is reachable, but the owning PID could not be identified." >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  local pid
+  for pid in $listener_pids; do
+    if is_current_repo_api_process "$pid"; then
+      collect_related_api_processes "$pid"
+    else
+      local cmd
+      cmd="$(tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null || true)"
+      echo "[AscendAny] Refusing to stop non-AscendAny process on $api_url: pid=$pid cmd=$cmd" >&2
+      exit 1
+    fi
+  done
+
+  if [ "${#api_pids[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "[AscendAny] Stopping existing API process(es): ${api_pids[*]}"
+  kill "${api_pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    local alive=0
+    for pid in "${api_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    if [ "$alive" -eq 0 ]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  for pid in "${api_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
+start_api() {
+  stop_existing_api
   echo "[AscendAny] Starting API at $api_url"
-  uv run --python .venv/bin/python uvicorn apps.api.main:app --host "$api_host" --port "$api_port" --reload &
+  .venv/bin/python -m uvicorn apps.api.main:app --host "$api_host" --port "$api_port" --reload &
   api_pid=$!
 
   for _ in $(seq 1 60); do
@@ -62,7 +159,9 @@ else
     echo "[AscendAny] API did not become healthy: $api_health" >&2
     exit 1
   fi
-fi
+}
+
+start_api
 
 echo "[AscendAny] Starting desktop against $api_url"
 VITE_API_BASE_URL="$api_url" \
@@ -86,7 +185,7 @@ for env_file in .env.local .env; do
   fi
 done
 
-for tool in pnpm curl; do
+for tool in uv pnpm curl ss; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "[AscendAny] Missing command: $tool" >&2
     exit 1
@@ -193,9 +292,98 @@ print(admin_url + "?" + query)
 PY
 }
 
-if curl -fsS "$api_health" >/dev/null 2>&1; then
-  echo "[AscendAny] API already running at $api_url"
-else
+append_unique_pid() {
+  local pid="$1"
+  local existing
+  for existing in "${api_pids[@]:-}"; do
+    if [ "$existing" = "$pid" ]; then
+      return 0
+    fi
+  done
+  api_pids+=("$pid")
+}
+
+is_current_repo_api_process() {
+  local pid="$1"
+  local cmd
+  local cwd
+  cmd="$(tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+
+  if [[ "$cmd" == *"uvicorn"* && "$cmd" == *"apps.api.main:app"* ]] \
+    && [[ "$cwd" = "$repo_root" || "$cmd" == *"$repo_root"* ]]; then
+    return 0
+  fi
+  if [[ "$cwd" = "$repo_root" && "$cmd" == *"multiprocessing.spawn"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+collect_related_api_processes() {
+  local pid="$1"
+  local ppid
+  append_unique_pid "$pid"
+  ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d " " || true)"
+  if [ -n "$ppid" ] && [ "$ppid" != "1" ] && is_current_repo_api_process "$ppid"; then
+    append_unique_pid "$ppid"
+  fi
+}
+
+stop_existing_api() {
+  repo_root="$(pwd -P)"
+  api_pids=()
+
+  local listener_pids
+  listener_pids="$(ss -H -ltnp "sport = :$api_port" 2>/dev/null | sed -n "s/.*pid=\([0-9]\+\).*/\1/p" | sort -u)"
+
+  if [ -z "$listener_pids" ]; then
+    if curl -fsS "$api_health" >/dev/null 2>&1; then
+      echo "[AscendAny] API port $api_port is reachable, but the owning PID could not be identified." >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  local pid
+  for pid in $listener_pids; do
+    if is_current_repo_api_process "$pid"; then
+      collect_related_api_processes "$pid"
+    else
+      local cmd
+      cmd="$(tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null || true)"
+      echo "[AscendAny] Refusing to stop non-AscendAny process on $api_url: pid=$pid cmd=$cmd" >&2
+      exit 1
+    fi
+  done
+
+  if [ "${#api_pids[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "[AscendAny] Stopping existing API process(es): ${api_pids[*]}"
+  kill "${api_pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    local alive=0
+    for pid in "${api_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    if [ "$alive" -eq 0 ]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  for pid in "${api_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
+start_api() {
+  stop_existing_api
   echo "[AscendAny] Starting API at $api_url"
   .venv/bin/python -m uvicorn apps.api.main:app --host "$api_host" --port "$api_port" --reload &
   api_pid=$!
@@ -215,7 +403,9 @@ else
     echo "[AscendAny] API did not become healthy: $api_health" >&2
     exit 1
   fi
-fi
+}
+
+start_api
 
 admin_open_url="$admin_url"
 if [ -n "${ASCENDANY_ADMIN_USERNAME:-}" ] || [ -n "${ASCENDANY_ADMIN_PASSWORD:-}" ]; then
@@ -280,7 +470,7 @@ for env_file in .env.local .env; do
   fi
 done
 
-for tool in pnpm curl; do
+for tool in uv pnpm curl ss; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "[AscendAny] Missing command: $tool" >&2
     exit 1
@@ -330,9 +520,98 @@ open_web_url() {
   fi
 }
 
-if curl -fsS "$api_health" >/dev/null 2>&1; then
-  echo "[AscendAny] API already running at $api_url"
-else
+append_unique_pid() {
+  local pid="$1"
+  local existing
+  for existing in "${api_pids[@]:-}"; do
+    if [ "$existing" = "$pid" ]; then
+      return 0
+    fi
+  done
+  api_pids+=("$pid")
+}
+
+is_current_repo_api_process() {
+  local pid="$1"
+  local cmd
+  local cwd
+  cmd="$(tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null || true)"
+  cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+
+  if [[ "$cmd" == *"uvicorn"* && "$cmd" == *"apps.api.main:app"* ]] \
+    && [[ "$cwd" = "$repo_root" || "$cmd" == *"$repo_root"* ]]; then
+    return 0
+  fi
+  if [[ "$cwd" = "$repo_root" && "$cmd" == *"multiprocessing.spawn"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+collect_related_api_processes() {
+  local pid="$1"
+  local ppid
+  append_unique_pid "$pid"
+  ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d " " || true)"
+  if [ -n "$ppid" ] && [ "$ppid" != "1" ] && is_current_repo_api_process "$ppid"; then
+    append_unique_pid "$ppid"
+  fi
+}
+
+stop_existing_api() {
+  repo_root="$(pwd -P)"
+  api_pids=()
+
+  local listener_pids
+  listener_pids="$(ss -H -ltnp "sport = :$api_port" 2>/dev/null | sed -n "s/.*pid=\([0-9]\+\).*/\1/p" | sort -u)"
+
+  if [ -z "$listener_pids" ]; then
+    if curl -fsS "$api_health" >/dev/null 2>&1; then
+      echo "[AscendAny] API port $api_port is reachable, but the owning PID could not be identified." >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  local pid
+  for pid in $listener_pids; do
+    if is_current_repo_api_process "$pid"; then
+      collect_related_api_processes "$pid"
+    else
+      local cmd
+      cmd="$(tr "\0" " " < "/proc/$pid/cmdline" 2>/dev/null || true)"
+      echo "[AscendAny] Refusing to stop non-AscendAny process on $api_url: pid=$pid cmd=$cmd" >&2
+      exit 1
+    fi
+  done
+
+  if [ "${#api_pids[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "[AscendAny] Stopping existing API process(es): ${api_pids[*]}"
+  kill "${api_pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    local alive=0
+    for pid in "${api_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    if [ "$alive" -eq 0 ]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  for pid in "${api_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
+start_api() {
+  stop_existing_api
   echo "[AscendAny] Starting API at $api_url"
   .venv/bin/python -m uvicorn apps.api.main:app --host "$api_host" --port "$api_port" --reload &
   api_pid=$!
@@ -352,7 +631,9 @@ else
     echo "[AscendAny] API did not become healthy: $api_health" >&2
     exit 1
   fi
-fi
+}
+
+start_api
 
 if curl -fsS "$web_url" >/dev/null 2>&1; then
   echo "[AscendAny] Web already running at $web_url"

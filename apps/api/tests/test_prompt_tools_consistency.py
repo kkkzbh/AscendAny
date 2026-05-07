@@ -19,7 +19,11 @@ from apps.api.db.repository import (
 )
 from apps.api.services.identity import ResolvedIdentity
 from apps.api.services.prompt import PromptService
-from apps.api.services.tools import TOOL_DEFINITIONS, ToolExecutor
+from apps.api.services.tools import (
+    FACT_TOOL_PROMPT_LINES,
+    TOOL_DEFINITIONS,
+    ToolExecutor,
+)
 
 
 class FakeFactRepo:
@@ -363,6 +367,31 @@ def test_prompt_service_falls_back_when_admin_prompt_is_invalid() -> None:
     assert "这个模板包含非法变量" not in prompt
 
 
+def test_prompt_service_lists_recommendation_tools_and_rules() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
+
+    prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
+
+    assert "get_problem_recommendations" in prompt
+    assert "get_learning_path" in prompt
+    assert "无明确条件时只传 `top_k` 或空参数，不要编造过滤参数" in prompt
+    assert "用户请求学习路线、先学什么、知识点路径时" in prompt
+
+
+def test_choice_tool_prompt_describes_hidden_followup_turn() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
+
+    prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
+    emit_choice = next(
+        item for item in TOOL_DEFINITIONS if item["function"]["name"] == "emit_choice"
+    )
+    description = emit_choice["function"]["description"]
+
+    assert "隐藏用户输入继续触发一轮回复" in prompt
+    assert "隐藏用户输入继续触发一轮回复" in description
+    assert "不会回传到模型" not in description
+
+
 def test_prompt_service_auto_analysis_message_uses_admin_template() -> None:
     prompt_service = PromptService(
         repository=PromptOverrideRepo(
@@ -377,7 +406,7 @@ def test_prompt_service_auto_analysis_message_uses_admin_template() -> None:
     assert message == "自动分析：目标考试 ID 为 8，开始。"
 
 
-def test_tool_definitions_only_expose_fact_tools() -> None:
+def test_tool_definitions_match_registered_handlers() -> None:
     names = [item["function"]["name"] for item in TOOL_DEFINITIONS]
 
     assert names == [
@@ -388,7 +417,39 @@ def test_tool_definitions_only_expose_fact_tools() -> None:
         "get_learning_path",
         "read_notes",
         "update_notes",
+        "emit_problem_card",
+        "emit_choice",
+        "emit_math_steps",
+        "emit_code",
+        "emit_node_ref",
+        "emit_callout",
+        "focus_knowledge_node",
     ]
+
+
+def test_fact_tool_prompt_lines_match_tool_definitions() -> None:
+    tool_names = [item["function"]["name"] for item in TOOL_DEFINITIONS]
+    prompt_names = [line.split("`", 2)[1] for line in FACT_TOOL_PROMPT_LINES]
+
+    assert prompt_names == tool_names[: len(prompt_names)]
+
+
+def test_recommendation_tool_schema_discourages_invented_filters() -> None:
+    recommendation = next(
+        item
+        for item in TOOL_DEFINITIONS
+        if item["function"]["name"] == "get_problem_recommendations"
+    )
+    function = recommendation["function"]
+    properties = function["parameters"]["properties"]
+
+    assert "只读取快照" in function["description"]
+    assert "不触发训练" in function["description"]
+    assert "不要编造过滤参数" in function["description"]
+    assert "仅当用户明确指定知识点时使用" in properties["knowledge_point"]["description"]
+    assert "仅当用户明确指定最低难度时使用" in properties["min_difficulty"]["description"]
+    assert "仅当用户明确指定最高难度时使用" in properties["max_difficulty"]["description"]
+    assert "仅当用户明确给出刚做过或不想看的题目时使用" in properties["exclude_problem_ids"]["description"]
 
 
 def test_prompt_service_injects_notes_context() -> None:

@@ -1,0 +1,29 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "STL",
+    "栈",
+    "字符串",
+    "递归",
+    "线性结构",
+    "模拟"
+  ],
+  "created_at": "2026-01-24 19:21:43.979106",
+  "description": "# P3719 [AHOI2017初中组] rexp\n\n## 题目背景\n\n为了解决形形色色的字符串匹配问题，正则表达式是一个强有力的工具。正则表达式通过定义一套符号体系，能够表示出需要查找的字符串所具有的性质。如 `a|aa` 能匹配 `a` 或 `aa`，`(a|b)c` 能匹配 `ac` 或 `bc`。\n\n## 题目描述\n\n完整的正则表达式过于复杂，在这里我们只考虑由 `(`、`)`、`|` 和 `a` 组成的正则表达式。运算遵循下列法则：\n\n1. 有括号时，我们总是先算括号内的部分；\n\n2. 当两个字符串（或由括号定义的子串）间没有符号时，我们总把它们连起来作为一个整体；\n\n3. `|` 是或连接符，表示两边的字符串任取其一，若同一层里有多个或连接符，可以看作在这些或连接符所分开的若干字符串里任取其一。\n\n例如，`(aaa)aa|aa|(a(aa)a)`、`(aaaaa)|(aa)|aaaa` 和 `aaaaa|aaaa|aa` 是等价的，它们都能匹配长度为 $2,4$ 或 $5$ 的全 `a` 字符串。\n\n下面给定一个简化正则表达式，试编程计算它最多能匹配多长的全 `a` 字符串。\n\n## 输入格式\n\n输入一行一个合法的简化正则表达式。\n\n## 输出格式\n\n一行一个整数，表示能匹配的最长全 `a` 字符串长度。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n(aaa)aa|aa|(a(aa)a)\n```\n\n### 输出 #1\n\n```\n5\n```\n\n## 输入输出样例 #2\n\n### 输入 #2\n\n```\n((a|aaa)|aa)|a\n```\n\n### 输出 #2\n\n```\n3\n```\n\n## 输入输出样例 #3\n\n### 输入 #3\n\n```\n(a(aa|aaa)a|(a|aa))aa\n```\n\n### 输出 #3\n\n```\n7\n```\n\n## 说明/提示\n\n**【数据范围】**\n\n对于 $20\\%$ 数据，表达式长度不超过 $100$，且不存在括号。\n\n对于 $40\\%$ 数据，表达式长度不超过 $100$。\n\n对于 $70\\%$ 数据，表达式长度不超过 $2 \\times 10^3$。\n\n对于 $100\\%$ 的数据，表达式长度不超过 $10^5$。\n\n保证表达式合法（即 `|` 两端和括号内运算结果均非空字符串）。",
+  "link": "https://www.luogu.com.cn/problem/P3719",
+  "pass_count": 4.08,
+  "problem_id": "bank_whrlg_P3719",
+  "raw_category_tags": "STL 栈 字符串 递归 线性结构 模拟",
+  "rejected_tags": [],
+  "solution_1": "可以注意到，此题的关键在于如何处理'|'这个符号，因为如果没有'|'，那么括号就可以忽略了，我们只需要统计有几个字母'a'就能知道答案。那么为什么在有'|'符号的情况下，括号不可忽略呢？因为括号中可能会有若干'|'符号，而这些'|'符号只会在括号中起作用，所以这道题的思路就有了，即：\n\n- 对于每一个括号，挑选出被'|'分隔的几部分中长度最长的一部分，更新答案，去掉括号。\n- 从样例可以观察到，并不是所有'a'字符都被包含在一个括号中，我们可**人为地在初始字符串外围增加一对括号**，保证算法的通用性。\n\n此时问题已经被我们转化成了一个类似于括号匹配的问题，如果你做过 [有效的括号](https://leetcode.cn/problems/valid-parentheses/description/) 你可能立马想到了可以用栈来匹配括号，那么如何记录每一个括号中的最长a的个数呢？我们可以在栈上多存储一个变量，即使用`std::stack<pair<char,int>>`，每个左括号的第一维就存左括号或者'|'，第二维存已经处理好的的a的总长度。\n\n具体过程可以看下面的图:\n\n- 我们考虑一种简单的情况：\n- 遇到'a'就对栈顶的符号对应的计数加1\n- 当遇到右括号时，如果栈顶符号是'|'，那么就弹出栈顶的两个元素，并对这两个元素的第二维数进行max操作，max的结果和第二个弹出的符号一起再压回栈中。如果栈顶元素一直是'|'，那么就重复上述操作。\n- 如果栈顶符号是左括号，那么就将匹配到的左括号弹出栈，将其计数加到栈顶元素的计数即可。\n\n遍历到最后一个'a'，再加一，最后一个匹配弹出的左括号对应的计数就是答案\n\n- 代码实现如下：\n\n```c++\n#include <bits/stdc++.h>\nusing namespace std;\n\nint main()\n{\n    string s;\n    cin >> s;\n    s = '('+s+')';\n    stack<pair<char,int>> st;\n    for(auto c:s){\n        if(c == '('||c == '|'){   //遇到左括号或者'|'就要入栈，并设初值为0\n            st.emplace(c,0);\n        }else if(c == 'a'){\n            st.top().second++;   //遇到'a'就把栈顶元素对应计数+1\n        }else{\n            auto [c1,cnt1] = st.top();\n            st.pop();\n            while(c1 == '|') {   //如果栈顶一直是'|'，那就一直进行max操作，并扔掉栈顶'|'\n                st.top().second = max(st.top().second,cnt1);\n                c1 = st.top().first;\n                cnt1 = st.top().second;\n                st.pop();\n            }\n            if(st.empty()){    //如果栈为空，由于我们开始人为在外围加了一个括号，所以此时一定可以得到答案\n                cout << cnt1 << '\\n';\n                break;\n            }\n            st.top().second+=cnt1;  //经历了'|'的max操作和判空之后依然运行到这里，说明此时栈顶一定为'('，更新\n        }\n    }\n    return 0;\n}\n```",
+  "solution_2": "另外，以上的过程还可以通过递归实现，因为递归和栈本就是密不可分的，而且只要你想明白了上述我讲的过程，递归代码量会很小。\n\n- 以下是本题的递归实现：\n\n```c++\n#include <bits/stdc++.h>\nusing namespace std;\n\nint main()\n{\n    string s;\n    cin >> s;\n    int i = 0;\n    cout << [&](this auto self, int cnt)->int{\n        while(i<s.size()){\n            char c = s[i++];\n            if(c == 'a') cnt++;\n            if(c == '(') cnt+=self(0);\n            if(c == '|') return max(cnt,self(0)); //注意此处一定要返回\n            if(c == ')') return cnt;\n        }\n        return cnt;\n    }(0) << '\\n';\n    return 0;\n}\n```\n\n#### 解释：\n\n1. i是什么作用？i是整个递归的指针，保证所有的递归遍历不会处理一个位置两次。\n2. 为什么不用在s的外围加上左右括号了？因为这个处理过程天然的把不在某个括号内的字符正确处理了，`i<s.size()`已经避免了结尾匹配的问题。其实上面用栈模拟的代码也是可以不加左右括号的，只不过要特判罢了。\n3. 为什么 `c == '|'` 时要返回？因为 `max(cnt,self(0))` 得到的就是一个括号内最多的连续'a'的数量，由上面的推理可以知道，我们要在左括号处更新这个括号内的答案。\n\n\n\n另外，还有一种写法，很巧妙，因为处理过程不用回头，我们可以用`cin`一直从标准输入流读入字符，读入一个就处理一个，当输入只剩下空白字符时，`cin`会自动停止读入。这样可以将字符串s的空间省去。\n\n- 代码如下：\n\n```c++\n#include <bits/stdc++.h>\nusing namespace std;\n\nint main()\n{\n    cout << [](this auto self, int cnt)->int{\n        char c;\n        while(cin >> c){\n            if(c == 'a') cnt++;\n            if(c == '(') cnt+=self(0);\n            if(c == '|') return max(cnt,self(0));\n            if(c == ')') return cnt;\n        }\n        return cnt;\n    }(0) << '\\n';\n    return 0;\n}\n```",
+  "source_hash": "ec6ebefa6da8127c72bdb11d926a539a39c5e243e3a9c7cac95d6cccd9a1d26d",
+  "source_meta": {
+    "legacy_id": 37,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 18.03,
+  "title": null
+}

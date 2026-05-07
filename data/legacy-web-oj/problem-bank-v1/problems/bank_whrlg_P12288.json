@@ -1,0 +1,27 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "STL",
+    "栈",
+    "数组",
+    "线性结构"
+  ],
+  "created_at": "2026-01-24 19:21:43.985650",
+  "description": "# P12288 [蓝桥杯 2024 国 Java A] 栈\n\n## 题目描述\n\n小蓝有一个栈，他不断地向这个栈的顶端添加数字。小蓝希望栈中不存在相同的数，当他加入了一个之前已经存在的数时，栈中之前存在的那个数会消失（其它原有元素的相对顺序不变），小蓝还想随时知道栈中所有相邻的数中和为奇数的总共有多少组，请你计算出小蓝要求的结果。\n\n## 输入格式\n\n输入的第一行包含一个整数 $n$。\n\n接下来 $n$ 行，每行包含一个整数 $A_i$，表示被添加的数。\n\n## 输出格式\n\n输出 $n$ 行，每行包含一个整数表示每次添加数后的答案。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n4\n1\n2\n3\n2\n```\n\n### 输出 #1\n\n```\n0\n1\n2\n1\n```\n\n## 说明/提示\n\n### 评测用例规模与约定\n\n- 对于 $30\\%$ 的评测用例，$1 \\leq n \\leq 1000$，$A_i \\leq 300$；\n- 对于 $70\\%$ 的评测用例，$1 \\leq n \\leq 10^5$，$A_i \\leq 1000$；\n- 对于所有评测用例，$1 \\leq n \\leq 5 \\times 10^5$，$1 \\leq A_i \\leq 10^6$。",
+  "link": "https://www.luogu.com.cn/problem/P12288",
+  "pass_count": 1.18,
+  "problem_id": "bank_whrlg_P12288",
+  "raw_category_tags": "STL 栈 数组 线性结构",
+  "rejected_tags": [],
+  "solution_1": "P12288 题解\n核心：双向链表维护栈内数据，用 map 维护每个数出现的次数和位置（因为 map 内元素键的数量是唯一的便），于查找和删除。\n\n我们可以用一条双向链表储存每个数据的前驱和后继。用 ans 代表栈内相邻元素和是奇数的组数。每次向链表里添加元素时，先判断在 map 里有无重复元素（j）。如果有，分三种情况：\n\nj 是链表第一个元素，那么它只对后面的 ans 有贡献，所以将它对后面的贡献减去。\nj 是链表当前的最后一个元素，那么它只对前面的 ans 有贡献，所以将它对后面的贡献减去。\nj 是链表中间的元素，那么它对前面和后面的 ans 都有贡献，所以都减去。如果被删除后 j 前面和后面的两个数和是奇数，那么 ans 应加 1 。\n判断完成后将新元素添加到链表中，并计算新元素对答案的贡献。最后输出。\n\n于是我们就快乐的通过了这道题 QAQ。\n\nAC code：\n#include <bits/stdc++.h>\n\nusing namespace std;\n#define int long long\n\nint n;\nconst int N = 5e5 + 10;\nconst int M = 1e6 + 10;\n\nstruct node{\n int prev, nxt, id;\n}a[N];\n\nmap<int, int> num;\nint ans = 0, cnt = 2;\n\ninline void add(int k, int x){\n a[cnt].id = x;\n a[cnt].nxt = a[k].nxt;\n a[a[k].nxt].prev = cnt;\n a[cnt].prev = k;\n a[k].nxt = cnt;\n cnt++;\n}\n\nsigned main(){\n cin >> n;\n a[0].nxt = 1;\n a[1].prev = 0;\n for (int i = 1; i <= n; i++){\n  int x;\n  cin >> x;\n  int j = 0;\n  if (num[x]){\n   j = num[x];\n   int pre = a[j].prev;\n   int next = a[j].nxt;\n   if (pre) ans -= (a[pre].id + a[j].id) % 2;\n   if (next != 1) ans -= (a[next].id + a[j].id) % 2;\n   if (next != 1 && pre != 0) ans += (a[next].id + a[pre].id) % 2;\n   a[a[j].prev].nxt = a[j].nxt;\n   a[a[j].nxt].prev = a[j].prev;\n  }\n  num[x] = i + 1;\n  add(a[1].prev, x);\n  j = num[x];\n  if (a[j].prev) ans += (a[j].id + a[a[j].prev].id) % 2;\n  cout << ans << \"\\n\";\n }\n return 0;\n}",
+  "solution_2": "这题的名字简直就是诈骗，这题根本就和栈没什么关系(在我看来)。看这道题又有几个特点：\n\n- 频繁删除，保持相对顺序不变\n\n- 数据量很大\n\n- 需要快速找到重复元素的位置(至少$O(logn)$)\n\n依然应该使用链表来维护，这不难想到。但是如何快速找到重复元素的位置呢？如果你一直是用静态链表你肯定没这个烦恼，因为题中给了数字的范围，在`1~1e6`之间，内存开的也不小，有512MB，那肯定可以开一个至少(1e6+1)的数组，用输入的数字作为链表节点的地址。\n\n但是我这个人比较执著，list在这题能不能用？自然可以。不过要开一个`std::unordered_map`或者`std::map`记录一个数字->迭代器的映射。\n\n- 具体代码如下：\n\n```c++\n#include <bits/stdc++.h>\nusing namespace std;\n\nint main()\n{\n    int n;\n    cin >> n;\n    list<int> lst;\n    auto ok = [&](list<int>::iterator &it){return it != lst.end();};\n    unordered_map<int,list<int>::iterator> m;\n    int ans = 0;\n    for(int i = 0;i<n;i++){\n        int x;\n        cin >> x;\n        if(!lst.empty()&&x == *prev(lst.end())) {\n            cout << ans << '\\n';\n            continue;\n        }\n        if(!lst.empty()&&(lst.back()+x)%2 == 1) ans++;\n        if(m.count(x)){\n            auto it = m[x];\n            auto l = lst.end();\n            auto r = lst.erase(it);\n            if(ok(r)){\n                l = prev(r);\n            }\n            if(ok(l)&&(*l+x)%2 == 1) ans--;\n            if(ok(r)&&(*r+x)%2 == 1) ans--;\n            if(ok(l)&&ok(r)&&(*l+*r)%2 == 1) ans++;\n        }\n        lst.emplace_back(x);\n        m[x] = prev(lst.end());\n        cout << ans << '\\n';\n    }\n    return 0;\n}\n```\n\n大多数人我看都是用的数组来模拟链表，其实这道题很明显可以用`std::unordered_map`来模拟链表，原理和数组模拟链表一样，理论上查询也是$O(1)$的复杂度，不过比数组稍好的一点就是，`std::unordered_map` 可以省略很多操作，比如它不用显式分配内存，即开即用，插入不用像`std::set`那样必须调用insert方法，插入一个键值对，只需要方括号+赋值即可。并且如果用int作为key，还可以用负数作为key，比数组要方便得多。\n\n但是它的缺点也很明显，虽然不用显式分配内存，但是其内部占用的内存比你想象中大很多，如果你向其中插入过多数据，很有可能MLE。另外，如果哈希冲突较多或者出题人有意卡掉`std::unordered_map` ，它的查询速度甚至会慢于`std::map`（$O(logn)$）。\n\n总之，大多数情况下用它都是没问题的。\n\n- 以下是`std::unordered_map`维护双向循环链表的代码：\n\n```c++\n#include <bits/stdc++.h>\nusing namespace std;\n\nint main()\n{\n    int n;\n    cin >> n;\n    unordered_map<int,pair<int,int>> lst; //pair第一维代表当前节点左节点，第二维为当前节点右节点\n    int tail = 0;       //tail记录链表结尾，以0节点(题中数据之外)为哨兵节点(或者叫头节点)\n    int ans = 0;\n    for(int i = 1;i<=n;i++){\n        int x;\n        cin >> x;\n        if(x == tail) {      //新插入节点等于tail，那就不用插了\n            cout << ans << '\\n';   //注意不插入也要打印\n            continue;\n        }\n        if(lst.count(x)){\n            auto [l,r] = lst[x];\n            if(l&&(l+x)%2 == 1) ans--;\n            if(r&&(r+x)%2 == 1) ans--;\n            lst[l].second = r;\n            lst[r].first = l;\n            if(l&&r&&(l+r)%2 == 1) ans++;\n        }\n        lst[x] = {tail,0};     //维护双向循环链表\n        lst[tail].second = x;\n        if(tail&&(x+tail)%2 == 1) ans++;\n        tail = x;\n        cout << ans << '\\n';\n    }\n    return 0;\n}\n\n```",
+  "source_hash": "7082ee50f2a0b500afb951a325db2066f9fca014972c6c653118d8e0a5fb03f4",
+  "source_meta": {
+    "legacy_id": 38,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 1.624,
+  "title": null
+}

@@ -48,10 +48,10 @@ class ImportRunResponse(BaseModel):
 class SingleImportRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    examType: str = Field(description="Exam type, e.g. datastructure")
+    examType: str = Field(description="Exam type, e.g. pintia")
     sourcePath: str = Field(
         min_length=1,
-        description="Exam source_path, supports both full (datastructure/xxx) and short (xxx).",
+        description="Exam source_path. Pintia uses the JSON path relative to practice root.",
     )
     dryRun: bool = Field(
         default=False,

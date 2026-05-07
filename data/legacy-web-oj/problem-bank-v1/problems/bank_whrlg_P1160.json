@@ -1,0 +1,29 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "STL",
+    "栈",
+    "队列",
+    "递归",
+    "线性结构",
+    "模拟"
+  ],
+  "created_at": "2026-01-24 19:21:43.949678",
+  "description": "# P1160 队列安排\n\n## 题目描述\n\n一个学校里老师要将班上 $N$ 个同学排成一列，同学被编号为 $1\\sim N$，他采取如下的方法：\n\n1. 先将 $1$ 号同学安排进队列，这时队列中只有他一个人；\n\n2. $2\\sim N$ 号同学依次入列，编号为 $i$ 的同学入列方式为：老师指定编号为 $i$ 的同学站在编号为 $1\\sim(i-1)$ 中某位同学（即之前已经入列的同学）的左边或右边；\n\n3. 从队列中去掉 $M$ 个同学，其他同学位置顺序不变。\n\n在所有同学按照上述方法队列排列完毕后，老师想知道从左到右所有同学的编号。\n\n## 输入格式\n\n第一行一个整数 $N$，表示了有 $N$ 个同学。\n\n第 $2\\sim N$ 行，第 $i$ 行包含两个整数 $k,p$，其中 $k$ 为小于 $i$ 的正整数，$p$ 为 $0$ 或者 $1$。若 $p$ 为 $0$，则表示将 $i$ 号同学插入到 $k$ 号同学的左边，$p$ 为 $1$ 则表示插入到右边。\n\n第 $N+1$ 行为一个整数 $M$，表示去掉的同学数目。\n\n接下来 $M$ 行，每行一个正整数 $x$，表示将 $x$ 号同学从队列中移去，如果 $x$ 号同学已经不在队列中则忽略这一条指令。\n\n## 输出格式\n\n一行，包含最多 $N$ 个空格隔开的整数，表示了队列从左到右所有同学的编号。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n4\n1 0\n2 1\n1 0\n2\n3\n3\n```\n\n### 输出 #1\n\n```\n2 4 1\n```\n\n## 说明/提示\n\n**【样例解释】**\n\n将同学 $2$ 插入至同学 $1$ 左边，此时队列为：\n\n`2 1`\n\n将同学 $3$ 插入至同学 $2$ 右边，此时队列为：\n\n`2 3 1`  \n\n将同学 $4$ 插入至同学 $1$ 左边，此时队列为：\n\n`2 3 4 1`  \n\n将同学 $3$ 从队列中移出，此时队列为：\n\n`2 4 1`  \n\n同学 $3$ 已经不在队列中，忽略最后一条指令\n\n最终队列：\n\n`2 4 1`  \n\n**【数据范围】**\n\n对于 $20\\%$ 的数据，$1\\leq N\\leq 10$。\n\n对于 $40\\%$ 的数据，$1\\leq N\\leq 1000$。\n\n对于 $100\\%$ 的数据，$1<M\\leq N\\leq 10^5$。",
+  "link": "https://www.luogu.com.cn/problem/P1160",
+  "pass_count": 61.55,
+  "problem_id": "bank_whrlg_P1160",
+  "raw_category_tags": "STL 栈 队列 递归 线性结构 模拟",
+  "rejected_tags": [],
+  "solution_1": "看了一下题解区似乎没有用STL的，那我就发个STL的解法好了(〃'▽'〃)\n\nC++标准库自带了std::list这个双向链表的模板类，使用时需要包含头文件：#include <list>。\n\nlist<int> myList;\n\n这句代码声明了一个list<int>类型的变量，也就是一个包含int类型元素的双向链表。尖括号里边的部分称为模板参数，对于list而言，它表示链表里的元素是什么类型。\n\nmyList.push_front(1);\nmyList.push_back(2);\n\n顾名思义，这两个成员函数分别用于在链表的头部和尾部插入元素。对应地，pop_front()用于移除头部的元素，pop_back()用于移除尾部的元素。\n\ntypedef list<int>::iterator Iter;\nIter itBegin = myList.begin();\nIter itEnd = myList.end();\nfor (; itBegin != itEnd; ++itBegin)\n printf(\" %d\", *itBegin);\n\n这段代码演示的是list提供的，用于访问内部元素的迭代器。迭代器的类型是list<Tp>::iterator（这里模板参数Tp需要与你操作的链表一致）。\n\n迭代器的用法和指针有些像，可以用*运算符访问内部的元素，++和--运算符可以将它后移或前移一位（建议写成前置形式），用==和!=运算符进判断两个迭代器所指的位置是否一致。但要注意：list的迭代器不支持it += x或it1 - it2这样的运算，也不支持<，<=等运算符。\n\nbegin()成员函数返回指向头部元素的迭代器。\n\nend()成员函数返回指向末尾位置的迭代器。这个“末尾位置”指的是最后一个元素再往后一位，也就是说end()所指的位置不包含有效元素，它相当于一个虚设的节点。这样设计是为了满足C++标准库表示区间时左闭右开的惯例。\n\n//接上例\nIter it = myList.end();\n--it;\n//C++11中可以直接写成it = prev(myList.end());\n//这里prev是头文件<iterator>提供的函数，用于返回将某个迭代器前移一位的结果\nIter it2 = myList.insert(it, 3);\n//myList的内容：1,3,2\n\n这段代码首先定义了一个迭代器it，然后在end()的基础上左移一位，让它指向链表中最后一个元素。\n\ninsert(it, val)成员函数用于在链表中插入元素。it为该链表的一个迭代器，val为待插入的值，插入后val位于it所指位置的前一位。返回值为一个迭代器，表示val插入到了哪个位置。\n\n//接上例\nmyList.remove(it);\n//myList的内容：1,3\nint x = *it + 10; //ERROR!\n\nremove(it)成员函数用于删除某个迭代器所指的节点。注意在删除之后it就失效了，除非给it重新赋值，否则对它的任何操作都会导致错误！\n\n除上述主要操作以外，list还提供了其他一些实用的成员函数：size()返回链表内元素的个数，empty()判断链表是否为空，remove(val)用于移除所有值为val的节点，以及作为成员函数的sort()和unique()。（注意sort(myList.begin(), myList.end())是错误的写法）\n\n有了这些基础知识，我们就可以用STL来写本题了。代码如下：\n\n#include <cstdio>\n#include <list>\n\nusing namespace std;\n\nusing Iter = list<int>::iterator;\n\nconst int maxN = 1e5 + 10;\nIter pos[maxN];\nlist<int> queList;\nbool erased[maxN];\nint N;\n\nvoid buildQueue()\n{\n  queList.push_front(1);\n  pos[1] = queList.begin();\n\n  for (int i = 2; i <= N; i++)\n  {\n      int k, p;\n      scanf(\"%d%d\", &k, &p);\n      if (p == 0)\n      {\n          pos[i] = queList.insert(pos[k], i); //left\n      }\n      else\n      {\n          auto nextIter = next(pos[k]);\n          pos[i] = queList.insert(nextIter, i); //right\n      }\n  }\n  int M;\n  scanf(\"%d\", &M);\n  for (int x, i = 1; i <= M; i++)\n  {\n      scanf(\"%d\", &x);\n      if (!erased[x])\n      {\n          queList.erase(pos[x]);\n      }\n      erased[x] = true;\n  }\n}\n\nint main()\n{\n  scanf(\"%d\", &N);\n  buildQueue();\n  bool first = true;\n  for (int x: queList)\n  {\n      if (!first)\n          putchar(' ');\n      first = false;\n      printf(\"%d\", x);\n  }\n  putchar('\\n');\n  return 0;\n}",
+  "solution_2": "蒟蒻思路：当元素在左侧插入时看做一个先进先出的队列，在右侧插入时看做一个先进后出的栈。通过c++的STL中的vector和stack实现了这两种数据结构，并通过递归完成输出\n\n\n#include<cstdio>\n#include<stack>\n#include<vector>\n#define N 100005\n\nusing namespace std;\n\nvector<int>left[N];\nstack<int>right[N];\nint tot;\nbool hash[N];\n\nvoid print(int k)\n{\n    for (int i=0;i<left[k].size();i++) print(left[k][i]);\n    \n    if (hash[k]) \n    {\n        tot--;\n        if (!tot) printf(\"%d\\n\",k);\n            else printf(\"%d \",k);\n    }\n    while (!right[k].empty())\n    {\n        print(right[k].top());\n        right[k].pop();\n    }\n}\n\nint main()\n{\n    int n,a,b,tmp;\n    \n    scanf(\"%d\",&n);\n    \n    for (int i=2;i<=n;i++)\n    {\n        scanf(\"%d%d\",&a,&b);\n        if (!b) left[a].push_back(i);\n            else right[a].push(i);\n    }\n    for (int i=1;i<=n;i++) hash[i]=true;\n    tot=n;\n    \n    scanf(\"%d\",&n);\n    for (int i=1;i<=n;i++) \n    {\n        scanf(\"%d\",&tmp);\n        if (hash[tmp])\n        {\n            tot--;\n            hash[tmp]=false;\n        }\n    }\n    \n    print(1);\n}",
+  "source_hash": "a86311abce668c6294b9ecff73e278c7d065cb8f24d53e395fe9cedf2b62645e",
+  "source_meta": {
+    "legacy_id": 33,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 170.41,
+  "title": null
+}

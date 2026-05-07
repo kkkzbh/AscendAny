@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "AscendAny Pintia Exporter",
+  "description": "Export the current Pintia problem set as an AscendAny import unit.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Export Pintia to AscendAny",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["activeTab", "downloads", "scripting", "tabs"],
+  "host_permissions": ["https://pintia.cn/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://pintia.cn/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-bridge.js"],
+      "matches": ["https://pintia.cn/*"]
+    }
+  ]
+}

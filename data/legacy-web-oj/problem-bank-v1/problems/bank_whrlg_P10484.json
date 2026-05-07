@@ -1,0 +1,30 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "DFS",
+    "二分",
+    "双指针",
+    "堆",
+    "数组",
+    "字符串",
+    "搜索"
+  ],
+  "created_at": "2026-01-24 19:21:43.779817",
+  "description": "# P10484 送礼物\n\n## 题目描述\n\n作为惩罚，GY 被遣送去帮助某神牛给女生送礼物 (GY：貌似是个好差事）但是在 GY 看到礼物之后，他就不这么认为了。某神牛有 $N$ 个礼物，且异常沉重，但是 GY 的力气也异常的大 (-_-b)，他一次可以搬动重量和在 $w$ 以下的任意多个物品。GY 希望一次搬掉尽量重的一些物品，请你告诉他在他的力气范围内一次性能搬动的最大重量是多少。\n\n## 输入格式\n\n第一行两个整数，分别代表 $W$ 和 $N$。\n\n以后 $N$ 行，每行一个正整数表示 $G_i$。\n\n## 输出格式\n\n仅一个整数，表示 GY 在他的力气范围内一次性能搬动的最大重量。\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n20 5\n7\n5\n4\n18\n1\n```\n\n### 输出 #1\n\n```\n19\n```\n\n## 说明/提示\n\n对于所有测试数据，$1 \\le N \\le 46$, $1 \\le W,G[i] \\le 2^{31}-1$。",
+  "link": "https://www.luogu.com.cn/problem/P10484",
+  "pass_count": 2.22,
+  "problem_id": "bank_whrlg_P10484",
+  "raw_category_tags": "DFS 二分 双指针 堆 数组 字符串 搜索",
+  "rejected_tags": [],
+  "solution_1": "思路\n折半搜索。\n\n看数据范围，2 \n46\n  肯定炸，但 2×2 \n23\n  炸不了。\n\n整个数组从中间劈成两半，对于每一半，求出礼物能组成的所有重量数，存在两个数组中。\n\n把其中一个数组排序，遍历另一个数组，二分查找在另一个数组中满足条件的最大值。最后求出所有答案的最大值。\n\n代码\n#include<bits/stdc++.h>\nusing namespace std;\n#define ll long long\n#define ull unsigned long long\n#define INF 0x3f3f3f3f\n#define re register\n#define ri register int\n#define rll register long long\n#define ld long double\n#define endl '\\n'\n#define fi first\n#define se second\n#define pii pair<int,int>\n#define p_q priority_queue\n#define iter iterator\n#define rep(i,a,b) for(int i=(a);i<=(b);i++)\n#define nep(i,a,b) for(int i=(a);i>=(b);i--)\n#define popcount __builtin_popcount\n#define pb push_back\n#define mem(a,x) memset((a),x,sizeof(a))\n#define eps 1e-8\n#define oper operator\n#define mk make_pair\nvector<ll>a,b;\nll n,g[55],w;\nvoid dfs1(int l,int r,ll sum){\n\tif(l>r){\n\t\tif(sum<=w)a.pb(sum);//能搬动\n\t\treturn ;\n\t}\n\tdfs1(l+1,r,sum+g[l]);\n\tdfs1(l+1,r,sum);\n}\nvoid dfs2(int l,int r,ll sum){\n\tif(l>r){\n\t\tif(sum<=w)b.pb(sum);//能搬动\n\t\treturn ;\n\t}\n\tdfs2(l+1,r,sum+g[l]);\n\tdfs2(l+1,r,sum);\n}\nint main(){\n\tcin>>w>>n;\n\tfor(int i=1;i<=n;i++) cin>>g[i];\n\tdfs1(1,(1+n)/2,0);//前一半\n\tdfs2((1+n)/2+1,n,0);//后一半\n\tll maxx=0;\n\tsort(b.begin(),b.end());//排序\n\tfor(int i=0;i<a.size();i++){\n\t\tll sum=a[i];\n\t\tint l=0,r=b.size()-1,ans=0;\n\t\twhile(l<=r){//二分查找满足条件的最大值\n\t\t\tint mid=(l+r)/2;\n\t\t\tif(b[mid]+a[i]<=w){\n\t\t\t\tl=mid+1;\n\t\t\t\tans=mid;\n\t\t\t}else r=mid-1;\n\t\t}\n\t\tsum+=b[ans];\n\t\tmaxx=max(maxx,sum);\n\t}\n\tcout<<maxx;//输出\n    return 0;\n}",
+  "solution_2": "来一发双向搜索加双指针的题解。\n\n题目大意\n分析一下复杂度。\n\n暴力搜索 O(2 \nn\n ) 明显会炸，但是 O(2 \n2\nn\n​\n +1\n ) 不会，所以双向搜索可行。\n\n题目实现\n劈成两半枚举所有可能的结果，每一半存入一个数组中。\n\n最后从两个数组中分别拿出一个匹配，如果不超过 W，那么是一个可能的答案，统计最大值。\n\n但是显然 O(n \n2\n ) 的答案求解不可行，所以考虑食用双指针优化为 O(n)。\n\n我们将两个数组从大到小排序，显然对于第一个数组 a，随着下标不断增大，a \ni\n​\n  也不断增大，根据单调性，如果想要两个数的和维持在 ≤W 的范围内，第二个数要不断缩小，所以我们可以再设一个指针 j 来倒序枚举第二个数组。\n\n代码：\n#include <bits/stdc++.h>\n#define int long long\n#define f(i ,m ,n ,x) for (int i = (m) ;i <= (n) ;i += (x))\nusing namespace std ;\ntemplate < typename T > inline void read (T &x) {\n\tx = 0 ;\n\tbool flag (0) ;\n\tregister char ch = getchar () ;\n\twhile (! isdigit (ch)) {\n\t\tflag = ch == '-' ;\n\t\tch = getchar () ;\n\t}\n\twhile (isdigit (ch)) {\n\t\tx = (x << 1) + (x << 3) + (ch ^ 48) ;\n\t\tch = getchar () ;\n\t}\n\tflag ? x = -x : 0 ;\n}\nconst int N = 50 ;\nconst int M = (1 << 23) + 7 ;\nint w ,n ,g[N] ;\nint v1[M] ,v2[M] ,tot1 ,tot2 ,mid ;\ninline void dfs (int num ,int end ,int sum ,bool flag) {\n\tif (num == end + 1) {\n\t\tif (! flag) {\n\t\t\tv1[++ tot1] = sum ;\n\t\t\treturn ;\n\t\t}\n\t\tv2[++ tot2] = sum ;\n\t\treturn ;\n\t}\n\tdfs (num + 1 ,end ,sum ,flag) ;\n\tif (sum + g[num] <= w) {\n\t\tdfs (num + 1 ,end ,sum + g[num] ,flag) ;\n\t} // 第 num 个物品可以选或者不选\n}\nint ans ;\nsigned main () {\n\tread (w) ,read (n) ;\n\tf (i ,1 ,n ,1) {\n\t\tread (g[i]) ;\n\t}\n\tmid = n >> 1 ;\n\tdfs (1 ,mid ,0 ,0) ;\n\tdfs (mid + 1 ,n ,0 ,1) ;\n\tint j = tot2 ;\n\tsort (v1 + 1 ,v1 + tot1 + 1) ;\n\tsort (v2 + 1 ,v2 + tot2 + 1) ;\n\tf (i ,1 ,tot1 ,1) {\n\t\twhile (j >= 1 && v2[j] + v1[i] > w) j -- ;\n\t\tans = max (ans ,v2[j] + v1[i]) ;\n\t}\n\tcout << ans << '\\n' ;\n\treturn 0 ;\n}",
+  "source_hash": "ded58b4e3656ede38c4d3ed740283b4fc01d67cfe5087370fbdb822f247772e9",
+  "source_meta": {
+    "legacy_id": 12,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 6.78,
+  "title": null
+}

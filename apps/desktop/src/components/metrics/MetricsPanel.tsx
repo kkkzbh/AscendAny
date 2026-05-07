@@ -7,6 +7,7 @@ import { RatingDisplay } from "./RatingDisplay";
 import { MetricCard } from "./MetricCard";
 import { RatingHistoryLineChart } from "./RatingHistoryLineChart";
 import { NotesWorkspace } from "@/components/notes/NotesWorkspace";
+import { PathPanel } from "@/components/path/PathPanel";
 import type { MetricName } from "@/types/metrics";
 
 const METRIC_ORDER: MetricName[] = [
@@ -24,6 +25,7 @@ export function MetricsPanel() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const activeTab = useLayoutStore((s) => s.activeRightPanelTab);
   const setActiveTab = useLayoutStore((s) => s.setActiveRightPanelTab);
+  const [activeHistoryExamId, setActiveHistoryExamId] = useState<string | null>(null);
   const studentId = account?.studentId ?? undefined;
   const ptaNickname = account?.ptaNickname ?? undefined;
 
@@ -42,6 +44,7 @@ export function MetricsPanel() {
   const tabs: Array<{ id: RightPanelTab; label: string }> = [
     { id: "ability", label: "能力" },
     { id: "history", label: "历史" },
+    { id: "path", label: "地图" },
     { id: "notes", label: "笔记" },
   ];
   const activeIndex = tabs.findIndex((tab) => tab.id === activeTab);
@@ -69,6 +72,8 @@ export function MetricsPanel() {
   let content: ReactNode;
   if (activeTab === "notes") {
     content = <NotesWorkspace />;
+  } else if (activeTab === "path") {
+    content = <PathPanel />;
   } else if (loading && !metrics && !rating) {
     content = (
       <div className="student-right-empty">
@@ -92,12 +97,20 @@ export function MetricsPanel() {
       <div className="student-right-content">
         {historyItems.length > 0 ? (
           <>
-            <RatingHistoryLineChart history={historyItems} />
+            <RatingHistoryLineChart
+              history={historyItems}
+              activeExamId={activeHistoryExamId}
+            />
             <div className="rating-history-list space-y-1">
               {historyItems.map((point) => (
                 <div
                   key={point.examId}
                   className="rating-history-row flex items-center justify-between text-xs transition-colors duration-150 hover:bg-[var(--surface-soft)]"
+                  onMouseEnter={() => setActiveHistoryExamId(point.examId)}
+                  onMouseLeave={() => setActiveHistoryExamId(null)}
+                  onFocus={() => setActiveHistoryExamId(point.examId)}
+                  onBlur={() => setActiveHistoryExamId(null)}
+                  tabIndex={0}
                 >
                   <div className="flex min-w-0 flex-col">
                     <span className="truncate font-medium text-[var(--text-strong)]">

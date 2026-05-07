@@ -3,6 +3,8 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceDot,
+  ReferenceLine,
   Tooltip,
   XAxis,
   YAxis,
@@ -12,8 +14,10 @@ import type { RatingPoint } from "@/types/metrics";
 
 const CHART_HEIGHT = 176;
 const MIN_CHART_WIDTH = 320;
-const MIN_SIDE_PADDING = 16;
-const POINT_STEP = 62;
+const CHART_RIGHT_MARGIN = 14;
+const Y_AXIS_WIDTH = 36;
+const X_AXIS_MIN_TICK_GAP = 12;
+const X_AXIS_PADDING = { left: 6, right: 30 };
 const Y_AXIS_PADDING = 24;
 
 export interface RatingTrendPoint {
@@ -27,6 +31,7 @@ export interface RatingTrendPoint {
 
 interface RatingHistoryLineChartProps {
   history: RatingPoint[];
+  activeExamId?: string | null;
 }
 
 interface TooltipPayloadItem {
@@ -59,13 +64,10 @@ export function buildRatingTrendPoints(history: RatingPoint[]): RatingTrendPoint
 }
 
 export function computeTrendChartWidth(
-  pointCount: number,
+  _pointCount: number,
   viewportWidth: number,
 ): number {
-  const pointsWidth =
-    pointCount <= 1 ? MIN_CHART_WIDTH : pointCount * POINT_STEP;
-  const viewportDriven = Math.max(0, viewportWidth - MIN_SIDE_PADDING * 2);
-  return Math.max(MIN_CHART_WIDTH, pointsWidth, viewportDriven + MIN_SIDE_PADDING * 2);
+  return Math.max(MIN_CHART_WIDTH, viewportWidth);
 }
 
 function RatingTrendTooltip({ active, payload }: RatingTrendTooltipProps) {
@@ -95,10 +97,33 @@ function RatingTrendTooltip({ active, payload }: RatingTrendTooltipProps) {
   );
 }
 
-export function RatingHistoryLineChart({ history }: RatingHistoryLineChartProps) {
+function RatingTrendPointDetails({ point }: { point: RatingTrendPoint }) {
+  const deltaPrefix = point.delta >= 0 ? "+" : "";
+
+  return (
+    <div className="rating-trend-highlight-tooltip" role="status" aria-label="考试详情">
+      <div className="rating-trend-tooltip-title">{point.examName}</div>
+      <div className="rating-trend-tooltip-row">{point.date}</div>
+      <div className="rating-trend-tooltip-row">Rating: {point.rating}</div>
+      <div className="rating-trend-tooltip-row">
+        变化: {deltaPrefix}
+        {point.delta}
+      </div>
+    </div>
+  );
+}
+
+export function RatingHistoryLineChart({
+  history,
+  activeExamId = null,
+}: RatingHistoryLineChartProps) {
   const [viewportWidth, setViewportWidth] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const trend = useMemo(() => buildRatingTrendPoints(history), [history]);
+  const activePoint = useMemo(
+    () => trend.find((item) => item.examId === activeExamId) ?? null,
+    [activeExamId, trend],
+  );
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -153,9 +178,9 @@ export function RatingHistoryLineChart({ history }: RatingHistoryLineChartProps)
             data={trend}
             margin={{
               top: 10,
-              right: MIN_SIDE_PADDING,
+              right: CHART_RIGHT_MARGIN,
               bottom: 6,
-              left: MIN_SIDE_PADDING,
+              left: 0,
             }}
           >
             <CartesianGrid
@@ -165,18 +190,22 @@ export function RatingHistoryLineChart({ history }: RatingHistoryLineChartProps)
               vertical={false}
             />
             <XAxis
-              dataKey="shortDate"
+              dataKey="examId"
               tickLine={false}
               axisLine={false}
-              minTickGap={22}
+              minTickGap={X_AXIS_MIN_TICK_GAP}
               interval="preserveStartEnd"
+              padding={X_AXIS_PADDING}
+              tickFormatter={(examId) =>
+                trend.find((item) => item.examId === examId)?.shortDate ?? String(examId)
+              }
               tick={{
                 fill: "var(--text-soft)",
                 fontSize: 10,
               }}
             />
             <YAxis
-              width={44}
+              width={Y_AXIS_WIDTH}
               tickLine={false}
               axisLine={false}
               domain={[yDomainMin, yDomainMax]}
@@ -192,25 +221,47 @@ export function RatingHistoryLineChart({ history }: RatingHistoryLineChartProps)
               }}
               content={<RatingTrendTooltip />}
             />
+            {activePoint ? (
+              <>
+                <ReferenceLine
+                  x={activePoint.examId}
+                  stroke="var(--accent-500)"
+                  strokeOpacity={0.26}
+                  strokeDasharray="3 3"
+                  ifOverflow="visible"
+                />
+                <ReferenceDot
+                  x={activePoint.examId}
+                  y={activePoint.rating}
+                  r={6}
+                  isFront
+                  fill="var(--accent-600)"
+                  stroke="var(--surface-raised)"
+                  strokeWidth={2}
+                  ifOverflow="visible"
+                />
+              </>
+            ) : null}
             <Line
               type="monotone"
               dataKey="rating"
               stroke="var(--accent-600)"
               strokeWidth={2}
               dot={{
-                r: 2.2,
-                strokeWidth: 1.2,
+                r: 4,
+                strokeWidth: 1.6,
                 stroke: "var(--surface-raised)",
                 fill: "var(--accent-500)",
               }}
               activeDot={{
-                r: 4,
+                r: 6,
                 strokeWidth: 2,
                 stroke: "var(--surface-raised)",
                 fill: "var(--accent-600)",
               }}
             />
           </LineChart>
+          {activePoint ? <RatingTrendPointDetails point={activePoint} /> : null}
         </div>
       </div>
     </section>

@@ -352,6 +352,10 @@ describe("student shell components", () => {
     fireEvent.click(screen.getByRole("button", { name: "历史" }));
     expect(useLayoutStore.getState().activeRightPanelTab).toBe("history");
     expect(screen.getByText("月测表现分析")).toBeTruthy();
+
+    expect(screen.queryByRole("status", { name: "考试详情" })).toBeNull();
+    fireEvent.mouseEnter(screen.getByText("月测表现分析").closest(".rating-history-row")!);
+    expect(screen.getByRole("status", { name: "考试详情" }).textContent).toContain("Rating: 1002");
   });
 
   it("switches the main app shell to the settings workspace", () => {

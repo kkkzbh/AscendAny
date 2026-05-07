@@ -11,6 +11,11 @@ from typing import Any
 from ..core.errors import AppError
 from ..db.repository import ApiRepository
 from .identity import ResolvedIdentity
+from .tools import (
+    FACT_TOOL_PROMPT_LINES,
+    NOTES_TOOL_PROMPT_LINES,
+    UI_TOOL_PROMPT_LINES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,24 +67,40 @@ class PromptDefinition:
 
 _TOOL_RULES = """\
 ## 工具使用规则
-- 你可以调用事实工具获取学生学习画像、指定考试全体学生榜单指标、提交记录。
+- 你可以调用事实工具获取学生学习画像、指定考试全体学生榜单指标、提交记录、题目推荐和学习路径。
 - 需要具体分数、排名、Rating、五维指标、提交细节时必须先调用工具，禁止编造。
+- 用户请求推荐题目、刷什么题时，直接调用 `get_problem_recommendations`；无明确条件时只传 `top_k` 或空参数，不要编造过滤参数。
+- 用户请求学习路线、先学什么、知识点路径时，直接调用 `get_learning_path`；无明确主题或条数时传空参数。
 - 工具只返回事实数据；对比、诊断、建议、心理支持和训练动作都由你基于事实自行完成。
 - 工具调用是后台行为，不向用户暴露函数调用过程或任何调用标记。
 
 ## 可用事实工具
-- `get_student_learning_profile`: 当前绑定学生身份、当前 Rating/五维指标、最近考试历史。
-- `get_exam_participant_metrics`: 指定考试的考试信息与未缺考学生全量榜单、分数、Rating 变化和五维指标。
-- `get_exam_submissions`: 指定考试提交记录；默认查当前学生，也可按学号或内部学生实体 ID 查询。
+{fact_tool_lines}
 
 ## 长期笔记工具
 你可以读写一份跨会话持久化的「长期笔记」（用户当前激活的那一份；其内容已在系统提示中给出）。
-- `read_notes`: 读取当前长期笔记；可整篇读取，也可按关键词搜索。
-- `update_notes`: 修改当前长期笔记；小改用 patch，大改或全文重构用 replace。
+{notes_tool_lines}
 - 用户要求整理、精简、补充、删除、改写笔记时，必须调用 `update_notes`。
 - 成功调用 `update_notes` 之前，不要说笔记已经修改完成。
-- 写笔记时保留仍有价值的用户内容，不要无故清空或丢失手写记录。\
-"""
+- 写笔记时保留仍有价值的用户内容，不要无故清空或丢失手写记录。
+
+## UI 富组件工具
+聊天气泡支持结构化富块。能用结构化块时不要再用 markdown 罗列：
+- 提到具体题目、推荐题目时调用 `emit_problem_card`，不要在文字里手写"题目：xxx, 难度：xxx"。
+- 给学生出选择题考核时调用 `emit_choice`；用户选择后，UI 会把题干、选项和用户选择作为隐藏用户输入继续触发一轮回复。
+- 多步公式推导调用 `emit_math_steps`，每一步一条 tex；不要把整段 LaTeX 揉在普通段落里。
+- 输出代码用 `emit_code` 而不是 markdown ``` 代码围栏，前端会渲染成带语言徽章和复制按钮的卡。
+- 提到一个知识点时（尤其用户的学习路径里出现的）配套调用 `emit_node_ref`，让用户点击直接跳到右侧地图详情。
+- 强提示/警告/提示性短语优先用 `emit_callout`（info/warn/tip），比 emoji 列表更突出。
+- 想让学生注意到当前路径上的某个节点时，调用 `focus_knowledge_node` 让地图自动展开，再开始讲。
+{ui_tool_lines}
+- UI 工具的调用是 UI 信号，不返回业务数据；调用前后仍需要把"为什么推荐"用文字解释清楚。
+- 不要重复造卡：同一道题、同一个知识点不要在一次回复里反复 `emit_*`。\
+""".format(
+    fact_tool_lines="\n".join(FACT_TOOL_PROMPT_LINES),
+    notes_tool_lines="\n".join(NOTES_TOOL_PROMPT_LINES),
+    ui_tool_lines="\n".join(UI_TOOL_PROMPT_LINES),
+)
 
 _NORMAL_SYSTEM_PROMPT_TEMPLATE = """\
 你是一位专业的编程学习分析助手，名叫「{role_name}」。

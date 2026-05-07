@@ -125,6 +125,8 @@ def test_public_tool_activity_labels_do_not_expose_tool_names() -> None:
     cases = {
         "get_student_learning_profile": "查看学习画像",
         "get_exam_submissions": "核对提交记录",
+        "get_problem_recommendations": "获取题目推荐",
+        "get_learning_path": "获取学习路径",
         "read_notes": "读取学习笔记",
         "update_notes": "更新学习笔记",
     }
@@ -690,6 +692,89 @@ def test_streaming_deepseek_reasoning_delta_and_tool_replay(monkeypatch) -> None
     )
     assert replayed_assistant["reasoning_content"] == "先看榜单。"
     assert replayed_assistant["tool_calls"]
+
+
+def test_streaming_problem_recommendation_tool_activity(monkeypatch) -> None:
+    requests_payload: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        requests_payload.append(payload)
+        if len(requests_payload) == 1:
+            tool_arguments = json.dumps({"top_k": 5})
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=_SseStream(
+                    [
+                        (
+                            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                            '"id":"call_rec","type":"function","function":{'
+                            '"name":"get_problem_recommendations","arguments":'
+                            f'{json.dumps(tool_arguments)}'
+                            "}}]}}]}\n\n"
+                        ),
+                        "data: [DONE]\n\n",
+                    ]
+                ),
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=_SseStream(
+                [
+                    'data: {"choices":[{"delta":{"content":"已给出推荐。"}}]}\n\n',
+                    "data: [DONE]\n\n",
+                ]
+            ),
+        )
+
+    transport = httpx.MockTransport(handler)
+    settings = Settings()
+    settings.llm.active_provider = "deepseek"
+    settings.llm.providers["deepseek"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="deepseek-v4-flash",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
+    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "test-key")
+
+    async def run_case() -> tuple[list[dict[str, object]], FakeToolExecutor]:
+        async with httpx.AsyncClient(transport=transport) as client:
+            service = LLMService(settings=settings, http_client=client)
+            tool_executor = FakeToolExecutor()
+            events: list[dict[str, object]] = []
+            async for event in service.stream_reply(
+                ChatReplyRequest(
+                    messages=[ChatMessageRequest(role="user", content="推荐几道题")],
+                    summary="",
+                ),
+                system_prompt="test prompt",
+                tool_executor=tool_executor,  # type: ignore[arg-type]
+            ):
+                events.append(event)
+            return events, tool_executor
+
+    events, tool_executor = asyncio.run(run_case())
+
+    assert tool_executor.calls == [("get_problem_recommendations", {"top_k": 5})]
+    assert {
+        "type": "tool_activity_start",
+        "activityId": "call_rec",
+        "label": "获取题目推荐",
+        "status": "running",
+    } in events
+    assert {
+        "type": "tool_activity_done",
+        "activityId": "call_rec",
+        "label": "获取题目推荐",
+        "status": "done",
+    } in events
+    assert {"type": "delta", "text": "已给出推荐。"} in events
+    assert events[-1]["type"] == "done"
+    assert events[-1]["reply"] == "已给出推荐。"
+    assert len(requests_payload) == 2
 
 
 def test_streaming_interleaves_text_and_tool_across_rounds(monkeypatch) -> None:

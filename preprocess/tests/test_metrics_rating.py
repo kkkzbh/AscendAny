@@ -119,6 +119,36 @@ def test_compute_exam_metrics_prefers_timeline_flexibility() -> None:
     assert by_id[1].details["ac_count"] == 2
 
 
+def test_compute_exam_metrics_does_not_count_partial_correct_as_ac() -> None:
+    timezone = ZoneInfo("Asia/Shanghai")
+    participants = [_participant(1, rank=1, score=50.0, time_used=120, attempts=2)]
+    timeline = {
+        1: [
+            {
+                "submitted_at": datetime(2025, 3, 1, 10, 0, tzinfo=timezone),
+                "problem_code": "P1",
+                "verdict": "部分正确",
+            },
+            {
+                "submitted_at": datetime(2025, 3, 1, 10, 3, tzinfo=timezone),
+                "problem_code": "P1",
+                "verdict": "答案正确",
+            },
+        ]
+    }
+
+    results = compute_exam_metrics(
+        participants=participants,
+        total_points=100.0,
+        winsor_low=0.05,
+        winsor_high=0.95,
+        flexibility_mode="approx",
+        timeline_by_student=timeline,
+    )
+
+    assert results[0].details["ac_count"] == 1
+
+
 def test_compute_exam_metrics_quality_avoids_division_by_zero() -> None:
     faster = _participant(1, rank=1, score=100.0, time_used=120, attempts=1)
     slower = _participant(2, rank=2, score=80.0, time_used=240, attempts=1)

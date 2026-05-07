@@ -1,0 +1,26 @@
+{
+  "active": true,
+  "canonical_tags": [
+    "单调队列",
+    "模拟",
+    "搜索"
+  ],
+  "created_at": "2026-01-24 19:21:43.871633",
+  "description": "# P3111 [USACO14DEC] Cow Jog S\n\n## 题目描述\n\nThe cows are out exercising their hooves again!  There are N cows\n\njogging on an infinitely-long single-lane track (1 <= N <= 100,000).\n\nEach cow starts at a distinct position on the track, and some cows jog\n\nat different speeds.\n\n\n \n\nWith only one lane in the track, cows cannot pass each other.  When a\n\nfaster cow catches up to another cow, she has to slow down to avoid\n\nrunning into the other cow, becoming part of the same running group.\n\n \n\nThe cows will run for T minutes (1 <= T <= 1,000,000,000).  Please\n\nhelp Farmer John determine how many groups will be left at this time.\n\nTwo cows should be considered part of the same group if they are at\n\n\nthe same position at the end of T minutes. \n\n有N (1 <= N <= 100,000)头奶牛在一个单人的超长跑道上慢跑，每头牛的起点位置都不同。由于是单人跑道，所有他们之间不能相互超越。当一头速度快的奶牛追上另外一头奶牛的时候，他必须降速成同等速度。我们把这些跑走同一个位置而且同等速度的牛看成一个小组。\n\n\n请计算T (1 <= T <= 1,000,000,000)时间后，奶牛们将分为多少小组。\n\n## 输入格式\n\nINPUT: (file cowjog.in) \n\nThe first line of input contains the two integers N and T.\n\n\nThe following N lines each contain the initial position and speed of a\n\nsingle cow.  Position is a nonnegative integer and speed is a positive\n\ninteger; both numbers are at most 1 billion.  All cows start at\n\ndistinct positions, and these will be given in increasing order in\n\nthe input.\n\n## 输出格式\n\nOUTPUT: (file cowjog.out) \n\nA single integer indicating how many groups remain after T minutes.\n\n## 输入输出样例 #1\n\n### 输入 #1\n\n```\n5 3 \n0 1 \n1 2 \n2 3 \n3 2 \n6 1\n```\n\n### 输出 #1\n\n```\n3\n```",
+  "link": "https://www.luogu.com.cn/problem/P3111",
+  "pass_count": 2.42,
+  "problem_id": "bank_whrlg_P3111",
+  "raw_category_tags": "单调队列 模拟 搜索",
+  "rejected_tags": [],
+  "solution_1": "算是道shui题了吧！\n\n只要在一开始算出所有牛的最终位置，并从后往前比对即可\n\n如果前一头牛的最终位置达不到后一头牛，则res++\n\n否则，将前一头牛的位置设置成和后一头牛相同\n\n######注意，这里t的大小达到了10^9，因此要用long long!!!\n\n附上代码\n#include<bits/stdc++.h>\nusing namespace std;\nlong long n,t,last[100005];\nstruct cow\n{\n    long long spe,pos;\n}a[100005];\nint main()\n{\n    cin >> n >> t;\n    for(int i=1;i<=n;i++)\n    {\n        cin >> a[i].pos >> a[i].spe;\n        last[i]=a[i].pos+a[i].spe*t;\n    }\n    int res=1;\n    for(int i=n-1;i>=1;i--)\n    {\n        if(last[i]>=last[i+1])\n        {\n            last[i]=last[i+1];\n        }\n        else\n        {\n            res++;\n        }\n    }\n    cout<< res;\n}",
+  "solution_2": "单调队列了解一下？\n\n我们将牛的顺序倒着排，按照牛的速度形成单增队列，对于每一只牛，我们判断它能否追上队尾的牛，如果能，将ans-1（初值为n，表示有多少小组），如果不能，将其入队。\n\n因为我们容易发现，如果下一只牛跑得过这只牛前面的牛，那么它不一定比这只牛跑得快（因为它追上上一只牛会减速，而下一只牛追它则不按照减速），所以如果一只牛能追上队尾的牛，那么下一只牛追当前队尾的牛一定比追这一只牛容易些。\n\n放代码：\n#include<iostream>\n#include<cstdio>\n#include<cstring>\n#include<cmath>\n#include<algorithm>\n#include<queue>\nusing namespace std;\nint n,t,ans;\nstruct cym{\n int _speed;\n int pos;\n}a[100010];\ndeque<cym>q;\nint main()\n{\n scanf(\"%d%d\",&n,&t);\n ans=n;\n for(int i=n;i>=1;i--)\n {\n  int x,y;\n  scanf(\"%d%d\",&x,&y);\n  a[i]._speed=y;\n  a[i].pos=x;\n }\n for(int i=1;i<=n;i++)\n {\n  while(!q.empty())\n  {\n   cym now=q.back();\n   if(a[i]._speed<=now._speed)\n   q.pop_back();\n   else\n   break;\n  }\n  if(!q.empty())\n  {\n  cym cnt=q.back();\n  if((cnt.pos-a[i].pos)/(a[i]._speed-cnt._speed)<=t)\n  ans--;\n  else\n  q.push_back(a[i]);\n  }\n  else \n  q.push_back(a[i]);\n }\n printf(\"%d\",ans);\n return 0;\n}",
+  "source_hash": "8a98b1a8288b97b8ed6182c578701a2aa62421a423ccc92c07b7fe1c365af71d",
+  "source_meta": {
+    "legacy_id": 23,
+    "source_dump_path": "/home/kkkzbh/code/x/xxx.sql",
+    "source_name": "legacy_x_web_oj",
+    "source_table": "problem_set"
+  },
+  "submission_count": 6.13,
+  "title": null
+}
