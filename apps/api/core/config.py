@@ -147,6 +147,8 @@ class EmailConfig:
     password_env: str = "EMAIL_PASS"
     from_env: str = "EMAIL_FROM"
     from_name: str = "用户验证系统"
+    feedback_to_env: str = "ASCENDANY_FEEDBACK_TO"
+    feedback_to_default: str = "uika@foxmail.com"
     timeout_seconds: int = 10
     use_ssl: bool | None = None
     use_tls: bool | None = None
@@ -465,6 +467,14 @@ def _from_dict(raw: dict[str, Any]) -> Settings:
             from_env=str(email.get("from_env", "EMAIL_FROM")).strip()
             or "EMAIL_FROM",
             from_name=str(email.get("from_name", "用户验证系统")),
+            feedback_to_env=str(
+                email.get("feedback_to_env", "ASCENDANY_FEEDBACK_TO")
+            ).strip()
+            or "ASCENDANY_FEEDBACK_TO",
+            feedback_to_default=str(
+                email.get("feedback_to_default", "uika@foxmail.com")
+            ).strip()
+            or "uika@foxmail.com",
             timeout_seconds=max(1, int(email.get("timeout_seconds", 10))),
             use_ssl=_optional_bool(email.get("use_ssl")),
             use_tls=_optional_bool(email.get("use_tls")),

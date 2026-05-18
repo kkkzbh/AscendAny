@@ -5,8 +5,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   minimize: () => ipcRenderer.send("window-minimize"),
   maximize: () => ipcRenderer.send("window-maximize"),
   close: () => ipcRenderer.send("window-close"),
-  submitFeedback: (payload: { title: string; content: string; images: Array<{ name: string; dataUrl: string }> }) =>
-    ipcRenderer.invoke("feedback-submit", payload) as Promise<{ success: boolean; message: string }>,
   setZoomFactor: (factor: number) =>
     ipcRenderer.invoke("window-set-zoom-factor", factor) as Promise<boolean>,
   getOpaqueSidebarBackground: () =>

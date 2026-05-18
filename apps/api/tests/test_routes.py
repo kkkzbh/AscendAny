@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
+from apps.api.api.routes import meta as meta_routes
 from apps.api.db.repository import (
     AchievementDefinitionRow,
     AggregatedAchievementStateRow,
@@ -28,6 +31,7 @@ class FakeRepo:
             StudentNoMatch(student_id=1, student_no="20230001", student_name="Alice"),
             StudentNoMatch(student_id=2, student_no="20230002", student_name="Alice"),
         ]
+
 
     async def find_students_by_student_no(self, student_no: str):
         if student_no == "20230001":
@@ -156,6 +160,21 @@ class FakeRepo:
         self.ai_counter_calls.append(tuple(sorted(student_ids)))
 
 
+class ChangingMetaRepo(FakeRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self._values = [
+            datetime(2026, 2, 13, 9, 30, tzinfo=timezone.utc),
+            datetime(2026, 2, 13, 9, 30, tzinfo=timezone.utc),
+            datetime(2026, 2, 14, 10, 15, tzinfo=timezone.utc),
+        ]
+
+    async def fetch_latest_exam_imported_at(self):
+        if len(self._values) > 1:
+            return self._values.pop(0)
+        return self._values[0]
+
+
 class FakeLLM:
     def __init__(self) -> None:
         self.calls = 0
@@ -207,6 +226,35 @@ def test_meta_latest_exam_route() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["latestExamImportedAt"].startswith("2026-02-13T09:30:00")
+
+
+def test_meta_data_events_stream_emits_snapshot_and_change() -> None:
+    async def collect_events() -> list[tuple[str, dict[str, object]]]:
+        generator = meta_routes.data_event_generator(
+            ChangingMetaRepo(),
+            poll_seconds=0,
+            heartbeat_seconds=60,
+        )
+        blocks = [await anext(generator), await anext(generator)]
+        await generator.aclose()
+        events: list[tuple[str, dict[str, object]]] = []
+        for block in blocks:
+            event_type = ""
+            payload: dict[str, object] = {}
+            for line in block.splitlines():
+                if line.startswith("event:"):
+                    event_type = line.split(":", 1)[1].strip()
+                elif line.startswith("data:"):
+                    payload = json.loads(line.split(":", 1)[1].strip())
+            events.append((event_type, payload))
+        return events
+
+    events = asyncio.run(collect_events())
+
+    assert events[0][0] == "snapshot"
+    assert str(events[0][1]["latestExamImportedAt"]).startswith("2026-02-13T09:30:00")
+    assert events[-1][0] == "data_changed"
+    assert str(events[-1][1]["latestExamImportedAt"]).startswith("2026-02-14T10:15:00")
 
 
 def test_auth_policy_route() -> None:

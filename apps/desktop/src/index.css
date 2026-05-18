@@ -1,4 +1,11 @@
 @import "tailwindcss";
+@import "streamdown/styles.css";
+@import "katex/dist/katex.min.css";
+
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
+@source "../node_modules/@streamdown/math/dist/*.js";
+@source "../node_modules/@streamdown/cjk/dist/*.js";
 
 *,
 *::before,
@@ -876,6 +883,10 @@ body {
   word-break: break-word;
 }
 
+.chat-markdown-streaming {
+  overflow-anchor: auto;
+}
+
 .chat-markdown > * + * {
   margin-top: 0.45rem;
 }
@@ -942,7 +953,9 @@ body {
   text-decoration: underline;
 }
 
-.chat-markdown-assistant a {
+.chat-markdown-assistant a,
+.chat-markdown-callout a,
+.chat-markdown-note a {
   color: var(--accent-700);
   text-decoration: underline;
 }
@@ -961,40 +974,106 @@ body {
   border-color: rgba(255, 255, 255, 0.3);
 }
 
-.chat-markdown-assistant code {
+.chat-markdown-assistant code,
+.chat-markdown-callout code,
+.chat-markdown-note code {
   background: var(--surface-soft);
   color: inherit;
 }
 
-.chat-markdown-assistant pre {
+.chat-markdown-assistant pre,
+.chat-markdown-callout pre,
+.chat-markdown-note pre {
   background: rgba(148, 163, 184, 0.2);
+}
+
+.chat-markdown [data-streamdown="code-block"] {
+  margin: 0.25rem 0;
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-base);
+  padding: 0;
+}
+
+.chat-markdown [data-streamdown="code-block-header"] {
+  min-height: 28px;
+  height: 28px;
+  padding: 3px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-soft);
+  color: var(--text-soft);
+}
+
+.chat-markdown [data-streamdown="code-block-header"] span {
+  margin-left: 0;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.chat-markdown [data-streamdown="code-block-actions"] {
+  margin-top: -28px;
+  height: 28px;
+  padding-right: 7px;
+}
+
+.chat-markdown [data-streamdown="code-block-body"] {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface-base);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chat-markdown [data-streamdown="code-block-body"] pre,
+.chat-markdown [data-streamdown="code-block-body"] code {
+  margin: 0;
+  padding: 0;
+  background: transparent;
 }
 
 /*
  * Sakiko-style assistant chat: tight, iMessage-like line spacing.
- * - remark-breaks turns single \n into <br>, so intra-paragraph lines
- *   share line-height (no margin) and read like one chat bubble.
+ * - Streamdown handles streaming markdown while keeping intra-paragraph lines
+ *   tight enough to read like one chat bubble.
  * - \n\n still becomes a new <p>, but with a small breath, not the
  *   default 0.45rem gap that makes short lines look stranded.
  */
-.chat-markdown-assistant {
+.chat-markdown-assistant,
+.chat-markdown-callout {
   line-height: 1.55;
 }
 
-.chat-markdown-assistant > * + * {
+.chat-markdown-assistant > * + *,
+.chat-markdown-callout > * + * {
   margin-top: 0.25rem;
 }
 
-.chat-markdown-assistant p {
+.chat-markdown-assistant p,
+.chat-markdown-callout p {
   margin: 0;
 }
 
-.chat-markdown-assistant p + p {
+.chat-markdown-assistant p + p,
+.chat-markdown-callout p + p {
   margin-top: 0.25rem;
 }
 
-.chat-markdown-assistant br {
+.chat-markdown-assistant br,
+.chat-markdown-callout br {
   line-height: inherit;
+}
+
+.chat-markdown-note {
+  color: var(--text-muted);
+}
+
+.chat-markdown [data-sd-animate] {
+  will-change: opacity, filter, transform;
 }
 
 .chat-input-wrap {
@@ -3612,6 +3691,7 @@ body {
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
+  animation: chat-rich-block-enter 220ms var(--ease-out-expo) both;
 }
 
 .assistant-tool-activity {
@@ -3627,10 +3707,6 @@ body {
   color: var(--rating-negative);
 }
 
-.streaming-message-text {
-  white-space: pre-wrap;
-}
-
 .streaming-caret {
   display: inline-block;
   width: 6px;
@@ -3640,6 +3716,25 @@ body {
   border-radius: 999px;
   background: var(--accent-600);
   animation: streaming-caret-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes chat-rich-block-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown [data-sd-animate],
+  .assistant-tool-activities {
+    animation: none;
+  }
 }
 
 .assistant-working-card {

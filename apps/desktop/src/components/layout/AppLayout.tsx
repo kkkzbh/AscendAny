@@ -17,6 +17,7 @@ import { MetricsPanel } from "@/components/metrics/MetricsPanel";
 import { LeaderboardWorkspace } from "@/components/leaderboard/LeaderboardWorkspace";
 import { SettingsWorkspace } from "@/components/settings/SettingsDialog";
 import { useAvatarSync } from "@/hooks/useAvatar";
+import { useDataFreshnessWatcher } from "@/hooks/useDataFreshnessWatcher";
 import {
   DEFAULT_RIGHT_PANEL_RATIO,
   MAX_RIGHT_PANEL_RATIO,
@@ -52,6 +53,7 @@ function clampRightPanelRatioForWidth(value: number, workspaceWidth: number): nu
 
 export function AppLayout() {
   useAvatarSync();
+  useDataFreshnessWatcher();
   const isMetricsPanelVisible = useLayoutStore((s) => s.isMetricsPanelVisible);
   const rightPanelRatio = useLayoutStore((s) => s.rightPanelRatio);
   const setRightPanelRatio = useLayoutStore((s) => s.setRightPanelRatio);

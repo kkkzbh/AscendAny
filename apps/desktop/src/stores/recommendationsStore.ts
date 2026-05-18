@@ -40,6 +40,7 @@ interface RecommendationsState {
   loadNodeDetail: (point: string, options?: { topK?: number; authToken?: string }) => Promise<KnowledgeNodeDetail | null>;
   openNodeDetail: (point: string, options?: { topK?: number; authToken?: string }) => Promise<void>;
   closeNodeDetail: () => void;
+  clearNodeDetailCache: () => void;
   applyPathUpdate: (event: PathUpdateEvent) => void;
   applyNodeStatus: (point: string, mastery: number) => void;
   selectNodeViewModels: () => NodeViewModel[];
@@ -172,6 +173,10 @@ export const useRecommendationsStore = create<RecommendationsState>(
 
     closeNodeDetail: () => {
       set({ activeDetailPoint: null, detailError: null });
+    },
+
+    clearNodeDetailCache: () => {
+      set({ nodeDetailCache: {}, detailError: null });
     },
 
     applyPathUpdate: (event) => {

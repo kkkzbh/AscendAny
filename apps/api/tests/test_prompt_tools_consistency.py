@@ -329,6 +329,18 @@ def test_prompt_service_sakiko_role_includes_style_prompt() -> None:
 
     assert "你是一位专业的编程学习分析助手，名叫「丰川祥子（Sakiko）」" in prompt
     assert "你的中文名：丰川祥子" in prompt
+    assert "每次调用工具之前" not in prompt
+    assert "一次只调一个工具" not in prompt
+
+
+def test_prompt_requires_native_tool_calls_and_hides_markup() -> None:
+    prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
+
+    prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
+
+    assert "原生 tool-calling API" in prompt
+    assert "禁止输出 `<tool_call>`" in prompt
+    assert "DSML 标记" in prompt
 
 
 def test_prompt_service_uses_admin_prompt_overrides() -> None:
@@ -378,18 +390,16 @@ def test_prompt_service_lists_recommendation_tools_and_rules() -> None:
     assert "用户请求学习路线、先学什么、知识点路径时" in prompt
 
 
-def test_choice_tool_prompt_describes_hidden_followup_turn() -> None:
+def test_prompt_uses_markdown_instead_of_ui_emit_tools() -> None:
     prompt_service = PromptService(repository=ExplodingRepo())  # type: ignore[arg-type]
 
     prompt = asyncio.run(prompt_service.build_system_prompt(identity=_build_identity()))
-    emit_choice = next(
-        item for item in TOOL_DEFINITIONS if item["function"]["name"] == "emit_choice"
-    )
-    description = emit_choice["function"]["description"]
+    tool_names = [item["function"]["name"] for item in TOOL_DEFINITIONS]
 
-    assert "隐藏用户输入继续触发一轮回复" in prompt
-    assert "隐藏用户输入继续触发一轮回复" in description
-    assert "不会回传到模型" not in description
+    assert "标准 fenced code" in prompt
+    assert "emit_" not in "\n".join(tool_names)
+    assert "focus_knowledge_node" not in tool_names
+    assert "UI 富组件工具" not in prompt
 
 
 def test_prompt_service_auto_analysis_message_uses_admin_template() -> None:
@@ -417,13 +427,6 @@ def test_tool_definitions_match_registered_handlers() -> None:
         "get_learning_path",
         "read_notes",
         "update_notes",
-        "emit_problem_card",
-        "emit_choice",
-        "emit_math_steps",
-        "emit_code",
-        "emit_node_ref",
-        "emit_callout",
-        "focus_knowledge_node",
     ]
 
 

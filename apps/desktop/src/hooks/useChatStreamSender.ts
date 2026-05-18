@@ -12,13 +12,7 @@ import { useRecommendationsStore } from "@/stores/recommendationsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useCustomRoleStore } from "@/stores/customRoleStore";
 import { findRole } from "@/types/role";
-import type { ChatBlock, ChatMessage } from "@/types/chat";
-
-export interface ChoiceAnswerRequest {
-  assistantMessageId: string;
-  blockIndex: number;
-  optionIndex: number;
-}
+import type { ChatMessage } from "@/types/chat";
 
 function normalizeIdentifier(value: string): string | undefined {
   const trimmed = value.trim();
@@ -40,57 +34,6 @@ export function toOutboundChatMessage(message: ChatMessage): ChatMessagePayload 
   return payload;
 }
 
-function hasActiveAssistantStream(messages: ChatMessage[]): boolean {
-  return messages.some(
-    (message) =>
-      message.role === "assistant" &&
-      (message.streaming || message.reasoningStreaming),
-  );
-}
-
-function getChoiceBlock(
-  message: ChatMessage | undefined,
-  blockIndex: number,
-): Extract<ChatBlock, { kind: "choice" }> | null {
-  const block = message?.blocks?.[blockIndex];
-  return block?.kind === "choice" ? block : null;
-}
-
-export function buildChoiceAnswerPrompt(
-  block: Extract<ChatBlock, { kind: "choice" }>,
-  optionIndex: number,
-): string {
-  const selected = block.options[optionIndex] ?? block.options[0];
-  if (!selected) {
-    return "用户刚刚在你上一条选择题卡片中选择了一个选项，但前端没有取到选项内容。请提示用户重新选择。";
-  }
-  const optionLines = block.options
-    .map((option) => `${option.id}. ${option.label}`)
-    .join("\n");
-  const lines = [
-    "用户刚刚在你上一条选择题卡片中选择了一个选项。请基于这个选择继续回复，不要重复出同一道题。",
-    "",
-    `题目：${block.question}`,
-    "选项：",
-    optionLines,
-    `用户选择：${selected.id}. ${selected.label}`,
-  ];
-  if (
-    typeof block.answerIdx === "number" &&
-    block.answerIdx >= 0 &&
-    block.answerIdx < block.options.length
-  ) {
-    const answer = block.options[block.answerIdx];
-    if (answer) {
-      lines.push(`正确答案：${answer.id}. ${answer.label}`);
-    }
-  }
-  if (block.explanation?.trim()) {
-    lines.push(`原解析：${block.explanation.trim()}`);
-  }
-  return lines.join("\n");
-}
-
 export function useChatStreamSender() {
   const [isSending, setIsSending] = useState(false);
 
@@ -99,8 +42,6 @@ export function useChatStreamSender() {
   const appendMessageContent = useChatStore((s) => s.appendMessageContent);
   const appendMessageReasoning = useChatStore((s) => s.appendMessageReasoning);
   const upsertMessageToolActivity = useChatStore((s) => s.upsertMessageToolActivity);
-  const appendMessageBlock = useChatStore((s) => s.appendMessageBlock);
-  const setMessageChoiceAnswer = useChatStore((s) => s.setMessageChoiceAnswer);
   const finalizeMessageReasoning = useChatStore((s) => s.finalizeMessageReasoning);
   const finalizeMessage = useChatStore((s) => s.finalizeMessage);
   const removeMessage = useChatStore((s) => s.removeMessage);
@@ -247,14 +188,6 @@ export function useChatStreamSender() {
                 .applyNodeStatus(event.point, event.mastery);
               return;
             }
-            if (event.type === "block_append") {
-              const activeDraftId = ensureDraft();
-              flushReasoning();
-              finalizeMessageReasoning(activeDraftId);
-              flushTextSync();
-              appendMessageBlock(activeDraftId, event.block);
-              return;
-            }
             if (event.type === "done") {
               if (rafId) {
                 window.cancelAnimationFrame(rafId);
@@ -302,7 +235,6 @@ export function useChatStreamSender() {
       account?.ptaNickname,
       accessToken,
       addMessage,
-      appendMessageBlock,
       appendMessageContent,
       appendMessageReasoning,
       createAssistantDraft,
@@ -340,53 +272,9 @@ export function useChatStreamSender() {
     [activeRole, addMessage, isAiWorking, isSending, runStream],
   );
 
-  const sendChoiceAnswer = useCallback(
-    async ({ assistantMessageId, blockIndex, optionIndex }: ChoiceAnswerRequest) => {
-      if (isSending || isAiWorking) return false;
-      const state = useChatStore.getState();
-      const activeSession = state.getActiveSession();
-      if (!activeSession || hasActiveAssistantStream(activeSession.messages)) {
-        return false;
-      }
-      const assistantMessage = activeSession.messages.find(
-        (message) => message.id === assistantMessageId,
-      );
-      const choice = getChoiceBlock(assistantMessage, blockIndex);
-      if (!choice || typeof choice.answerIdx === "number") return false;
-      if (optionIndex < 0 || optionIndex >= choice.options.length) return false;
-
-      const hiddenChoiceMessage = buildChoiceAnswerPrompt(choice, optionIndex);
-      const roleIdAtSend = activeRole;
-      setIsSending(true);
-      setMessageChoiceAnswer(assistantMessageId, blockIndex, optionIndex);
-
-      const latestSession = useChatStore.getState().getActiveSession();
-      if (!latestSession) {
-        addMessage("system", "未能找到当前对话，请重试。");
-        setIsSending(false);
-        return false;
-      }
-      const messages = latestSession.messages
-        .map(toOutboundChatMessage)
-        .filter((message): message is ChatMessagePayload => message !== null);
-      messages.push({ role: "user", content: hiddenChoiceMessage });
-      await runStream(messages, latestSession.summary, roleIdAtSend);
-      return true;
-    },
-    [
-      activeRole,
-      addMessage,
-      isAiWorking,
-      isSending,
-      runStream,
-      setMessageChoiceAnswer,
-    ],
-  );
-
   return {
     isSending,
     isBlocked: isSending || isAiWorking,
     sendManual,
-    sendChoiceAnswer,
   };
 }

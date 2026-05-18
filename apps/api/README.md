@@ -18,6 +18,21 @@ uv run --python .venv/bin/python uvicorn apps.api.main:app --host 127.0.0.1 --po
 - Optional override via env: `ASCENDANY_API_CONFIG=/path/to/config.yaml`
 - The active model API key is loaded from the environment variable named by `llm.providers.<id>.api_key_env`.
 
+### Feedback email
+
+Desktop feedback is submitted to `POST /api/v1/feedback`; the server sends the email so SMTP credentials never ship in the desktop installer.
+
+```bash
+EMAIL_HOST=smtp.qq.com
+EMAIL_PORT=465
+EMAIL_USER=uika@foxmail.com
+EMAIL_PASS=QQ邮箱授权码
+EMAIL_FROM=uika@foxmail.com
+ASCENDANY_FEEDBACK_TO=uika@foxmail.com
+```
+
+`EMAIL_PASS` must be the QQ/Foxmail SMTP authorization code, not the mailbox login password.
+
 ### External auth provider (MySQL app01_user)
 
 By default, the backend authenticates against PostgreSQL (`ascendany.user_accounts`).

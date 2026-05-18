@@ -75,10 +75,35 @@ afterEach(() => {
 
 describe("NotesWorkspace", () => {
   it("renders markdown preview and the action toolbar by default", () => {
-    render(<NotesWorkspace />);
+    const { container } = render(<NotesWorkspace />);
     expect(screen.getByDisplayValue("原标题")).toBeTruthy();
     expect(screen.getByText("笔记内容")).toBeTruthy();
+    expect(container.querySelector(".chat-markdown-note h1")?.textContent).toBe("笔记内容");
     expect(screen.getByRole("button", { name: "复制 Markdown" })).toBeTruthy();
+  });
+
+  it("keeps unsafe note preview links sanitized", () => {
+    useNotesStore.getState().hydrateFromLocalState({
+      items: [
+        {
+          id: "note_link",
+          title: "链接",
+          content: "[危险](javascript:alert(1)) [安全](https://example.com)",
+          titleIsAuto: false,
+          createdAt: 1_700_000_000,
+          updatedAt: 1_700_000_000,
+        },
+      ],
+      activeNoteId: "note_link",
+    });
+
+    const { container } = render(<NotesWorkspace />);
+    const links = Array.from(container.querySelectorAll(".chat-markdown-note a"));
+
+    expect(container.textContent).toContain("危险");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.textContent).toBe("安全");
+    expect(links[0]?.getAttribute("href")).toBe("https://example.com/");
   });
 
   it("switches to list view when 加载笔记 is clicked", () => {

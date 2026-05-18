@@ -9,7 +9,9 @@ import smtplib
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email import encoders
 from email.header import Header
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -31,6 +33,13 @@ class EmailSendResult:
     success: bool
     code: str | None
     message: str
+
+
+@dataclass(slots=True)
+class EmailAttachment:
+    filename: str
+    content: bytes
+    content_type: str
 
 
 class LegacyEmailService:
@@ -204,6 +213,26 @@ class LegacyEmailService:
             "normal",
         )
 
+    async def send_feedback_email(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        html_content: str,
+        text_content: str,
+        attachments: list[EmailAttachment],
+    ) -> EmailSendResult:
+        sent, message = await asyncio.to_thread(
+            self._send_email,
+            self._clean_email(to_email),
+            subject,
+            html_content,
+            text_content,
+            "normal",
+            attachments,
+        )
+        return EmailSendResult(sent, None, message)
+
     def _send_email(
         self,
         to_email: str,
@@ -211,6 +240,7 @@ class LegacyEmailService:
         html_content: str,
         text_content: str | None = None,
         priority: str = "high",
+        attachments: list[EmailAttachment] | None = None,
     ) -> tuple[bool, str]:
         cfg = self._settings.email
         host = (cfg.host or "").strip()
@@ -228,7 +258,12 @@ class LegacyEmailService:
             return False, "收件人邮箱格式不正确"
 
         try:
-            msg = MIMEMultipart("alternative")
+            if attachments:
+                msg = MIMEMultipart("mixed")
+                alternative = MIMEMultipart("alternative")
+            else:
+                msg = MIMEMultipart("alternative")
+                alternative = msg
             msg["From"] = formataddr((from_name, from_email))
             msg["To"] = to_email
             msg["Subject"] = str(Header(subject, "utf-8"))
@@ -239,8 +274,20 @@ class LegacyEmailService:
             msg["X-Mailer"] = "Python EmailService"
             msg["Message-ID"] = f"<{random.randint(1000000, 9999999)}@{host}>"
             if text_content:
-                msg.attach(MIMEText(text_content, "plain", "utf-8"))
-            msg.attach(MIMEText(html_content, "html", "utf-8"))
+                alternative.attach(MIMEText(text_content, "plain", "utf-8"))
+            alternative.attach(MIMEText(html_content, "html", "utf-8"))
+            if attachments:
+                msg.attach(alternative)
+                for attachment in attachments:
+                    maintype, _, subtype = attachment.content_type.partition("/")
+                    if not maintype or not subtype:
+                        maintype, subtype = "application", "octet-stream"
+                    part = MIMEBase(maintype, subtype)
+                    part.set_payload(attachment.content)
+                    encoders.encode_base64(part)
+                    safe_filename = attachment.filename.replace("\r", "_").replace("\n", "_")
+                    part.add_header("Content-Disposition", "attachment", filename=safe_filename)
+                    msg.attach(part)
 
             use_ssl = cfg.use_ssl if cfg.use_ssl is not None else port == 465
             use_tls = cfg.use_tls if cfg.use_tls is not None else port == 587

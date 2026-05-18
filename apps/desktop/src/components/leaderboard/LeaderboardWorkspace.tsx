@@ -46,6 +46,7 @@ function WindowControls() {
 
 export function LeaderboardWorkspace() {
   const isOpen = useLeaderboardStore((s) => s.isOpen);
+  const refreshSeq = useLeaderboardStore((s) => s.refreshSeq);
   const closeLeaderboard = useLeaderboardStore((s) => s.closeLeaderboard);
   const accessToken = useAuthStore((s) => s.accessToken);
 
@@ -89,6 +90,13 @@ export function LeaderboardWorkspace() {
       window.clearInterval(timer);
     };
   }, [isOpen, loadLeaderboard]);
+
+  useEffect(() => {
+    if (!isOpen || refreshSeq <= 0) {
+      return;
+    }
+    void loadLeaderboard();
+  }, [isOpen, refreshSeq, loadLeaderboard]);
 
   useEffect(() => {
     if (!isOpen) {

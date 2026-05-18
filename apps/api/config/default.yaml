@@ -81,6 +81,8 @@ email:
   password_env: EMAIL_PASS
   from_env: EMAIL_FROM
   from_name: 用户验证系统
+  feedback_to_env: ASCENDANY_FEEDBACK_TO
+  feedback_to_default: uika@foxmail.com
   timeout_seconds: 10
   use_ssl: null
   use_tls: null

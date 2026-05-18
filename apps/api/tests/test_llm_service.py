@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from apps.api.core.config import LLMProviderConfig, Settings
 from apps.api.schemas.chat import ChatMessageRequest, ChatReplyRequest
 from apps.api.services.llm import LLMService
+from apps.api.services.llm_providers.registry import build_provider_profile, get_adapter
 from apps.api.services.tools import ToolExecutor
 
 
@@ -188,33 +189,12 @@ class _SseStream(httpx.AsyncByteStream):
             yield chunk.encode("utf-8")
 
 
-def test_openai_path_executes_textual_dsml_tool_calls(monkeypatch) -> None:
+def test_openai_path_does_not_execute_textual_tool_call_markup(monkeypatch) -> None:
     requests_payload: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))
         requests_payload.append(payload)
-        if len(requests_payload) == 1:
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": (
-                                    "让我获取你的能力指标详情。\n"
-                                    "<｜DSML｜function_calls>\n"
-                                    "<｜DSML｜invoke name=\"get_exam_participant_metrics\">\n"
-                                    "<｜DSML｜parameter name=\"exam_id\" string=\"false\">32</｜DSML｜parameter>\n"
-                                    "</｜DSML｜invoke>\n"
-                                    "</｜DSML｜function_calls>"
-                                ),
-                            }
-                        }
-                    ]
-                },
-            )
         return httpx.Response(
             200,
             json={
@@ -222,7 +202,12 @@ def test_openai_path_executes_textual_dsml_tool_calls(monkeypatch) -> None:
                     {
                         "message": {
                             "role": "assistant",
-                            "content": "你在本场第 7 名，和上一名相差 1 名。",
+                            "content": (
+                                "<tool_call>\n"
+                                "<function=get_exam_participant_metrics>\n"
+                                "<parameter=exam_id>32\n"
+                                "</tool_call>"
+                            ),
                         }
                     }
                 ]
@@ -256,24 +241,102 @@ def test_openai_path_executes_textual_dsml_tool_calls(monkeypatch) -> None:
 
     reply, tool_executor = asyncio.run(run_case())
 
-    assert reply == "你在本场第 7 名，和上一名相差 1 名。"
-    assert tool_executor.calls == [
-        (
-            "get_exam_participant_metrics",
-            {
-                "exam_id": 32,
+    assert reply == (
+        "<tool_call>\n"
+        "<function=get_exam_participant_metrics>\n"
+        "<parameter=exam_id>32\n"
+        "</tool_call>"
+    )
+    assert tool_executor.calls == []
+    assert len(requests_payload) == 1
+
+
+def test_mimo_payload_uses_native_tool_choice_auto(monkeypatch) -> None:
+    requests_payload: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        requests_payload.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "收到",
+                        }
+                    }
+                ]
             },
         )
-    ]
-    assert len(requests_payload) == 2
-    second_messages = requests_payload[1]["messages"]
-    assert isinstance(second_messages, list)
-    assert any(
-        isinstance(item, dict)
-        and item.get("role") == "user"
-        and "工具结果" in str(item.get("content"))
-        for item in second_messages
+
+    transport = httpx.MockTransport(handler)
+    settings = Settings()
+    settings.llm.active_provider = "mimo"
+    settings.llm.providers["mimo"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="mimo-v2.5-pro",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
     )
+    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "secret")
+
+    async def run_case() -> str:
+        async with httpx.AsyncClient(transport=transport) as client:
+            service = LLMService(settings=settings, http_client=client)
+            response = await service.generate_reply(
+                ChatReplyRequest(
+                    messages=[ChatMessageRequest(role="user", content="你好")],
+                    summary="",
+                ),
+                system_prompt="test prompt",
+                tool_executor=FakeToolExecutor(),  # type: ignore[arg-type]
+            )
+            return response.reply
+
+    assert asyncio.run(run_case()) == "收到"
+    assert len(requests_payload) == 1
+    first = requests_payload[0]
+    assert "tools" in first
+    assert first["tool_choice"] == "auto"
+
+
+def test_mimo_connection_test_uses_max_completion_tokens(monkeypatch) -> None:
+    requests_payload: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        requests_payload.append(payload)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    settings = Settings()
+    settings.llm.active_provider = "mimo"
+    settings.llm.providers["mimo"] = LLMProviderConfig(
+        adapter="openai_compatible",
+        base_url="https://llm.example.com/v1",
+        model="mimo-v2.5-pro",
+        api_key_env="SERVER_DEFAULT_TEST_KEY",
+    )
+    monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "secret")
+    profile = build_provider_profile(settings)
+    adapter = get_adapter(profile.adapter)
+
+    async def run_case() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await adapter.test_connection(profile, client)
+            assert result.ok
+
+    asyncio.run(run_case())
+
+    assert len(requests_payload) == 1
+    assert requests_payload[0]["max_completion_tokens"] == 8
+    assert "max_tokens" not in requests_payload[0]
+
+
 def test_openai_path_executes_standard_tool_call(monkeypatch) -> None:
     requests_payload: list[dict[str, object]] = []
 
@@ -524,36 +587,29 @@ def test_non_deepseek_tool_replay_drops_reasoning_content(monkeypatch) -> None:
     assert "reasoning_content" not in replayed_assistant
 
 
-def test_deepseek_textual_dsml_tool_call_replays_reasoning_content(monkeypatch) -> None:
+def test_deepseek_textual_tool_markup_is_not_replayed_as_tool_call(
+    monkeypatch,
+) -> None:
     requests_payload: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content.decode("utf-8"))
         requests_payload.append(payload)
-        if len(requests_payload) == 1:
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "reasoning_content": "先转成文本工具调用。",
-                                "content": (
-                                    "<｜DSML｜invoke name=\"get_exam_participant_metrics\">"
-                                    "<｜DSML｜parameter name=\"exam_id\" string=\"false\">32</｜DSML｜parameter>"
-                                    "</｜DSML｜invoke>"
-                                ),
-                            }
-                        }
-                    ]
-                },
-            )
         return httpx.Response(
             200,
             json={
                 "choices": [
-                    {"message": {"role": "assistant", "content": "工具结果已收到。"}}
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "reasoning_content": "错误地想写文本工具调用。",
+                            "content": (
+                                "<｜DSML｜invoke name=\"get_exam_participant_metrics\">"
+                                "<｜DSML｜parameter name=\"exam_id\" string=\"false\">32</｜DSML｜parameter>"
+                                "</｜DSML｜invoke>"
+                            ),
+                        }
+                    }
                 ]
             },
         )
@@ -569,6 +625,8 @@ def test_deepseek_textual_dsml_tool_call_replays_reasoning_content(monkeypatch) 
     )
     monkeypatch.setenv("SERVER_DEFAULT_TEST_KEY", "test-key")
 
+    tool_executor = FakeToolExecutor()
+
     async def run_case() -> str:
         async with httpx.AsyncClient(transport=transport) as client:
             service = LLMService(settings=settings, http_client=client)
@@ -578,22 +636,19 @@ def test_deepseek_textual_dsml_tool_call_replays_reasoning_content(monkeypatch) 
                     summary="",
                 ),
                 system_prompt="test prompt",
-                tool_executor=FakeToolExecutor(),  # type: ignore[arg-type]
+                tool_executor=tool_executor,  # type: ignore[arg-type]
             )
             return response.reply
 
     reply = asyncio.run(run_case())
 
-    assert reply == "工具结果已收到。"
-    second_messages = requests_payload[1]["messages"]
-    assert isinstance(second_messages, list)
-    replayed_assistant = next(
-        item
-        for item in second_messages
-        if isinstance(item, dict) and item.get("role") == "assistant"
+    assert reply == (
+        "<｜DSML｜invoke name=\"get_exam_participant_metrics\">"
+        "<｜DSML｜parameter name=\"exam_id\" string=\"false\">32</｜DSML｜parameter>"
+        "</｜DSML｜invoke>"
     )
-    assert replayed_assistant["reasoning_content"] == "先转成文本工具调用。"
-    assert "DSML" in str(replayed_assistant["content"])
+    assert tool_executor.calls == []
+    assert len(requests_payload) == 1
 
 
 def test_streaming_deepseek_reasoning_delta_and_tool_replay(monkeypatch) -> None:

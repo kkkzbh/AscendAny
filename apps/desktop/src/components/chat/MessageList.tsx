@@ -15,6 +15,7 @@ export function MessageList() {
   });
   const isAiWorking = useChatStore((s) => s.isAiWorking);
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottomRef = useRef(true);
 
   const isNearBottom = () => {
@@ -79,6 +80,17 @@ export function MessageList() {
     };
   }, []);
 
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!shouldStickToBottomRef.current) return;
+      scrollToBottom("auto");
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
   const latestMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
   const latestContentLength = latestMessage?.content.length ?? 0;
   const latestReasoningLength = latestMessage?.reasoningContent?.length ?? 0;
@@ -129,7 +141,7 @@ export function MessageList() {
 
   return (
     <div ref={containerRef} className="message-list-shell flex-1 overflow-y-auto">
-      <div className={contentClassName}>
+      <div ref={contentRef} className={contentClassName}>
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}

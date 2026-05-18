@@ -248,7 +248,7 @@ describe("chatStore sessions", () => {
     expect(message?.reasoningStreaming).toBe(false);
   });
 
-  it("hydrates persisted rich blocks with reasoning while clearing stream flags", () => {
+  it("drops retired rich blocks while hydrating reasoning and clearing stream flags", () => {
     useChatStore.getState().hydrateFromLocalState({
       sessions: [
         {
@@ -284,8 +284,6 @@ describe("chatStore sessions", () => {
     expect(message?.content).toBe("最终回答");
     expect(message?.blocks).toEqual([
       { kind: "text", text: "最终回答" },
-      { kind: "callout", tone: "tip", markdown: "**先补数组**" },
-      { kind: "code", lang: "python", code: "print('ok')" },
     ]);
     expect(message?.reasoningContent).toBe("先看画像，再看提交记录。");
     expect(message?.reasoningStartedAt).toBe(1710000000100);

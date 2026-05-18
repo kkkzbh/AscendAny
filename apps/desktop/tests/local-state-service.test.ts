@@ -105,33 +105,6 @@ describe("LocalStateService source contract", () => {
                     kind: "tool",
                     activity: { id: "call_1", label: "查看学习画像", status: "running" },
                   },
-                  {
-                    kind: "problem",
-                    problem: {
-                      problemId: "p1001",
-                      title: "A+B",
-                      difficulty: 2,
-                      knowledgePoints: ["基础语法"],
-                      reason: "补基础",
-                    },
-                  },
-                  {
-                    kind: "choice",
-                    question: "下一步练什么？",
-                    options: [
-                      { id: "a", label: "数组" },
-                      { id: "b", label: "链表" },
-                    ],
-                    answerIdx: 1,
-                    explanation: "薄弱点更集中",
-                  },
-                  {
-                    kind: "math_steps",
-                    steps: [{ title: "半衰期", tex: "2^{-d / h}", note: "用于衰减" }],
-                  },
-                  { kind: "code", lang: "python", code: "print('ok')" },
-                  { kind: "node_ref", point: "array.basic", label: "数组基础" },
-                  { kind: "callout", tone: "tip", markdown: "**先补数组**" },
                 ],
               },
             ],
@@ -168,33 +141,6 @@ describe("LocalStateService source contract", () => {
           kind: "tool",
           activity: { id: "call_1", label: "查看学习画像", status: "running" },
         },
-        {
-          kind: "problem",
-          problem: {
-            problemId: "p1001",
-            title: "A+B",
-            difficulty: 2,
-            knowledgePoints: ["基础语法"],
-            reason: "补基础",
-          },
-        },
-        {
-          kind: "choice",
-          question: "下一步练什么？",
-          options: [
-            { id: "a", label: "数组" },
-            { id: "b", label: "链表" },
-          ],
-          answerIdx: 1,
-          explanation: "薄弱点更集中",
-        },
-        {
-          kind: "math_steps",
-          steps: [{ title: "半衰期", tex: "2^{-d / h}", note: "用于衰减" }],
-        },
-        { kind: "code", lang: "python", code: "print('ok')" },
-        { kind: "node_ref", point: "array.basic", label: "数组基础" },
-        { kind: "callout", tone: "tip", markdown: "**先补数组**" },
       ]);
     } finally {
       service?.close();

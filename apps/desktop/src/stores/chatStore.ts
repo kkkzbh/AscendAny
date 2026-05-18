@@ -1,11 +1,7 @@
 import { create } from "zustand";
 import type {
   ChatBlock,
-  ChatCalloutTone,
-  ChatChoiceOption,
-  ChatMathStep,
   ChatMessage,
-  ChatProblemRef,
   ChatSession,
   ChatToolActivity,
 } from "@/types/chat";
@@ -36,12 +32,6 @@ interface ChatState {
   upsertMessageToolActivity: (
     messageId: string,
     activity: ChatToolActivity,
-  ) => void;
-  appendMessageBlock: (messageId: string, block: ChatBlock) => void;
-  setMessageChoiceAnswer: (
-    messageId: string,
-    blockIndex: number,
-    answerIdx: number,
   ) => void;
   finalizeMessageReasoning: (messageId: string) => void;
   finalizeMessage: (messageId: string) => void;
@@ -130,13 +120,6 @@ function upsertToolBlock(blocks: ChatBlock[], activity: ChatToolActivity): ChatB
   return [...blocks, { kind: "tool", activity }];
 }
 
-function appendBlock(blocks: ChatBlock[], block: ChatBlock): ChatBlock[] {
-  // Rich blocks always go at the end; text/code may merge with same-kind tail
-  // when called explicitly with the same shape, but for plain "append" we just
-  // push. Streaming text uses appendTextBlock, not this helper.
-  return [...blocks, block];
-}
-
 function normalizeBlocks(value: unknown): ChatBlock[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const out: ChatBlock[] = [];
@@ -176,113 +159,6 @@ function normalizeBlock(value: unknown): ChatBlock | null {
           ? "error"
           : "done";
     return { kind: "tool", activity: { id, label, status } };
-  }
-  if (kind === "problem") {
-    const raw = (value as { problem?: unknown }).problem;
-    if (!raw || typeof raw !== "object") return null;
-    const problem = raw as Partial<ChatProblemRef>;
-    const problemId =
-      typeof problem.problemId === "string" ? problem.problemId.trim() : "";
-    if (!problemId) return null;
-    const knowledgePoints = Array.isArray(problem.knowledgePoints)
-      ? problem.knowledgePoints
-          .filter((point): point is string => typeof point === "string")
-          .map((point) => point.trim())
-          .filter(Boolean)
-      : [];
-    return {
-      kind: "problem",
-      problem: {
-        problemId,
-        title: typeof problem.title === "string" ? problem.title : null,
-        difficulty:
-          typeof problem.difficulty === "number" ? problem.difficulty : null,
-        knowledgePoints,
-        reason: typeof problem.reason === "string" ? problem.reason : null,
-      },
-    };
-  }
-  if (kind === "choice") {
-    const question = (value as { question?: unknown }).question;
-    const optionsRaw = (value as { options?: unknown }).options;
-    if (typeof question !== "string" || !question.trim()) return null;
-    if (!Array.isArray(optionsRaw)) return null;
-    const options: ChatChoiceOption[] = optionsRaw
-      .map((option) => {
-        if (!option || typeof option !== "object") return null;
-        const candidate = option as Partial<ChatChoiceOption>;
-        const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-        const label =
-          typeof candidate.label === "string" ? candidate.label.trim() : "";
-        if (!id || !label) return null;
-        return { id, label };
-      })
-      .filter((option): option is ChatChoiceOption => option !== null);
-    if (options.length === 0) return null;
-    const answerIdxRaw = (value as { answerIdx?: unknown }).answerIdx;
-    const explanationRaw = (value as { explanation?: unknown }).explanation;
-    return {
-      kind: "choice",
-      question: question.trim(),
-      options,
-      answerIdx:
-        typeof answerIdxRaw === "number" &&
-        answerIdxRaw >= 0 &&
-        answerIdxRaw < options.length
-          ? answerIdxRaw
-          : undefined,
-      explanation:
-        typeof explanationRaw === "string" && explanationRaw.trim()
-          ? explanationRaw.trim()
-          : undefined,
-    };
-  }
-  if (kind === "math_steps") {
-    const stepsRaw = (value as { steps?: unknown }).steps;
-    if (!Array.isArray(stepsRaw)) return null;
-    const steps: ChatMathStep[] = stepsRaw
-      .map((step) => {
-        if (!step || typeof step !== "object") return null;
-        const candidate = step as Partial<ChatMathStep>;
-        const tex = typeof candidate.tex === "string" ? candidate.tex.trim() : "";
-        if (!tex) return null;
-        const result: ChatMathStep = { tex };
-        if (typeof candidate.title === "string" && candidate.title.trim()) {
-          result.title = candidate.title.trim();
-        }
-        if (typeof candidate.note === "string" && candidate.note.trim()) {
-          result.note = candidate.note.trim();
-        }
-        return result;
-      })
-      .filter((step): step is ChatMathStep => step !== null);
-    if (steps.length === 0) return null;
-    return { kind: "math_steps", steps };
-  }
-  if (kind === "code") {
-    const code = (value as { code?: unknown }).code;
-    if (typeof code !== "string" || !code) return null;
-    const langRaw = (value as { lang?: unknown }).lang;
-    const lang = typeof langRaw === "string" ? langRaw.trim() : "";
-    return { kind: "code", lang: lang || "text", code };
-  }
-  if (kind === "node_ref") {
-    const point = (value as { point?: unknown }).point;
-    if (typeof point !== "string" || !point.trim()) return null;
-    const labelRaw = (value as { label?: unknown }).label;
-    return {
-      kind: "node_ref",
-      point: point.trim(),
-      label: typeof labelRaw === "string" && labelRaw.trim() ? labelRaw.trim() : undefined,
-    };
-  }
-  if (kind === "callout") {
-    const tone = (value as { tone?: unknown }).tone;
-    const markdown = (value as { markdown?: unknown }).markdown;
-    if (typeof markdown !== "string" || !markdown.trim()) return null;
-    const safeTone: ChatCalloutTone =
-      tone === "warn" ? "warn" : tone === "tip" ? "tip" : "info";
-    return { kind: "callout", tone: safeTone, markdown: markdown.trim() };
   }
   return null;
 }
@@ -713,57 +589,6 @@ export const useChatStore = create<ChatState>()(
                   }
                 : message,
             ),
-            updatedAt: session.messages.some((message) => message.id === messageId)
-              ? Date.now()
-              : session.updatedAt,
-          })),
-        }));
-        persistChatSnapshot(pickChatSnapshot(get()));
-      },
-
-      appendMessageBlock: (messageId, block) => {
-        if (!block) return;
-        set((state) => ({
-          sessions: state.sessions.map((session) => ({
-            ...session,
-            messages: session.messages.map((message) => {
-              if (message.id !== messageId) return message;
-              const blocks = appendBlock(message.blocks ?? [], block);
-              return {
-                ...message,
-                blocks,
-              };
-            }),
-            updatedAt: session.messages.some((message) => message.id === messageId)
-              ? Date.now()
-              : session.updatedAt,
-          })),
-        }));
-        persistChatSnapshot(pickChatSnapshot(get()));
-      },
-
-      setMessageChoiceAnswer: (messageId, blockIndex, answerIdx) => {
-        set((state) => ({
-          sessions: state.sessions.map((session) => ({
-            ...session,
-            messages: session.messages.map((message) => {
-              if (message.id !== messageId) return message;
-              const existing = message.blocks ?? [];
-              const target = existing[blockIndex];
-              if (!target || target.kind !== "choice") return message;
-              if (typeof target.answerIdx === "number") return message;
-              const safeIdx =
-                answerIdx >= 0 && answerIdx < target.options.length
-                  ? answerIdx
-                  : target.answerIdx;
-              if (safeIdx === target.answerIdx) return message;
-              const nextBlocks = existing.map((block, idx) =>
-                idx === blockIndex && block.kind === "choice"
-                  ? { ...block, answerIdx: safeIdx }
-                  : block,
-              );
-              return { ...message, blocks: nextBlocks };
-            }),
             updatedAt: session.messages.some((message) => message.id === messageId)
               ? Date.now()
               : session.updatedAt,

@@ -1,4 +1,6 @@
+import { MarkdownView } from "@/components/common/MarkdownView";
 import type { NoteStreamState } from "@/stores/notesStore";
+import { safeMarkdownUrl } from "./notesUtils";
 
 interface NotesStreamingViewProps {
   streaming: NoteStreamState;
@@ -105,8 +107,17 @@ function buildLines(streaming: NoteStreamState): RenderedLine[] {
   return lines;
 }
 
+function buildVisibleMarkdown(lines: RenderedLine[]): string {
+  return lines
+    .filter((line) => line.kind !== "removed" && line.kind !== "added-pending")
+    .map((line) => line.text)
+    .join("\n");
+}
+
 export function NotesStreamingView({ streaming }: NotesStreamingViewProps) {
   const lines = buildLines(streaming);
+  const visibleMarkdown = buildVisibleMarkdown(lines);
+  const showMarkdownPreview = streaming.phase !== "deleting";
   return (
     <div
       className={`notes-streaming notes-streaming--${streaming.phase}`}
@@ -119,33 +130,44 @@ export function NotesStreamingView({ streaming }: NotesStreamingViewProps) {
         </span>
         <span>笔记更新中…</span>
       </div>
-      <pre className="notes-streaming-pre">
-        {lines.map((line) => {
-          if (line.kind === "added-pending") {
+      {showMarkdownPreview ? (
+        <div className="notes-streaming-preview">
+          <MarkdownView
+            markdown={visibleMarkdown}
+            variant="note"
+            streaming={streaming.phase === "typing"}
+            urlTransform={(value) => safeMarkdownUrl(value)}
+          />
+        </div>
+      ) : (
+        <pre className="notes-streaming-pre">
+          {lines.map((line) => {
+            if (line.kind === "added-pending") {
+              return (
+                <span key={line.key} className="notes-line notes-line--pending">
+                  {"​"}
+                  {"\n"}
+                </span>
+              );
+            }
+            const baseClass =
+              line.kind === "removed"
+                ? "notes-line notes-line--removed"
+                : line.kind === "added-partial"
+                  ? "notes-line notes-line--added"
+                  : line.kind === "added-full"
+                    ? "notes-line notes-line--added"
+                    : "notes-line";
             return (
-              <span key={line.key} className="notes-line notes-line--pending">
-                {"​"}
+              <span key={line.key} className={baseClass}>
+                {line.text || "​"}
+                {line.showCaret ? <span className="notes-streaming-caret" aria-hidden /> : null}
                 {"\n"}
               </span>
             );
-          }
-          const baseClass =
-            line.kind === "removed"
-              ? "notes-line notes-line--removed"
-              : line.kind === "added-partial"
-                ? "notes-line notes-line--added"
-                : line.kind === "added-full"
-                  ? "notes-line notes-line--added"
-                  : "notes-line";
-          return (
-            <span key={line.key} className={baseClass}>
-              {line.text || "​"}
-              {line.showCaret ? <span className="notes-streaming-caret" aria-hidden /> : null}
-              {"\n"}
-            </span>
-          );
-        })}
-      </pre>
+          })}
+        </pre>
+      )}
     </div>
   );
 }

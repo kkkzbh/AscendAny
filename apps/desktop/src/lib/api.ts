@@ -1,4 +1,4 @@
-import type { ChatBlock, Role } from "@/types/chat";
+import type { Role } from "@/types/chat";
 import type { LeaderboardEntry } from "@/types/leaderboard";
 import {
   createEmptyMilestoneStreak,
@@ -123,6 +123,20 @@ interface StudentLeaderboardPayload {
   items?: LeaderboardEntryPayload[];
 }
 
+export interface FeedbackSubmitPayload {
+  title: string;
+  content: string;
+  images: Array<{ name: string; dataUrl: string }>;
+  platform?: string;
+  appVersion?: string;
+  userAgent?: string;
+}
+
+export interface FeedbackSubmitResult {
+  success: boolean;
+  message: string;
+}
+
 export interface ChatMessagePayload {
   role: Role;
   content: string;
@@ -166,6 +180,12 @@ export interface LatestExamImportedAtPayload {
   latestExamImportedAt: string | null;
 }
 
+export type DataFreshnessEvent =
+  | { type: "snapshot"; latestExamImportedAt: string | null }
+  | { type: "data_changed"; latestExamImportedAt: string | null }
+  | { type: "heartbeat"; ts?: string }
+  | { type: "error"; code?: string; message: string };
+
 export interface ChatReplyResponsePayload {
   reply: string;
   summary: string;
@@ -200,7 +220,6 @@ export type ChatStreamEvent =
     }
   | { type: "node_focus"; point: string }
   | { type: "node_status"; point: string; mastery: number }
-  | { type: "block_append"; block: ChatBlock }
   | {
       type: "done";
       reply: string;
@@ -308,6 +327,17 @@ async function requestJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+export async function submitFeedback(
+  payload: FeedbackSubmitPayload,
+  authToken?: string,
+): Promise<FeedbackSubmitResult> {
+  return requestJson<FeedbackSubmitResult>("/api/v1/feedback", {
+    method: "POST",
+    body: payload,
+    authToken,
+  });
 }
 
 export function normalizeDashboardData(
@@ -745,11 +775,6 @@ async function streamJsonEvents(
       if (point && mastery !== null) {
         onEvent({ type: "node_status", point, mastery });
       }
-    } else if (type === "block_append") {
-      const block = parseStreamBlock(parsed.block);
-      if (block) {
-        onEvent({ type: "block_append", block });
-      }
     } else if (type === "tool_start" || type === "tool_done") {
       return;
     } else {
@@ -776,12 +801,101 @@ async function streamJsonEvents(
   }
 }
 
+async function readSseBlocks(
+  response: Response,
+  dispatchBlock: (block: string) => void,
+): Promise<void> {
+  if (!response.body) {
+    throw new ApiError("后端没有返回可读取的流", response.status);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let splitIndex = buffer.search(/\r?\n\r?\n/);
+    while (splitIndex >= 0) {
+      const block = buffer.slice(0, splitIndex);
+      const match = buffer.slice(splitIndex).match(/^\r?\n\r?\n/);
+      buffer = buffer.slice(splitIndex + (match?.[0].length ?? 2));
+      dispatchBlock(block);
+      splitIndex = buffer.search(/\r?\n\r?\n/);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    dispatchBlock(buffer);
+  }
+}
+
 export function streamChatReply(
   payload: ChatReplyRequestPayload,
   authToken: string | undefined,
   onEvent: (event: ChatStreamEvent) => void,
 ): Promise<void> {
   return streamJsonEvents("/api/v1/chat/reply/stream", payload, authToken, onEvent);
+}
+
+export async function streamDataEvents(
+  onEvent: (event: DataFreshnessEvent) => void,
+  options?: { signal?: AbortSignal },
+): Promise<void> {
+  const response = await fetch(buildUrl("/api/v1/meta/data-events/stream"), {
+    method: "GET",
+    headers: {
+      Accept: "text/event-stream",
+    },
+    signal: options?.signal,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(text.trim() || `请求失败（${response.status}）`, response.status);
+  }
+
+  const dispatchBlock = (block: string) => {
+    const lines = block.split(/\r?\n/);
+    let eventType = "message";
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        eventType = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (!dataLines.length) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const type = typeof parsed.type === "string" ? parsed.type : eventType;
+    if (type === "snapshot" || type === "data_changed") {
+      onEvent({
+        type,
+        latestExamImportedAt:
+          typeof parsed.latestExamImportedAt === "string"
+            ? parsed.latestExamImportedAt
+            : null,
+      });
+    } else if (type === "heartbeat") {
+      onEvent({
+        type: "heartbeat",
+        ts: typeof parsed.ts === "string" ? parsed.ts : undefined,
+      });
+    } else if (type === "error") {
+      onEvent({
+        type: "error",
+        code: typeof parsed.code === "string" ? parsed.code : undefined,
+        message: String(parsed.message ?? "数据更新流失败"),
+      });
+    }
+  };
+
+  await readSseBlocks(response, dispatchBlock);
 }
 
 export type SignupPolicy =
@@ -1002,123 +1116,6 @@ export async function fetchLatestExamImportedAt(): Promise<LatestExamImportedAtP
   return requestJson<LatestExamImportedAtPayload>(
     "/api/v1/meta/latest_exam_imported_at",
   );
-}
-
-function parseStreamBlock(value: unknown): ChatBlock | null {
-  if (!value || typeof value !== "object") return null;
-  const kind = (value as { kind?: unknown }).kind;
-  if (kind === "text") {
-    const text = (value as { text?: unknown }).text;
-    return typeof text === "string" && text.length > 0
-      ? { kind: "text", text }
-      : null;
-  }
-  if (kind === "problem") {
-    const problemRaw = (value as { problem?: unknown }).problem;
-    if (!problemRaw || typeof problemRaw !== "object") return null;
-    const problem = problemRaw as Record<string, unknown>;
-    const problemId =
-      typeof problem.problemId === "string" ? problem.problemId.trim() : "";
-    if (!problemId) return null;
-    const knowledgePoints = Array.isArray(problem.knowledgePoints)
-      ? problem.knowledgePoints
-          .filter((point): point is string => typeof point === "string")
-          .map((point) => point.trim())
-          .filter(Boolean)
-      : [];
-    return {
-      kind: "problem",
-      problem: {
-        problemId,
-        title: typeof problem.title === "string" ? problem.title : null,
-        difficulty:
-          typeof problem.difficulty === "number" ? problem.difficulty : null,
-        knowledgePoints,
-        reason: typeof problem.reason === "string" ? problem.reason : null,
-      },
-    };
-  }
-  if (kind === "choice") {
-    const question = (value as { question?: unknown }).question;
-    const optionsRaw = (value as { options?: unknown }).options;
-    if (typeof question !== "string" || !question.trim()) return null;
-    if (!Array.isArray(optionsRaw)) return null;
-    const options: { id: string; label: string }[] = [];
-    for (const option of optionsRaw) {
-      if (!option || typeof option !== "object") continue;
-      const candidate = option as Record<string, unknown>;
-      const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-      const label =
-        typeof candidate.label === "string" ? candidate.label.trim() : "";
-      if (id && label) options.push({ id, label });
-    }
-    if (options.length === 0) return null;
-    const answerIdxRaw = (value as { answerIdx?: unknown }).answerIdx;
-    const explanationRaw = (value as { explanation?: unknown }).explanation;
-    return {
-      kind: "choice",
-      question: question.trim(),
-      options,
-      answerIdx:
-        typeof answerIdxRaw === "number" &&
-        answerIdxRaw >= 0 &&
-        answerIdxRaw < options.length
-          ? answerIdxRaw
-          : undefined,
-      explanation:
-        typeof explanationRaw === "string" && explanationRaw.trim()
-          ? explanationRaw.trim()
-          : undefined,
-    };
-  }
-  if (kind === "math_steps") {
-    const stepsRaw = (value as { steps?: unknown }).steps;
-    if (!Array.isArray(stepsRaw)) return null;
-    const steps: Array<{ title?: string; tex: string; note?: string }> = [];
-    for (const step of stepsRaw) {
-      if (!step || typeof step !== "object") continue;
-      const candidate = step as Record<string, unknown>;
-      const tex = typeof candidate.tex === "string" ? candidate.tex.trim() : "";
-      if (!tex) continue;
-      const result: { title?: string; tex: string; note?: string } = { tex };
-      if (typeof candidate.title === "string" && candidate.title.trim()) {
-        result.title = candidate.title.trim();
-      }
-      if (typeof candidate.note === "string" && candidate.note.trim()) {
-        result.note = candidate.note.trim();
-      }
-      steps.push(result);
-    }
-    return steps.length > 0 ? { kind: "math_steps", steps } : null;
-  }
-  if (kind === "code") {
-    const code = (value as { code?: unknown }).code;
-    if (typeof code !== "string" || !code) return null;
-    const langRaw = (value as { lang?: unknown }).lang;
-    const lang = typeof langRaw === "string" ? langRaw.trim() : "";
-    return { kind: "code", lang: lang || "text", code };
-  }
-  if (kind === "node_ref") {
-    const point = (value as { point?: unknown }).point;
-    if (typeof point !== "string" || !point.trim()) return null;
-    const labelRaw = (value as { label?: unknown }).label;
-    return {
-      kind: "node_ref",
-      point: point.trim(),
-      label:
-        typeof labelRaw === "string" && labelRaw.trim()
-          ? labelRaw.trim()
-          : undefined,
-    };
-  }
-  if (kind === "callout") {
-    const tone = (value as { tone?: unknown }).tone;
-    const markdown = (value as { markdown?: unknown }).markdown;
-    if (typeof markdown !== "string" || !markdown.trim()) return null;
-    const safeTone = tone === "warn" ? "warn" : tone === "tip" ? "tip" : "info";
-    return { kind: "callout", tone: safeTone, markdown: markdown.trim() };
-  }
-  return null;
 }
 
 interface LearningPathPayload {

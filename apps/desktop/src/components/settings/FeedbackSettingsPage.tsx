@@ -7,6 +7,7 @@ import {
   type DragEvent,
   type FormEvent,
 } from "react";
+import { getApiErrorMessage, submitFeedback } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 
 interface FeedbackImageItem {
@@ -40,6 +41,7 @@ function buildImageId() {
 
 export function FeedbackSettingsPage() {
   const account = useAuthStore((s) => s.account);
+  const accessToken = useAuthStore((s) => s.accessToken);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -163,25 +165,20 @@ export function FeedbackSettingsPage() {
       return;
     }
 
-    const api = window.electronAPI;
-    if (!api?.submitFeedback) {
-      setError("当前环境不支持发送反馈。");
-      setNotice(null);
-      return;
-    }
-
     setIsSubmitting(true);
     setError(null);
     setNotice(null);
     try {
-      const result = await api.submitFeedback({
+      const result = await submitFeedback({
         title: trimmedTitle,
         content: trimmedContent,
         images: images.map((item) => ({
           name: item.name,
           dataUrl: item.dataUrl,
         })),
-      });
+        platform: window.electronAPI?.platform || navigator.platform,
+        userAgent: navigator.userAgent,
+      }, accessToken ?? undefined);
       if (!result.success) {
         setError(result.message);
         return;
@@ -191,8 +188,8 @@ export function FeedbackSettingsPage() {
       setTitle("");
       setContent("");
       setImages([]);
-    } catch {
-      setError("发送失败，请稍后重试。");
+    } catch (err) {
+      setError(getApiErrorMessage(err, "发送失败，请稍后重试。"));
     } finally {
       setIsSubmitting(false);
     }

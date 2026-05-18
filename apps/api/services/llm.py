@@ -22,12 +22,6 @@ _EXAM_TITLE_MAX_LENGTH = 32
 
 
 @dataclass(slots=True)
-class ParsedTextToolCall:
-    tool_name: str
-    arguments: dict[str, Any]
-
-
-@dataclass(slots=True)
 class ToolExecutionResult:
     tool_call_id: str
     activity_id: str
@@ -204,20 +198,6 @@ class LLMService:
                 await self._append_tool_results(messages, tool_executor, tool_calls)
                 continue
 
-            parsed_text_tool_calls = self._extract_text_tool_calls(response.text)
-            if parsed_text_tool_calls:
-                messages.append(
-                    self._assistant_replay_message(
-                        profile,
-                        message,
-                        fallback_content=response.text,
-                    )
-                )
-                await self._append_text_tool_results(
-                    messages, tool_executor, parsed_text_tool_calls
-                )
-                continue
-
             return response.text.strip()
 
         response = await adapter.complete(
@@ -303,11 +283,8 @@ class LLMService:
         self,
         profile: Any,
         message: dict[str, Any],
-        fallback_content: str | None = None,
     ) -> dict[str, Any]:
         content = message.get("content")
-        if content is None and fallback_content is not None:
-            content = fallback_content
         replay: dict[str, Any] = {
             "role": str(message.get("role") or "assistant"),
             "content": content,
@@ -365,37 +342,6 @@ class LLMService:
                 for note_event in pending_notes_events:
                     yield {"type": "notes_update", **note_event}
                 pending_notes_events.clear()
-
-            pending_block_events = getattr(
-                tool_executor, "chat_block_events", None
-            )
-            if isinstance(pending_block_events, list) and pending_block_events:
-                for block in pending_block_events:
-                    yield {"type": "block_append", "block": block}
-                pending_block_events.clear()
-
-            pending_path_events = getattr(
-                tool_executor, "path_visualization_events", None
-            )
-            if isinstance(pending_path_events, list) and pending_path_events:
-                for event in pending_path_events:
-                    name = event.get("event")
-                    if name == "node_focus" and event.get("point"):
-                        yield {"type": "node_focus", "point": event["point"]}
-                    elif name == "node_status" and event.get("point") is not None:
-                        yield {
-                            "type": "node_status",
-                            "point": event["point"],
-                            "mastery": event.get("mastery", 0.0),
-                        }
-                    elif name == "path_update" and event.get("next") is not None:
-                        yield {
-                            "type": "path_update",
-                            "mode": event.get("mode", "replace"),
-                            "previous": event.get("previous"),
-                            "next": event["next"],
-                        }
-                pending_path_events.clear()
 
             if activity_label is None:
                 continue
@@ -513,31 +459,6 @@ class LLMService:
             return False
         return isinstance(parsed, dict) and isinstance(parsed.get("error"), str)
 
-    async def _append_text_tool_results(
-        self,
-        messages: list[dict[str, Any]],
-        tool_executor: ToolExecutor,
-        parsed_text_tool_calls: list[ParsedTextToolCall],
-    ) -> None:
-        tool_result_lines: list[str] = []
-        for idx, call in enumerate(parsed_text_tool_calls, start=1):
-            logger.info("Text tool call: %s(%s)", call.tool_name, call.arguments)
-            result = await tool_executor.execute(call.tool_name, call.arguments)
-            args_json = json.dumps(call.arguments, ensure_ascii=False)
-            tool_result_lines.append(
-                f"{idx}. {call.tool_name}({args_json}) => {result}"
-            )
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "以下是你请求的工具结果（JSON）。"
-                    "请直接回答用户，不要输出任何函数/工具调用标记。\n"
-                    + "\n".join(tool_result_lines)
-                ),
-            }
-        )
-
     def _merge_tool_call_deltas(
         self,
         target: dict[int, dict[str, Any]],
@@ -580,71 +501,6 @@ class LLMService:
         if not isinstance(parsed, dict):
             return {}
         return parsed
-
-    def _extract_text_tool_calls(self, content: str) -> list[ParsedTextToolCall]:
-        text = content.strip()
-        if not text:
-            return []
-
-        tag_prefix = r"(?:[|｜]DSML[|｜])?"
-        invoke_pattern = re.compile(
-            rf"<{tag_prefix}invoke\s+name=\"(?P<name>[A-Za-z0-9_.-]+)\"[^>]*>"
-            rf"(?P<body>.*?)</{tag_prefix}invoke>",
-            re.DOTALL,
-        )
-        parameter_pattern = re.compile(
-            rf"<{tag_prefix}parameter\s+name=\"(?P<name>[^\"]+)\""
-            rf"(?P<attrs>[^>]*)>(?P<value>.*?)</{tag_prefix}parameter>",
-            re.DOTALL,
-        )
-
-        calls: list[ParsedTextToolCall] = []
-        for invoke_match in invoke_pattern.finditer(text):
-            tool_name = (invoke_match.group("name") or "").strip()
-            if not tool_name:
-                continue
-            body = invoke_match.group("body") or ""
-            arguments: dict[str, Any] = {}
-            for param_match in parameter_pattern.finditer(body):
-                key = (param_match.group("name") or "").strip()
-                if not key:
-                    continue
-                value = (param_match.group("value") or "").strip()
-                attrs = param_match.group("attrs") or ""
-                arguments[key] = self._coerce_text_tool_parameter(value, attrs)
-            calls.append(ParsedTextToolCall(tool_name=tool_name, arguments=arguments))
-        return calls
-
-    @staticmethod
-    def _coerce_text_tool_parameter(value: str, attrs: str) -> Any:
-        attrs_lower = attrs.lower()
-        if 'string="true"' in attrs_lower:
-            return value
-        if value == "":
-            return ""
-        if value.startswith("{") or value.startswith("["):
-            try:
-                parsed = json.loads(value)
-                if isinstance(parsed, (dict, list)):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
-        lowered = value.lower()
-        if lowered == "true":
-            return True
-        if lowered == "false":
-            return False
-        if re.fullmatch(r"[+-]?\d+", value):
-            try:
-                return int(value)
-            except ValueError:
-                return value
-        if re.fullmatch(r"[+-]?\d+\.\d+", value):
-            try:
-                return float(value)
-            except ValueError:
-                return value
-        return value
 
 
 def _extract_exam_title(result: str | None) -> str | None:

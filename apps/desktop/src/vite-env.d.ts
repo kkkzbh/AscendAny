@@ -69,11 +69,6 @@ interface ElectronAPI {
   minimize: () => void;
   maximize: () => void;
   close: () => void;
-  submitFeedback?: (payload: {
-    title: string;
-    content: string;
-    images: Array<{ name: string; dataUrl: string }>;
-  }) => Promise<{ success: boolean; message: string }>;
   setZoomFactor?: (factor: number) => Promise<boolean>;
   getOpaqueSidebarBackground?: () => Promise<boolean>;
   setOpaqueSidebarBackground?: (enabled: boolean) => Promise<boolean>;

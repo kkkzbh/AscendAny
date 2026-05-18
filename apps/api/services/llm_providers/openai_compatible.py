@@ -136,7 +136,7 @@ class OpenAICompatibleAdapter:
                         {"role": "user", "content": "Reply with ok."},
                     ],
                     "temperature": 0,
-                    "max_tokens": 8,
+                    **self._max_token_payload(profile, 8),
                 },
             )
         except httpx.HTTPError as exc:
@@ -251,12 +251,20 @@ class OpenAICompatibleAdapter:
             "temperature": request.temperature,
         }
         if request.max_tokens is not None:
-            payload["max_tokens"] = request.max_tokens
+            payload.update(self._max_token_payload(request.profile, request.max_tokens))
         if request.tools is not None:
             payload["tools"] = request.tools
+            if request.profile.provider == "mimo":
+                payload["tool_choice"] = "auto"
         if stream:
             payload["stream"] = True
         return payload
+
+    @staticmethod
+    def _max_token_payload(profile: ProviderProfile, value: int) -> dict[str, int]:
+        if profile.provider == "mimo":
+            return {"max_completion_tokens": value}
+        return {"max_tokens": value}
 
     async def _post_json(
         self,

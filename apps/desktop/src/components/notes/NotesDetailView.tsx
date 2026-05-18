@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownView } from "@/components/common/MarkdownView";
 import {
   selectActiveNote,
   useNotesStore,
@@ -142,14 +141,13 @@ export function NotesDetailView() {
         ) : streaming && streaming.noteId === activeNote.id ? (
           <NotesStreamingView streaming={streaming} />
         ) : (
-          <div ref={previewRef} className="notes-preview chat-markdown">
+          <div ref={previewRef} className="notes-preview">
             {activeNote.content.trim() ? (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+              <MarkdownView
+                markdown={activeNote.content}
+                variant="note"
                 urlTransform={(value) => safeMarkdownUrl(value)}
-              >
-                {activeNote.content}
-              </ReactMarkdown>
+              />
             ) : null}
           </div>
         )}

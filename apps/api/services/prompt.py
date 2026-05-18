@@ -14,7 +14,6 @@ from .identity import ResolvedIdentity
 from .tools import (
     FACT_TOOL_PROMPT_LINES,
     NOTES_TOOL_PROMPT_LINES,
-    UI_TOOL_PROMPT_LINES,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,8 @@ _TOOL_RULES = """\
 - 用户请求推荐题目、刷什么题时，直接调用 `get_problem_recommendations`；无明确条件时只传 `top_k` 或空参数，不要编造过滤参数。
 - 用户请求学习路线、先学什么、知识点路径时，直接调用 `get_learning_path`；无明确主题或条数时传空参数。
 - 工具只返回事实数据；对比、诊断、建议、心理支持和训练动作都由你基于事实自行完成。
-- 工具调用是后台行为，不向用户暴露函数调用过程或任何调用标记。
+- 工具调用是后台行为；需要调用工具时，必须通过运行时提供的原生 tool-calling API 调用函数。
+- 不要在可见回复中书写、模拟或解释工具调用。禁止输出 `<tool_call>`、`<function=...>`、XML/JSON 形式的函数调用、DSML 标记或工具函数名来代替真实工具调用。
 
 ## 可用事实工具
 {fact_tool_lines}
@@ -84,22 +84,13 @@ _TOOL_RULES = """\
 - 成功调用 `update_notes` 之前，不要说笔记已经修改完成。
 - 写笔记时保留仍有价值的用户内容，不要无故清空或丢失手写记录。
 
-## UI 富组件工具
-聊天气泡支持结构化富块。能用结构化块时不要再用 markdown 罗列：
-- 提到具体题目、推荐题目时调用 `emit_problem_card`，不要在文字里手写"题目：xxx, 难度：xxx"。
-- 给学生出选择题考核时调用 `emit_choice`；用户选择后，UI 会把题干、选项和用户选择作为隐藏用户输入继续触发一轮回复。
-- 多步公式推导调用 `emit_math_steps`，每一步一条 tex；不要把整段 LaTeX 揉在普通段落里。
-- 输出代码用 `emit_code` 而不是 markdown ``` 代码围栏，前端会渲染成带语言徽章和复制按钮的卡。
-- 提到一个知识点时（尤其用户的学习路径里出现的）配套调用 `emit_node_ref`，让用户点击直接跳到右侧地图详情。
-- 强提示/警告/提示性短语优先用 `emit_callout`（info/warn/tip），比 emoji 列表更突出。
-- 想让学生注意到当前路径上的某个节点时，调用 `focus_knowledge_node` 让地图自动展开，再开始讲。
-{ui_tool_lines}
-- UI 工具的调用是 UI 信号，不返回业务数据；调用前后仍需要把"为什么推荐"用文字解释清楚。
-- 不要重复造卡：同一道题、同一个知识点不要在一次回复里反复 `emit_*`。\
+## 普通内容渲染
+- 普通回答、列表、公式和代码都直接输出 Markdown。
+- 输出代码时使用标准 fenced code，例如 ```python，不要调用工具来展示代码。
+- 不要把工具调用写成正文；没有合适工具时就直接用 Markdown 回答。\
 """.format(
     fact_tool_lines="\n".join(FACT_TOOL_PROMPT_LINES),
     notes_tool_lines="\n".join(NOTES_TOOL_PROMPT_LINES),
-    ui_tool_lines="\n".join(UI_TOOL_PROMPT_LINES),
 )
 
 _NORMAL_SYSTEM_PROMPT_TEMPLATE = """\
@@ -569,7 +560,22 @@ class PromptService:
         notes: str = "",
         notes_title: str = "",
     ) -> str:
-        sections: list[str] = [base_prompt]
+        sections: list[str] = []
+        style = await self._build_role_style_prompt(role_id)
+        if style:
+            sections.append(
+                "## 角色风格\n"
+                "以下只约束语气和人设表达，不改变任务目标、事实约束或工具调用规则。\n"
+                + style
+            )
+        custom_style = custom_role_style_prompt.strip()
+        if custom_style:
+            sections.append(
+                "## 自定义角色风格\n"
+                "以下只约束语气和人设表达，不改变任务目标、事实约束或工具调用规则。\n"
+                + custom_style
+            )
+        sections.append(base_prompt)
         if identity is not None and not identity.no_submission_records:
             sections.append(await self._build_student_context(identity))
         else:
@@ -582,12 +588,6 @@ class PromptService:
                 )
             )
         sections.append(await self._build_notes_context(notes, notes_title))
-        style = await self._build_role_style_prompt(role_id)
-        if style:
-            sections.append(style)
-        custom_style = custom_role_style_prompt.strip()
-        if custom_style:
-            sections.append(custom_style)
         return "\n\n".join(sections)
 
     async def _build_notes_context(self, notes: str, notes_title: str) -> str:
