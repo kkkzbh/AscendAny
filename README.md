@@ -1,239 +1,111 @@
-# AscendAny（学生能力分析平台）
+# AscendAny
 
-本仓库当前包含：
-- `doc/`：设计与开发文档（从真实数据样例抽象出的规范）
-- `db/schema/`：PostgreSQL DDL（每张表一个 SQL 文件）
-- `preprocess/`：预处理与增量导入代码（已实现，导入内自动提交绑定）
+<p align="center">
+  <img src="image/LOGO_SHRIND.png" alt="AscendAny Logo" width="96" />
+</p>
 
-更多入口见：`doc/文档索引.md`。
+<p align="center">
+  <strong>学生能力分析平台</strong>
+</p>
 
-## 本地数据库（PostgreSQL + PgBouncer）
+<p align="center">
+  把程序设计考试数据转化为可解释的成长洞察，帮助学生看清近期表现，也帮助教师快速定位教学关注点。
+</p>
 
-本地开发推荐使用 `~/services/postgres`（Podman Compose）：
-- PostgreSQL：`127.0.0.1:5432`（管理/排障直连）
-- PgBouncer：`127.0.0.1:6432`（应用默认入口）
+![AscendAny 主界面](image/主界面.png)
 
-> 默认使用 **PgBouncer（6432）+ `~/.pgpass`** 管理密码；不要把数据库密码写进仓库。
+## 项目简介
 
-### 1) 创建数据库与用户（示例）
+AscendAny 面向程序设计课程、训练营和班级考试场景。平台持续接收考试数据，自动形成学生画像，并通过 AI 助手解释近期表现、能力变化和训练重点。
 
-按 `~/services/postgres/README.md` 在 PostgreSQL 中创建角色与数据库（示例使用本项目默认命名，注意大小写需双引号）：
+它关注三个核心问题：
 
-```sql
-CREATE ROLE "AscendAny" LOGIN PASSWORD '<your_password>';
-CREATE DATABASE "AscendAny" OWNER "AscendAny";
-```
+- 学生最近一场考试表现如何，排名、得分、解题数和历史变化是否清晰。
+- 五个能力维度如何变化，强项和短板能否一眼看出。
+- 下一阶段训练应该优先补什么，建议能否直接用于复盘和学习。
 
-### 2) 配置 `~/.pgpass`（推荐）
+## 核心能力
 
-将密码写入本机 `~/.pgpass`（权限必须为 `600`，否则会被忽略）：
+### 增量考试导入
 
-```text
-127.0.0.1:6432:AscendAny:AscendAny:<your_password>
-```
+每个考试目录都可以作为一次独立考试导入。平台会识别新增考试和新增快照，保留历史数据，并避免重复导入同一批记录。
 
-可选：保留直连 PostgreSQL（5432）用于管理/排障：
+### 五维能力画像
 
-```text
-127.0.0.1:5432:AscendAny:AscendAny:<your_password>
-```
+平台将考试表现拆解为五个维度：
 
-### 3) 应用 DDL（`db/schema/*.sql`）
+| 维度 | 含义 |
+| --- | --- |
+| 知识 | 反映知识点掌握程度，结合通过率和得分表现。 |
+| 准确 | 关注 AC 前提交次数，衡量解题稳定性和试错成本。 |
+| 质量 | 结合运行时表现等数据，描述解法质量。 |
+| 灵活 | 观察切题节奏和卡题时长，反映临场策略调整能力。 |
+| 熟练 | 关注解题速度和完成节奏，呈现训练熟练度。 |
 
-从仓库根目录执行（默认连接 PgBouncer:6432；`-w` 表示只用 `~/.pgpass`，不进行交互式密码提示）：
+### Rating 追踪
 
-```bash
-for f in db/schema/*.sql; do
-  psql -w -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 6432 -U AscendAny -d AscendAny -f "$f"
-done
-```
+每场考试都会更新综合 rating，并记录本场变化。学生可以看到自己的成长趋势，教师也可以据此观察班级整体变化。
 
-### 4) 应用连接参数（通过 PgBouncer）
+### AI 智能解读
 
-```text
-host=127.0.0.1
-port=6432
-dbname=AscendAny
-user=AscendAny
-# password: from ~/.pgpass
-```
+AI 助手可以结合考试记录、能力指标和 rating 历史，生成近期表现分析、短板解释、题目推荐和训练建议。学生可以继续追问某次考试、某个指标或下一步学习计划。
 
-## Python 运行环境（uv + .venv）
+## 界面预览
 
-预处理相关命令统一使用仓库内 `.venv`（`uv` 管理），避免污染用户/系统 Python 环境。
+### 登录与账号绑定
 
-```bash
-# 首次初始化（若 .venv 不存在）
-uv venv .venv
+注册后绑定学号和平台昵称，系统会将账号与考试数据关联，进入个人学习工作台。
 
-# 安装预处理依赖到项目 .venv
-uv pip install --python .venv/bin/python -r preprocess/requirements-dev.txt
+![登录界面](image/登录界面.png)
 
-# 示例：运行预处理与测试
-uv run --python .venv/bin/python -m preprocess.cli run --dry-run
-uv run --python .venv/bin/python pytest -q
-```
+### 学习工作台
 
-## FastAPI 后端（apps/api）
+左侧保留历史对话和入口，中间展示 AI 分析内容、题目推荐与学习路径提醒，右侧集中呈现能力、历史、地图和笔记等学习面板。
 
-后端目录：`apps/api/`，默认配置：`apps/api/config/default.yaml`。
+![主界面总览](image/主界面.png)
 
-```bash
-# 安装后端依赖
-uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt
+### 能力面板
 
-# 启动后端
-uv run --python .venv/bin/python uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 --reload
-```
+能力面板展示综合 rating、五维雷达图和各项能力分。学生可以快速判断当前强项、短板和最近一次考试带来的变化。
 
-## Linux 桌面端 GPU 兼容模式（Electron）
+![能力面板](image/能力面板.png)
 
-在 Linux 下，桌面端默认使用 `ASCENDANY_LINUX_GPU_MODE=off`（关闭硬件加速）以规避
-`gbm_pixmap_wayland.cc` / GPU 进程反复崩溃问题。
+### AI 角色切换
 
-可按需切换：
+平台支持切换 AI 助教角色，也支持本地自定义角色，用不同语气和分析风格陪伴复盘。
 
-```bash
-# 默认（最稳妥）
-ASCENDANY_LINUX_GPU_MODE=off pnpm --filter @ascendany/desktop dev
+![角色切换](image/角色切换.png)
 
-# 强制走 XWayland（某些驱动更稳定）
-ASCENDANY_LINUX_GPU_MODE=x11 pnpm --filter @ascendany/desktop dev
+## 从考试数据到学习建议
 
-# 使用软件渲染
-ASCENDANY_LINUX_GPU_MODE=swiftshader pnpm --filter @ascendany/desktop dev
+1. 放入新的考试数据。
+2. 平台扫描新增考试和快照。
+3. 数据标准化后进入学生能力计算流程。
+4. 系统生成五维能力分、rating 变化和历史趋势。
+5. AI 助手基于最新数据给出可执行的学习建议。
 
-# 自动（不做降级处理）
-ASCENDANY_LINUX_GPU_MODE=auto pnpm --filter @ascendany/desktop dev
-```
+## 适合谁使用
 
-## Linux Wayland 输入法（fcitx5）
+- 学生：查看近期考试表现、能力短板和下一步训练重点。
+- 教师与助教：观察班级学习状态，定位共性问题和个体差异。
+- 管理者：维护考试数据导入流程，跟踪导入进度和数据质量。
 
-桌面端在 Wayland 会话下默认启用 IME 兼容开关（`ASCENDANY_LINUX_IME_MODE=auto`），
-会自动追加 Chromium 的 `enable-wayland-ime`。
+## 平台组成
 
-可按需配置：
+- 学生端：桌面端、Web 访问和 Android 应用。
+- 管理端：导入控制台，用于发起数据导入和查看任务进度。
+- 后端服务：提供认证、学生画像、考试分析、AI 对话和导入任务接口。
+- 数据预处理：负责考试扫描、解析、导入和能力指标计算。
 
-```bash
-# 默认：仅在 Wayland 会话启用 IME 开关
-ASCENDANY_LINUX_IME_MODE=auto pnpm --filter @ascendany/desktop dev
+## 项目入口
 
-# 强制开启（用于排查）
-ASCENDANY_LINUX_IME_MODE=on pnpm --filter @ascendany/desktop dev
-
-# 关闭（用于回归对比）
-ASCENDANY_LINUX_IME_MODE=off pnpm --filter @ascendany/desktop dev
-```
-
-若系统会话里没有设置输入法模块变量，可额外指定：
-
-```bash
-ASCENDANY_LINUX_IM_MODULE=fcitx ASCENDANY_LINUX_IME_MODE=on pnpm --filter @ascendany/desktop dev
-```
-
-说明：
-- `ASCENDANY_LINUX_GPU_MODE=x11` 会强制 XWayland 路径，并跳过 Wayland IME 开关。
-- 若你只关心稳定输入法，建议优先使用 `ASCENDANY_LINUX_IME_MODE=on` 在 Wayland 下验证。
-
-## 桌面端 Web 访问（独立端口，不影响 Electron）
-
-`apps/desktop` 已支持独立 Web 构建配置（与 Electron 配置分离）：
-
-```bash
-# Web 本地开发（默认监听 0.0.0.0:4173）
-pnpm --filter @ascendany/desktop web:dev
-
-# Web 生产构建
-pnpm --filter @ascendany/desktop web:build
-
-# Web 预览服务
-pnpm --filter @ascendany/desktop web:preview
-```
-
-push 后自动部署到服务器可用工作流：`.github/workflows/deploy-desktop-web.yml`。
-
-## 产品官网（apps/site）
-
-产品介绍网页已独立放在 `apps/site/`，与桌面端 `apps/desktop/` 隔离。
-
-```bash
-# 本地开发
-pnpm --filter @ascendany/site dev
-
-# 生产构建
-pnpm --filter @ascendany/site build
-```
-
-### 下载中心 Release 源配置
-
-`apps/site` 下载区会优先读取站点内置的 `release-assets.json`（由 Pages 工作流在构建时根据 GitHub 最新正式版 Release 生成），自动匹配：
-- Windows：`.exe`
-- Linux：`.rpm`（文件名需包含 `x64`、`amd64` 或 `x86_64`）
-- Android：`.apk`（文件名需包含 `android` / `mobile` / `arm64` / `aarch64` / `armeabi`）
-
-当本地清单不可用时，会回退到 GitHub API（`/releases/latest`）。
-
-此外，Pages 工作流会同步生成 `apps/site/public/desktop-updates/`，用于桌面端自动更新（`latest.yml`、`latest-linux.yml`、Windows 安装包与 blockmap、Linux RPM）。
-
-可通过环境变量覆盖默认仓库（默认 `kkkzbh/AscendAny`）：
-
-```bash
-VITE_RELEASE_OWNER=kkkzbh
-VITE_RELEASE_REPO=AscendAny
-```
-
-### GitHub Pages 自动发布
-
-仓库已提供 GitHub Actions 工作流：`.github/workflows/deploy-site-pages.yml`。
-
-- 发布触发：`main` 分支有前端相关变更时自动触发（也支持手动 `workflow_dispatch`）。
-- 发布同步：当 GitHub Release `published` 时也会自动触发一次，刷新下载资源清单。
-- 发布地址：`https://<GitHub 用户名>.github.io/AscendAny/`（仓库级 Pages）。
-- 仓库设置：`Settings -> Pages -> Source` 选择 `GitHub Actions`。
-
-
-## 移动端应用（apps/mobile）
-
-Android APK 现已切换到 `apps/mobile/`（Capacitor 容器 + 桌面端业务界面移动适配），与官网 `apps/site/` 完全隔离。
-
-> 说明：`apps/mobile/android/` 为本地生成目录，默认不纳入版本控制；首次打包会自动执行 `cap add android`。
-
-```bash
-# 本地开发
-pnpm --filter @ascendany/mobile dev
-
-# Android Release APK
-pnpm --filter @ascendany/mobile dist:android:release
-```
-
-## 客户端 Release（Windows EXE + Linux RPM x64 + Android APK ARM）
-
-仓库已提供发布工作流：`.github/workflows/release-desktop.yml`。
-
-- 触发方式：推送标签 `v*`（如 `v0.2.0`）。
-- 版本规则：安装包版本由标签自动解析（去掉前缀 `v`，并补齐为 `major.minor.patch`；例如 `v0.02` 会映射为 `0.2.0`）。
-- 打包 API 地址：工作流会注入 `VITE_API_BASE_URL`（优先读取仓库变量 `DESKTOP_API_BASE_URL`，未配置时回退 `https://ascendany.kkkzbh.cn`）。
-- 产物：
-  - Windows：`exe`（x64）
-  - Linux：`rpm`（x64）
-  - Android：`apk`（ARM：`arm64-v8a` + `armeabi-v7a`）
-- 产物会自动上传到对应的 GitHub Release。
-- 桌面端自动更新必需元数据也会同步上传：
-  - Windows：`latest.yml`、`AscendAny-win-*.exe.blockmap`
-  - Linux：`latest-linux.yml`
-- Android 签名：
-  - 若配置仓库 Secrets（`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`），工作流会使用该 keystore 进行 release 签名。
-  - 若未配置，会回退到 debug keystore 签名（可安装，但不建议作为长期正式分发密钥）。
-
-本地手动打包命令：
-
-```bash
-# Windows EXE x64
-pnpm --filter @ascendany/desktop dist:win:x64
-
-# Linux RPM x64
-pnpm --filter @ascendany/desktop dist:linux:rpm:x64
-
-# Android APK (ARM)
-pnpm --filter @ascendany/mobile dist:android:release
-```
+| 模块 | 说明 |
+| --- | --- |
+| `apps/desktop/` | 学生桌面端与桌面端 Web 构建入口。 |
+| `apps/mobile/` | Android 应用入口。 |
+| `apps/import-console/` | 管理员导入控制台。 |
+| `apps/api/` | FastAPI 后端服务。 |
+| `preprocess/` | 考试数据预处理与增量导入。 |
+| `doc/` | 数据规范、能力模型、平台架构和部署文档。 |
+
+更多开发、部署和数据规范说明见 [文档索引](doc/文档索引.md)。
