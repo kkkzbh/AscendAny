@@ -5,107 +5,107 @@
 </p>
 
 <p align="center">
-  <strong>学生能力分析平台</strong>
+  <strong>Student Ability Analytics Platform</strong>
 </p>
 
 <p align="center">
-  把程序设计考试数据转化为可解释的成长洞察，帮助学生看清近期表现，也帮助教师快速定位教学关注点。
+  Turn programming-exam data into explainable growth insights, helping students understand recent performance and helping teachers quickly identify teaching priorities.
 </p>
 
-![AscendAny 主界面](image/主界面.png)
+![AscendAny main interface](image/主界面.png)
 
-## 项目简介
+## Project Overview
 
-AscendAny 面向程序设计课程、训练营和班级考试场景。平台持续接收考试数据，自动形成学生画像，并通过 AI 助手解释近期表现、能力变化和训练重点。
+AscendAny is designed for programming courses, training camps, and class exams. The platform continuously ingests exam data, automatically builds student profiles, and uses an AI assistant to explain recent performance, ability changes, and training priorities.
 
-它关注三个核心问题：
+It focuses on three core questions:
 
-- 学生最近一场考试表现如何，排名、得分、解题数和历史变化是否清晰。
-- 五个能力维度如何变化，强项和短板能否一眼看出。
-- 下一阶段训练应该优先补什么，建议能否直接用于复盘和学习。
+- How did a student perform in the latest exam, and are the ranking, score, solved count, and historical changes clear?
+- How are the five ability dimensions changing, and can strengths and weaknesses be seen at a glance?
+- What should the student practice next, and are the suggestions directly usable for review and study?
 
-## 核心能力
+## Core Capabilities
 
-### 增量考试导入
+### Incremental Exam Import
 
-每个考试目录都可以作为一次独立考试导入。平台会识别新增考试和新增快照，保留历史数据，并避免重复导入同一批记录。
+Each exam directory can be imported as an independent exam. The platform detects new exams and new snapshots, preserves historical data, and avoids re-importing the same records.
 
-### 五维能力画像
+### Five-Dimensional Ability Profile
 
-平台将考试表现拆解为五个维度：
+The platform decomposes exam performance into five dimensions:
 
-| 维度 | 含义 |
+| Dimension | Meaning |
 | --- | --- |
-| 知识 | 反映知识点掌握程度，结合通过率和得分表现。 |
-| 准确 | 关注 AC 前提交次数，衡量解题稳定性和试错成本。 |
-| 质量 | 结合运行时表现等数据，描述解法质量。 |
-| 灵活 | 观察切题节奏和卡题时长，反映临场策略调整能力。 |
-| 熟练 | 关注解题速度和完成节奏，呈现训练熟练度。 |
+| Knowledge | Reflects mastery of knowledge points, combining pass rate and score performance. |
+| Accuracy | Focuses on submissions before AC, measuring solving stability and trial-and-error cost. |
+| Quality | Combines runtime and related data to describe solution quality. |
+| Flexibility | Observes problem-switching rhythm and stuck time, reflecting in-contest strategy adjustment. |
+| Proficiency | Focuses on solving speed and completion rhythm, showing training fluency. |
 
-### Rating 追踪
+### Rating Tracking
 
-每场考试都会更新综合 rating，并记录本场变化。学生可以看到自己的成长趋势，教师也可以据此观察班级整体变化。
+Each exam updates the overall rating and records the change for that exam. Students can see their growth trend, and teachers can use it to observe class-wide changes.
 
-### AI 智能解读
+### AI-Powered Interpretation
 
-AI 助手可以结合考试记录、能力指标和 rating 历史，生成近期表现分析、短板解释、题目推荐和训练建议。学生可以继续追问某次考试、某个指标或下一步学习计划。
+The AI assistant can combine exam records, ability indicators, and rating history to generate recent performance analysis, weakness explanations, problem recommendations, and training suggestions. Students can continue asking about a specific exam, a specific metric, or the next study plan.
 
-## 界面预览
+## Interface Preview
 
-### 登录与账号绑定
+### Login and Account Binding
 
-注册后绑定学号和平台昵称，系统会将账号与考试数据关联，进入个人学习工作台。
+After registration, students bind their student ID and platform nickname. The system associates the account with exam data and opens the personal learning workspace.
 
-![登录界面](image/登录界面.png)
+![Login screen](image/登录界面.png)
 
-### 学习工作台
+### Learning Workspace
 
-左侧保留历史对话和入口，中间展示 AI 分析内容、题目推荐与学习路径提醒，右侧集中呈现能力、历史、地图和笔记等学习面板。
+The left side keeps history conversations and entry points, the center displays AI analysis, problem recommendations, and learning-path reminders, and the right side gathers ability, history, map, and note panels.
 
-![主界面总览](image/主界面.png)
+![Main interface overview](image/主界面.png)
 
-### 能力面板
+### Ability Panel
 
-能力面板展示综合 rating、五维雷达图和各项能力分。学生可以快速判断当前强项、短板和最近一次考试带来的变化。
+The ability panel shows the overall rating, a five-dimensional radar chart, and individual ability scores. Students can quickly identify current strengths, weaknesses, and changes caused by the latest exam.
 
-![能力面板](image/能力面板.png)
+![Ability panel](image/能力面板.png)
 
-### AI 角色切换
+### AI Role Switching
 
-平台支持切换 AI 助教角色，也支持本地自定义角色，用不同语气和分析风格陪伴复盘。
+The platform supports switching AI teaching-assistant roles and also supports locally customized roles, using different tones and analysis styles to accompany review.
 
-![角色切换](image/角色切换.png)
+![Role switching](image/角色切换.png)
 
-## 从考试数据到学习建议
+## From Exam Data to Study Suggestions
 
-1. 放入新的考试数据。
-2. 平台扫描新增考试和快照。
-3. 数据标准化后进入学生能力计算流程。
-4. 系统生成五维能力分、rating 变化和历史趋势。
-5. AI 助手基于最新数据给出可执行的学习建议。
+1. Put in new exam data.
+2. The platform scans new exams and snapshots.
+3. Standardized data enters the student ability calculation pipeline.
+4. The system generates five-dimensional ability scores, rating changes, and historical trends.
+5. The AI assistant provides actionable study suggestions based on the latest data.
 
-## 适合谁使用
+## Who Is It For
 
-- 学生：查看近期考试表现、能力短板和下一步训练重点。
-- 教师与助教：观察班级学习状态，定位共性问题和个体差异。
-- 管理者：维护考试数据导入流程，跟踪导入进度和数据质量。
+- Students: view recent exam performance, ability weaknesses, and the next training focus.
+- Teachers and teaching assistants: observe class learning status and locate common issues and individual differences.
+- Administrators: maintain the exam data import pipeline and track import progress and data quality.
 
-## 平台组成
+## Platform Components
 
-- 学生端：桌面端、Web 访问和 Android 应用。
-- 管理端：导入控制台，用于发起数据导入和查看任务进度。
-- 后端服务：提供认证、学生画像、考试分析、AI 对话和导入任务接口。
-- 数据预处理：负责考试扫描、解析、导入和能力指标计算。
+- Student side: desktop client, web access, and Android app.
+- Admin side: import console for starting data imports and viewing task progress.
+- Backend service: provides authentication, student profiles, exam analysis, AI chat, and import-task APIs.
+- Data preprocessing: scans, parses, imports, and computes ability indicators from exam data.
 
-## 项目入口
+## Project Entry Points
 
-| 模块 | 说明 |
+| Module | Description |
 | --- | --- |
-| `apps/desktop/` | 学生桌面端与桌面端 Web 构建入口。 |
-| `apps/mobile/` | Android 应用入口。 |
-| `apps/import-console/` | 管理员导入控制台。 |
-| `apps/api/` | FastAPI 后端服务。 |
-| `preprocess/` | 考试数据预处理与增量导入。 |
-| `doc/` | 数据规范、能力模型、平台架构和部署文档。 |
+| `apps/desktop/` | Student desktop client and desktop web build entry point. |
+| `apps/mobile/` | Android app entry point. |
+| `apps/import-console/` | Administrator import console. |
+| `apps/api/` | FastAPI backend service. |
+| `preprocess/` | Exam data preprocessing and incremental import. |
+| `doc/` | Data specifications, ability model, platform architecture, and deployment documentation. |
 
-更多开发、部署和数据规范说明见 [文档索引](doc/文档索引.md)。
+For more development, deployment, and data-specification notes, see the [documentation index](doc/文档索引.md).
