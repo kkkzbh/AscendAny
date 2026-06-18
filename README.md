@@ -1,5 +1,7 @@
 # AscendAny
 
+English | [简体中文](README.zh-CN.md)
+
 <p align="center">
   <img src="image/LOGO_SHRIND.png" alt="AscendAny Logo" width="96" />
 </p>
