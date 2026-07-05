@@ -358,6 +358,61 @@ def _extract_external_problem_tags(
     return result
 
 
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = clean_text(value)
+    if not text:
+        return None
+    lowered = text.casefold()
+    if lowered in {"true", "1", "yes", "y", "passed", "通过", "accepted"}:
+        return True
+    if lowered in {"false", "0", "no", "n", "未通过", "not passed", "not_accepted"}:
+        return False
+    return None
+
+
+def _normalize_pintia_problem_stats(
+    problem_code: str,
+    stats: Any,
+    max_score: float | None,
+) -> dict[str, Any]:
+    if not isinstance(stats, dict):
+        return {"raw": stats}
+
+    normalized = dict(stats)
+    score = parse_optional_float(normalized.get("score"))
+    solved = _coerce_bool(normalized.get("passed"))
+    if solved is None:
+        if score is not None and max_score is not None and max_score > 0:
+            solved = score >= max_score
+        elif score is not None:
+            solved = score > 0
+    if solved is not None:
+        normalized["solved"] = solved
+
+    attempts = parse_optional_int(normalized.get("validSubmitCount"))
+    if attempts is None:
+        attempts = parse_optional_int(normalized.get("attempts"))
+
+    if attempts is not None:
+        normalized["attempts"] = attempts
+        if normalized.get("wrong_before_ac") is None:
+            solved_flag = solved or bool(solved is None and score and score > 0)
+            if solved_flag:
+                normalized["wrong_before_ac"] = max(0, attempts - 1)
+            else:
+                normalized["wrong_before_ac"] = attempts
+
+    raw_value = normalized.get("raw")
+    if isinstance(raw_value, str):
+        normalized["raw"] = raw_value.strip()
+
+    return normalized
+
+
 def _parse_participants(
     participants_raw: list[Any],
     rankings_raw: list[Any],
@@ -399,14 +454,17 @@ def _parse_participants(
         seen_identity.add(identity_key)
 
         stats_raw = ranking.get("problemScoreByProblemSetProblemId")
-        problem_stats = stats_raw if isinstance(stats_raw, dict) else {}
+        raw_problem_stats = stats_raw if isinstance(stats_raw, dict) else {}
+        problem_stats: dict[str, dict[str, Any]] = {}
         solved_count = 0
-        for problem_code, stats in problem_stats.items():
-            if not isinstance(stats, dict):
-                continue
-            score = parse_optional_float(stats.get("score")) or 0.0
-            max_score = problem_points.get(str(problem_code))
-            if max_score is not None and max_score > 0 and score >= max_score:
+        for problem_code, raw_stats in raw_problem_stats.items():
+            normalized_stats = _normalize_pintia_problem_stats(
+                problem_code=str(problem_code),
+                stats=raw_stats,
+                max_score=problem_points.get(str(problem_code)),
+            )
+            problem_stats[str(problem_code)] = normalized_stats
+            if normalized_stats.get("solved"):
                 solved_count += 1
 
         rows.append(
@@ -421,8 +479,7 @@ def _parse_participants(
                 solved_count=solved_count,
                 absent=False,
                 problem_stats={
-                    str(problem_code): dict(stats) if isinstance(stats, dict) else {"raw": stats}
-                    for problem_code, stats in problem_stats.items()
+                    str(problem_code): dict(stats) for problem_code, stats in problem_stats.items()
                 },
                 raw={
                     "source_platform": "pintia",

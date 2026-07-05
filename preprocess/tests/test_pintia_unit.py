@@ -145,6 +145,25 @@ def test_parse_pintia_unit_maps_stable_problem_and_submission_identities(tmp_pat
     assert bundle.submissions[0].verdict == "部分正确"
     assert bundle.submission_codes[0].external_submission_id == "sub-1"
     assert bundle.submission_codes[0].code_content.endswith("\n")
+    assert bundle.participants[0].problem_stats["psp-1"]["solved"] is True
+    assert bundle.participants[0].problem_stats["psp-1"]["attempts"] == 1
+    assert bundle.participants[0].problem_stats["psp-1"]["wrong_before_ac"] == 0
+
+
+def test_parse_pintia_unit_uses_passed_flag_when_score_is_incomplete(tmp_path: Path) -> None:
+    payload = copy.deepcopy(_unit_payload())
+    payload["rankings"][0]["problemScoreByProblemSetProblemId"] = {  # type: ignore[index]
+        "psp-1": {"score": 9.0, "validSubmitCount": 3, "passed": False, "raw": "9.0/10.0"}
+    }
+    _write_payload(tmp_path / "unit.json", payload)
+    unit = discover_exam_units(tmp_path)[0]
+
+    bundle = parse_exam_bundle(unit, encodings=["utf-8"], timezone_name="Asia/Shanghai")
+
+    assert bundle.participants[0].problem_stats["psp-1"]["solved"] is False
+    assert bundle.participants[0].problem_stats["psp-1"]["attempts"] == 3
+    assert bundle.participants[0].problem_stats["psp-1"]["wrong_before_ac"] == 3
+    assert bundle.participants[0].solved_count == 0
 
 
 def test_parse_pintia_unit_rejects_unknown_submission_problem(tmp_path: Path) -> None:
