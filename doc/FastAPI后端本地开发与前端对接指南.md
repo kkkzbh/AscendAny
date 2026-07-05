@@ -1,6 +1,6 @@
 # FastAPI 后端本地开发与前端对接指南（v0）
 
-> 目标：在本地先跑通一个可联调的 FastAPI 服务，替换桌面端 mock 数据，并与现有 PostgreSQL（经 PgBouncer 6432）对接。
+> 目标：本电脑只做开发与测试；需要后端联调时临时启动 FastAPI，并通过 SSH tunnel 使用 km6 上的 PostgreSQL + PgBouncer `6432`。生产部署入口见 `deploy/README.md`。
 
 ## 1. 前端当前对后端的真实需求
 
@@ -125,26 +125,24 @@ DDL 参考：`db/schema/*.sql`
 - `rating.current`：取 `student_current_metrics.rating`。
 - `rating.history`：按考试时间倒序（建议用 `exams.starts_at`，为空时回退 `rating_history.created_at`）。
 
-## 4. 本地启动建议（先跑起来）
+## 4. 本地启动建议（临时联调）
 
-仓库目前尚无 `apps/api/` 实现，可按下面步骤启动：
+本地不维护 PostgreSQL 实例，也不常驻 API。需要后端联调时：
 
-1. 创建目录：`apps/api/`
-2. 使用仓库 `.venv`（`uv` 管理，不用系统 Python）
-3. 安装基础依赖（FastAPI/Uvicorn/数据库驱动/配置）
-4. 本地启动 `127.0.0.1:8000`
-
-示例命令（建议）：
+1. 建立到 km6 PgBouncer 的 SSH local forwarding，详见 `deploy/README.md`。
+2. 使用仓库 `.venv`（`uv` 管理，不用系统 Python）。
+3. 安装后端开发依赖。
+4. 临时启动 `127.0.0.1:8000`。
 
 ```bash
-uv venv .venv
-uv pip install --python .venv/bin/python fastapi uvicorn[standard] pydantic-settings sqlalchemy psycopg[binary]
+uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt
 uv run --python .venv/bin/python uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 数据库连接约束：
 - 默认走 PgBouncer：`127.0.0.1:6432`
-- 不要把密码写进仓库；优先 `~/.pgpass`（见 `README.md`）
+- 本地 `127.0.0.1:6432` 必须指向 km6 PgBouncer。
+- 不要把密码写进仓库；优先 `~/.pgpass` 或环境变量。
 
 ## 5. 前后端联调落地顺序（建议）
 
@@ -157,4 +155,4 @@ uv run --python .venv/bin/python uvicorn apps.api.main:app --host 127.0.0.1 --po
 - 桌面端不依赖 mock 也能渲染右侧指标与 rating。
 - `Rating 历史` 展开后仅历史列表区域滚动。
 - 学号/PTA 昵称任一可用于定位学生（有明确 400/404 返回）。
-- API 在本地重启后可稳定连接 PgBouncer 6432。
+- API 临时启动后可稳定连接 km6 数据库。

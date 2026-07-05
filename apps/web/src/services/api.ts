@@ -1,6 +1,6 @@
 /**
  * Ascend API 服务层
- * 用于与 Ascend Django 后端通信（Bearer token）。
+ * 用于与 AscendAny API通信（Bearer token）。
  */
 
 import { apiFetch } from '../app/api'

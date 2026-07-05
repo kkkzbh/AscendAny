@@ -12,7 +12,7 @@
 - `practice/` 的**每一个单位数据 = 一场考试**（目录级别的一个子目录）。
 - 输入数据是**增量**的；旧数据需要**永久保留**。
 - 预处理/导入必须**可重复运行**：重复执行不会重复导入旧数据，只处理新增考试（或新增“快照”）。
-- 数据库为 PostgreSQL，应用默认通过 **6432 的 PgBouncer** 访问；连接参数必须可配置（不要写死）。
+- 数据库为 PostgreSQL，只部署在 km6；应用默认通过 **6432 的 PgBouncer** 访问；连接参数必须可配置（不要写死）。
 
 ## 数据源实践规范（必须遵守）
 - `practice` 根目录必须来自配置（如 `PRACTICE_DATA_ROOT`），不要依赖机器固定路径。
@@ -36,7 +36,7 @@
 ## 配置与安全约束
 - 预处理默认配置：`preprocess/config/default.yaml`，可被 `--config`、CLI 参数和环境变量覆盖。
 - API 默认配置：`apps/api/config/default.yaml`，可由 `ASCENDANY_API_CONFIG` 覆盖。
-- 数据库密码优先走 `~/.pgpass` 或环境变量（如 `ASCENDANY_DB_PASSWORD`），不要提交明文凭据。
+- 数据库密码只放在 km6 的 `~/.pgpass` 或服务器环境变量（如 `ASCENDANY_DB_PASSWORD`），不要提交明文凭据。
 - 模型 API Key 必须使用环境变量，不得写入仓库文件。
 
 ## 工程与测试
@@ -46,4 +46,4 @@
 - 前端使用 TypeScript 严格模式；关键交互（分栏拖拽、上下文清空、自动 compact）应有单测或 e2e 覆盖。
 
 ##
-使用ssh ascend连接服务器
+使用 `ssh km6` 连接 km6 服务器。生产部署入口为 `deploy/README.md`。

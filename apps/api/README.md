@@ -8,6 +8,8 @@ uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt
 
 ## Run
 
+生产环境只在 km6 常驻运行 API，部署操作见 `deploy/README.md`。本地只在开发调试时临时启动 API。
+
 ```bash
 uv run --python .venv/bin/python uvicorn apps.api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
@@ -16,6 +18,7 @@ uv run --python .venv/bin/python uvicorn apps.api.main:app --host 127.0.0.1 --po
 
 - Default config file: `apps/api/config/default.yaml`
 - Optional override via env: `ASCENDANY_API_CONFIG=/path/to/config.yaml`
+- Database defaults target PgBouncer 6432; the development machine must connect to km6.
 - The active model API key is loaded from the environment variable named by `llm.providers.<id>.api_key_env`.
 
 ### Feedback email

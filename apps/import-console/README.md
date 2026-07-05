@@ -12,38 +12,36 @@
 
 ---
 
-## 本地开发（连接云服务器）
+## 本地开发
 
 ### 前置条件
 
 - Node.js 20+, pnpm 9+
-- 云端 FastAPI 已部署在 `https://ascendany.kkkzbh.cn`
+- km6 FastAPI 已部署在 `https://ascendany.kkkzbh.cn`
 
 ### 启动方式
 
-**方式 A — 连接本地 API（Vite 自动代理）**
-
-```bash
-# 1. 先启动本地 FastAPI（VS Code "AscendAny API" 配置，或手动）
-# 2. 启动前端
-pnpm --filter @ascendany/import-console dev
-```
-
-浏览器打开 **http://localhost:6748**。Vite dev server 自动将 `/api` 代理到 `http://127.0.0.1:8000`。
-
-**方式 B — 直连云服务器 API**
+默认直连 km6 API：
 
 ```bash
 VITE_API_BASE_URL=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/import-console dev
 ```
 
-浏览器打开 **http://localhost:6748**。前端直接请求云端 API（后端 CORS 已配置 `allow_origins: ["*"]`）。
+浏览器打开 **http://localhost:6748**。本地只运行前端开发服务器，API 与数据库都使用 km6。
+
+需要调试本地临时 API 时，先按 `deploy/README.md` 建立 km6 数据库连接，再临时启动 FastAPI。随后运行：
+
+```bash
+pnpm --filter @ascendany/import-console dev
+```
+
+此时 Vite dev server 将 `/api` 代理到本地临时 API。
 
 ### 环境变量
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `VITE_API_BASE_URL` | 后端 API 地址（不含尾 `/`） | `""` (同源，走 Vite proxy) |
+| `VITE_API_BASE_URL` | 后端 API 地址（不含尾 `/`） | 本地开发显式设为 `https://ascendany.kkkzbh.cn`；为空仅用于临时本地 API 联调 |
 | `VITE_BASE_PATH` | 部署子路径 | `/` |
 | `VITE_TOKEN_HANDOFF` | `"true"` → 允许从 Action 传入登录 token（仅本地开发建议开启） | dev server 默认可用，生产构建默认关闭 |
 | `VITE_HASH_ROUTER` | `"true"` → 启用 HashRouter（静态托管场景） | 不设置 → BrowserRouter |
@@ -87,7 +85,7 @@ ASCENDANY_ADMIN_PASSWORD=你的本地管理员密码
    WHERE username = '你的用户名';
    ```
 
-3. **部署后端新代码**到服务器（`git pull` + `systemctl restart ascendany-api`），使 import 路由生效。
+3. 按 `deploy/README.md` 更新 km6 上的 `Release` 实例并重启 `ascendany-api`，使 import 路由生效。
 
 4. 打开 `http://localhost:6748`，用管理员账号登录。
 

@@ -1,6 +1,6 @@
 # Ascend API 集成使用文档
 
-本文档介绍 AscendWeb 与 Ascend Django 后端 API 的集成方案，包括配置、使用方法和视觉效果说明。
+本文档介绍 AscendWeb 与 AscendAny API 的集成方案，包括配置、使用方法和视觉效果说明。当前生产 API 只部署在 km6，默认通过 `https://ascendany.kkkzbh.cn` 访问。
 
 ---
 
@@ -31,7 +31,7 @@
 
 ```
 ┌─────────────────┐     HTTP/JSON      ┌──────────────────┐
-│  Ascend Django  │◄──────────────────►│    AscendWeb     │
+│  AscendAny API  │◄──────────────────►│    AscendWeb     │
 │     API         │                     │   React + D3     │
 └─────────────────┘                     └──────────────────┘
        │                                        │
@@ -48,33 +48,20 @@
 
 ## 快速开始
 
-### 1. 启动（推荐）
-
-在 `code/django_project/` 下执行：
+### 1. 默认直连 km6 API
 
 ```bash
-python start.py
+VITE_BACKEND_ORIGIN=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/web dev
 ```
-
-Windows 也可以继续用 `start.bat`（旧版，多窗口）。
 
 默认端口：
 
-- 后端（Django API）：`http://127.0.0.1:8000`
+- 生产 API：`https://ascendany.kkkzbh.cn`
 - 前端（Vite）：`http://127.0.0.1:5175/`
 
-### 2. 手动启动（可选）
+### 2. 临时本地 API 联调
 
-```bat
-cd code/django_project
-python manage.py runserver 127.0.0.1:8000
-
-cd code/django_project/AscendWeb
-npm install
-npm run dev
-```
-
-说明：Vite dev server 会代理 `/api` 与 `/ws` 到后端（见 `AscendWeb/vite.config.ts`）。
+只在调试后端改动时使用本地临时 API。先按 `deploy/README.md` 建立到 km6 PgBouncer 的 SSH local forwarding，再临时启动 FastAPI；此时可以让 Vite dev server 代理 `/api` 与 `/ws` 到 `http://127.0.0.1:8000`。
 
 ---
 
@@ -84,7 +71,7 @@ npm run dev
 
 | 变量名 | 默认值 | 描述 |
 |--------|--------|------|
-| `VITE_BACKEND_ORIGIN` | `` | Django 后端 Origin（为空则使用相对路径；本地开发通常走 Vite proxy） |
+| `VITE_BACKEND_ORIGIN` | `https://ascendany.kkkzbh.cn` | AscendAny API Origin；为空时使用相对路径，仅适合临时本地 API 联调 |
 | `VITE_APP_BASENAME` | `/` | SPA Router basename |
 
 ### student 标识
@@ -315,15 +302,9 @@ API 返回的知识点名称与前端标签ID的对应关系：
 
 补充：主页的 `/api/metrics/student` 默认开启 `use_cache=true`；当前后端已在 ingest 时对受影响学生做版本化失效，正常情况下刷新页面即可看到更新。如需强制跳过缓存，可传 `use_cache=false`。
 
-**Django CORS 配置**：
+**CORS 配置**：
 
-本项目通过环境变量 `CORS_ALLOWED_ORIGINS`（逗号分隔）控制允许的前端 Origin，例如：
-
-```bash
-CORS_ALLOWED_ORIGINS=http://localhost:5175,http://127.0.0.1:5175
-```
-
-提示：`start.py`（或 `start.bat`）会自动设置该变量；如你修改了前端端口，需要同步更新。
+生产 API 的 CORS 配置在 km6 后端环境中维护。修改前端端口或域名时，需要同步更新 km6 API 配置并按 `deploy/README.md` 重新部署。
 
 ### 降级模式
 

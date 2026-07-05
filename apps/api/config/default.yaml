@@ -16,7 +16,7 @@ dashboard:
   default_metric: 0
   rating_history_limit: 50
 llm:
-  active_provider: mimo
+  active_provider: deepseek
   providers:
     siliconflow:
       adapter: openai_compatible
