@@ -1,0 +1,66 @@
+[Unit]
+Description=AscendAny sandboxed LSP session %i
+Documentation=file:/opt/ascendany/v2/README.md file:/opt/ascendany/v2/LSP_CONTROL_CONTRACT.md
+After=ascendanyd.service
+AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-lsp
+AssertFileIsExecutable=/usr/bin/clangd
+AssertPathExists=/run/ascendany-lsp-control/control.sock
+AssertPathExists=/var/lib/ascendany-lsp-root
+
+[Service]
+Type=exec
+User=ascendany-lsp
+Group=ascendany-lsp
+SupplementaryGroups=ascendany-lsp-control
+RootDirectory=/var/lib/ascendany-lsp-root
+WorkingDirectory=/tmp
+UMask=0077
+
+# One canonical UUID instance owns one bounded workspace and one fixed clangd.
+# The worker binds the non-root socket inode owner to ascendanyd's SO_PEERCRED.
+ExecStart=/opt/ascendany/v2/bin/ascendany-lsp serve --session-id %i --control-socket /run/ascendany-lsp-control/control.sock --workspace /tmp/ascendany-lsp-sessions/%i
+TimeoutStartSec=30s
+TimeoutStopSec=15s
+KillMode=mixed
+OOMPolicy=kill
+Restart=no
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateNetwork=yes
+# Every template instance receives a distinct mount and PID namespace. The
+# shared OS UID cannot observe another session's workspace or clangd PID.
+PrivateTmp=disconnected
+PrivatePIDs=yes
+PrivateDevices=yes
+MountAPIVFS=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+DevicePolicy=closed
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+BindReadOnlyPaths=/usr
+BindReadOnlyPaths=/opt/ascendany/v2/bin/ascendany-lsp:/opt/ascendany/v2/bin/ascendany-lsp
+BindReadOnlyPaths=/run/ascendany-lsp-control/control.sock:/run/ascendany-lsp-control/control.sock
+TasksMax=128
+MemoryMax=1G
+LimitFSIZE=32M
+CPUQuota=100%

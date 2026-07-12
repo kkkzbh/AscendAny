@@ -1,0 +1,20 @@
+{
+  "orphanedFiles": [
+    "550e8400-e29b-41d4-a716-446655440000.json",
+    "123e4567-e89b-42d3-a456-426614174000.json"
+  ],
+  "unexpectedEntries": [
+    {
+      "name": "README.txt",
+      "kind": "file"
+    },
+    {
+      "name": "550E8400-E29B-41D4-A716-446655440000.json",
+      "kind": "file"
+    },
+    {
+      "name": "550e8400-e29b-41d4-a716-446655440000.json",
+      "kind": "directory"
+    }
+  ]
+}

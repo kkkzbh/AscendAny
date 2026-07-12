@@ -10,104 +10,129 @@ English | [简体中文](README.zh-CN.md)
   <strong>Student Ability Analytics Platform</strong>
 </p>
 
-<p align="center">
-  Turn programming-exam data into explainable growth insights, helping students understand recent performance and helping teachers quickly identify teaching priorities.
-</p>
+AscendAny turns complete Pintia programming problem-set snapshots into traceable ability profiles, ratings, achievements, leaderboards, exam analyses, and personalized learning recommendations. Web, Desktop, and Mobile share the core student capabilities for accounts, profiles, exams, AI chat, and recommendations, while each client provides platform-specific interactions. Administrators use a separate Import Console for imports, accounts, configuration, audits, and model-training jobs.
 
-![AscendAny main interface](image/主界面.png)
+## v2 architecture
 
-## Project Overview
-
-AscendAny is designed for programming courses, training camps, and class exams. The platform continuously ingests exam data, automatically builds student profiles, and uses an AI assistant to explain recent performance, ability changes, and training priorities.
-
-It focuses on three core questions:
-
-- How did a student perform in the latest exam, and are the ranking, score, solved count, and historical changes clear?
-- How are the five ability dimensions changing, and can strengths and weaknesses be seen at a glance?
-- What should the student practice next, and are the suggestions directly usable for review and study?
-
-## Core Capabilities
-
-### Incremental Exam Import
-
-Each exam directory can be imported as an independent exam. The platform detects new exams and new snapshots, preserves historical data, and avoids re-importing the same records.
-
-### Five-Dimensional Ability Profile
-
-The platform decomposes exam performance into five dimensions:
-
-| Dimension | Meaning |
+| Scope | Sole owner |
 | --- | --- |
-| Knowledge | Reflects mastery of knowledge points, combining pass rate and score performance. |
-| Accuracy | Focuses on submissions before AC, measuring solving stability and trial-and-error cost. |
-| Quality | Combines runtime and related data to describe solution quality. |
-| Flexibility | Observes problem-switching rhythm and stuck time, reflecting in-contest strategy adjustment. |
-| Proficiency | Focuses on solving speed and completion rhythm, showing training fluency. |
+| Public HTTP, authentication, business transactions, durable jobs, SSE/WebSocket | Go `ascendanyd` |
+| PostgreSQL migrations | Go `ascendany-migrate` |
+| Backup, verification, and restore rehearsal | Go `ascendany-backup` |
+| Isolated OJ and C++ LSP | Go `ascendany-judge`, `ascendany-lsp` |
+| Web, Desktop, Mobile, Import Console, product site | TypeScript |
+| Pintia data capture | TypeScript Manifest V3 browser extension |
+| Recommendation training orchestration | Go `ascendany-trainer-agent` |
+| Recommendation model implementation | Isolated Python trainer |
 
-### Rating Tracking
+The online runtime has no Python dependency. The Python trainer only reads an immutable bundle produced by Go and writes one bounded output bundle from a child process with no network or database credential.
 
-Each exam updates the overall rating and records the change for that exam. Students can see their growth trend, and teachers can use it to observe class-wide changes.
+## Data boundary
 
-### AI-Powered Interpretation
+- v2 starts from an empty PostgreSQL database and does not migrate legacy accounts or business data.
+- `ascendany.pintia.snapshot.v2` is the only accepted exam format.
+- The browser extension reads official Pintia page APIs from the user's current authenticated problem-set tab and exports one complete snapshot JSON document.
+- Import Console streams the snapshot to Go; the backend performs SHA-256 verification, strict schema and semantic validation, idempotent persistence, analytics generation, and ordered SSE delivery.
+- Every snapshot, analytics generation, recommendation model, and configuration version retains immutable provenance.
 
-The AI assistant can combine exam records, ability indicators, and rating history to generate recent performance analysis, weakness explanations, problem recommendations, and training suggestions. Students can continue asking about a specific exam, a specific metric, or the next study plan.
+## Product capabilities
 
-## Interface Preview
+- Enrollment claim, login, refresh, logout, profile, session revocation, and role authorization.
+- Five ability dimensions, rating history, achievements, leaderboard, exam catalog, and exam analysis.
+- Durable AI chat, automatic analysis, audited note tools, and resumable event streams.
+- Fresh, stale, and unavailable recommendation states with learning paths and knowledge detail.
+- OJ run/submit and clangd LSP, with execution workers holding no database credential.
+- Pintia v2 import, job history, failure diagnostics, and reconnect-safe ordered events.
+- Account, student, audit, prompt/model configuration, model-connection probe, and training-job administration.
 
-### Login and Account Binding
+## Repository entry points
 
-After registration, students bind their student ID and platform nickname. The system associates the account with exam data and opens the personal learning workspace.
-
-![Login screen](image/登录界面.png)
-
-### Learning Workspace
-
-The left side keeps history conversations and entry points, the center displays AI analysis, problem recommendations, and learning-path reminders, and the right side gathers ability, history, map, and note panels.
-
-![Main interface overview](image/主界面.png)
-
-### Ability Panel
-
-The ability panel shows the overall rating, a five-dimensional radar chart, and individual ability scores. Students can quickly identify current strengths, weaknesses, and changes caused by the latest exam.
-
-![Ability panel](image/能力面板.png)
-
-### AI Role Switching
-
-The platform supports switching AI teaching-assistant roles and also supports locally customized roles, using different tones and analysis styles to accompany review.
-
-![Role switching](image/角色切换.png)
-
-## From Exam Data to Study Suggestions
-
-1. Put in new exam data.
-2. The platform scans new exams and snapshots.
-3. Standardized data enters the student ability calculation pipeline.
-4. The system generates five-dimensional ability scores, rating changes, and historical trends.
-5. The AI assistant provides actionable study suggestions based on the latest data.
-
-## Who Is It For
-
-- Students: view recent exam performance, ability weaknesses, and the next training focus.
-- Teachers and teaching assistants: observe class learning status and locate common issues and individual differences.
-- Administrators: maintain the exam data import pipeline and track import progress and data quality.
-
-## Platform Components
-
-- Student side: desktop client, web access, and Android app.
-- Admin side: import console for starting data imports and viewing task progress.
-- Backend service: provides authentication, student profiles, exam analysis, AI chat, and import-task APIs.
-- Data preprocessing: scans, parses, imports, and computes ability indicators from exam data.
-
-## Project Entry Points
-
-| Module | Description |
+| Path | Contents |
 | --- | --- |
-| `apps/desktop/` | Student desktop client and desktop web build entry point. |
-| `apps/mobile/` | Android app entry point. |
-| `apps/import-console/` | Administrator import console. |
-| `apps/api/` | FastAPI backend service. |
-| `preprocess/` | Exam data preprocessing and incremental import. |
-| `doc/` | Data specifications, ability model, platform architecture, and deployment documentation. |
+| `backend/` | Go services, workers, CLIs, migrations, and domain tests. |
+| `apps/web/` | Student Web application. |
+| `apps/desktop/` | Electron student application. |
+| `apps/mobile/` | Capacitor mobile application. |
+| `apps/import-console/` | Administrator console. |
+| `apps/site/` | Product website. |
+| `packages/sdk/` | The only TypeScript SDK, generated from the final OpenAPI contract. |
+| `tools/pintia-exporter-extension/` | Pintia snapshot v2 Chrome extension. |
+| `trainers/recommendation/` | The isolated trainer and the only permitted Python runtime. |
+| `contracts/` | OpenAPI and Pintia snapshot v2 contracts and fixtures. |
+| `deploy/v2/` | systemd, privilege, configuration, and production acceptance contracts. |
+| `doc/重写v2架构与验收.md` | v2 ownership, data flow, cleanup scope, and acceptance gates. |
 
-For more development, deployment, and data-specification notes, see the [documentation index](doc/文档索引.md).
+## Local verification
+
+The repository expects Go 1.26, Node.js 22, pnpm 9.15.4, and PostgreSQL 17 for integration tests.
+
+```bash
+cd backend
+go test ./...
+go vet ./...
+
+cd ..
+pnpm install --frozen-lockfile
+pnpm --filter @ascendany/sdk check
+pnpm --filter @ascendany/pintia-exporter check
+pnpm --filter @ascendany/web check
+pnpm --filter @ascendany/mobile check
+pnpm --filter @ascendany/import-console check
+pnpm --filter @ascendany/desktop test
+pnpm --filter @ascendany/desktop build
+
+.venv/bin/python -m unittest discover -s trainers/recommendation/tests -v
+```
+
+### Rootless PostgreSQL rehearsal
+
+The disposable integration environment uses the digest-pinned PostgreSQL 17
+image and the release-locked native Fedora 44 x86_64 PgBouncer 1.25.2 RPM.
+PgBouncer derives its temporary configuration and HBA rules from the production
+release, receives only SCRAM verifiers in the private runtime tree, and binds to
+loopback. Pull the PostgreSQL image explicitly if it is absent; the rehearsal
+never pulls or starts a PgBouncer image.
+After each disposable role-password reset, the integration runner publishes the
+exact admin/legacy/runtime SCRAM verifier set with same-directory fsync and atomic
+rename, then issues explicit PgBouncer `RELOAD` and database `RECONNECT` commands.
+
+```bash
+tools/run-v2-postgres-podman-rehearsal.sh \
+  --confirm-reset drop-disposable-ascendany-v2
+```
+
+The default input is the sanitized complete Pintia fixture. Exercise a real
+export with an absolute path and select different free loopback ports when the
+defaults (`55432` and `56432`) are occupied:
+
+```bash
+tools/run-v2-postgres-podman-rehearsal.sh \
+  --confirm-reset drop-disposable-ascendany-v2 \
+  --snapshot /absolute/path/to/ascendany-pintia-snapshot.json \
+  --direct-port 55433 \
+  --pgbouncer-port 56433
+```
+
+The confirmation authorizes resets only inside the newly created disposable
+cluster. The exit trap terminates the native PgBouncer child, removes exactly
+the labeled rehearsal pod and its temporary credential directory, then verifies
+that pre-existing Podman container and pod identities are unchanged.
+
+The independent backup/restore rehearsal defaults to the same committed
+sanitized snapshot, validates it through the production Go Pintia validator,
+and exercises the real create, verify, restore-verify, ownership, ACL, and
+cleanup paths:
+
+```bash
+tools/run-v2-backup-restore-podman-rehearsal.sh \
+  --confirm-reset drop-disposable-ascendany-v2-backup-restore
+```
+
+Pass `--snapshot /absolute/canonical/snapshot.json` to rehearse a protected
+real export without changing the script or repository.
+
+The release-to-restore acceptance path, its guarded local invocation, and the
+separate fail-closed real Judge/LSP sandbox gate are documented in
+[AscendAny v2 full E2E](doc/v2-full-e2e.md).
+
+See [deploy/v2/README.md](deploy/v2/README.md) for the production structure, credential boundary, and install/migrate/bootstrap/import/backup/restore sequence. The complete acceptance definition is [v2 rewrite architecture and acceptance](doc/重写v2架构与验收.md).

@@ -1,8 +1,23 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, type Rectangle } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  session,
+  shell,
+  type Rectangle,
+} from "electron";
 import fs from "node:fs";
 import path from "path";
+import {
+  isDesktopAppURL,
+  registerDesktopAppProtocol,
+  registerDesktopAppSchemePrivileges,
+} from "./appProtocol";
+import { DESKTOP_APP_ENTRY_URL } from "./appProtocolPath";
+import { denyWindowOpenAndMaybeOpenPintia } from "./externalNavigation";
 import { desktopUpdater } from "./updater";
-import { LocalStateService } from "./localState";
+
+registerDesktopAppSchemePrivileges();
 
 process.env.DIST = path.join(__dirname, "../dist");
 process.env.VITE_PUBLIC = app.isPackaged
@@ -13,11 +28,7 @@ let mainWindow: BrowserWindow | null = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
-const CREDENTIAL_FILE_NAME = "secure-credentials.json";
-const RENDERER_STATE_FILE_NAME = "renderer-state.json";
-const LOCAL_STATE_FILE_NAME = "state_v2.sqlite";
 const LINUX_DESKTOP_FILE = "ascendany.desktop";
-const DEFAULT_OPAQUE_SIDEBAR_BACKGROUND = true;
 
 function resolveWindowIconPath(): string | undefined {
   if (!isLinux) {
@@ -40,10 +51,9 @@ function resolveLinuxGpuMode(): LinuxGpuMode {
   if (mode === "auto" || mode === "off" || mode === "x11" || mode === "swiftshader") {
     return mode;
   }
-  console.warn(
-    `[AscendAny] Unknown ASCENDANY_LINUX_GPU_MODE="${process.env.ASCENDANY_LINUX_GPU_MODE}", fallback to "off".`,
+  throw new Error(
+    `ASCENDANY_LINUX_GPU_MODE must be one of auto, off, x11, or swiftshader; received "${process.env.ASCENDANY_LINUX_GPU_MODE}".`,
   );
-  return "off";
 }
 
 function resolveLinuxImeMode(): LinuxImeMode {
@@ -51,10 +61,9 @@ function resolveLinuxImeMode(): LinuxImeMode {
   if (mode === "auto" || mode === "on" || mode === "off") {
     return mode;
   }
-  console.warn(
-    `[AscendAny] Unknown ASCENDANY_LINUX_IME_MODE="${process.env.ASCENDANY_LINUX_IME_MODE}", fallback to "auto".`,
+  throw new Error(
+    `ASCENDANY_LINUX_IME_MODE must be one of auto, on, or off; received "${process.env.ASCENDANY_LINUX_IME_MODE}".`,
   );
-  return "auto";
 }
 
 function isWaylandSession() {
@@ -140,32 +149,23 @@ if (isLinux) {
   configureLinuxInputMethod(linuxGpuMode);
 }
 
-function normalizeOpaqueSidebarBackground(value: unknown): boolean | null {
-  if (typeof value !== "boolean") {
-    return null;
-  }
-  return value;
-}
-
-let localStateService: LocalStateService | null = null;
-
-function localStateFilePath(): string {
-  return path.join(app.getPath("userData"), LOCAL_STATE_FILE_NAME);
-}
-
-function getLocalStateService(): LocalStateService {
-  if (!localStateService) {
-    localStateService = new LocalStateService(localStateFilePath());
-  }
-  return localStateService;
-}
-
 function loadMainWindow(window: BrowserWindow) {
   if (VITE_DEV_SERVER_URL) {
     void window.loadURL(VITE_DEV_SERVER_URL);
   } else {
-    void window.loadFile(path.join(process.env.DIST!, "index.html"));
+    void window.loadURL(DESKTOP_APP_ENTRY_URL);
   }
+}
+
+function isAllowedRendererURL(value: string): boolean {
+  if (VITE_DEV_SERVER_URL) {
+    try {
+      return new URL(value).origin === new URL(VITE_DEV_SERVER_URL).origin;
+    } catch {
+      return false;
+    }
+  }
+  return isDesktopAppURL(value);
 }
 
 function createWindow(options?: {
@@ -192,6 +192,7 @@ function createWindow(options?: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
     ...(options?.bounds ?? {}),
   });
@@ -201,454 +202,25 @@ function createWindow(options?: {
       mainWindow = null;
     }
   });
+  nextWindow.webContents.setWindowOpenHandler(({ url }) => {
+    return denyWindowOpenAndMaybeOpenPintia(
+      url,
+      (allowedURL) => shell.openExternal(allowedURL),
+      (error) => {
+        console.error("[AscendAny] Failed to open Pintia problem set URL.", error);
+      },
+    );
+  });
+  nextWindow.webContents.on("will-navigate", (event, targetURL) => {
+    if (!isAllowedRendererURL(targetURL)) {
+      event.preventDefault();
+    }
+  });
 
   mainWindow = nextWindow;
   loadMainWindow(nextWindow);
   return nextWindow;
 }
-
-function credentialFilePath(): string {
-  return path.join(app.getPath("userData"), CREDENTIAL_FILE_NAME);
-}
-
-function loadCredentialStore(): Record<string, string> {
-  try {
-    const filePath = credentialFilePath();
-    if (!fs.existsSync(filePath)) {
-      return {};
-    }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const result: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === "string") {
-        result[key] = value;
-      }
-    }
-    return result;
-  } catch {
-    return {};
-  }
-}
-
-function saveCredentialStore(next: Record<string, string>): boolean {
-  try {
-    const filePath = credentialFilePath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(next), { encoding: "utf-8" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeCredentialKey(username: unknown): string {
-  return typeof username === "string" ? username.trim() : "";
-}
-
-function rendererStateFilePath(): string {
-  return path.join(app.getPath("userData"), RENDERER_STATE_FILE_NAME);
-}
-
-function loadRendererStateStore(): Record<string, string> {
-  try {
-    const filePath = rendererStateFilePath();
-    if (!fs.existsSync(filePath)) {
-      return {};
-    }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const result: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === "string") {
-        result[key] = value;
-      }
-    }
-    return result;
-  } catch {
-    return {};
-  }
-}
-
-function saveRendererStateStore(next: Record<string, string>): boolean {
-  try {
-    const filePath = rendererStateFilePath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(next), { encoding: "utf-8" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeRendererStateKey(key: unknown): string {
-  return typeof key === "string" ? key.trim() : "";
-}
-
-ipcMain.handle("credential-available", () => {
-  return safeStorage.isEncryptionAvailable();
-});
-
-ipcMain.handle("credential-save", (_event, username: unknown, password: unknown) => {
-  const key = normalizeCredentialKey(username);
-  const secret = typeof password === "string" ? password : "";
-  if (!key || !secret || !safeStorage.isEncryptionAvailable()) {
-    return false;
-  }
-  const encrypted = safeStorage.encryptString(secret).toString("base64");
-  const next = loadCredentialStore();
-  next[key] = encrypted;
-  return saveCredentialStore(next);
-});
-
-ipcMain.handle("credential-read", (_event, username: unknown) => {
-  const key = normalizeCredentialKey(username);
-  if (!key || !safeStorage.isEncryptionAvailable()) {
-    return null;
-  }
-  const store = loadCredentialStore();
-  const encoded = store[key];
-  if (!encoded) {
-    return null;
-  }
-  try {
-    return safeStorage.decryptString(Buffer.from(encoded, "base64"));
-  } catch {
-    return null;
-  }
-});
-
-ipcMain.handle("credential-delete", (_event, username: unknown) => {
-  const key = normalizeCredentialKey(username);
-  if (!key) {
-    return false;
-  }
-  const next = loadCredentialStore();
-  if (!(key in next)) {
-    return true;
-  }
-  delete next[key];
-  return saveCredentialStore(next);
-});
-
-ipcMain.handle("auth-session-get", (_event, key: unknown) => {
-  const normalized = normalizeRendererStateKey(key);
-  if (!normalized) {
-    return null;
-  }
-  const store = loadRendererStateStore();
-  return store[normalized] ?? null;
-});
-
-ipcMain.handle("auth-session-set", (_event, key: unknown, value: unknown) => {
-  const normalized = normalizeRendererStateKey(key);
-  if (!normalized || typeof value !== "string") {
-    return false;
-  }
-  const next = loadRendererStateStore();
-  next[normalized] = value;
-  return saveRendererStateStore(next);
-});
-
-ipcMain.handle("auth-session-delete", (_event, key: unknown) => {
-  const normalized = normalizeRendererStateKey(key);
-  if (!normalized) {
-    return false;
-  }
-  const next = loadRendererStateStore();
-  if (!(normalized in next)) {
-    return true;
-  }
-  delete next[normalized];
-  return saveRendererStateStore(next);
-});
-
-ipcMain.handle("local-state-hydrate", () => {
-  try {
-    return getLocalStateService().hydrate();
-  } catch (error) {
-    console.error("[AscendAny] Failed to hydrate local state:", error);
-    return null;
-  }
-});
-
-ipcMain.handle("local-state-save-settings", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().saveSettings(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to save local settings:", error);
-    return false;
-  }
-});
-
-ipcMain.handle("local-state-save-layout", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().saveLayout(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to save local layout:", error);
-    return false;
-  }
-});
-
-ipcMain.handle("local-state-save-chat", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().saveChat(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to save local chat:", error);
-    return false;
-  }
-});
-
-ipcMain.handle("local-state-bind-profile", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().bindActiveProfile(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to bind local profile:", error);
-    return null;
-  }
-});
-
-ipcMain.handle("local-state-upsert-note", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().upsertNote(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to upsert note:", error);
-    return null;
-  }
-});
-
-ipcMain.handle("local-state-create-note", () => {
-  try {
-    return getLocalStateService().createNote();
-  } catch (error) {
-    console.error("[AscendAny] Failed to create note:", error);
-    return null;
-  }
-});
-
-ipcMain.handle("local-state-delete-note", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().deleteNote(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to delete note:", error);
-    return null;
-  }
-});
-
-ipcMain.handle("local-state-set-active-note", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().setActiveNote(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to set active note:", error);
-    return false;
-  }
-});
-
-ipcMain.handle("local-state-clear-note-content", (_event, value: unknown) => {
-  try {
-    return getLocalStateService().clearNoteContent(value);
-  } catch (error) {
-    console.error("[AscendAny] Failed to clear note content:", error);
-    return null;
-  }
-});
-
-interface NotesExportPdfPayload {
-  html: string;
-  defaultFilename?: string;
-}
-
-function parseNotesExportPdfPayload(value: unknown): NotesExportPdfPayload | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const candidate = value as Partial<NotesExportPdfPayload>;
-  if (typeof candidate.html !== "string" || !candidate.html.trim()) {
-    return null;
-  }
-  return {
-    html: candidate.html,
-    defaultFilename:
-      typeof candidate.defaultFilename === "string" && candidate.defaultFilename.trim()
-        ? candidate.defaultFilename.trim()
-        : "notes.pdf",
-  };
-}
-
-async function exportNotesAsPdf(
-  payload: NotesExportPdfPayload,
-  parentWindow: BrowserWindow | null,
-): Promise<{ success: boolean; canceled?: boolean; path?: string; message?: string }> {
-  const offscreen = new BrowserWindow({
-    show: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  try {
-    const dataUrl = "data:text/html;charset=utf-8," + encodeURIComponent(payload.html);
-    await offscreen.loadURL(dataUrl);
-    const pdf = await offscreen.webContents.printToPDF({
-      printBackground: true,
-      pageSize: "A4",
-      margins: { marginType: "default" },
-    });
-    const filenameSuggestion = payload.defaultFilename ?? "notes.pdf";
-    const target = parentWindow ?? mainWindow;
-    const result = target
-      ? await dialog.showSaveDialog(target, {
-          title: "导出笔记为 PDF",
-          defaultPath: filenameSuggestion,
-          filters: [{ name: "PDF", extensions: ["pdf"] }],
-        })
-      : await dialog.showSaveDialog({
-          title: "导出笔记为 PDF",
-          defaultPath: filenameSuggestion,
-          filters: [{ name: "PDF", extensions: ["pdf"] }],
-        });
-    if (result.canceled || !result.filePath) {
-      return { success: false, canceled: true };
-    }
-    const finalPath = result.filePath.toLowerCase().endsWith(".pdf")
-      ? result.filePath
-      : `${result.filePath}.pdf`;
-    fs.writeFileSync(finalPath, pdf);
-    return { success: true, path: finalPath };
-  } finally {
-    offscreen.destroy();
-  }
-}
-
-ipcMain.handle("notes-export-pdf", async (event, value: unknown) => {
-  const payload = parseNotesExportPdfPayload(value);
-  if (!payload) {
-    return { success: false, message: "Invalid PDF export payload." };
-  }
-  try {
-    const sender = BrowserWindow.fromWebContents(event.sender);
-    return await exportNotesAsPdf(payload, sender ?? mainWindow);
-  } catch (error) {
-    console.error("[AscendAny] Notes PDF export failed:", error);
-    return {
-      success: false,
-      message: error instanceof Error ? error.message : "Notes PDF export failed.",
-    };
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Avatar local storage
-// ---------------------------------------------------------------------------
-
-function avatarDir(): string {
-  return path.join(app.getPath("userData"), "avatars");
-}
-
-function avatarFilePath(accountId: string): string {
-  // Sanitise accountId to prevent path traversal
-  const safe = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return path.join(avatarDir(), `${safe}.png`);
-}
-
-function normalizeZoomFactor(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return null;
-  }
-  return Math.min(1.3, Math.max(0.8, value));
-}
-
-ipcMain.handle("avatar-save", (_event, accountId: unknown, base64Data: unknown) => {
-  const id = typeof accountId === "string" ? accountId.trim() : "";
-  const data = typeof base64Data === "string" ? base64Data : "";
-  if (!id || !data) return false;
-
-  try {
-    // Strip optional data-URL prefix (e.g. "data:image/png;base64,")
-    const raw = data.replace(/^data:image\/\w+;base64,/, "");
-    const dir = avatarDir();
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(avatarFilePath(id), Buffer.from(raw, "base64"));
-    return true;
-  } catch {
-    return false;
-  }
-});
-
-ipcMain.handle("avatar-read", (_event, accountId: unknown) => {
-  const id = typeof accountId === "string" ? accountId.trim() : "";
-  if (!id) return null;
-
-  try {
-    const filePath = avatarFilePath(id);
-    if (!fs.existsSync(filePath)) return null;
-    const buf = fs.readFileSync(filePath);
-    return `data:image/png;base64,${buf.toString("base64")}`;
-  } catch {
-    return null;
-  }
-});
-
-ipcMain.handle("avatar-delete", (_event, accountId: unknown) => {
-  const id = typeof accountId === "string" ? accountId.trim() : "";
-  if (!id) return false;
-
-  try {
-    const filePath = avatarFilePath(id);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-});
-
-ipcMain.handle("window-set-zoom-factor", (event, value: unknown) => {
-  const zoomFactor = normalizeZoomFactor(value);
-  if (zoomFactor === null) {
-    return false;
-  }
-  const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
-  if (!window) {
-    return false;
-  }
-  window.webContents.setZoomFactor(zoomFactor);
-  return true;
-});
-
-ipcMain.handle("window-get-opaque-sidebar-background", () => {
-  try {
-    return getLocalStateService().getOpaqueSidebarBackground();
-  } catch {
-    return DEFAULT_OPAQUE_SIDEBAR_BACKGROUND;
-  }
-});
-
-ipcMain.handle("window-set-opaque-sidebar-background", (_event, value: unknown) => {
-  const useOpaqueSidebarBackground = normalizeOpaqueSidebarBackground(value);
-  if (useOpaqueSidebarBackground === null) {
-    return false;
-  }
-
-  try {
-    const current = getLocalStateService().hydrate().settings;
-    getLocalStateService().saveSettings({
-      ...current,
-      useOpaqueSidebarBackground,
-    });
-  } catch {
-    return false;
-  }
-  return true;
-});
 
 // Window control IPC handlers
 ipcMain.on("window-minimize", (event) => {
@@ -683,13 +255,11 @@ app.on("activate", () => {
   }
 });
 
-app.on("before-quit", () => {
-  localStateService?.close();
-  localStateService = null;
-});
-
 app.whenReady().then(() => {
-  getLocalStateService();
+  registerDesktopAppProtocol(process.env.DIST!);
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
   desktopUpdater.registerIpc();
   desktopUpdater.start();
   createWindow();

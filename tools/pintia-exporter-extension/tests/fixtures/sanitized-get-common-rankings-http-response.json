@@ -1,0 +1,75 @@
+{
+  "total": 1,
+  "commonRankings": {
+    "labels": [
+      "A"
+    ],
+    "commonRankings": [
+      {
+        "rank": 1,
+        "user": {
+          "examId": "exam-synthetic",
+          "studentUser": {
+            "id": "student-alpha",
+            "name": "Learner Alpha",
+            "studentNumber": "SYNTHETIC-001"
+          },
+          "user": {
+            "id": "user-alpha",
+            "nickname": "Alpha"
+          },
+          "userGroupId": "group-synthetic"
+        },
+        "examId": "exam-synthetic",
+        "totalScore": 40,
+        "solvingTime": 123,
+        "startAt": "2030-01-01T01:00:00.000Z",
+        "typeScores": {
+          "PROGRAMMING": 40
+        },
+        "problemScoreByProblemSetProblemId": {
+          "problem-set-problem-alpha": {
+            "acceptTime": 5,
+            "score": 40,
+            "submitCountSnapshot": 2,
+            "validSubmitCount": 2
+          }
+        }
+      }
+    ],
+    "selfRanking": {
+      "rank": 1,
+      "user": {
+        "examId": "exam-synthetic",
+        "studentUser": {
+          "id": "student-alpha",
+          "name": "Learner Alpha",
+          "studentNumber": "SYNTHETIC-001"
+        },
+        "user": {
+          "id": "user-alpha",
+          "nickname": "Alpha"
+        },
+        "userGroupId": "group-synthetic"
+      },
+      "examId": "exam-synthetic",
+      "totalScore": 40,
+      "solvingTime": 123,
+      "startAt": "2030-01-01T01:00:00.000Z",
+      "typeScores": {
+        "PROGRAMMING": 40
+      },
+      "problemScoreByProblemSetProblemId": {
+        "problem-set-problem-alpha": {
+          "acceptTime": 5,
+          "score": 40,
+          "submitCountSnapshot": 2,
+          "validSubmitCount": 2
+        }
+      }
+    },
+    "labelByProblemSetProblemId": {
+      "problem-set-problem-alpha": "A"
+    }
+  }
+}

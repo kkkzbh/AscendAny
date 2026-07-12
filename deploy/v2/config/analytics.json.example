@@ -1,0 +1,23 @@
+{
+  "algorithmVersion": "ascendany_analytics_v1",
+  "acceptedVerdicts": [
+    "ACCEPTED"
+  ],
+  "winsor": {
+    "low": 0.05,
+    "high": 0.95
+  },
+  "halfLifeDays": {
+    "knowledge": 45,
+    "accuracy": 21,
+    "quality": 45,
+    "flexibility": 21,
+    "proficiency": 21
+  },
+  "rating": {
+    "initial": 800,
+    "binarySearchMin": -2000,
+    "binarySearchMax": 8000,
+    "binarySearchSteps": 30
+  }
+}

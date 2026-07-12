@@ -1,0 +1,31 @@
+{
+  "name": "@ascendany/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./generated": "./src/generated/index.ts"
+  },
+  "scripts": {
+    "generate": "openapi-ts && node scripts/generate-runtime-contracts.mjs",
+    "lint:openapi": "redocly lint ../../contracts/openapi/ascendany-v2.yaml --config redocly.yaml --format stylish",
+    "check:generated": "node scripts/check-generated.mjs",
+    "check:browser": "node scripts/check-browser-runtime.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "redocly lint ../../contracts/openapi/ascendany-v2.yaml --config redocly.yaml --format stylish && node scripts/check-generated.mjs && node scripts/check-browser-runtime.mjs && tsc --noEmit && vitest run"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
+    "@redocly/cli": "2.38.0",
+    "@types/node": "22.19.17",
+    "esbuild": "0.25.12",
+    "typescript": "5.7.3",
+    "vitest": "3.2.4"
+  }
+}

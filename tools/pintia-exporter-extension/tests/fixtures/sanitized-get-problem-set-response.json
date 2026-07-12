@@ -1,0 +1,53 @@
+{
+  "exam": {
+    "endAt": "2030-01-02T09:00:00+08:00",
+    "ended": false,
+    "examConfig": {},
+    "existsSubmissionsNotCompleted": false,
+    "id": "sanitized-exam-001",
+    "problemSetId": "9000000000000000001",
+    "score": 0,
+    "startAt": "2030-01-01T09:00:00+08:00",
+    "status": "SANITIZED_STATUS",
+    "userId": "sanitized-user-001"
+  },
+  "problemSet": {
+    "collaboratorPermission": "SANITIZED_PERMISSION",
+    "description": "SANITIZED_DESCRIPTION",
+    "duration": 86400,
+    "endAt": "2030-01-02T09:00:00+08:00",
+    "id": "9000000000000000001",
+    "name": "SANITIZED_PROBLEM_SET",
+    "omsProtected": false,
+    "organizationName": "SANITIZED_ORGANIZATION",
+    "ownerNickname": "SANITIZED_OWNER",
+    "permission": {
+      "permission": 0
+    },
+    "problemSetConfig": {
+      "allowStudentLogin": true,
+      "allowSubmitExam": true,
+      "allowedLoginSecondsBeforeStart": 0,
+      "compilers": [
+        "SANITIZED_COMPILER"
+      ],
+      "enableCustomTestData": false,
+      "enableVirtualPrinter": false,
+      "examGroupId": "sanitized-exam-group-001",
+      "hideOtherProblemSets": false,
+      "hideScoreboard": false,
+      "hidingTime": 0,
+      "multipleChoiceMoreThanOneAnswerProblemScoringMethod": "SANITIZED_SCORING_METHOD",
+      "omsProtected": false,
+      "scoringRule": "SANITIZED_SCORING_RULE",
+      "showBulletinBoard": false,
+      "showDetections": false,
+      "showNameInRanking": true,
+      "useStrictCodeJudger": false
+    },
+    "startAt": "2030-01-01T09:00:00+08:00",
+    "timeType": "SANITIZED_TIME_TYPE",
+    "type": "SANITIZED_PROBLEM_SET_TYPE"
+  },
+  "serverTime": "2030-01-01T00:00:00Z"
+}

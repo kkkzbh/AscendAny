@@ -1,0 +1,641 @@
+#!/usr/bin/bash -p
+if [[ "${BASH:-}" != "/usr/bin/bash" ||
+      "$-" != *p* ||
+      "$-" == *[cis]* ||
+      -n "${BASH_EXECUTION_STRING:-}" ||
+      "${#BASH_SOURCE[@]}" -ne 1 ||
+      "${BASH_SOURCE[0]}" != "$0" ]]; then
+  /usr/bin/printf '%s\n' 'release installer must run directly under /usr/bin/bash -p' >&2
+  /usr/bin/kill -KILL "${BASHPID}"
+fi
+installer_environment_is_clean=1
+while IFS= read -r environment_name; do
+  case "$environment_name" in
+    PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_RELEASE_INSTALLER_CLEAN_ENV)
+      ;;
+    *)
+      installer_environment_is_clean=0
+      ;;
+  esac
+done < <(builtin compgen -e)
+if [[ "${ASCENDANY_RELEASE_INSTALLER_CLEAN_ENV-}" != "1" ||
+      "${PATH-}" != "/usr/bin:/bin" || "${LC_ALL-}" != "C" ||
+      "$installer_environment_is_clean" != 1 ]]; then
+  script_entry="${BASH_SOURCE[0]}"
+  [[ "$script_entry" == /* ]] || script_entry="$PWD/$script_entry"
+  exec -c /usr/bin/env \
+    PATH=/usr/bin:/bin \
+    LC_ALL=C \
+    ASCENDANY_RELEASE_INSTALLER_CLEAN_ENV=1 \
+    /usr/bin/bash -p "$script_entry" "$@"
+fi
+unset installer_environment_is_clean environment_name script_entry
+builtin unset BASH_ENV ENV CDPATH GLOBIGNORE POSIXLY_CORRECT TMPDIR
+builtin export -n SHELLOPTS BASHOPTS
+set -Eeuo pipefail
+
+export PATH=/usr/bin:/bin
+export LC_ALL=C
+umask 077
+
+usage() {
+  /usr/bin/printf 'usage: %s --source /absolute/root-owned/release --manifest-sha256 64_LOWER_HEX\n' "$0" >&2
+}
+
+die() {
+  case "${release_state:-preflight}" in
+    staged)
+      /usr/bin/printf \
+        'release installation state: pre-commit-staging-retained parent-identity=%s basename=%s expected-path=%s/%s\n' \
+        "${install_parent_identity:-unknown}" \
+        "${stage_name:-unknown}" \
+        "${install_parent:-/opt/ascendany}" \
+        "${stage_name:-unknown}" >&2
+      ;;
+    committed)
+      /usr/bin/printf \
+        'release installation state: committed-unverified target=%s identity=%s\n' \
+        "${install_target:-/opt/ascendany/v2}" \
+        "${published_target_identity:-unknown}" >&2
+      ;;
+  esac
+  /usr/bin/printf 'release installation failed: %s\n' "$*" >&2
+  exit 1
+}
+
+release_state=preflight
+
+for required_command in \
+  awk chmod cmp dd diff env find findmnt flock jq kill mkdir mktemp mv \
+  printf realpath rm sha256sum sort stat sync; do
+  [[ -x "/usr/bin/$required_command" ]] || die "required command is missing: /usr/bin/$required_command"
+done
+unset required_command
+
+[[ "$EUID" == 0 ]] || die 'installer must run as root'
+if [[ "$#" != 4 || "$1" != '--source' || "$3" != '--manifest-sha256' ]]; then
+  usage
+  exit 2
+fi
+source_root="$2"
+expected_manifest_sha256="$4"
+[[ "$expected_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || die 'manifest trust anchor must be exactly 64 lowercase hexadecimal characters'
+readonly install_parent='/opt/ascendany'
+readonly install_target='/opt/ascendany/v2'
+readonly lock_path='/opt/ascendany/.install-v2-release.lock'
+readonly manifest_relative='release-manifest.json'
+readonly max_manifest_size=1048576
+readonly max_payload_file_size=1073741824
+readonly max_payload_total_size=4294967296
+
+readonly -a required_paths=(
+  bin/ascendanyd
+  bin/ascendany-admin-bootstrap
+  bin/ascendany-backup
+  bin/ascendany-judge
+  bin/ascendany-lsp
+  bin/ascendany-migrate
+  bin/ascendany-release-ops
+  bin/ascendany-trainer-agent
+  trainers/recommendation/ascendany_recommendation_trainer/__init__.py
+  trainers/recommendation/ascendany_recommendation_trainer/__main__.py
+  trainers/recommendation/ascendany_recommendation_trainer/attestation.py
+  trainers/recommendation/ascendany_recommendation_trainer/cli.py
+  trainers/recommendation/ascendany_recommendation_trainer/contract.py
+  trainers/recommendation/ascendany_recommendation_trainer/model.py
+  trainers/recommendation/ascendany_recommendation_trainer/train.py
+  trainers/recommendation/runtime-closure-cu130.json
+  trainers/recommendation/runtime-python-cu130.json
+  trainers/recommendation/runtime-requirements-cu130.lock
+  trainers/recommendation/runtime-wheels-cu130.json
+  README.md
+  OJ_JUDGE_CONTRACT.md
+  LSP_CONTROL_CONTRACT.md
+  TRAINER_AGENT_CONTRACT.md
+  contracts/openapi/ascendany-v2.yaml
+  contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
+  db/roles/README.md
+  db/roles/001_v2_roles.sql
+  db/roles/verify_v2_roles.sql
+  config/analytics.json
+  config/ascendanyd.env
+  config/ascendanyd-read-only-smoke.env
+  config/backup.env
+  config/cloudflared.yaml
+  config/fedora-runtime-packages.json
+  config/judge.env
+  config/judge-image-lock.json
+  config/migrate.env
+  config/pgbouncer-hba.conf
+  config/pgbouncer.ini
+  config/postgresql-hba-bootstrap.conf
+  config/postgresql-hba.conf
+  config/postgresql-ident-bootstrap.conf
+  config/postgresql-ident.conf
+  config/restore.env
+  config/trainer-agent.env
+  systemd/ascendanyd.service
+  systemd/ascendanyd.service.d/40-read-only-smoke.conf
+  systemd/ascendany-admin-bootstrap.service
+  systemd/ascendany-backup.service
+  systemd/ascendany-backup.timer
+  systemd/ascendany-cloudflared.service
+  systemd/ascendany-judge@.service
+  systemd/ascendany-lsp@.service
+  systemd/ascendany-migrate.service
+  systemd/ascendany-pgbouncer.service
+  systemd/ascendany-restore-verify@.service
+  systemd/ascendany-trainer-agent.service
+  polkit-1/rules.d/60-ascendany-judge.rules
+  polkit-1/rules.d/61-ascendany-lsp.rules
+  sysusers.d/ascendany-v2.conf
+  tmpfiles.d/ascendany-v2.conf
+  scripts/publish-restore-evidence.sh
+  scripts/restore-verify-operator.sh
+  scripts/install-trainer-runtime.sh
+  scripts/install-v2-release.sh
+  scripts/acquire-judge-image.sh
+  scripts/attest-judge-image.sh
+  scripts/judge-image-contract.sh
+  scripts/preload-judge-image.sh
+  scripts/acquire-pgbouncer-rpm.sh
+  scripts/attest-pgbouncer-rpm.sh
+  scripts/provision-postgres-pgbouncer.sh
+  scripts/trainer-host-capability-identity.sh
+  scripts/trainer-runtime-tree-identity.sh
+  scripts/validate-cloudflared.sh
+  scripts/validate-production.sh
+  scripts/validate-trainer-host.sh
+)
+readonly -a required_directories=(
+  bin
+  trainers
+  trainers/recommendation
+  trainers/recommendation/ascendany_recommendation_trainer
+  contracts
+  contracts/openapi
+  contracts/pintia
+  db
+  db/roles
+  config
+  systemd
+  systemd/ascendanyd.service.d
+  polkit-1
+  polkit-1/rules.d
+  sysusers.d
+  tmpfiles.d
+  scripts
+)
+
+validate_safe_relative_path() {
+  local relative="$1"
+  local remaining component
+
+  [[ -n "$relative" && "$relative" != /* && "$relative" != */ &&
+     "$relative" != *//* && "$relative" =~ ^[0-9A-Za-z_@./+-]+$ ]] || return 1
+  (( ${#relative} <= 4096 )) || return 1
+  remaining="$relative"
+  while :; do
+    component="${remaining%%/*}"
+    [[ -n "$component" && "$component" != . && "$component" != .. ]] || return 1
+    (( ${#component} <= 255 )) || return 1
+    [[ "$remaining" == */* ]] || break
+    remaining="${remaining#*/}"
+  done
+}
+
+validate_root_owned_ancestry() {
+  local label="$1"
+  local directory="$2"
+  local current=/ component metadata owner group mode_text mode is_leaf
+  local -a components=()
+
+  [[ "$directory" == /* && ! "$directory" =~ [[:cntrl:]] ]] || die "$label must be one absolute path without control characters"
+  IFS=/ read -r -a components <<<"${directory#/}"
+  for component in '' "${components[@]}"; do
+    [[ -z "$component" ]] || current="${current%/}/$component"
+    [[ -d "$current" && ! -L "$current" ]] || die "$label has a missing, non-directory, or symbolic-link ancestor: $current"
+    metadata="$(/usr/bin/stat -Lc '%u:%g:%a' -- "$current")" || die "$label metadata cannot be read: $current"
+    IFS=: read -r owner group mode_text <<<"$metadata"
+    [[ "$owner" == 0 && "$group" == 0 ]] || die "$label ancestry must be owned by root:root: $current"
+    mode="$((8#$mode_text))"
+    is_leaf=0
+    [[ "$current" != "$directory" ]] || is_leaf=1
+    if (( (mode & 8#022) != 0 )); then
+      if (( is_leaf == 1 )); then
+        die "$label leaf must not be group- or other-writable: $current"
+      fi
+      if (( (mode & 8#1000) == 0 )); then
+        die "$label has an unprotected writable ancestor: $current"
+      fi
+    fi
+  done
+}
+
+directory_identity() {
+  /usr/bin/stat -Lc '%d:%i' -- "$1"
+}
+
+assert_source_identity() {
+  local phase="$1"
+  validate_root_owned_ancestry 'release source' "$source_root"
+  [[ -d "$source_root" && ! -L "$source_root" &&
+     "$(directory_identity "$source_root")" == "$source_identity" &&
+     "$(directory_identity "$source_anchor")" == "$source_identity" ]] ||
+    die "release source identity changed before $phase"
+}
+
+assert_install_parent_identity() {
+  local phase="$1"
+  validate_root_owned_ancestry 'installation parent' "$install_parent"
+  [[ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$install_parent")" == '0:0:755' &&
+     "$(directory_identity "$install_parent")" == "$install_parent_identity" &&
+     "$(directory_identity "$install_parent_anchor")" == "$install_parent_identity" ]] ||
+    die "installation parent identity changed before $phase"
+}
+
+copy_bounded_regular_file() {
+  local source="$1"
+  local destination="$2"
+  local expected_size="$3"
+
+  (set -o noclobber; : >"$destination") 2>/dev/null ||
+    die "capture destination already exists: $destination"
+  [[ -f "$destination" && ! -L "$destination" &&
+     "$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$destination")" == '0:0:600:1' ]] ||
+    die "capture destination metadata is invalid: $destination"
+  /usr/bin/dd \
+    if="$source" \
+    of="$destination" \
+    bs=1M \
+    count="$((expected_size + 1))" \
+    iflag=fullblock,nofollow,nonblock,count_bytes \
+    oflag=nofollow \
+    status=none || die "failed to capture regular file: $source"
+  [[ "$(/usr/bin/stat -Lc '%s' -- "$destination")" == "$expected_size" ]] ||
+    die "captured file size differs from its manifest-bound size: $source"
+}
+
+file_sha256() {
+  /usr/bin/sha256sum -- "$1" | /usr/bin/awk '{print $1}'
+}
+
+verify_installed_tree() {
+  local tree_root="$1"
+  local label="$2"
+  local mount_root="$3"
+  local relative path mount_path index metadata actual_owner actual_group actual_mode actual_size actual_links actual_sha
+  local tree_device
+  local -a actual_files=() actual_directories=()
+
+  [[ -d "$tree_root" && ! -L "$tree_root" &&
+     "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$tree_root")" == '0:0:755' ]] ||
+    die "$label root metadata drifted"
+  tree_device="$(/usr/bin/stat -Lc '%d' -- "$tree_root")"
+  while IFS= read -r -d '' path; do
+    relative="${path#"$tree_root"/}"
+    validate_safe_relative_path "$relative" || die "$label contains an unsafe path"
+    [[ "$(/usr/bin/stat -Lc '%d' -- "$path")" == "$tree_device" ]] ||
+      die "$label crosses a filesystem boundary: $relative"
+    mount_path="$mount_root/$relative"
+    if /usr/bin/findmnt -rn --mountpoint "$mount_path" >/dev/null 2>&1; then
+      die "$label contains a descendant mount: $relative"
+    fi
+    if [[ -d "$path" && ! -L "$path" ]]; then
+      actual_directories+=("$relative")
+      [[ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$path")" == '0:0:755' ]] ||
+        die "$label directory metadata drifted: $relative"
+    elif [[ -f "$path" && ! -L "$path" ]]; then
+      actual_files+=("$relative")
+    else
+      die "$label contains a symbolic link or special filesystem node: $relative"
+    fi
+  done < <(/usr/bin/find "$tree_root" -mindepth 1 -print0)
+
+  mapfile -t actual_directories < <(/usr/bin/printf '%s\n' "${actual_directories[@]}" | /usr/bin/sort)
+  mapfile -t expected_sorted_directories < <(/usr/bin/printf '%s\n' "${required_directories[@]}" | /usr/bin/sort)
+  if [[ "$(/usr/bin/printf '%s\n' "${actual_directories[@]}")" != "$(/usr/bin/printf '%s\n' "${expected_sorted_directories[@]}")" ]]; then
+    /usr/bin/diff -u \
+      <(/usr/bin/printf '%s\n' "${expected_sorted_directories[@]}") \
+      <(/usr/bin/printf '%s\n' "${actual_directories[@]}") >&2 || true
+    die "$label directory set differs from the release contract"
+  fi
+
+  mapfile -t actual_files < <(/usr/bin/printf '%s\n' "${actual_files[@]}" | /usr/bin/sort)
+  mapfile -t expected_sorted_files < <(/usr/bin/printf '%s\n' "${required_paths[@]}" "$manifest_relative" | /usr/bin/sort)
+  if [[ "$(/usr/bin/printf '%s\n' "${actual_files[@]}")" != "$(/usr/bin/printf '%s\n' "${expected_sorted_files[@]}")" ]]; then
+    /usr/bin/diff -u \
+      <(/usr/bin/printf '%s\n' "${expected_sorted_files[@]}") \
+      <(/usr/bin/printf '%s\n' "${actual_files[@]}") >&2 || true
+    die "$label file set differs from the manifest-closed release contract"
+  fi
+
+  for index in "${!required_paths[@]}"; do
+    relative="${required_paths[$index]}"
+    path="$tree_root/$relative"
+    metadata="$(/usr/bin/stat -Lc '%u:%g:%a:%s:%h' -- "$path")" || die "$label payload metadata cannot be read: $relative"
+    IFS=: read -r actual_owner actual_group actual_mode actual_size actual_links <<<"$metadata"
+    actual_sha="$(file_sha256 "$path")"
+    [[ "$actual_owner" == 0 && "$actual_group" == 0 &&
+       "0$actual_mode" == "${manifest_modes[$index]}" &&
+       "$actual_size" == "${manifest_sizes[$index]}" &&
+       "$actual_links" == 1 && "$actual_sha" == "${manifest_hashes[$index]}" ]] ||
+      die "$label payload integrity drifted: $relative"
+  done
+  path="$tree_root/$manifest_relative"
+  [[ "$(/usr/bin/stat -Lc '%u:%g:%a:%s:%h' -- "$path")" == "0:0:644:${captured_manifest_size}:1" &&
+     "$(file_sha256 "$path")" == "$captured_manifest_sha256" ]] ||
+    die "$label manifest integrity drifted"
+}
+
+[[ "$source_root" == /* && ! "$source_root" =~ [[:cntrl:]] &&
+   "$source_root" == "$(/usr/bin/realpath -e -- "$source_root" 2>/dev/null || true)" &&
+   -d "$source_root" && ! -L "$source_root" ]] || die 'release source must be one canonical absolute real directory'
+validate_root_owned_ancestry 'release source' "$source_root"
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$source_root")" == '0:0:755' ]] ||
+  die 'release source root must be root:root mode 0755'
+readonly source_identity="$(directory_identity "$source_root")"
+exec {source_fd}<"$source_root"
+readonly source_fd
+readonly source_anchor="/proc/$BASHPID/fd/$source_fd"
+[[ "$(directory_identity "$source_anchor")" == "$source_identity" ]] || die 'release source changed while anchoring its directory descriptor'
+
+script_entry="${BASH_SOURCE[0]}"
+[[ "$script_entry" == /* && ! "$script_entry" =~ [[:cntrl:]] &&
+   "$script_entry" == "$(/usr/bin/realpath -e -- "$script_entry" 2>/dev/null || true)" &&
+   -f "$script_entry" && ! -L "$script_entry" ]] ||
+  die 'release installer bootstrap must be one canonical absolute regular file'
+[[ "$script_entry" != "$source_root" && "$script_entry" != "$source_root/"* ]] ||
+  die 'release installer bootstrap must be external to the untrusted release payload'
+script_parent="${script_entry%/*}"
+[[ -n "$script_parent" ]] || script_parent=/
+validate_root_owned_ancestry 'release installer bootstrap' "$script_parent"
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$script_entry")" == '0:0:755:1' ]] ||
+  die 'release installer bootstrap must be root:root mode 0755 with one link'
+readonly bootstrap_identity="$(/usr/bin/stat -Lc '%d:%i' -- "$script_entry")"
+exec {bootstrap_fd}<"$script_entry"
+readonly bootstrap_fd
+readonly bootstrap_anchor="/proc/$BASHPID/fd/$bootstrap_fd"
+[[ "$(/usr/bin/stat -Lc '%d:%i:%u:%g:%a:%h' -- "$bootstrap_anchor")" == "$bootstrap_identity:0:0:755:1" ]] ||
+  die 'release installer bootstrap identity changed while anchoring its file descriptor'
+unset script_parent
+
+validate_root_owned_ancestry '/opt' '/opt'
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a' -- /opt)" == '0:0:755' ]] || die '/opt must be root:root mode 0755'
+if [[ ! -e "$install_parent" && ! -L "$install_parent" ]]; then
+  /usr/bin/mkdir -m 0755 -- "$install_parent" || die 'failed to create /opt/ascendany'
+  /usr/bin/sync -- /opt
+fi
+validate_root_owned_ancestry 'installation parent' "$install_parent"
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$install_parent")" == '0:0:755' ]] ||
+  die 'installation parent must be root:root mode 0755'
+readonly install_parent_identity="$(directory_identity "$install_parent")"
+exec {install_parent_fd}<"$install_parent"
+readonly install_parent_fd
+readonly install_parent_anchor="/proc/$BASHPID/fd/$install_parent_fd"
+[[ "$(directory_identity "$install_parent_anchor")" == "$install_parent_identity" ]] ||
+  die 'installation parent changed while anchoring its directory descriptor'
+
+if [[ ! -e "$lock_path" && ! -L "$lock_path" ]]; then
+  (set -o noclobber; : >"$lock_path") 2>/dev/null || true
+fi
+[[ -f "$lock_path" && ! -L "$lock_path" &&
+   "$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$lock_path")" == '0:0:600:1' ]] ||
+  die 'installation lock must be one root:root mode 0600 regular file'
+readonly lock_identity="$(/usr/bin/stat -Lc '%d:%i' -- "$lock_path")"
+exec {lock_fd}<>"$lock_path"
+readonly lock_fd
+/usr/bin/flock --exclusive --nonblock "$lock_fd" || die 'another release installer holds the installation lock'
+readonly lock_anchor="/proc/$BASHPID/fd/$lock_fd"
+[[ "$(/usr/bin/stat -Lc '%d:%i:%u:%g:%a:%h' -- "$lock_path")" == "$lock_identity:0:0:600:1" &&
+   "$(/usr/bin/stat -Lc '%d:%i:%u:%g:%a:%h' -- "$lock_anchor")" == "$lock_identity:0:0:600:1" ]] ||
+  die 'installation lock identity changed while acquiring it'
+
+assert_install_parent_identity 'target absence check'
+[[ ! -e "$install_parent_anchor/v2" && ! -L "$install_parent_anchor/v2" ]] ||
+  die 'canonical release target already exists'
+declare -a incomplete_stage_entries=()
+while IFS= read -r -d '' incomplete_stage_entry; do
+  incomplete_stage_entries+=("${incomplete_stage_entry##*/}")
+done < <(/usr/bin/find -H "$install_parent_anchor" -mindepth 1 -maxdepth 1 -name '.v2.installing.*' -print0)
+(( ${#incomplete_stage_entries[@]} == 0 )) ||
+  die "pre-existing incomplete release staging requires explicit operator resolution: ${incomplete_stage_entries[*]}"
+unset incomplete_stage_entry incomplete_stage_entries
+
+stage_root="$(/usr/bin/mktemp -d "$install_parent_anchor/.v2.installing.XXXXXXXXXX")" || die 'failed to create private installation staging directory'
+readonly stage_name="${stage_root##*/}"
+release_state=staged
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$stage_root")" == '0:0:700' ]] || die 'private installation staging metadata is invalid'
+[[ "$(/usr/bin/stat -Lc '%d' -- "$stage_root")" == "$(/usr/bin/stat -Lc '%d' -- "$install_parent_anchor")" ]] ||
+  die 'installation staging and canonical target parent are on different filesystems'
+
+source_manifest="$source_anchor/$manifest_relative"
+[[ -f "$source_manifest" && ! -L "$source_manifest" ]] || die 'release manifest is missing or non-regular'
+source_manifest_metadata="$(/usr/bin/stat -Lc '%u:%g:%a:%s:%h' -- "$source_manifest")"
+IFS=: read -r manifest_owner manifest_group manifest_mode source_manifest_size manifest_links <<<"$source_manifest_metadata"
+[[ "$manifest_owner" == 0 && "$manifest_group" == 0 && "$manifest_mode" == 644 && "$manifest_links" == 1 &&
+   "$source_manifest_size" =~ ^[1-9][0-9]*$ && "$source_manifest_size" -le "$max_manifest_size" ]] ||
+  die 'release manifest must be a bounded root:root mode 0644 single-link regular file'
+captured_manifest="$stage_root/.captured-release-manifest.json"
+copy_bounded_regular_file "$source_manifest" "$captured_manifest" "$source_manifest_size"
+/usr/bin/chmod 0600 -- "$captured_manifest"
+readonly captured_manifest_size="$(/usr/bin/stat -Lc '%s' -- "$captured_manifest")"
+readonly captured_manifest_sha256="$(file_sha256 "$captured_manifest")"
+[[ "$captured_manifest_sha256" == "$expected_manifest_sha256" ]] ||
+  die 'release manifest digest differs from the external trust anchor'
+
+canonical_manifest="$stage_root/.canonical-release-manifest.json"
+/usr/bin/jq -jSc . "$captured_manifest" >"$canonical_manifest" 2>/dev/null || die 'release manifest is not valid JSON'
+/usr/bin/cmp --silent -- "$captured_manifest" "$canonical_manifest" || die 'release manifest bytes are not canonical jq -jSc JSON'
+/usr/bin/rm -f -- "$canonical_manifest"
+
+/usr/bin/jq -e \
+  --argjson max_file_size "$max_payload_file_size" \
+  --argjson max_total_size "$max_payload_total_size" '
+  type == "object" and
+  keys == ["build", "commit", "files", "schema", "sourceDateEpoch", "version"] and
+  .schema == "ascendany.release.v2" and
+  (.version | type == "string" and length >= 1 and length <= 128) and
+  (.commit | type == "string" and test("^[0-9a-f]{40}$")) and
+  (.sourceDateEpoch | type == "number" and (floor == .) and . >= 0 and . <= 4102444800) and
+  (.build | type == "object" and
+    keys == ["cgoEnabled", "goExperiment", "goVersion", "goamd64", "goarch", "gofips140", "goos"] and
+    .cgoEnabled == false and .goos == "linux" and .goarch == "amd64" and
+    .goamd64 == "v1" and .gofips140 == "off" and
+    (.goVersion | type == "string" and test("^go[0-9]+[.][0-9]+([.][0-9]+)?([A-Za-z0-9.:_+~-]+)?$")) and
+    (.goExperiment | type == "string" and test("^(none|[0-9A-Za-z_,.-]+)$"))) and
+  (.files | type == "array" and length >= 1 and length <= 1024) and
+  (all(.files[];
+    type == "object" and keys == ["mode", "path", "sha256", "size"] and
+    (.path | type == "string" and length >= 1 and length <= 4096 and test("^[0-9A-Za-z_@./+-]+$")) and
+    (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.size | type == "number" and (floor == .) and . > 0 and . <= $max_file_size) and
+    (.mode == "0644" or .mode == "0755"))) and
+  ([.files[].path] | length == (unique | length)) and
+  ([.files[].size] | add <= $max_total_size)
+  ' "$captured_manifest" >/dev/null || die 'release manifest violates the strict installation contract'
+
+readonly canonical_semver_pattern='^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))([.]((0|[1-9][0-9]*)|([0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$'
+manifest_version="$(/usr/bin/jq -r '.version' "$captured_manifest")"
+[[ "$manifest_version" =~ $canonical_semver_pattern ]] || die 'release manifest version is not canonical SemVer'
+
+declare -a manifest_paths=() manifest_hashes=() manifest_sizes=() manifest_modes=()
+while IFS=$'\t' read -r relative expected_sha expected_size expected_mode; do
+  validate_safe_relative_path "$relative" || die 'release manifest contains an unsafe path'
+  manifest_paths+=("$relative")
+  manifest_hashes+=("$expected_sha")
+  manifest_sizes+=("$expected_size")
+  manifest_modes+=("$expected_mode")
+done < <(/usr/bin/jq -r '.files[] | [.path, .sha256, (.size | tostring), .mode] | @tsv' "$captured_manifest")
+readonly -a manifest_paths manifest_hashes manifest_sizes manifest_modes
+(( ${#manifest_paths[@]} == ${#required_paths[@]} )) || die 'release manifest file count differs from the release contract'
+for index in "${!required_paths[@]}"; do
+  relative="${required_paths[$index]}"
+  [[ "${manifest_paths[$index]}" == "$relative" ]] || die 'release manifest path order or closed set differs from the release contract'
+  expected_mode=0644
+  if [[ "$relative" == bin/* || "$relative" == scripts/* ]]; then
+    expected_mode=0755
+  fi
+  [[ "${manifest_modes[$index]}" == "$expected_mode" ]] || die "release manifest mode differs from the release contract: $relative"
+done
+
+declare -a actual_source_files=() actual_source_directories=()
+source_device="${source_identity%%:*}"
+while IFS= read -r -d '' source_path; do
+  relative="${source_path#"$source_anchor"/}"
+  validate_safe_relative_path "$relative" || die 'release source contains an unsafe path'
+  if [[ -L "$source_path" || ( ! -d "$source_path" && ! -f "$source_path" ) ]]; then
+    die "release source contains a symbolic link or special filesystem node: $relative"
+  fi
+  [[ "$(/usr/bin/stat -Lc '%u:%g' -- "$source_path")" == '0:0' ]] ||
+    die "release source entry must be owned by root:root: $relative"
+  [[ "$(/usr/bin/stat -Lc '%d' -- "$source_path")" == "$source_device" ]] || die "release source crosses a filesystem boundary: $relative"
+  if /usr/bin/findmnt -rn --mountpoint "$source_root/$relative" >/dev/null 2>&1; then
+    die "release source contains a descendant mount: $relative"
+  fi
+  if [[ -d "$source_path" ]]; then
+    actual_source_directories+=("$relative")
+    [[ "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$source_path")" == '0:0:755' ]] ||
+      die "release source directory metadata is invalid: $relative"
+  elif [[ -f "$source_path" ]]; then
+    actual_source_files+=("$relative")
+  fi
+done < <(/usr/bin/find -H "$source_anchor" -mindepth 1 -print0)
+mapfile -t actual_source_directories < <(/usr/bin/printf '%s\n' "${actual_source_directories[@]}" | /usr/bin/sort)
+mapfile -t expected_sorted_directories < <(/usr/bin/printf '%s\n' "${required_directories[@]}" | /usr/bin/sort)
+if [[ "$(/usr/bin/printf '%s\n' "${actual_source_directories[@]}")" != "$(/usr/bin/printf '%s\n' "${expected_sorted_directories[@]}")" ]]; then
+  /usr/bin/diff -u \
+    <(/usr/bin/printf '%s\n' "${expected_sorted_directories[@]}") \
+    <(/usr/bin/printf '%s\n' "${actual_source_directories[@]}") >&2 || true
+  die 'release source directory set differs from the release contract'
+fi
+mapfile -t actual_source_files < <(/usr/bin/printf '%s\n' "${actual_source_files[@]}" | /usr/bin/sort)
+mapfile -t expected_sorted_files < <(/usr/bin/printf '%s\n' "${required_paths[@]}" "$manifest_relative" | /usr/bin/sort)
+if [[ "$(/usr/bin/printf '%s\n' "${actual_source_files[@]}")" != "$(/usr/bin/printf '%s\n' "${expected_sorted_files[@]}")" ]]; then
+  /usr/bin/diff -u \
+    <(/usr/bin/printf '%s\n' "${expected_sorted_files[@]}") \
+    <(/usr/bin/printf '%s\n' "${actual_source_files[@]}") >&2 || true
+  die 'release source file set differs from the manifest-closed release contract'
+fi
+
+for index in "${!required_paths[@]}"; do
+  relative="${required_paths[$index]}"
+  source_path="$source_anchor/$relative"
+  metadata="$(/usr/bin/stat -Lc '%u:%g:%a:%s:%h' -- "$source_path")" || die "release source payload metadata cannot be read: $relative"
+  IFS=: read -r actual_owner actual_group actual_mode actual_size actual_links <<<"$metadata"
+  [[ "$actual_owner" == 0 && "$actual_group" == 0 && "0$actual_mode" == "${manifest_modes[$index]}" &&
+     "$actual_size" == "${manifest_sizes[$index]}" && "$actual_links" == 1 &&
+     "$(file_sha256 "$source_path")" == "${manifest_hashes[$index]}" ]] ||
+    die "release source payload integrity differs from its manifest: $relative"
+done
+assert_source_identity 'payload capture'
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a:%s:%h' -- "$source_manifest")" == "0:0:644:${captured_manifest_size}:1" &&
+   "$(file_sha256 "$source_manifest")" == "$captured_manifest_sha256" ]] ||
+  die 'release source manifest changed after capture'
+
+for relative in "${required_directories[@]}"; do
+  /usr/bin/mkdir -m 0755 -- "$stage_root/$relative" || die "failed to create staged release directory: $relative"
+done
+for index in "${!required_paths[@]}"; do
+  relative="${required_paths[$index]}"
+  destination_path="$stage_root/$relative"
+  copy_bounded_regular_file "$source_anchor/$relative" "$destination_path" "${manifest_sizes[$index]}"
+  /usr/bin/chmod "${manifest_modes[$index]}" -- "$destination_path"
+  [[ "$(file_sha256 "$destination_path")" == "${manifest_hashes[$index]}" ]] ||
+    die "captured payload digest differs from its manifest: $relative"
+done
+/usr/bin/mv --no-target-directory -- "$captured_manifest" "$stage_root/$manifest_relative"
+/usr/bin/chmod 0644 -- "$stage_root/$manifest_relative"
+
+assert_source_identity 'publication eligibility check'
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a:%s:%h' -- "$source_manifest")" == "0:0:644:${captured_manifest_size}:1" &&
+   "$(file_sha256 "$source_manifest")" == "$captured_manifest_sha256" ]] ||
+  die 'release source manifest changed before publication'
+assert_install_parent_identity 'staged tree verification'
+/usr/bin/chmod 0755 -- "$stage_root"
+verify_installed_tree "$stage_root" 'staged release' "$install_parent/$stage_name"
+
+while IFS= read -r -d '' staged_file; do
+  /usr/bin/sync -- "$staged_file"
+done < <(/usr/bin/find "$stage_root" -type f -print0)
+while IFS= read -r -d '' staged_directory; do
+  /usr/bin/sync -- "$staged_directory"
+done < <(/usr/bin/find "$stage_root" -depth -type d -print0)
+assert_install_parent_identity 'atomic promotion'
+[[ ! -e "$install_parent_anchor/v2" && ! -L "$install_parent_anchor/v2" ]] ||
+  die 'canonical release target appeared before atomic promotion'
+readonly staged_identity="$(directory_identity "$stage_root")"
+IFS=: read -r staged_device staged_inode <<<"$staged_identity"
+release_ops_index=-1
+for index in "${!required_paths[@]}"; do
+  if [[ "${required_paths[$index]}" == 'bin/ascendany-release-ops' ]]; then
+    release_ops_index="$index"
+    break
+  fi
+done
+(( release_ops_index >= 0 )) || die 'native atomic release helper is absent from the release contract'
+native_helper="$stage_root/bin/ascendany-release-ops"
+exec {native_helper_fd}<"$native_helper"
+readonly native_helper_fd
+readonly native_helper_anchor="/proc/$BASHPID/fd/$native_helper_fd"
+[[ "$(/usr/bin/stat -Lc '%u:%g:%a:%s:%h' -- "$native_helper_anchor")" == "0:0:755:${manifest_sizes[$release_ops_index]}:1" &&
+   "$(file_sha256 "$native_helper_anchor")" == "${manifest_hashes[$release_ops_index]}" ]] ||
+  die 'native atomic release helper differs from the externally anchored manifest'
+set +e
+"$native_helper_anchor" promote \
+  --parent-fd "$install_parent_fd" \
+  --stage-name "$stage_name" \
+  --expected-device "$staged_device" \
+  --expected-inode "$staged_inode"
+native_helper_status=$?
+set -e
+published_target_identity=''
+if [[ -d "$install_parent_anchor/v2" && ! -L "$install_parent_anchor/v2" &&
+      "$(directory_identity "$install_parent_anchor/v2")" == "$staged_identity" ]]; then
+  published_target_identity="$staged_identity"
+  release_state=committed
+fi
+if (( native_helper_status != 0 )); then
+  die 'native same-filesystem RENAME_NOREPLACE promotion failed'
+fi
+[[ ! -e "$stage_root" && ! -L "$stage_root" ]] ||
+  die 'native atomic helper returned without moving the staged release'
+[[ "$release_state" == committed && "$published_target_identity" == "$staged_identity" ]] ||
+  die 'native atomic helper did not expose the verified stage at the canonical target'
+
+assert_install_parent_identity 'post-promotion verification'
+[[ -d "$install_parent_anchor/v2" && ! -L "$install_parent_anchor/v2" &&
+   "$(directory_identity "$install_parent_anchor/v2")" == "$published_target_identity" &&
+   -d "$install_target" && ! -L "$install_target" &&
+   "$(directory_identity "$install_target")" == "$published_target_identity" ]] ||
+  die 'promoted canonical release identity differs from verified staging'
+verify_installed_tree "$install_parent_anchor/v2" 'promoted release' "$install_target"
+/usr/bin/sync -- "$install_parent_anchor/v2"
+/usr/bin/sync -- "$install_parent_anchor"
+assert_install_parent_identity 'durable publication verification'
+[[ "$(directory_identity "$install_target")" == "$published_target_identity" ]] ||
+  die 'canonical release identity changed after durable publication'
+verify_installed_tree "$install_target" 'durable release' "$install_target"
+release_state=verified
+
+/usr/bin/printf '%s\n' "$install_target"

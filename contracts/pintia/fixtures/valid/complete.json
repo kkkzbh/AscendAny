@@ -1,0 +1,128 @@
+{
+  "schema": "ascendany.pintia.snapshot.v2",
+  "schemaSha256": "85b8277dc4485019499ff3bcceb1715ea73f58197ebdff9487c9a5fb8f3ccdfa",
+  "exporter": {
+    "name": "ascendany-pintia-exporter",
+    "version": "2.0.0",
+    "exportedAt": "2026-07-10T01:02:03Z"
+  },
+  "exam": {
+    "platform": "pintia",
+    "problemSetId": "problem-set-100",
+    "title": "Pintia v2 golden exam",
+    "sourceUrl": "https://pintia.cn/problem-sets/problem-set-100/submissions",
+    "startsAt": "2026-07-09T01:00:00Z",
+    "endsAt": "2026-07-09T03:00:00Z",
+    "totalScore": 100
+  },
+  "problems": [
+    {
+      "problemSetProblemId": "psp-100",
+      "problemId": "problem-100",
+      "label": "7-1",
+      "title": "Print ok",
+      "type": "PROGRAMMING",
+      "maxScore": 100,
+      "contentHtml": "<p>Print ok.</p>",
+      "timeLimitMs": 1000,
+      "memoryLimitBytes": 134217728
+    }
+  ],
+  "participants": [
+    {
+      "userId": "user-100",
+      "studentUserId": "student-user-100",
+      "studentNumber": "20260001",
+      "displayName": "Alice",
+      "groupName": null,
+      "ranking": {
+        "rank": 1,
+        "totalScore": 100,
+        "timeUsedSeconds": 60,
+        "problemResults": [
+          {
+            "problemSetProblemId": "psp-100",
+            "score": 100,
+            "passed": true,
+            "validSubmissionCount": 1,
+            "acceptTimeSeconds": 60
+          }
+        ]
+      }
+    },
+    {
+      "userId": "user-200",
+      "studentUserId": null,
+      "studentNumber": null,
+      "displayName": null,
+      "groupName": null,
+      "ranking": null
+    }
+  ],
+  "submissions": [
+    {
+      "submissionId": "submission-100",
+      "problemSetProblemId": "psp-100",
+      "userId": "user-100",
+      "submittedAt": "2026-07-09T01:01:00Z",
+      "language": "C",
+      "compiler": "GCC",
+      "verdict": "ACCEPTED",
+      "score": 100,
+      "timeMs": 3,
+      "memoryBytes": 1024,
+      "code": "#include <stdio.h>\nint main(void) { puts(\"ok\"); }\n",
+      "codeSha256": "7f8bbd02315df9bd2477f37f5e8ea23812631a43e0d9879d2c17c1ad506ca1b1",
+      "compileLog": null,
+      "caseResults": [
+        {
+          "caseId": "case-1",
+          "verdict": "ACCEPTED",
+          "score": 100,
+          "timeMs": 3,
+          "memoryBytes": 1024,
+          "message": null
+        }
+      ]
+    },
+    {
+      "submissionId": "submission-200",
+      "problemSetProblemId": "psp-100",
+      "userId": "user-200",
+      "submittedAt": "2026-07-09T01:02:00Z",
+      "language": "C",
+      "compiler": "GCC",
+      "verdict": "COMPILATION_ERROR",
+      "score": null,
+      "timeMs": null,
+      "memoryBytes": null,
+      "code": "int main( {\n",
+      "codeSha256": "31dd8cb076fb2e93b8e1fe011eec8e9be3434ff99fbe3d07d1d78626944217f8",
+      "compileLog": "error: expected declaration specifiers",
+      "caseResults": []
+    }
+  ],
+  "completeness": {
+    "problems": {
+      "sourceReportedCount": 1,
+      "observedCount": 1,
+      "exportedCount": 1,
+      "paginationExhausted": true
+    },
+    "rankings": {
+      "sourceReportedCount": 1,
+      "observedCount": 1,
+      "exportedCount": 1,
+      "paginationExhausted": true
+    },
+    "submissions": {
+      "sourceReportedCount": 3,
+      "observedCount": 3,
+      "exportedCount": 2,
+      "paginationExhausted": true
+    },
+    "participants": {
+      "exportedCount": 2
+    }
+  }
+}

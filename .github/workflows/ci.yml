@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,34 +15,218 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python-tests:
-    name: Python Tests
+  real-sandbox-acceptance:
+    name: Real OJ and LSP Sandbox Acceptance
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64, ascendany-sandbox]
+    timeout-minutes: 90
+    env:
+      ASCENDANY_CI_CLANGD_SHA256: ${{ vars.ASCENDANY_CI_CLANGD_SHA256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: backend/go.sum
+
+      - name: Run exact no-skip sandbox manifest
+        run: |
+          test -n "${ASCENDANY_CI_CLANGD_SHA256}"
+          ./tools/run-v2-sandbox-acceptance.sh \
+            --confirm run-real-ascendany-v2-sandbox-acceptance \
+            --clangd-sha256 "${ASCENDANY_CI_CLANGD_SHA256}"
+
+  source-boundary:
+    name: v2 Source Boundary
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
+      - name: Verify Go/TypeScript/Python ownership
+        run: ./tools/verify-v2-boundary.sh
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
+  desktop-release-contract:
+    name: Desktop Release Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install backend dependencies
+      - name: Verify detached builds, signer identities, and closed outputs
+        run: ./apps/desktop/scripts/tests/release-builders-fixture.sh
+
+  server-release-contract:
+    name: Server Release and Deployment Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go for native release operations fixture
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: backend/go.sum
+
+      - name: Install deployment fixture dependencies
         run: |
-          uv venv .venv
-          uv pip install --python .venv/bin/python -r preprocess/requirements-dev.txt
-          uv pip install --python .venv/bin/python -r apps/api/requirements-dev.txt
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+
+      - name: Check deployment scripts
+        run: bash -n deploy/v2/scripts/*.sh tools/build-v2-release.sh tools/run-v2-*.sh tools/verify-v2-boundary.sh tools/tests/*.sh
+
+      - name: Verify private commit-snapshot release publication
+        run: ./tools/tests/build-v2-release-fixture.sh
+
+      - name: Verify manifest-bound no-replace server installation
+        run: ./tools/tests/install-v2-release-fixture.sh
+
+      - name: Verify fresh PostgreSQL and PgBouncer provisioning
+        run: ./tools/tests/provision-postgres-pgbouncer-fixture.sh
+
+      - name: Verify native PgBouncer RPM acquisition and attestation
+        run: ./tools/tests/pgbouncer-rpm-contract-fixture.sh
+
+      - name: Verify installed systemd unit and executable closure
+        run: ./tools/tests/systemd-installed-unit-closure-fixture.sh
+
+      - name: Verify cloudflared production acceptance contract
+        run: ./tools/tests/validate-cloudflared-fixture.sh
+
+      - name: Verify source boundary fail-closed behavior
+        run: ./tools/tests/verify-v2-boundary-fixture.sh
+
+      - name: Verify rehearsal private runtime lifecycle
+        run: |
+          runtime_dir="$(mktemp -d /dev/shm/ascendany-ci-runtime.XXXXXX)"
+          trap 'rm -rf -- "${runtime_dir}"' EXIT
+          XDG_RUNTIME_DIR="${runtime_dir}" ./tools/tests/rehearsal-private-runtime-fixture.sh
+
+      - name: Verify online and quiesced trainer work roots
+        run: ./tools/tests/validate-trainer-work-root-fixture.sh
+
+      - name: Verify trainer runtime provenance closure
+        run: ./tools/tests/trainer-runtime-provenance-fixture.sh
+
+      - name: Verify trainer runtime tree mount closure
+        run: sudo ./tools/tests/trainer-runtime-tree-identity-fixture.sh
+
+      - name: Verify production unit closure
+        run: ./tools/tests/validate-production-unit-closure-fixture.sh
+
+      - name: Verify restore operator stable-lock concurrency
+        run: ./tools/tests/restore-operator-concurrency-fixture.sh
+
+  go-backend:
+    name: Go Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: backend/go.sum
+
+      - name: Verify dependencies
+        working-directory: backend
+        run: go mod verify
+
+      - name: Check formatting
+        working-directory: backend
+        run: test -z "$(gofmt -l .)"
 
       - name: Run tests
-        run: uv run --python .venv/bin/python pytest -q
+        working-directory: backend
+        run: go test ./...
 
-  desktop-build:
-    name: Desktop Build
+      - name: Run vet
+        working-directory: backend
+        run: go vet ./...
+
+  go-race:
+    name: Go Race Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: backend/go.sum
+
+      - name: Run race detector
+        working-directory: backend
+        run: go test -race ./...
+
+  pintia-contract:
+    name: Pintia v2 Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate JSON and schema digests
+        run: |
+          find contracts/pintia -name '*.json' -print0 | xargs -0 -n1 jq empty
+          schema=contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
+          digest=$(sha256sum "$schema" | awk '{print $1}')
+          find contracts/pintia/fixtures -name '*.json' -print0 | \
+            xargs -0 -n1 jq -e --arg digest "$digest" '.schemaSha256 == $digest'
+
+  typescript:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: OpenAPI and Generated SDK
+            command: pnpm --filter @ascendany/sdk check
+          - name: Pintia Exporter Extension
+            command: pnpm --filter @ascendany/pintia-exporter check
+          - name: Student Web
+            command: pnpm --filter @ascendany/web check
+          - name: Student Mobile
+            command: pnpm --filter @ascendany/mobile check
+          - name: Import Console
+            command: pnpm --filter @ascendany/import-console check
+          - name: Student Desktop
+            command: pnpm --filter @ascendany/desktop test && pnpm --filter @ascendany/desktop build
+          - name: Product Site
+            command: pnpm --filter @ascendany/site build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify package
+        run: ${{ matrix.command }}
+
+  public-assets:
+    name: Canonical Public Asset Closure
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -53,11 +240,246 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.22.0"
           cache: pnpm
 
-      - name: Install frontend dependencies
+      - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build desktop app
-        run: pnpm --filter @ascendany/desktop build
+      - name: Test public asset closure failures
+        run: pnpm public-assets:test
+
+      - name: Rebuild and verify embedded public assets
+        run: pnpm public-assets:check
+
+  isolated-trainer:
+    name: Isolated Python Trainer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Setup exact uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.9.26"
+
+      - name: Install hashed CPU trainer test runtime
+        run: |
+          uv pip install --system --require-hashes \
+            -r trainers/recommendation/test-requirements-cpu.lock
+
+      - name: Run trainer contract and isolation tests
+        run: python -m unittest discover -s trainers/recommendation/tests -v
+
+  android-release-contract:
+    name: Android Release Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install release sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          /usr/bin/bwrap --version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run isolated release fixture
+        run: apps/mobile/scripts/test-android-release-contract.sh
+
+      - name: Verify direct privileged release entrypoint
+        run: apps/mobile/scripts/build-android-release.sh --help >/dev/null
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install exact Android release toolchain
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Prove aggregate tasks cannot bypass the release wrapper
+        working-directory: apps/mobile/android
+        env:
+          ASCENDANY_ANDROID_VERSION_NAME: 1.2.3
+          ASCENDANY_ANDROID_VERSION_CODE: "10203"
+        run: |
+          set -Eeuo pipefail
+          unset ASCENDANY_ANDROID_SIGNING_STORE_FILE
+          unset ASCENDANY_ANDROID_SIGNING_STORE_PASSWORD
+          unset ASCENDANY_ANDROID_SIGNING_KEY_ALIAS
+          unset ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD
+          for task in :app:assembleRelease :app:bundleRelease :app:assemble :app:build :app:bundle; do
+            log="${RUNNER_TEMP}/android-release-gate-${task##*:}.log"
+            if ./gradlew --no-daemon "${task}" --dry-run >"${log}" 2>&1; then
+              printf 'aggregate task bypassed the release signing gate: %s\n' "${task}" >&2
+              exit 1
+            fi
+            grep -F 'release tasks must run through the AscendAny release wrapper' "${log}" >/dev/null
+          done
+          long_version="1.2.3+$(printf 'a%.0s' {1..123})"
+          long_log="${RUNNER_TEMP}/android-release-gate-long-version.log"
+          if ASCENDANY_ANDROID_RELEASE_WRAPPER=1 ASCENDANY_ANDROID_VERSION_NAME="${long_version}" ./gradlew --no-daemon :app:assembleRelease --dry-run >"${long_log}" 2>&1; then
+            printf 'direct Gradle release gate accepted an oversized SemVer\n' >&2
+            exit 1
+          fi
+          grep -F 'at most 128 ASCII bytes' "${long_log}" >/dev/null
+          credential_log="${RUNNER_TEMP}/android-release-gate-signing-environment.log"
+          if ASCENDANY_ANDROID_RELEASE_WRAPPER=1 ASCENDANY_ANDROID_SIGNING_STORE_PASSWORD=forbidden ./gradlew --no-daemon :app:assembleRelease --dry-run >"${credential_log}" 2>&1; then
+            printf 'Gradle release gate accepted signing credentials\n' >&2
+            exit 1
+          fi
+          grep -F 'signing credentials must not enter the Gradle process' "${credential_log}" >/dev/null
+          injected_property_log="${RUNNER_TEMP}/android-release-gate-injected-signing-property.log"
+          if ASCENDANY_ANDROID_RELEASE_WRAPPER=1 ./gradlew --no-daemon :app:assembleRelease --dry-run \
+            -Pandroid.injected.signing.store.file=/tmp/forbidden \
+            >"${injected_property_log}" 2>&1; then
+            printf 'Gradle release gate accepted an injected signing project property\n' >&2
+            exit 1
+          fi
+          grep -F 'injected signing project properties must not enter the Gradle process' "${injected_property_log}" >/dev/null
+
+      - name: Build and verify a signed APK through the release wrapper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +x
+          umask 077
+
+          release_root="$(mktemp -d "${RUNNER_TEMP}/ascendany-android-integration.XXXXXX")"
+          cleanup_release_root() {
+            rm -rf -- "${release_root}"
+          }
+          trap cleanup_release_root EXIT
+
+          release_tools="${release_root}/tools"
+          release_java_home="${release_tools}/jdk-21"
+          release_android_home="${release_tools}/android-sdk"
+          release_key_root="${release_root}/keys"
+          release_output="${release_root}/output"
+          install -d -m 0700 -- \
+            "${release_tools}" \
+            "${release_java_home}" \
+            "${release_android_home}/platforms" \
+            "${release_android_home}/build-tools" \
+            "${release_key_root}"
+
+          java_home_source="$(realpath -e -- "${JAVA_HOME}")"
+          android_home_source="$(realpath -e -- "${ANDROID_HOME}")"
+          cp -a --no-preserve=ownership --reflink=auto -- \
+            "${java_home_source}/." \
+            "${release_java_home}/"
+          cp -a --no-preserve=ownership --reflink=auto -- \
+            "${android_home_source}/platforms/android-36" \
+            "${release_android_home}/platforms/android-36"
+          cp -a --no-preserve=ownership --reflink=auto -- \
+            "${android_home_source}/build-tools/36.0.0" \
+            "${release_android_home}/build-tools/36.0.0"
+          cp -a --no-preserve=ownership --reflink=auto -- \
+            "${android_home_source}/platform-tools" \
+            "${release_android_home}/platform-tools"
+          chmod -R go-w -- "${release_tools}"
+
+          trusted_node="${release_tools}/node-22"
+          install -m 0755 -- "$(realpath -e -- "$(command -v node)")" "${trusted_node}"
+          pnpm_launcher="$(realpath -e -- "$(command -v pnpm)")"
+          pnpm_distribution="$(realpath -e -- "$(dirname -- "${pnpm_launcher}")/../dist/pnpm.cjs")"
+          trusted_pnpm="${release_tools}/pnpm-9.15.4.cjs"
+          install -m 0755 -- "${pnpm_distribution}" "${trusted_pnpm}"
+          [[ "$(/usr/bin/env -i "${trusted_node}" "${trusted_pnpm}" --version)" == "9.15.4" ]]
+
+          store_password_file="${release_key_root}/store-password"
+          key_password_file="${release_key_root}/key-password"
+          openssl rand -base64 36 | tr -d '\n' >"${store_password_file}"
+          openssl rand -base64 36 | tr -d '\n' >"${key_password_file}"
+          chmod 0600 -- "${store_password_file}" "${key_password_file}"
+
+          keystore="${release_key_root}/ascendany-ci-release.jks"
+          "${release_java_home}/bin/keytool" -genkeypair \
+            -storetype JKS \
+            -keystore "${keystore}" \
+            -alias ascendany-ci \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 1 \
+            -dname 'CN=AscendAny CI, O=AscendAny, C=CN' \
+            -storepass:file "${store_password_file}" \
+            -keypass:file "${key_password_file}" \
+            >/dev/null
+          chmod 0600 -- "${keystore}"
+
+          signer_sha256="$(
+            "${release_java_home}/bin/keytool" -exportcert \
+              -keystore "${keystore}" \
+              -alias ascendany-ci \
+              -storepass:file "${store_password_file}" |
+              openssl x509 -inform DER -fingerprint -sha256 -noout |
+              sed -n 's/^sha256 Fingerprint=//p' |
+              tr -d ':' |
+              tr 'A-F' 'a-f'
+          )"
+          [[ "${signer_sha256}" =~ ^[0-9a-f]{64}$ ]]
+
+          apksigner="${release_android_home}/build-tools/36.0.0/apksigner"
+          commit="${GITHUB_SHA}"
+          [[ "${commit}" =~ ^[0-9a-f]{40}$ ]]
+
+          JAVA_HOME="${release_java_home}" \
+          ANDROID_HOME="${release_android_home}" \
+            apps/mobile/scripts/build-android-release.sh \
+              --version 0.1.0-ci.1 \
+              --version-code 101 \
+              --gradle-max-workers 1 \
+              --commit "${commit}" \
+              --output-dir "${release_output}" \
+              --api-origin https://ascendany.example.invalid \
+              --prompt-key agent.prompt.default \
+              --model-key agent.model.default \
+              --node-bin "${trusted_node}" \
+              --pnpm-entry "${trusted_pnpm}" \
+              --apksigner-bin "${apksigner}" \
+              --keystore "${keystore}" \
+              --key-alias ascendany-ci \
+              --store-password-fd 3 \
+              --key-password-fd 4 \
+              --signer-sha256 "${signer_sha256}" \
+              3< <(secret=; IFS= read -r secret <"${store_password_file}" || [[ -n "${secret}" ]]; printf '%s\0' "${secret}") \
+              4< <(secret=; IFS= read -r secret <"${key_password_file}" || [[ -n "${secret}" ]]; printf '%s\0' "${secret}")
+
+          artifact='AscendAny-Android-0.1.0-ci.1.apk'
+          (cd -- "${release_output}" && sha512sum --check "${artifact}.sha512")
+          verification_output="$("${apksigner}" verify -Werr --verbose --print-certs "${release_output}/${artifact}")"
+          actual_signer_sha256="$(
+            sed -n -E 's/^Signer #[0-9]+ certificate SHA-256 digest: ([0-9A-Fa-f]{64})$/\1/p' \
+              <<<"${verification_output}" |
+              tr 'A-F' 'a-f'
+          )"
+          [[ "${actual_signer_sha256}" == "${signer_sha256}" ]]
+          printf '%s\n' "${artifact}" "${artifact}.sha512" | sort >"${release_root}/expected-files"
+          find "${release_output}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort >"${release_root}/actual-files"
+          diff -u "${release_root}/expected-files" "${release_root}/actual-files"
+          [[ -z "$(find "${release_output}" -mindepth 1 ! -type f -print -quit)" ]]

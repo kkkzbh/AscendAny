@@ -1,0 +1,22 @@
+extends:
+  - recommended-strict
+
+rules:
+  operation-operationId: error
+  operation-operationId-unique: error
+  no-unresolved-refs: error
+  path-parameters-defined: error
+
+  # The private repository has no declared software license.
+  info-license: off
+
+  # Health and immutable metadata reads have no caller-controlled 4xx state.
+  operation-4xx-response: off
+
+  # The authenticated LSP WebSocket operation correctly returns HTTP 101 and
+  # therefore has no semantically valid 2XX response to declare.
+  operation-2xx-response: off
+
+  # ImportEvent is intentionally referenced by x-sse-data-schema because the
+  # text/event-stream wire body remains a string in OpenAPI.
+  no-unused-components: off

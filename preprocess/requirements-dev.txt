@@ -1,3 +1,0 @@
--r requirements.txt
--r ../apps/api/requirements.txt
-pytest>=8.3.4

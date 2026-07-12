@@ -2,32 +2,31 @@
   "name": "@ascendany/mobile",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "sync:android": "pnpm run build && ([ -d android ] || pnpm exec cap add android) && pnpm exec cap sync android && node ./scripts/ensure-android-signing.mjs",
-    "dist:android:release": "pnpm run sync:android && cd android && ./gradlew :app:assembleRelease"
+    "test": "vitest run",
+    "check": "vitest run && tsc -b && vite build",
+    "sync:android": "pnpm run build && test -d android && pnpm exec cap sync android && node ./scripts/ensure-android-signing.mjs"
   },
   "dependencies": {
+    "@ascendany/sdk": "workspace:*",
     "@capacitor/android": "^8.1.0",
     "@capacitor/core": "^8.1.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-image-crop": "^11.0.10",
-    "react-markdown": "^10.1.0",
-    "recharts": "^2.15.0",
-    "remark-gfm": "^4.0.1",
-    "zustand": "^5.0.3"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.1.0",
-    "@tailwindcss/vite": "^4.1.3",
+    "@testing-library/react": "^16.3.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "tailwindcss": "^4.1.3",
+    "jsdom": "^25.0.1",
     "typescript": "~5.7.2",
-    "vite": "^6.1.0"
+    "vite": "^6.1.0",
+    "vitest": "^3.2.4"
   }
 }

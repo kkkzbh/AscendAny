@@ -1,88 +1,75 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  apiFetch,
-  clearTokens,
-  consumeTokenHandoff,
-  getStoredToken,
-  storeTokens,
-} from "../api/client";
+import type { Account, BrowserSessionSnapshot } from "@ascendany/sdk";
+import { apiFailureMessage, browserSession } from "../api/v2Client";
 
-export interface AccountInfo {
-  accountId: string;
-  username: string;
-  isAdmin: boolean;
-  studentId?: string | null;
-  ptaNickname?: string | null;
-}
-
-interface AuthTokensResponse {
-  accessToken: string;
-  refreshToken: string;
-  account: AccountInfo;
-}
+export type AuthStatus = "initializing" | "anonymous" | "authenticated";
 
 interface AuthState {
-  token: string | null;
-  account: AccountInfo | null;
-  loading: boolean;
+  status: AuthStatus;
+  account: Account | null;
   error: string | null;
   login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
+}
+
+function accountFromSnapshot(snapshot: BrowserSessionSnapshot): Account | null {
+  return snapshot.status === "authenticated" ? snapshot.account : null;
 }
 
 export function useAuth(): AuthState {
-  const [token, setToken] = useState<string | null>(() => consumeTokenHandoff() ?? getStoredToken());
-  const [account, setAccount] = useState<AccountInfo | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [snapshot, setSnapshot] = useState<BrowserSessionSnapshot>(() => browserSession.snapshot());
+  const [ready, setReady] = useState(snapshot.status === "authenticated");
   const [error, setError] = useState<string | null>(null);
 
-  // On mount, if we have a token, fetch current user info
   useEffect(() => {
-    if (!token) {
-      setAccount(null);
-      return;
+    let active = true;
+    const unsubscribe = browserSession.subscribe((nextSnapshot) => {
+      if (active) setSnapshot(nextSnapshot);
+    });
+
+    if (browserSession.snapshot().status === "authenticated") {
+      setReady(true);
+    } else {
+      void browserSession.bootstrap()
+        .catch((bootstrapError: unknown) => {
+          if (active) setError(apiFailureMessage(bootstrapError));
+        })
+        .finally(() => {
+          if (active) setReady(true);
+        });
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        const me = await apiFetch<{ account: AccountInfo }>("/api/v1/auth/me");
-        if (!cancelled) setAccount(me.account);
-      } catch {
-        if (!cancelled) {
-          clearTokens();
-          setToken(null);
-          setAccount(null);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [token]);
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<AuthTokensResponse>("/api/v1/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username, password }),
-      });
-      storeTokens(data.accessToken, data.refreshToken);
-      setToken(data.accessToken);
-      setAccount(data.account);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "登录失败";
-      setError(msg);
-      throw err;
-    } finally {
-      setLoading(false);
+      await browserSession.login({ username, password });
+    } catch (loginError) {
+      const message = apiFailureMessage(loginError);
+      setError(message);
+      throw new Error(message);
     }
   }, []);
 
-  const logout = useCallback(() => {
-    clearTokens();
-    setToken(null);
-    setAccount(null);
+  const logout = useCallback(async () => {
+    setError(null);
+    try {
+      await browserSession.logout();
+    } catch (logoutError) {
+      setError(apiFailureMessage(logoutError));
+    }
   }, []);
 
-  return { token, account, loading, error, login, logout };
+  return {
+    status: ready ? snapshot.status : "initializing",
+    account: accountFromSnapshot(snapshot),
+    error,
+    login,
+    logout,
+  };
 }

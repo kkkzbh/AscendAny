@@ -1,25 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { EXAM_TYPES, getIngestHistory, startImportRun, uploadExamZip, type IngestHistoryItem } from "../api/import";
+import { getImportHistory, uploadPintiaSnapshot, type ImportJob } from "../api/import";
 import { EmptyState, PageHeader, StatusBadge } from "../components/ui";
-import { useSSEStream, type LogEntry } from "../hooks/useSSEStream";
-
-interface UploadedExam {
-  examType: string;
-  examName: string;
-  sourcePath: string;
-  fileCount: number;
-}
-
-const EXAM_TYPE_LABELS: Record<string, string> = {
-  pintia: "Pintia",
-  datastructure: "数据结构",
-  pta_icpc: "PTA ICPC",
-  pta_ioi: "PTA IOI",
-};
-
-function examLabel(type: string): string {
-  return EXAM_TYPE_LABELS[type] ?? type;
-}
+import { useImportJobStream, type ImportLogEntry } from "../hooks/useImportJobStream";
 
 function formatTime(value: string | null): string {
   if (!value) return "-";
@@ -33,35 +15,37 @@ function formatTime(value: string | null): string {
   });
 }
 
+function shortID(value: string): string {
+  return value.slice(0, 8);
+}
+
 export function ImportPage() {
-  const [selectedType, setSelectedType] = useState<string>(EXAM_TYPES[0]?.value ?? "pintia");
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadedExams, setUploadedExams] = useState<UploadedExam[]>([]);
-  const [dryRun, setDryRun] = useState(false);
-  const [force, setForce] = useState(false);
-  const [history, setHistory] = useState<IngestHistoryItem[]>([]);
+  const [recentJobs, setRecentJobs] = useState<ImportJob[]>([]);
+  const [history, setHistory] = useState<ImportJob[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [taskBusy, setTaskBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
-  const stream = useSSEStream();
-
+  const stream = useImportJobStream();
   const isStreaming = stream.status === "connecting" || stream.status === "streaming";
+  const busy = uploading || isStreaming;
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [stream.logs]);
 
-  const loadHistory = useCallback(async () => {
+  const loadHistory = useCallback(async (cursor?: string) => {
     setHistoryLoading(true);
     setHistoryError(null);
     try {
-      const response = await getIngestHistory(30);
-      setHistory(response.items);
+      const response = await getImportHistory(30, cursor);
+      setHistory((current) => cursor ? [...current, ...response.items] : response.items);
+      setNextCursor(response.nextCursor);
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : "导入历史加载失败");
     } finally {
@@ -75,27 +59,19 @@ export function ImportPage() {
 
   useEffect(() => {
     if (stream.status === "done" || stream.status === "error") {
-      setTaskBusy(false);
       void loadHistory();
     }
   }, [loadHistory, stream.status]);
 
-  const doUpload = async (files: File[]) => {
+  const doUpload = async (file: File) => {
     setUploadError(null);
     setUploading(true);
     setUploadPct(0);
-    const results: UploadedExam[] = [];
     try {
-      for (const file of files) {
-        const response = await uploadExamZip(file, selectedType, setUploadPct);
-        results.push({
-          examType: response.examType,
-          examName: response.examName,
-          sourcePath: response.sourcePath,
-          fileCount: response.fileCount,
-        });
-      }
-      setUploadedExams((current) => [...current, ...results]);
+      const job = await uploadPintiaSnapshot(file, setUploadPct);
+      setRecentJobs((current) => [job, ...current.filter((item) => item.id !== job.id)].slice(0, 5));
+      stream.connect(job.id);
+      await loadHistory();
     } catch (error) {
       setUploadError(error instanceof Error ? error.message : "上传失败");
     } finally {
@@ -104,53 +80,38 @@ export function ImportPage() {
     }
   };
 
-  const handleDrop = useCallback(
-    async (event: DragEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setDragOver(false);
-      const files = Array.from(event.dataTransfer.files).filter((file) =>
-        file.name.toLowerCase().endsWith(".json") || file.name.toLowerCase().endsWith(".zip"),
-      );
-      if (!files.length) {
-        setUploadError("请拖入 Pintia .json 或旧格式 .zip 文件");
-        return;
-      }
-      await doUpload(files);
-    },
-    [selectedType],
-  );
+  const selectSingleJSON = async (files: File[]) => {
+    if (busy) return;
+    const jsonFiles = files.filter((file) => file.name.toLowerCase().endsWith(".json"));
+    if (jsonFiles.length !== 1 || files.length !== 1) {
+      setUploadError("每次请选择一个浏览器插件导出的 Pintia JSON 快照");
+      return;
+    }
+    const file = jsonFiles[0];
+    if (file) await doUpload(file);
+  };
+
+  const handleDrop = useCallback(async (event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOver(false);
+    await selectSingleJSON(Array.from(event.dataTransfer.files));
+  }, [busy]);
 
   const handleFileSelect = useCallback(async () => {
     const files = fileInputRef.current?.files;
     if (!files?.length) return;
-    await doUpload(Array.from(files));
+    await selectSingleJSON(Array.from(files));
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [selectedType]);
-
-  const handleImport = useCallback(async () => {
-    setTaskBusy(true);
-    stream.clearLogs();
-    try {
-      const examTypes = uploadedExams.length
-        ? [...new Set(uploadedExams.map((item) => item.examType))]
-        : [selectedType];
-      const response = await startImportRun({ examTypes, dryRun, force });
-      stream.connect(response.runId, "/api/v1/import/run/{run_id}/stream");
-    } catch (error) {
-      setTaskBusy(false);
-      stream.clearLogs();
-      window.alert(error instanceof Error ? error.message : "启动导入失败");
-    }
-  }, [dryRun, force, selectedType, stream, uploadedExams]);
+  }, [busy]);
 
   return (
     <div className="page page-import">
       <PageHeader
-        title="数据导入"
-        description="上传考试数据，启动增量导入，并跟踪实时任务日志。"
+        title="Pintia 数据导入"
+        description="上传浏览器插件导出的 snapshot v2 JSON；快照持久化后会立即进入 Go 导入队列。"
         actions={
-          <button className="button" type="button" onClick={loadHistory} disabled={historyLoading}>
+          <button className="button" type="button" onClick={() => void loadHistory()} disabled={historyLoading}>
             {historyLoading ? "刷新中" : "刷新历史"}
           </button>
         }
@@ -158,24 +119,13 @@ export function ImportPage() {
 
       <div className="import-workspace">
         <section className="panel upload-panel">
-          <div className="panel-title">上传队列</div>
-          <label className="field">
-            <span className="field-label">旧 ZIP 类型</span>
-            <select value={selectedType} onChange={(event) => setSelectedType(event.target.value)} disabled={uploading}>
-              {EXAM_TYPES.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
+          <div className="panel-title">上传快照</div>
           <div
             className={`drop-target${dragOver ? " is-active" : ""}`}
-            onClick={() => !uploading && fileInputRef.current?.click()}
+            onClick={() => !busy && fileInputRef.current?.click()}
             onDragOver={(event) => {
               event.preventDefault();
-              setDragOver(true);
+              if (!busy) setDragOver(true);
             }}
             onDragLeave={(event) => {
               event.preventDefault();
@@ -184,19 +134,20 @@ export function ImportPage() {
             onDrop={handleDrop}
             role="button"
             tabIndex={0}
+            aria-disabled={busy}
           >
-            <input ref={fileInputRef} type="file" accept=".json,.zip" multiple hidden onChange={handleFileSelect} />
+            <input ref={fileInputRef} type="file" accept="application/json,.json" hidden onChange={handleFileSelect} />
             {uploading ? (
               <>
-                <strong>上传中 {uploadPct}%</strong>
+                <strong>正在上传并持久化 {uploadPct}%</strong>
                 <div className="mini-progress">
                   <span style={{ width: `${uploadPct}%` }} />
                 </div>
               </>
             ) : (
               <>
-                <strong>拖入 Pintia JSON</strong>
-                <span>也支持选择旧格式 ZIP 包</span>
+                <strong>{isStreaming ? "当前任务执行中" : "拖入 Pintia snapshot v2 JSON"}</strong>
+                <span>{isStreaming ? "任务结束后可上传下一份快照" : "每次上传一份浏览器插件生成的完整 JSON 快照"}</span>
               </>
             )}
           </div>
@@ -205,85 +156,50 @@ export function ImportPage() {
 
           <div className="queue-list">
             <div className="queue-head">
-              <span>已上传 {uploadedExams.length}</span>
-              {uploadedExams.length ? (
-                <button className="button button-ghost" type="button" onClick={() => setUploadedExams([])}>
+              <span>本次会话任务</span>
+              {recentJobs.length ? (
+                <button className="button button-ghost" type="button" onClick={() => setRecentJobs([])}>
                   清空
                 </button>
               ) : null}
             </div>
-            {uploadedExams.length ? (
-              uploadedExams.map((item, index) => (
-                <div className="queue-item" key={`${item.sourcePath}-${index}`}>
-                  <div>
-                    <strong>{item.examName}</strong>
-                    <span>{examLabel(item.examType)} · {item.fileCount} 文件</span>
-                  </div>
-                  <button
-                    className="button button-ghost"
-                    type="button"
-                    onClick={() => setUploadedExams((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                  >
-                    移除
-                  </button>
+            {recentJobs.length ? recentJobs.map((job) => (
+              <div className="queue-item" key={job.id}>
+                <div>
+                  <strong title={job.id}>{shortID(job.id)}</strong>
+                  <span>{job.stage} · {job.artifactSha256.slice(0, 12)}</span>
                 </div>
-              ))
-            ) : (
-              <EmptyState>没有待处理上传。未上传时默认扫描 Pintia JSON 增量数据。</EmptyState>
-            )}
+                <StatusBadge status={job.status} />
+              </div>
+            )) : <EmptyState>上传成功后，任务会立即显示在这里。</EmptyState>}
           </div>
         </section>
 
         <section className="panel task-panel">
-          <div className="task-toolbar">
-            <button className="button button-primary" type="button" disabled={taskBusy || isStreaming} onClick={handleImport}>
-              {isStreaming ? "导入中" : "开始增量导入"}
-            </button>
-            <label className="check-control">
-              <input type="checkbox" checked={dryRun} disabled={isStreaming} onChange={(event) => setDryRun(event.target.checked)} />
-              Dry Run
-            </label>
-            <label className="check-control">
-              <input type="checkbox" checked={force} disabled={isStreaming} onChange={(event) => setForce(event.target.checked)} />
-              Force
-            </label>
-          </div>
-
+          <div className="panel-title">当前任务</div>
           {stream.progress ? (
             <div className="progress-strip">
               <div className="progress-track">
-                <span
-                  style={{
-                    width: `${stream.progress.total > 0 ? (stream.progress.current / stream.progress.total) * 100 : 0}%`,
-                  }}
-                />
+                <span style={{ width: `${(stream.progress.current / stream.progress.total) * 100}%` }} />
               </div>
-              <span>
-                {stream.progress.current} / {stream.progress.total}
-                {stream.progress.examType ? ` · ${examLabel(stream.progress.examType)}` : ""}
-              </span>
+              <span>{stream.progress.current} / {stream.progress.total} · {stream.progress.phase}</span>
             </div>
           ) : null}
 
-          {stream.status === "done" && stream.result ? (
+          {stream.result ? (
             <div className="summary-grid">
-              {["scanned", "skipped", "succeeded", "failed", "submissionsBound", "submissionsPendingClaim"].map((key) => (
-                <div className="metric-tile" key={key}>
-                  <span>{key}</span>
-                  <strong>{String(stream.result?.[key] ?? 0)}</strong>
-                </div>
-              ))}
+              <div className="metric-tile"><span>状态</span><strong>{stream.result.status}</strong></div>
+              <div className="metric-tile"><span>阶段</span><strong>{stream.result.stage}</strong></div>
+              <div className="metric-tile"><span>考试</span><strong>{stream.result.examId ? shortID(stream.result.examId) : "-"}</strong></div>
+              <div className="metric-tile"><span>快照</span><strong>{stream.result.snapshotId ? shortID(stream.result.snapshotId) : "-"}</strong></div>
             </div>
           ) : (
             <div className="task-empty">
-              <strong>{isStreaming ? "正在执行导入任务" : "等待导入任务"}</strong>
-              <span>
-                {isStreaming
-                  ? "进度会显示在上方，详细输出在底部终端。"
-                  : "上传 Pintia JSON 或设置导入选项后启动任务。实时日志会在底部终端显示。"}
-              </span>
+              <strong>{isStreaming ? "正在执行导入任务" : "等待快照上传"}</strong>
+              <span>{isStreaming ? "事件流可断点续传，详细状态显示在底部终端。" : "快照上传成功后自动入队，无需再次启动。"}</span>
             </div>
           )}
+          {stream.errorMessage ? <div className="notice notice-error">{stream.errorMessage}</div> : null}
         </section>
 
         <section className="panel history-panel">
@@ -293,26 +209,31 @@ export function ImportPage() {
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
+                  <th>任务</th>
                   <th>状态</th>
-                  <th>开始</th>
-                  <th>成功</th>
-                  <th>失败</th>
+                  <th>阶段</th>
+                  <th>创建时间</th>
+                  <th>错误</th>
                 </tr>
               </thead>
               <tbody>
-                {history.map((item) => (
-                  <tr key={item.ingestRunId}>
-                    <td>{item.ingestRunId}</td>
-                    <td><StatusBadge status={item.status} /></td>
-                    <td>{formatTime(item.startedAt)}</td>
-                    <td>{item.succeeded ?? "-"}</td>
-                    <td>{item.failed ?? "-"}</td>
+                {history.map((job) => (
+                  <tr key={job.id}>
+                    <td title={job.id}>{shortID(job.id)}</td>
+                    <td><StatusBadge status={job.status} /></td>
+                    <td>{job.stage}</td>
+                    <td>{formatTime(job.createdAt)}</td>
+                    <td>{job.error?.message ?? "-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {nextCursor ? (
+            <button className="button button-ghost" type="button" disabled={historyLoading} onClick={() => void loadHistory(nextCursor)}>
+              {historyLoading ? "加载中" : "加载更多"}
+            </button>
+          ) : null}
         </section>
       </div>
 
@@ -320,13 +241,13 @@ export function ImportPage() {
         <div className="log-title">
           <span>实时日志</span>
           {stream.logs.length ? (
-            <button className="button button-ghost" type="button" onClick={stream.clearLogs}>
-              清除
-            </button>
+            <button className="button button-ghost" type="button" onClick={stream.clearLogs}>清除</button>
           ) : null}
         </div>
         <div className="log-lines">
-          {stream.logs.length ? stream.logs.map((log, index) => <LogLine key={`${log.timestamp}-${index}`} log={log} />) : <EmptyState>任务日志会在导入开始后显示。</EmptyState>}
+          {stream.logs.length
+            ? stream.logs.map((log, index) => <LogLine key={`${log.timestamp}-${index}`} log={log} />)
+            : <EmptyState>任务日志会在快照上传后显示。</EmptyState>}
           <div ref={logEndRef} />
         </div>
       </section>
@@ -334,7 +255,7 @@ export function ImportPage() {
   );
 }
 
-function LogLine({ log }: { log: LogEntry }) {
+function LogLine({ log }: { log: ImportLogEntry }) {
   const time = log.timestamp ? new Date(log.timestamp).toLocaleTimeString("zh-CN") : "";
   return (
     <div className={`log-line log-${log.level}`}>

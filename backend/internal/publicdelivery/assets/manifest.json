@@ -1,0 +1,76 @@
+{
+  "schema": "ascendany.public-assets.v1",
+  "routes": {
+    "site": "/",
+    "studentWeb": "/app/",
+    "importConsole": "/admin/"
+  },
+  "files": [
+    {
+      "path": "admin/assets/index-CJSQLiIF.css",
+      "sha256": "ab211bcb72d6a17a793fa502de0f12d30ccebf2ffa1681d644c3a776e817eb33",
+      "size": 23277,
+      "cache": "immutable"
+    },
+    {
+      "path": "admin/assets/index-DisI9ruB.js",
+      "sha256": "b2d38967b08b25d22961636199e735f9c896e6a8c5177554867e1c4412da21ca",
+      "size": 318596,
+      "cache": "immutable"
+    },
+    {
+      "path": "admin/index.html",
+      "sha256": "a241084c7f1bcb8cb215a8b05a079cf5e4e6e48d43f6b2be5673ee86cea79dd6",
+      "size": 431,
+      "cache": "revalidate"
+    },
+    {
+      "path": "app/assets/index-DHxR94Hy.js",
+      "sha256": "8d1ddaf6d635106466a765ece7bfecdaf5385e398f34529994930c45fb0a2aa8",
+      "size": 330815,
+      "cache": "immutable"
+    },
+    {
+      "path": "app/assets/index-UqdZVQCV.css",
+      "sha256": "afe85fe7eb6a701624554ffb38735e3d706644c1c5be0da3987d9684a149d90e",
+      "size": 36576,
+      "cache": "immutable"
+    },
+    {
+      "path": "app/index.html",
+      "sha256": "fed2ed8440564e97bf75879d99f60288286882154e5b126c6d8a493faf5a9753",
+      "size": 504,
+      "cache": "revalidate"
+    },
+    {
+      "path": "site/assets/LOGO-Ct7Qmc2o.png",
+      "sha256": "cf19df06cc83ae34d8ff5e3ae902daf6c38f64edf4ca2a39368aaa4a4d4c8094",
+      "size": 239251,
+      "cache": "immutable"
+    },
+    {
+      "path": "site/assets/index-CaNnITye.js",
+      "sha256": "cf9e387bc6555de6454a2949e648606272d2212f45a8f101865b09ede6b35c1b",
+      "size": 169974,
+      "cache": "immutable"
+    },
+    {
+      "path": "site/assets/index-Z9g0rTgj.css",
+      "sha256": "84c8be0ff66eb4cbdf14e1e37de2d38d0d7037bfdc96e8c5900634f40a6b1013",
+      "size": 26262,
+      "cache": "immutable"
+    },
+    {
+      "path": "site/favicon.png",
+      "sha256": "b240edd798ae932903d5f2f6a68a662086a4f499d5de3f292f0573ac2df6c4d9",
+      "size": 239251,
+      "cache": "revalidate"
+    },
+    {
+      "path": "site/index.html",
+      "sha256": "2ba66f50b72f7be02e6ab908f6da27d6c81cf57aeebfed6ecae921d1940ad677",
+      "size": 675,
+      "cache": "revalidate"
+    }
+  ]
+}

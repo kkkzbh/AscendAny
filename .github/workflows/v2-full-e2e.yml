@@ -1,0 +1,135 @@
+name: AscendAny v2 Full E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 19 * * 6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-full-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-pgbouncer-contract:
+    name: Native PgBouncer Release Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout reviewed commit
+        uses: actions/checkout@v4
+
+      - name: Verify the signed Fedora RPM contract
+        run: ./tools/tests/pgbouncer-rpm-contract-fixture.sh
+
+      - name: Verify full E2E and rehearsal entrypoints
+        run: |
+          bash -n \
+            tools/run-v2-full-e2e.sh \
+            tools/run-v2-postgres-integration.sh \
+            tools/run-v2-postgres-podman-rehearsal.sh
+          if rg -n \
+            'docker\.io/pg[b]ouncer|PGBOUNCER_(IMAGE|CONTAINER)|auth_type = p[l]ain' \
+            tools/run-v2-full-e2e.sh \
+            tools/run-v2-postgres-integration.sh \
+            tools/run-v2-postgres-podman-rehearsal.sh; then
+            exit 1
+          fi
+
+  release-business-backup:
+    name: Release, Business Flow, and Restore
+    needs: native-pgbouncer-contract
+    runs-on: [self-hosted, linux, x64, fedora-44, ascendany-v2-full-e2e]
+    timeout-minutes: 120
+    steps:
+      - name: Checkout complete reviewed commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: backend/go.sum
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: pnpm
+
+      - name: Verify Fedora 44 native E2E runtime dependencies
+        run: |
+          grep -Fqx 'ID=fedora' /etc/os-release
+          grep -Fqx 'VERSION_ID=44' /etc/os-release
+          test "$(uname -m)" = x86_64
+          for command_name in \
+            bwrap curl ip jq openssl pg_dump pg_isready pg_restore \
+            pgbouncer podman psql rpm sha256sum ss zstd; do
+            command -v "${command_name}" >/dev/null
+          done
+
+      - name: Install repository dependencies
+        run: |
+          go -C backend mod download
+          pnpm install --frozen-lockfile
+
+      - name: Preload the digest-pinned PostgreSQL image
+        run: |
+          podman pull docker.io/library/postgres@sha256:030da09481c3876b71a7e49738a932e1c18c398201a1e4ccfdbff1e5a541215b
+
+      - name: Run release-to-restore full E2E
+        shell: /usr/bin/bash -p {0}
+        run: |
+          set -Eeuo pipefail
+          go_path="$(realpath -e -- "$(command -v go)")"
+          ./tools/run-v2-full-e2e.sh \
+            --confirm-reset run-disposable-ascendany-v2-full-e2e \
+            --version "0.0.0-e2e.${GITHUB_RUN_ID}" \
+            --commit "${GITHUB_SHA}" \
+            --go-path "${go_path}"
+
+  real-sandbox-acceptance:
+    name: Real Judge and LSP Sandbox Acceptance
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout reviewed commit
+        uses: actions/checkout@v4
+
+      - name: Preload the production judge image
+        shell: /usr/bin/bash -p {0}
+        run: |
+          set -Eeuo pipefail
+          for command_name in bwrap curl go jq podman sha256sum skopeo stat; do
+            command -v "${command_name}" >/dev/null
+          done
+          work="$(mktemp -d)"
+          trap 'rm -rf --one-file-system -- "${work}"' EXIT
+          archive="${work}/judge-image.oci.tar"
+          archive_sha256="${work}/judge-image.oci.tar.sha256"
+          /usr/bin/bash deploy/v2/scripts/acquire-judge-image.sh \
+            --output "${archive}" \
+            --sha256-output "${archive_sha256}"
+          podman load <"${archive}"
+          /usr/bin/bash deploy/v2/scripts/attest-judge-image.sh \
+            >"${work}/judge-image-attestation.json"
+          jq -e '.schema == "ascendany.judge-image-attestation.v1"' \
+            "${work}/judge-image-attestation.json" >/dev/null
+
+      - name: Run fail-closed real sandbox manifest
+        shell: /usr/bin/bash -p {0}
+        env:
+          REVIEWED_CLANGD_SHA256: ${{ vars.ASCENDANY_SANDBOX_CLANGD_SHA256 }}
+        run: |
+          set -Eeuo pipefail
+          ./tools/run-v2-sandbox-acceptance.sh \
+            --confirm run-real-ascendany-v2-sandbox-acceptance \
+            --clangd-sha256 "${REVIEWED_CLANGD_SHA256}"

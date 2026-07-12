@@ -1,0 +1,23 @@
+{
+  "name": "@ascendany/pintia-exporter",
+  "version": "2.2.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node scripts/generate-schema-validator.mjs",
+    "build": "node scripts/build.mjs",
+    "typecheck": "pnpm generate && tsc --noEmit",
+    "test": "pnpm generate && vitest run",
+    "check": "pnpm generate && tsc --noEmit && vitest run && node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.6",
+    "@types/node": "^22.15.30",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "esbuild": "^0.25.12",
+    "fake-indexeddb": "6.2.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

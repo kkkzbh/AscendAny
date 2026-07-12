@@ -1,43 +1,46 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImportJob, ImportJobPage } from "@ascendany/sdk";
 import { ImportPage } from "./ImportPage";
-import type { ImportRunResponse, IngestHistoryResponse } from "../api/import";
+
+const job: ImportJob = {
+  id: "123e4567-e89b-42d3-a456-426614174000",
+  artifactSha256: "a".repeat(64),
+  status: "queued",
+  stage: "received",
+  createdAt: "2026-07-11T04:00:00Z",
+  updatedAt: "2026-07-11T04:00:00Z",
+  examId: null,
+  snapshotId: null,
+  error: null,
+};
 
 const importMocks = vi.hoisted(() => ({
-  uploadExamZip: vi.fn(),
-  startImportRun: vi.fn<() => Promise<ImportRunResponse>>(),
-  getIngestHistory: vi.fn<() => Promise<IngestHistoryResponse>>(),
+  uploadPintiaSnapshot: vi.fn<(file: File, onProgress?: (percent: number) => void) => Promise<ImportJob>>(),
+  getImportHistory: vi.fn<(limit?: number, cursor?: string) => Promise<ImportJobPage>>(),
 }));
 
 const streamState = vi.hoisted(() => ({
   logs: [] as Array<{ level: "info" | "success" | "warning" | "error"; message: string; timestamp: string }>,
-  progress: null as { current: number; total: number; examType?: string | null } | null,
+  progress: null as { current: number; total: number; phase: string } | null,
   status: "idle" as "idle" | "connecting" | "streaming" | "done" | "error",
-  result: null as Record<string, unknown> | null,
+  result: null as ImportJob | null,
   errorMessage: null as string | null,
-  connect: vi.fn<(runId: string, path: string) => void>(),
+  connect: vi.fn<(jobId: string) => void>(),
   disconnect: vi.fn<() => void>(),
   clearLogs: vi.fn<() => void>(),
 }));
 
-vi.mock("../api/import", () => ({
-  EXAM_TYPES: [
-    { value: "pintia", label: "Pintia JSON" },
-    { value: "datastructure", label: "数据结构" },
-    { value: "pta_icpc", label: "PTA ICPC" },
-  ],
-  ...importMocks,
-}));
+vi.mock("../api/import", () => importMocks);
 
-vi.mock("../hooks/useSSEStream", () => ({
-  useSSEStream: () => streamState,
+vi.mock("../hooks/useImportJobStream", () => ({
+  useImportJobStream: () => streamState,
 }));
 
 describe("ImportPage", () => {
   beforeEach(() => {
-    importMocks.uploadExamZip.mockReset();
-    importMocks.startImportRun.mockReset();
-    importMocks.getIngestHistory.mockReset();
+    importMocks.uploadPintiaSnapshot.mockReset();
+    importMocks.getImportHistory.mockReset();
     streamState.logs = [];
     streamState.progress = null;
     streamState.status = "idle";
@@ -46,54 +49,51 @@ describe("ImportPage", () => {
     streamState.connect.mockReset();
     streamState.disconnect.mockReset();
     streamState.clearLogs.mockReset();
-    importMocks.getIngestHistory.mockResolvedValue({ items: [], total: 0 });
+    importMocks.getImportHistory.mockResolvedValue({ items: [], nextCursor: null });
   });
 
-  it("renders realtime logs in a standalone bottom terminal", async () => {
+  it("renders v2 snapshot upload and the standalone task terminal", async () => {
     const { container } = render(<ImportPage />);
 
-    expect(await screen.findByText("上传队列")).toBeInTheDocument();
+    expect(await screen.findByText("上传快照")).toBeInTheDocument();
+    expect(screen.getByText("拖入 Pintia snapshot v2 JSON")).toBeInTheDocument();
+    expect(screen.getByText("每次上传一份浏览器插件生成的完整 JSON 快照")).toBeInTheDocument();
     const terminal = container.querySelector(".import-terminal");
     expect(terminal).not.toBeNull();
     expect(terminal).toHaveTextContent("实时日志");
-    expect(terminal).toHaveTextContent("任务日志会在导入开始后显示。");
-    expect(container.querySelector(".import-workspace .log-panel")).toBeNull();
+    expect(terminal).toHaveTextContent("任务日志会在快照上传后显示。");
   });
 
-  it("starts import and keeps terminal log controls wired to the stream", async () => {
-    streamState.logs = [
-      {
-        level: "info",
-        message: "scan started",
-        timestamp: "2026-04-28T10:00:00+00:00",
-      },
-    ];
-    importMocks.startImportRun.mockResolvedValue({
-      runId: "run-1",
-      message: "started",
+  it("queues one JSON snapshot and connects the durable v2 job stream", async () => {
+    importMocks.uploadPintiaSnapshot.mockImplementation(async (_file, onProgress) => {
+      onProgress?.(100);
+      return job;
     });
-
     const { container } = render(<ImportPage />);
+    await screen.findByText("上传快照");
 
-    expect(await screen.findByText("scan started")).toBeInTheDocument();
-    expect(container.querySelector(".import-terminal")).toHaveTextContent("scan started");
-
-    fireEvent.click(screen.getByRole("button", { name: "开始增量导入" }));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    const file = new File(["{}"], "pintia-snapshot.json", { type: "application/json" });
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(importMocks.startImportRun).toHaveBeenCalledWith({
-        examTypes: ["pintia"],
-        dryRun: false,
-        force: false,
-      });
-      expect(streamState.clearLogs).toHaveBeenCalled();
-      expect(streamState.connect).toHaveBeenCalledWith(
-        "run-1",
-        "/api/v1/import/run/{run_id}/stream",
-      );
+      expect(importMocks.uploadPintiaSnapshot).toHaveBeenCalledWith(file, expect.any(Function));
+      expect(streamState.connect).toHaveBeenCalledWith(job.id);
+      expect(screen.getByText("123e4567")).toBeInTheDocument();
     });
+    expect(importMocks.getImportHistory).toHaveBeenCalledWith(30, undefined);
+    expect(screen.queryByRole("button", { name: "开始增量导入" })).not.toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "清除" }));
-    expect(streamState.clearLogs).toHaveBeenCalledTimes(2);
+  it("rejects a non-JSON file before calling the v2 upload operation", async () => {
+    const { container } = render(<ImportPage />);
+    await screen.findByText("上传快照");
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File(["rows"], "submissions.csv", { type: "text/csv" });
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+
+    expect(await screen.findByText("每次请选择一个浏览器插件导出的 Pintia JSON 快照")).toBeInTheDocument();
+    expect(importMocks.uploadPintiaSnapshot).not.toHaveBeenCalled();
   });
 });

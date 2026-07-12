@@ -1,22 +1,16 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import logoImage from "../../../image/LOGO.png";
-import desktopScreenshot from "../../../image/主界面.png";
-import loginScreenshot from "../../../image/登录界面.png";
-import abilityPanelScreenshot from "../../../image/能力面板.png";
-import roleSwitchScreenshot from "../../../image/角色切换.png";
+import { isVersionedAndroidReleaseAsset } from "./releaseAssetContract.ts";
 import "./styles.css";
 
-const RELEASE_OWNER = (import.meta.env.VITE_RELEASE_OWNER ?? "kkkzbh").trim() || "kkkzbh";
-const RELEASE_REPO = (import.meta.env.VITE_RELEASE_REPO ?? "AscendAny").trim() || "AscendAny";
-const WEB_ACCESS_URL = (import.meta.env.VITE_WEB_ACCESS_URL ?? "https://ascendany.kkkzbh.cn/").trim();
-const RELEASE_API_URL = `https://api.github.com/repos/${encodeURIComponent(RELEASE_OWNER)}/${encodeURIComponent(RELEASE_REPO)}/releases/latest`;
-const RELEASE_MANIFEST_URL = `${import.meta.env.BASE_URL}release-assets.json`;
+const WEB_ACCESS_URL = "/app/";
+const RELEASE_API_URL = "https://api.github.com/repos/kkkzbh/AscendAny/releases/latest";
 
 /* ─── Theme Hook (localStorage) ─── */
 const STORAGE_KEY = "ascendany-theme";
 type Theme = "light" | "dark";
 
-function getInitialTheme(): Theme {
+export function getInitialTheme(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === "light" || stored === "dark") return stored;
@@ -235,7 +229,7 @@ type FeatureItem = {
 };
 
 const features: FeatureItem[] = [
-  { icon: "import", iconClass: "feature-icon--import", label: "增量导入", metric: "100% 幂等", desc: "新增考试自动识别，重复执行不会重复入库。" },
+  { icon: "import", iconClass: "feature-icon--import", label: "快照导入", metric: "严格验证", desc: "TypeScript Manifest V3 插件导出完整 Pintia snapshot v2，由 Go 校验后入库。" },
   { icon: "ability", iconClass: "feature-icon--ability", label: "能力画像", metric: "5 大维度", desc: "知识、准确、质量、灵活、熟练形成多角度评估。" },
   { icon: "rating", iconClass: "feature-icon--rating", label: "评分追踪", metric: "逐场更新", desc: "每场考试都记录 rating 变化，成长趋势清晰可见。" },
   { icon: "ai", iconClass: "feature-icon--ai", label: "智能解读", metric: "自动总结", desc: "AI 给出近期表现洞察和改进方向。" },
@@ -251,52 +245,18 @@ type AbilityItem = {
 
 const abilities: AbilityItem[] = [
   { icon: "knowledge", iconClass: "ability-card-icon--know", name: "知识", subtitle: "掌握程度", desc: "根据通过率和得分率评估知识点掌握，并强调近期表现。" },
-  { icon: "accuracy", iconClass: "ability-card-icon--acc", name: "准确", subtitle: "提交效率", desc: "关注 AC 前提交次数，奖励高效解题与稳定正确率。" },
-  { icon: "quality", iconClass: "ability-card-icon--qual", name: "质量", subtitle: "解法质量", desc: "结合运行时数据衡量解法质量，支持后续扩展代码风格维度。" },
-  { icon: "flexibility", iconClass: "ability-card-icon--flex", name: "灵活", subtitle: "应变能力", desc: "通过切题节奏与卡题时长反映临场策略调整能力。" },
+  { icon: "accuracy", iconClass: "ability-card-icon--acc", name: "准确", subtitle: "提交效率", desc: "根据通过题数与完整提交时间线评估稳定正确率。" },
+  { icon: "quality", iconClass: "ability-card-icon--qual", name: "质量", subtitle: "解法质量", desc: "按题内 accepted runtime 中位数归一化，衡量解法执行质量。" },
+  { icon: "flexibility", iconClass: "ability-card-icon--flex", name: "灵活", subtitle: "应变能力", desc: "综合提交效率、相邻切题率和尝试覆盖度评估临场调整。" },
   { icon: "speed", iconClass: "ability-card-icon--speed", name: "熟练", subtitle: "解题速度", desc: "比较同场解题耗时，直观看出学生的速度与熟练度。" },
 ];
 
 type WorkflowItem = { title: string; desc: string };
 const workflow: WorkflowItem[] = [
-  { title: "扫描新增考试", desc: "自动识别新目录与快照，兼容多种数据编码。" },
-  { title: "标准化入库", desc: "以唯一键与行指纹保证幂等导入。" },
-  { title: "计算能力与 rating", desc: "产出五维指标和每场考试的评分变化。" },
-  { title: "生成 AI 洞察", desc: "面向老师和学生提供可执行的学习建议。" },
-];
-
-type ScreenPreviewItem = {
-  title: string;
-  desc: string;
-  image: string;
-  alt: string;
-};
-
-const screenPreviews: [ScreenPreviewItem, ...ScreenPreviewItem[]] = [
-  {
-    title: "主界面总览",
-    desc: "主界面主要展示用户个人能力信息，并可向 AI 助手询问自身与考试各项信息。",
-    image: desktopScreenshot,
-    alt: "AscendAny 主界面",
-  },
-  {
-    title: "登录界面",
-    desc: "先登个录，马上进场；流程够轻，开局够快。",
-    image: loginScreenshot,
-    alt: "AscendAny 登录界面",
-  },
-  {
-    title: "角色切换",
-    desc: "小祥请求出战，不满意？ 还可以自定义。",
-    image: roleSwitchScreenshot,
-    alt: "AscendAny 角色切换界面",
-  },
-  {
-    title: "能力面板",
-    desc: "这张面板像成绩解说员，强项直接夸，短板当场点名。",
-    image: abilityPanelScreenshot,
-    alt: "AscendAny 能力面板",
-  },
+  { title: "导出完整快照", desc: "在当前登录的 Pintia 题目集页面，由 TypeScript 插件生成 snapshot v2 JSON。" },
+  { title: "Go 严格验证", desc: "校验 schema、完整分页、引用、数量与 SHA-256，在单个事务中导入。" },
+  { title: "发布不可变分析", desc: "生成绑定输入 manifest 与 analytics revision 的能力指标和 Rating。" },
+  { title: "形成学习洞察", desc: "AI 分析与推荐携带精确模型、配置和数据 provenance。" },
 ];
 
 type DownloadStatus = "available" | "soon" | "later";
@@ -321,15 +281,7 @@ type GithubLatestRelease = {
   assets?: GithubReleaseAsset[];
 };
 
-type ReleaseFetchResult = {
-  status: number;
-  assets: GithubReleaseAsset[];
-};
-
-const EMPTY_RELEASE_FETCH_RESULT: ReleaseFetchResult = {
-  status: 0,
-  assets: [],
-};
+type ReleaseLoadStatus = "loading" | "ready" | "unavailable";
 
 const defaultDownloads: DownloadItem[] = [
   { target: "linux", platform: "Linux", icon: "linux", pkg: "RPM", arch: "x64", status: "soon", action: "暂无资源" },
@@ -359,8 +311,6 @@ function getAssetLink(
 function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
   const hasX64Alias = (name: string) =>
     name.includes("x64") || name.includes("amd64") || name.includes("x86_64");
-  const hasArmAlias = (name: string) =>
-    name.includes("arm64") || name.includes("aarch64") || name.includes("armeabi") || name.includes("arm-v7a");
 
   const windowsHref = getAssetLink(
     assets,
@@ -376,13 +326,7 @@ function resolveDownloads(assets: GithubReleaseAsset[]): DownloadItem[] {
   );
   const androidHref = getAssetLink(
     assets,
-    (name) =>
-      name.endsWith(".apk")
-      && (
-        name.includes("android")
-        || name.includes("mobile")
-        || hasArmAlias(name)
-      ),
+    isVersionedAndroidReleaseAsset,
   );
 
   return defaultDownloads.map((item) => {
@@ -403,20 +347,24 @@ async function fetchReleaseAssets(
   url: string,
   signal: AbortSignal,
   init?: Omit<RequestInit, "signal">,
-): Promise<ReleaseFetchResult> {
+): Promise<GithubReleaseAsset[]> {
   const response = await fetch(url, {
     ...init,
     signal,
   });
   if (!response.ok) {
-    return { status: response.status, assets: [] };
+    throw new Error(`GitHub Releases returned HTTP ${response.status}.`);
   }
 
-  const payload = (await response.json()) as GithubLatestRelease;
-  if (!Array.isArray(payload.assets)) {
-    return { status: response.status, assets: [] };
+  const payload: unknown = await response.json();
+  if (typeof payload !== "object" || payload === null || !("assets" in payload)) {
+    throw new Error("GitHub Releases response has no asset list.");
   }
-  return { status: response.status, assets: payload.assets };
+  const assets = (payload as GithubLatestRelease).assets;
+  if (!Array.isArray(assets)) {
+    throw new Error("GitHub Releases asset list is invalid.");
+  }
+  return assets;
 }
 
 /* ─── Small Components ─── */
@@ -443,81 +391,23 @@ function RevealGroup({ children }: { children: ReactNode }) {
 export default function App() {
   const { theme, toggle } = useTheme();
   const [downloads, setDownloads] = useState<DownloadItem[]>(defaultDownloads);
-  const [activeScreenIndex, setActiveScreenIndex] = useState(0);
-  const touchStartXRef = useRef<number | null>(null);
-  const screenCount = screenPreviews.length;
-  const activeScreen = screenPreviews[activeScreenIndex] ?? screenPreviews[0];
-
-  const gotoScreen = useCallback((index: number) => {
-    setActiveScreenIndex(index);
-  }, []);
-
-  const gotoNextScreen = useCallback(() => {
-    if (screenCount === 0) return;
-    setActiveScreenIndex((prev) => (prev + 1) % screenCount);
-  }, [screenCount]);
-
-  const gotoPrevScreen = useCallback(() => {
-    if (screenCount === 0) return;
-    setActiveScreenIndex((prev) => (prev - 1 + screenCount) % screenCount);
-  }, [screenCount]);
-
-  const onScreenTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
-    touchStartXRef.current = event.touches[0]?.clientX ?? null;
-  }, []);
-
-  const onScreenTouchEnd = useCallback((event: TouchEvent<HTMLDivElement>) => {
-    const startX = touchStartXRef.current;
-    const endX = event.changedTouches[0]?.clientX;
-    touchStartXRef.current = null;
-    if (typeof startX !== "number" || typeof endX !== "number") return;
-    const deltaX = endX - startX;
-    if (Math.abs(deltaX) < 50) return;
-    if (deltaX < 0) {
-      gotoNextScreen();
-      return;
-    }
-    gotoPrevScreen();
-  }, [gotoNextScreen, gotoPrevScreen]);
+  const [releaseLoadStatus, setReleaseLoadStatus] = useState<ReleaseLoadStatus>("loading");
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function loadReleaseAssets() {
       try {
-        const [apiResult, manifestResult] = await Promise.allSettled([
-          fetchReleaseAssets(RELEASE_API_URL, controller.signal, {
-            headers: {
-              Accept: "application/vnd.github+json",
-            },
-          }),
-          fetchReleaseAssets(RELEASE_MANIFEST_URL, controller.signal, {
-            cache: "no-store",
-          }),
-        ]);
-
-        const api = apiResult.status === "fulfilled"
-          ? apiResult.value
-          : EMPTY_RELEASE_FETCH_RESULT;
-        const manifest = manifestResult.status === "fulfilled"
-          ? manifestResult.value
-          : EMPTY_RELEASE_FETCH_RESULT;
-
-        if (api.assets.length > 0) {
-          setDownloads(resolveDownloads(api.assets));
-          return;
-        }
-
-        if (manifest.assets.length > 0) {
-          setDownloads(resolveDownloads(manifest.assets));
-          return;
-        }
-
-        if (api.status === 403) {
-          console.warn("[AscendAny] GitHub API rate limited; release assets are temporarily unavailable.");
-        }
+        const assets = await fetchReleaseAssets(RELEASE_API_URL, controller.signal, {
+          headers: {
+            Accept: "application/vnd.github+json",
+          },
+        });
+        setDownloads(resolveDownloads(assets));
+        setReleaseLoadStatus("ready");
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
+          setReleaseLoadStatus("unavailable");
           console.warn("[AscendAny] Failed to load release assets.", error);
         }
       }
@@ -550,7 +440,7 @@ export default function App() {
 
           <nav className="site-nav" aria-label="导航">
             <a href="#features">能力亮点</a>
-            <a href="#screens">界面预览</a>
+            <a href="#screens">产品界面</a>
             <a href="#workflow">工作流</a>
             <a href="#download">下载</a>
           </nav>
@@ -584,7 +474,7 @@ export default function App() {
                 <h1>把考试数据转化为可解释的成长洞察</h1>
 
                 <p className="hero-subtitle">
-                  AscendAny 支持增量导入、五维能力评分和 rating 追踪，帮助教师快速定位问题、帮助学生明确提升方向。
+                  AscendAny 从 Pintia snapshot v2 建立可追溯的能力评分、Rating 与 AI 学习洞察，帮助教师定位问题、帮助学生明确提升方向。
                 </p>
 
                 <div className="hero-actions">
@@ -600,7 +490,7 @@ export default function App() {
                 <div className="hero-tags">
                   <span className="hero-tag">
                     <Icon name="check" />
-                    增量幂等导入
+                    Snapshot v2 唯一输入
                   </span>
                   <span className="hero-tag">
                     <Icon name="check" />
@@ -613,9 +503,15 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="hero-visual">
-                <div className="hero-visual-frame">
-                  <img src={desktopScreenshot} alt="AscendAny 应用主界面" />
+              <div className="hero-visual hero-visual--contract">
+                <div className="hero-contract-card" aria-label="AscendAny v2 数据流">
+                  <span>TypeScript Pintia extension</span>
+                  <Icon name="arrowRight" className="hero-contract-arrow" />
+                  <span>Snapshot v2</span>
+                  <Icon name="arrowRight" className="hero-contract-arrow" />
+                  <span>Strict Go import</span>
+                  <Icon name="arrowRight" className="hero-contract-arrow" />
+                  <span>Immutable analytics &amp; AI</span>
                 </div>
 
                 <div className="hero-floating-card">
@@ -623,7 +519,7 @@ export default function App() {
                     <Icon name="sparkle" />
                   </div>
                   <strong>本周洞察</strong>
-                  <p>班级近三场考试平均准确度提升 9.4%。</p>
+                  <p>每条分析结果都关联精确 analytics revision 与模型 provenance。</p>
                 </div>
 
                 <div className="hero-stats">
@@ -632,8 +528,8 @@ export default function App() {
                     <span>能力维度</span>
                   </div>
                   <div className="hero-stat">
-                    <strong>100%</strong>
-                    <span>幂等导入</span>
+                    <strong>v2</strong>
+                    <span>快照合同</span>
                   </div>
                 </div>
               </div>
@@ -658,83 +554,19 @@ export default function App() {
             </section>
           </RevealGroup>
 
-          {/* ── Screenshots ── */}
+          {/* ── Product surfaces ── */}
           <RevealGroup>
             <section className="panel reveal" id="screens">
               <SectionHeader
-                label="界面预览"
-                title="核心功能界面一览"
-                desc="覆盖登录、主界面、角色切换与能力分析等关键页面。"
+                label="产品界面"
+                title="界面随 v2 客户端共同演进"
+                desc="官网只说明产品范围；具体布局、字段与交互以已发布的 Web、Desktop 和 Mobile 客户端为准。"
               />
-              <div className="screen-carousel">
-                <div className="screen-current-info">
-                  <span className="screen-stage-index">
-                    {String(activeScreenIndex + 1).padStart(2, "0")} / {String(screenCount).padStart(2, "0")}
-                  </span>
-                  <h3 className="screen-current-title">{activeScreen.title}</h3>
-                  <p className="screen-current-desc">{activeScreen.desc}</p>
-                </div>
-
-                <article className="screen-stage">
-                  <div
-                    className="screen-stage-image-wrap"
-                    onTouchStart={onScreenTouchStart}
-                    onTouchEnd={onScreenTouchEnd}
-                    onTouchCancel={() => {
-                      touchStartXRef.current = null;
-                    }}
-                  >
-                    <div
-                      className="screen-stage-slider"
-                      style={{ transform: `translateX(-${activeScreenIndex * 100}%)` }}
-                    >
-                      {screenPreviews.map((item) => (
-                        <div className="screen-stage-slide" key={item.title}>
-                          <img
-                            className="screen-stage-image"
-                            src={item.image}
-                            alt={item.alt}
-                            loading="lazy"
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    <button
-                      type="button"
-                      className="screen-arrow screen-arrow--prev"
-                      onClick={gotoPrevScreen}
-                      aria-label="上一张界面"
-                    >
-                      <Icon name="arrowRight" />
-                    </button>
-                    <button
-                      type="button"
-                      className="screen-arrow screen-arrow--next"
-                      onClick={gotoNextScreen}
-                      aria-label="下一张界面"
-                    >
-                      <Icon name="arrowRight" />
-                    </button>
-                  </div>
-                </article>
-
-                <div className="screen-track" role="tablist" aria-label="界面轮播导航">
-                  {screenPreviews.map((item, index) => (
-                    <button
-                      key={item.title}
-                      type="button"
-                      className={`screen-thumb ${activeScreenIndex === index ? "is-active" : ""}`}
-                      onClick={() => gotoScreen(index)}
-                      aria-label={`查看${item.title}`}
-                      aria-pressed={activeScreenIndex === index}
-                    >
-                      <img src={item.image} alt="" aria-hidden="true" />
-                      <span>{item.title}</span>
-                    </button>
-                  ))}
-                </div>
-                <p className="screen-tip">左右滑动图片，或点击下方缩略图与左右按钮切换。</p>
+              <div className="product-surface-note">
+                <Icon name="sparkle" />
+                <p>
+                  当前官网不使用早期原型截图承诺产品行为。每个正式发布包均以同一 OpenAPI 合同连接 Go 后端，版本说明记录实际可用能力。
+                </p>
               </div>
             </section>
           </RevealGroup>
@@ -769,8 +601,8 @@ export default function App() {
             <section className="panel reveal" id="workflow">
               <SectionHeader
                 label="执行流程"
-                title="从新增考试到 AI 建议，全链路自动完成"
-                desc="四步流水线，无需手动干预，只需放入新的考试数据即可获得完整分析结果。"
+                title="从 Pintia 快照到可追溯学习洞察"
+                desc="用户在已登录的 Pintia 题目集页面导出完整 snapshot v2，经 Go 严格验证后发布不可变分析结果。"
               />
               <div className="workflow-grid">
                 {workflow.map((w, i) => (
@@ -820,8 +652,14 @@ export default function App() {
                   </article>
                 ))}
               </div>
-              <p className="download-note" id="notify">
-                Windows EXE、Linux RPM (x64) 与 Android APK (ARM) 会在 GitHub Releases 发布后自动开放下载；macOS 已提供 Web 访问入口，iOS 敬请期待。
+              <p
+                className="download-note"
+                id="notify"
+                role={releaseLoadStatus === "unavailable" ? "alert" : undefined}
+              >
+                {releaseLoadStatus === "unavailable"
+                  ? "GitHub Releases 元数据当前不可用，下载按钮保持关闭；macOS Web 入口仍可使用。"
+                  : "Windows EXE、Linux RPM (x64) 与 Android APK (ARM) 会在 GitHub Releases 发布后自动开放下载；macOS 已提供 Web 访问入口，iOS 敬请期待。"}
               </p>
             </section>
           </RevealGroup>
@@ -836,7 +674,7 @@ export default function App() {
           </div>
           <div className="footer-links">
             <a href="#features">产品能力</a>
-            <a href="#screens">界面预览</a>
+            <a href="#screens">产品界面</a>
             <a href="#workflow">工作流</a>
             <a href="#top">回到顶部</a>
           </div>

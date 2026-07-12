@@ -1,0 +1,30 @@
+{
+  "submission": {
+    "submissionDetails": [
+      {
+        "programmingSubmissionDetail": {
+          "program": "SANITIZED_CODE_PLACEHOLDER"
+        }
+      }
+    ],
+    "judgeResponseContents": [
+      {
+        "programmingJudgeResponseContent": {
+          "compilationResult": {
+            "log": ""
+          },
+          "testcaseJudgeResults": {
+            "case-1": {
+              "result": "ACCEPTED",
+              "testcaseScore": 40,
+              "time": 0.125,
+              "memory": 1048576,
+              "error": "",
+              "checkerOutput": ""
+            }
+          }
+        }
+      }
+    ]
+  }
+}

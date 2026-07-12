@@ -1,0 +1,66 @@
+[Unit]
+Description=AscendAny v2 locally managed Cloudflare Tunnel
+Documentation=file:/opt/ascendany/v2/README.md
+Wants=network-online.target
+After=network-online.target
+AssertFileIsExecutable=/usr/bin/cloudflared
+AssertPathExists=/opt/ascendany/v2/config/cloudflared.yaml
+
+[Service]
+Type=exec
+DynamicUser=yes
+User=ascendany-cloudflared
+Group=ascendany-cloudflared
+WorkingDirectory=/var/empty
+UMask=0077
+
+LoadCredentialEncrypted=tunnel_credentials:/etc/ascendany/credentials/cloudflare_tunnel_credentials.cred
+ExecStartPre=/usr/bin/test -s %d/tunnel_credentials
+ExecStart=/usr/bin/cloudflared tunnel --config /opt/ascendany/v2/config/cloudflared.yaml --metrics 127.0.0.1:20090 --loglevel info --transport-loglevel warn run --credentials-file %d/tunnel_credentials e448a34c-9274-4c9d-8c69-e1a7fa369e52
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+MemoryPressureWatch=yes
+MemoryPressureThresholdSec=200ms
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+DevicePolicy=closed
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadOnlyPaths=/opt/ascendany/v2/config/cloudflared.yaml
+InaccessiblePaths=-/etc/ascendany -/opt/ascendany/Release -/var/lib/ascendany/artifacts
+TasksMax=512
+MemoryHigh=384M
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

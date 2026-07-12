@@ -1,0 +1,37 @@
+{
+  "submissions": [
+    {
+      "id": "submission-alpha",
+      "problemSetProblemId": "problem-set-problem-alpha",
+      "problemType": "PROGRAMMING",
+      "userId": "user-alpha",
+      "submitAt": "2030-01-01T01:10:00.000Z",
+      "compiler": "GXX",
+      "status": "ACCEPTED",
+      "score": 40,
+      "time": 0.125,
+      "memory": 1048576
+    }
+  ],
+  "hasBefore": false,
+  "examMemberByUserId": {
+    "user-alpha": {
+      "userId": "user-alpha",
+      "studentUserId": "student-alpha",
+      "userGroupId": "group-synthetic"
+    }
+  },
+  "studentUserById": {
+    "student-alpha": {
+      "id": "student-alpha",
+      "name": "Learner Alpha",
+      "studentNumber": "SYNTHETIC-001"
+    }
+  },
+  "userById": {
+    "user-alpha": {
+      "id": "user-alpha",
+      "nickname": "Alpha"
+    }
+  }
+}

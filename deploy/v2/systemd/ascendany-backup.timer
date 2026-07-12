@@ -1,0 +1,13 @@
+[Unit]
+Description=Run AscendAny v2 backup daily
+Documentation=file:/opt/ascendany/v2/README.md
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=20m
+Persistent=yes
+AccuracySec=1m
+Unit=ascendany-backup.service
+
+[Install]
+WantedBy=timers.target

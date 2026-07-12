@@ -9,14 +9,19 @@
     "build:web": "pnpm --filter @ascendany/site build",
     "dev:app-web": "pnpm --filter @ascendany/web dev",
     "build:app-web": "pnpm --filter @ascendany/web build",
-    "build:android": "pnpm --filter @ascendany/mobile dist:android:release",
     "dev:import": "pnpm --filter @ascendany/import-console dev",
     "build:import": "pnpm --filter @ascendany/import-console build",
     "dev:mobile": "pnpm --filter @ascendany/mobile dev",
-    "build:mobile": "pnpm --filter @ascendany/mobile build"
+    "build:mobile": "pnpm --filter @ascendany/mobile build",
+    "public-assets:generate": "node tools/build-v2-public-assets.mjs --write",
+    "public-assets:check": "node tools/build-v2-public-assets.mjs --check",
+    "public-assets:test": "node --test tools/build-v2-public-assets.test.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.18.0"
+  },
+  "devDependencies": {
+    "parse5": "7.3.0"
   },
   "packageManager": "pnpm@9.15.4"
 }

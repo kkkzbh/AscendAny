@@ -1,12 +1,85 @@
-def ascendanyVersionNameEnv = (System.getenv("ASCENDANY_ANDROID_VERSION_NAME") ?: "").trim()
-def ascendanyVersionCodeEnv = (System.getenv("ASCENDANY_ANDROID_VERSION_CODE") ?: "").trim()
+def ascendanyVersionNameEnv = System.getenv("ASCENDANY_ANDROID_VERSION_NAME") ?: ""
+def ascendanyVersionCodeEnv = System.getenv("ASCENDANY_ANDROID_VERSION_CODE") ?: ""
 def ascendanyVersionCodeValue = ascendanyVersionCodeEnv.isInteger() ? ascendanyVersionCodeEnv.toInteger() : null
+def ascendanyReleaseWrapper = System.getenv("ASCENDANY_ANDROID_RELEASE_WRAPPER") ?: ""
+def ascendanySigningEnvironmentNames = [
+    "ASCENDANY_ANDROID_SIGNING_STORE_FILE",
+    "ASCENDANY_ANDROID_SIGNING_STORE_PASSWORD",
+    "ASCENDANY_ANDROID_SIGNING_KEY_ALIAS",
+    "ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD",
+]
+def ascendanyInjectedSigningPropertyPrefix = "android.injected.signing."
 
-def ascendanyReleaseStoreFilePath = (System.getenv("ASCENDANY_ANDROID_SIGNING_STORE_FILE") ?: "").trim()
-def ascendanyReleaseStorePassword = (System.getenv("ASCENDANY_ANDROID_SIGNING_STORE_PASSWORD") ?: "").trim()
-def ascendanyReleaseKeyAlias = (System.getenv("ASCENDANY_ANDROID_SIGNING_KEY_ALIAS") ?: "").trim()
-def ascendanyReleaseKeyPassword = (System.getenv("ASCENDANY_ANDROID_SIGNING_KEY_PASSWORD") ?: "").trim()
-def ascendanyHasReleaseSigning = ascendanyReleaseStoreFilePath && ascendanyReleaseStorePassword && ascendanyReleaseKeyAlias && ascendanyReleaseKeyPassword
+def ascendanyCanonicalSemver = { String value ->
+    if (value.length() > 128) {
+        return false
+    }
+    def match = value =~ /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
+    if (!match.matches()) {
+        return false
+    }
+    def prerelease = match.group(4)
+    return prerelease == null || prerelease.split(/\./).every { identifier ->
+        !(identifier ==~ /^[0-9]+$/) || identifier == "0" || !identifier.startsWith("0")
+    }
+}
+
+def ascendanyValidateReleaseContract = {
+    if (!ascendanyCanonicalSemver(ascendanyVersionNameEnv)) {
+        throw new GradleException("ASCENDANY_ANDROID_VERSION_NAME must be an explicit canonical SemVer value of at most 128 ASCII bytes for release builds")
+    }
+    if (ascendanyVersionCodeValue == null || ascendanyVersionCodeValue <= 0) {
+        throw new GradleException("ASCENDANY_ANDROID_VERSION_CODE must be an explicit positive integer for release builds")
+    }
+    if (ascendanyReleaseWrapper != "1") {
+        throw new GradleException("Android release tasks must run through the AscendAny release wrapper")
+    }
+    if (ascendanySigningEnvironmentNames.any { System.getenv(it) != null }) {
+        throw new GradleException("Android signing credentials must not enter the Gradle process")
+    }
+    if (project.properties.keySet().any { propertyName ->
+        propertyName.toString().startsWith(ascendanyInjectedSigningPropertyPrefix)
+    }) {
+        throw new GradleException("Android injected signing project properties must not enter the Gradle process")
+    }
+}
+
+def ascendanyReleasePackagingTaskName = { String taskName ->
+    def normalizedName = taskName.toLowerCase(java.util.Locale.ROOT)
+    if (!normalizedName.contains("release")) {
+        return false
+    }
+    return ["assemble", "bundle", "package", "sign", "install", "publish"].any { prefix ->
+        normalizedName.startsWith(prefix)
+    }
+}
+
+def ascendanyRequestedSelectorBuildsRelease = { String selector ->
+    def targetsApp = !selector.contains(":") || selector.startsWith("${project.path}:")
+    if (!targetsApp) {
+        return false
+    }
+    def taskName = selector.substring(selector.lastIndexOf(":") + 1)
+    def normalizedName = taskName.toLowerCase(java.util.Locale.ROOT)
+    return normalizedName in ["assemble", "build", "bundle"] || ascendanyReleasePackagingTaskName(taskName)
+}
+
+if (gradle.startParameter.taskNames.any(ascendanyRequestedSelectorBuildsRelease)) {
+    ascendanyValidateReleaseContract()
+}
+
+def ascendanyReleasePackagingTask = { task ->
+    if (task.project != project) {
+        return false
+    }
+    return ascendanyReleasePackagingTaskName(task.name)
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    if (taskGraph.allTasks.any(ascendanyReleasePackagingTask)) {
+        ascendanyValidateReleaseContract()
+    }
+}
 
 android {
     defaultConfig {
@@ -18,20 +91,9 @@ android {
         }
     }
 
-    signingConfigs {
-        release {
-            if (ascendanyHasReleaseSigning) {
-                storeFile file(ascendanyReleaseStoreFilePath)
-                storePassword ascendanyReleaseStorePassword
-                keyAlias ascendanyReleaseKeyAlias
-                keyPassword ascendanyReleaseKeyPassword
-            }
-        }
-    }
-
     buildTypes {
         release {
-            signingConfig ascendanyHasReleaseSigning ? signingConfigs.release : signingConfigs.debug
+            signingConfig = null
         }
     }
 }

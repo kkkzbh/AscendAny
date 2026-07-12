@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AscendAny Pintia Exporter v2",
+  "description": "Export a complete Pintia problem set as an AscendAny snapshot v2.",
+  "version": "2.2.2",
+  "minimum_chrome_version": "120",
+  "action": {
+    "default_title": "Export Pintia to AscendAny",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["downloads", "offscreen", "scripting", "unlimitedStorage"],
+  "host_permissions": ["https://pintia.cn/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

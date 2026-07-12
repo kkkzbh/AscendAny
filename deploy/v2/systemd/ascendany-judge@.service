@@ -1,0 +1,92 @@
+[Unit]
+Description=AscendAny rootless judge job %i
+Documentation=file:/opt/ascendany/v2/README.md
+After=ascendanyd.service
+AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-judge
+AssertPathExists=/etc/ascendany/v2/judge.env
+AssertPathIsDirectory=/run/ascendany-judge
+AssertPathIsDirectory=/run/ascendany-judge-podman
+
+[Service]
+Type=exec
+User=ascendany-judge
+Group=ascendany-judge
+SupplementaryGroups=ascendany-runtime
+WorkingDirectory=/var/lib/ascendany-judge
+UMask=0077
+
+# One canonical UUID instance maps to one job and one Unix socket. The worker
+# keeps its account primary GID for one stable rootless Podman mapping. The
+# setgid socket directory supplies ascendany-runtime group ownership. The
+# worker has no LoadCredential entry, database configuration, or network access.
+Environment=HOME=/var/lib/ascendany-judge
+Environment=XDG_RUNTIME_DIR=/run/ascendany-judge-podman/%i
+Environment=XDG_DATA_HOME=/var/lib/ascendany-judge/.local/share
+Environment=XDG_CONFIG_HOME=/var/lib/ascendany-judge/.config
+Environment=XDG_CACHE_HOME=/var/lib/ascendany-judge/.cache
+EnvironmentFile=/etc/ascendany/v2/judge.env
+ExecStart=/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --container-image ${ASCENDANY_JUDGE_CPP20_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup
+TimeoutStartSec=30s
+TimeoutStopSec=15s
+KillMode=mixed
+OOMPolicy=kill
+Restart=no
+
+StateDirectory=ascendany-judge
+StateDirectoryMode=0700
+RuntimeDirectory=ascendany-judge-podman/%i
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+
+# Rootless Podman/bubblewrap needs user and mount namespaces. PrivateUsers and
+# RestrictNamespaces are intentionally omitted; the service still owns no
+# Linux capabilities and receives a private network namespace. The Go
+# supervisor lives below the delegation root so cgroup v2 controllers remain
+# available for bounded container children.
+Delegate=cpu memory pids
+DelegateSubgroup=supervisor
+# Rootless Podman invokes file-capability newuidmap/newgidmap for the dedicated
+# /etc/subuid and /etc/subgid ranges. The service itself receives no ambient
+# capability; the C++ container separately enforces no-new-privileges and drops
+# every capability.
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=
+PrivateNetwork=yes
+# Rootless Podman keeps one SELinux-labelled lock in /dev/shm for its shared
+# image store. Per-job tmpfs mounts isolate /tmp and /var/tmp without asking
+# systemd to remove that shared runtime object when an instance exits.
+PrivateTmp=no
+TemporaryFileSystem=/tmp:rw,nosuid,nodev,noexec /var/tmp:rw,nosuid,nodev,noexec
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=private
+# Fresh rootless containers mount procfs and write ping_group_range only after
+# entering their private user and network namespaces. These two systemd mount
+# masks prevent that namespace construction, while the unprivileged outer
+# identity still has no host capability that can mutate kernel state.
+ProtectKernelTunables=no
+ProtectKernelModules=yes
+ProtectKernelLogs=no
+ProtectClock=yes
+# crun sets the hostname only after entering the rootless container's private
+# UTS namespace. The service has no host CAP_SYS_ADMIN capability.
+ProtectHostname=no
+ProtectProc=invisible
+ProcSubset=all
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Podman image storage owns one process-shared lock for this dedicated UID.
+# Container IPC remains disabled explicitly by the Podman argv.
+RemoveIPC=no
+KeyringMode=private
+DevicePolicy=closed
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/ascendany-judge /run/ascendany-judge /run/ascendany-judge-podman
+InaccessiblePaths=/etc/ascendany/credentials /opt/ascendany/Release /var/lib/ascendany/artifacts
+TasksMax=256
+MemoryMax=2G
+CPUQuota=200%

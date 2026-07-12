@@ -1,0 +1,28 @@
+{
+  "problemSetProblems": [
+    {
+      "id": "problem-set-problem-alpha",
+      "problemId": "problem-alpha",
+      "problemSetId": "9000000000000000001",
+      "label": "A",
+      "title": "Synthetic Sum",
+      "content": "<p>Synthetic problem statement.</p>",
+      "type": "PROGRAMMING",
+      "score": 40,
+      "author": "SANITIZED",
+      "problemConfig": {
+        "programmingProblemConfig": {
+          "timeLimit": 1000,
+          "memoryLimit": 65536,
+          "codeSizeLimit": 16,
+          "cases": []
+        }
+      },
+      "judgeConfig": {
+        "programmingJudgeConfig": {}
+      }
+    }
+  ],
+  "total": 1,
+  "hasNext": false
+}

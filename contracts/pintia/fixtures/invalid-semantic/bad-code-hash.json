@@ -1,0 +1,82 @@
+{
+  "schema": "ascendany.pintia.snapshot.v2",
+  "schemaSha256": "85b8277dc4485019499ff3bcceb1715ea73f58197ebdff9487c9a5fb8f3ccdfa",
+  "exporter": {
+    "name": "ascendany-pintia-exporter",
+    "version": "2.0.0",
+    "exportedAt": "2026-07-10T01:02:03Z"
+  },
+  "exam": {
+    "platform": "pintia",
+    "problemSetId": "problem-set-100",
+    "title": "Bad code hash",
+    "sourceUrl": "https://pintia.cn/problem-sets/problem-set-100/submissions",
+    "startsAt": null,
+    "endsAt": null,
+    "totalScore": null
+  },
+  "problems": [
+    {
+      "problemSetProblemId": "psp-100",
+      "problemId": "problem-100",
+      "label": null,
+      "title": "Known problem",
+      "type": "PROGRAMMING",
+      "maxScore": null,
+      "contentHtml": null,
+      "timeLimitMs": null,
+      "memoryLimitBytes": null
+    }
+  ],
+  "participants": [
+    {
+      "userId": "user-100",
+      "studentUserId": null,
+      "studentNumber": null,
+      "displayName": null,
+      "groupName": null,
+      "ranking": null
+    }
+  ],
+  "submissions": [
+    {
+      "submissionId": "submission-100",
+      "problemSetProblemId": "psp-100",
+      "userId": "user-100",
+      "submittedAt": "2026-07-09T01:00:00Z",
+      "language": null,
+      "compiler": null,
+      "verdict": "ACCEPTED",
+      "score": null,
+      "timeMs": null,
+      "memoryBytes": null,
+      "code": "",
+      "codeSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "compileLog": null,
+      "caseResults": []
+    }
+  ],
+  "completeness": {
+    "problems": {
+      "sourceReportedCount": 1,
+      "observedCount": 1,
+      "exportedCount": 1,
+      "paginationExhausted": true
+    },
+    "rankings": {
+      "sourceReportedCount": 0,
+      "observedCount": 0,
+      "exportedCount": 0,
+      "paginationExhausted": true
+    },
+    "submissions": {
+      "sourceReportedCount": 1,
+      "observedCount": 1,
+      "exportedCount": 1,
+      "paginationExhausted": true
+    },
+    "participants": {
+      "exportedCount": 1
+    }
+  }
+}

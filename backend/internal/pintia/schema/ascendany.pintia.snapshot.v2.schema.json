@@ -1,0 +1,492 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ascendany:contract:pintia:snapshot:v2",
+  "title": "AscendAny Pintia Snapshot v2",
+  "description": "Authoritative structural contract for one immutable Pintia problem-set snapshot.",
+  "$comment": "Key uniqueness, references, participant union, collection counts, timestamps, and SHA-256 content checks are semantic validation rules documented beside this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schemaSha256",
+    "exporter",
+    "exam",
+    "problems",
+    "participants",
+    "submissions",
+    "completeness"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ascendany.pintia.snapshot.v2"
+    },
+    "schemaSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "exporter": {
+      "$ref": "#/$defs/exporter"
+    },
+    "exam": {
+      "$ref": "#/$defs/exam"
+    },
+    "problems": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/problem"
+      }
+    },
+    "participants": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/participant"
+      }
+    },
+    "submissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/submission"
+      }
+    },
+    "completeness": {
+      "$ref": "#/$defs/completeness"
+    }
+  },
+  "$defs": {
+    "pintiaId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "nullablePintiaId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/pintiaId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nullableDateTime": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableNonNegativeNumber": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "const": 0
+        },
+        {
+          "type": "number",
+          "minimum": 1e-100,
+          "maximum": 1e100
+        }
+      ]
+    },
+    "nullableNonNegativeInteger": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "exporter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "exportedAt"
+      ],
+      "properties": {
+        "name": {
+          "const": "ascendany-pintia-exporter"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "exportedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "exam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "problemSetId",
+        "title",
+        "sourceUrl",
+        "startsAt",
+        "endsAt",
+        "totalScore"
+      ],
+      "properties": {
+        "platform": {
+          "const": "pintia"
+        },
+        "problemSetId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://pintia\\.cn/"
+        },
+        "startsAt": {
+          "$ref": "#/$defs/nullableDateTime"
+        },
+        "endsAt": {
+          "$ref": "#/$defs/nullableDateTime"
+        },
+        "totalScore": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        }
+      }
+    },
+    "problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "problemSetProblemId",
+        "problemId",
+        "label",
+        "title",
+        "type",
+        "maxScore",
+        "contentHtml",
+        "timeLimitMs",
+        "memoryLimitBytes"
+      ],
+      "properties": {
+        "problemSetProblemId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "problemId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "label": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "const": "PROGRAMMING"
+        },
+        "maxScore": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "contentHtml": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "timeLimitMs": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "memoryLimitBytes": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        }
+      }
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "userId",
+        "studentUserId",
+        "studentNumber",
+        "displayName",
+        "groupName",
+        "ranking"
+      ],
+      "properties": {
+        "userId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "studentUserId": {
+          "$ref": "#/$defs/nullablePintiaId"
+        },
+        "studentNumber": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "displayName": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "groupName": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "ranking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ranking"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ranking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rank",
+        "totalScore",
+        "timeUsedSeconds",
+        "problemResults"
+      ],
+      "properties": {
+        "rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "totalScore": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "timeUsedSeconds": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "problemResults": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/rankingProblemResult"
+          }
+        }
+      }
+    },
+    "rankingProblemResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "problemSetProblemId",
+        "score",
+        "passed",
+        "validSubmissionCount",
+        "acceptTimeSeconds"
+      ],
+      "properties": {
+        "problemSetProblemId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "score": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "passed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "validSubmissionCount": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "acceptTimeSeconds": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        }
+      }
+    },
+    "submission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "submissionId",
+        "problemSetProblemId",
+        "userId",
+        "submittedAt",
+        "language",
+        "compiler",
+        "verdict",
+        "score",
+        "timeMs",
+        "memoryBytes",
+        "code",
+        "codeSha256",
+        "compileLog",
+        "caseResults"
+      ],
+      "properties": {
+        "submissionId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "problemSetProblemId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "userId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "submittedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "language": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "compiler": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "verdict": {
+          "type": "string",
+          "minLength": 1
+        },
+        "score": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "timeMs": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "memoryBytes": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "code": {
+          "type": "string"
+        },
+        "codeSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "compileLog": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "caseResults": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/caseResult"
+          }
+        }
+      }
+    },
+    "caseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "caseId",
+        "verdict",
+        "score",
+        "timeMs",
+        "memoryBytes",
+        "message"
+      ],
+      "properties": {
+        "caseId": {
+          "$ref": "#/$defs/pintiaId"
+        },
+        "verdict": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "score": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "timeMs": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "memoryBytes": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "message": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "collectionCompleteness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceReportedCount",
+        "observedCount",
+        "exportedCount",
+        "paginationExhausted"
+      ],
+      "properties": {
+        "sourceReportedCount": {
+          "$ref": "#/$defs/nullableNonNegativeInteger"
+        },
+        "observedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exportedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "paginationExhausted": {
+          "const": true
+        }
+      }
+    },
+    "participantCompleteness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exportedCount"
+      ],
+      "properties": {
+        "exportedCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "problems",
+        "rankings",
+        "submissions",
+        "participants"
+      ],
+      "properties": {
+        "problems": {
+          "$ref": "#/$defs/collectionCompleteness"
+        },
+        "rankings": {
+          "$ref": "#/$defs/collectionCompleteness"
+        },
+        "submissions": {
+          "$ref": "#/$defs/collectionCompleteness"
+        },
+        "participants": {
+          "$ref": "#/$defs/participantCompleteness"
+        }
+      }
+    }
+  }
+}

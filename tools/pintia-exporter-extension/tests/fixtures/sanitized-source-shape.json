@@ -1,0 +1,216 @@
+{
+  "problemSetId": "9000000000000000001",
+  "sourceUrl": "https://pintia.cn/problem-sets/9000000000000000001/problems/type/7",
+  "problems": {
+    "items": [
+      {
+        "id": "problem-set-problem-alpha",
+        "problemId": "problem-alpha",
+        "problemSetId": "9000000000000000001",
+        "label": "A",
+        "title": "Synthetic Sum",
+        "content": "<p>Synthetic problem statement.</p>",
+        "type": "PROGRAMMING",
+        "score": 40,
+        "author": "SANITIZED",
+        "problemConfig": {
+          "programmingProblemConfig": {
+            "timeLimit": 1000,
+            "memoryLimit": 65536,
+            "codeSizeLimit": 16,
+            "cases": []
+          }
+        },
+        "judgeConfig": {
+          "programmingJudgeConfig": {}
+        }
+      },
+      {
+        "id": "problem-set-problem-beta",
+        "problemId": "problem-beta",
+        "problemSetId": "9000000000000000001",
+        "label": "B",
+        "title": "Synthetic Sequence",
+        "content": "<p>Second synthetic statement.</p>",
+        "type": "PROGRAMMING",
+        "score": 60,
+        "problemConfig": {
+          "programmingProblemConfig": {
+            "timeLimit": 2000,
+            "memoryLimit": 131072,
+            "codeSizeLimit": 32,
+            "cases": []
+          }
+        },
+        "judgeConfig": {
+          "programmingJudgeConfig": {}
+        }
+      }
+    ],
+    "sourceReportedCount": 2,
+    "observedCount": 2,
+    "paginationExhausted": true,
+    "metadata": {
+      "problemSetId": "9000000000000000001",
+      "title": "Sanitized Programming Practice",
+      "startsAt": "2026-02-01T01:00:00.000Z",
+      "endsAt": "2026-02-03T03:00:00.000Z"
+    }
+  },
+  "rankings": {
+    "items": [
+      {
+        "rank": 1,
+        "user": {
+          "userId": "user-alpha",
+          "studentUserId": "student-alpha",
+          "userGroupId": "group-synthetic"
+        },
+        "examId": "exam-synthetic",
+        "totalScore": 40,
+        "solvingTime": 123,
+        "problemScoreByProblemSetProblemId": {
+          "problem-set-problem-alpha": {
+            "acceptTime": 5,
+            "score": 40,
+            "submitCountSnapshot": 2,
+            "validSubmitCount": 2
+          }
+        }
+      }
+    ],
+    "sourceReportedCount": 1,
+    "observedCount": 1,
+    "paginationExhausted": true,
+    "studentUserById": {
+      "student-alpha": {
+        "id": "student-alpha",
+        "name": "Learner Alpha",
+        "studentNumber": "SYNTHETIC-001"
+      }
+    },
+    "userById": {
+      "user-alpha": {
+        "id": "user-alpha",
+        "nickname": "Alpha"
+      }
+    },
+    "userGroupById": {
+      "group-synthetic": {
+        "id": "group-synthetic",
+        "name": "Synthetic Group"
+      }
+    }
+  },
+  "submissions": {
+    "items": [
+      {
+        "id": "submission-alpha",
+        "problemSetProblemId": "problem-set-problem-alpha",
+        "problemType": "PROGRAMMING",
+        "userId": "user-alpha",
+        "submitAt": "2026-01-02T03:04:00.000Z",
+        "compiler": "GXX",
+        "status": "ACCEPTED",
+        "score": 40,
+        "time": 0.125,
+        "memory": 1048576
+      },
+      {
+        "id": "submission-beta",
+        "problemSetProblemId": "problem-set-problem-beta",
+        "problemType": "PROGRAMMING",
+        "userId": "user-beta",
+        "submitAt": "2026-01-02T03:05:00.000Z",
+        "compiler": "GXX",
+        "status": "WRONG_ANSWER",
+        "score": 0,
+        "time": 0.25,
+        "memory": 2097152
+      },
+      {
+        "id": "submission-filtered",
+        "problemSetProblemId": "objective-problem-synthetic",
+        "problemType": "MULTIPLE_CHOICE",
+        "userId": "user-filtered",
+        "submitAt": "2026-01-02T03:06:00.000Z",
+        "compiler": null,
+        "status": "ACCEPTED",
+        "score": 1,
+        "time": null,
+        "memory": null
+      }
+    ],
+    "sourceReportedCount": 3,
+    "observedCount": 3,
+    "paginationExhausted": true,
+    "indexes": {
+      "examMemberByUserId": {
+        "user-alpha": {
+          "userId": "user-alpha",
+          "studentUserId": "student-alpha",
+          "userGroupId": "group-synthetic"
+        },
+        "user-beta": {
+          "userId": "user-beta",
+          "studentUserId": "student-beta",
+          "userGroupId": "group-synthetic"
+        }
+      },
+      "studentUserById": {
+        "student-alpha": {
+          "id": "student-alpha",
+          "name": "Learner Alpha",
+          "studentNumber": "SYNTHETIC-001"
+        },
+        "student-beta": {
+          "id": "student-beta",
+          "name": "Learner Beta",
+          "studentNumber": "SYNTHETIC-002"
+        }
+      },
+      "userById": {
+        "user-alpha": {
+          "id": "user-alpha",
+          "nickname": "Alpha"
+        },
+        "user-beta": {
+          "id": "user-beta",
+          "nickname": "Beta"
+        }
+      }
+    }
+  },
+  "submissionDetailsById": {
+    "submission-alpha": {
+      "submissionId": "submission-alpha",
+      "code": "SANITIZED_CODE_PLACEHOLDER_ALPHA",
+      "compileLog": null,
+      "testcaseJudgeResults": {
+        "case-1": {
+          "result": "ACCEPTED",
+          "testcaseScore": 40,
+          "time": 0.125,
+          "memory": 1048576,
+          "error": "",
+          "checkerOutput": ""
+        }
+      }
+    },
+    "submission-beta": {
+      "submissionId": "submission-beta",
+      "code": "SANITIZED_CODE_PLACEHOLDER_BETA",
+      "compileLog": "SANITIZED_COMPILER_MESSAGE",
+      "testcaseJudgeResults": {
+        "case-1": {
+          "result": "WRONG_ANSWER",
+          "testcaseScore": 0,
+          "time": 0.25,
+          "memory": 2097152,
+          "error": "SANITIZED_JUDGE_MESSAGE",
+          "checkerOutput": "SANITIZED_CHECKER_MESSAGE"
+        }
+      }
+    }
+  }
+}

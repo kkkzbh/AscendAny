@@ -1,0 +1,13 @@
+{
+  "userGroupProblemSets": [
+    {
+      "userGroupId": "group-synthetic"
+    }
+  ],
+  "userGroupById": {
+    "group-synthetic": {
+      "id": "group-synthetic",
+      "name": "Synthetic Group"
+    }
+  }
+}

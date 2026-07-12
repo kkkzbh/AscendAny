@@ -1,49 +1,43 @@
-# AscendAny (学生能力分析平台) - Agent Instructions
+# AscendAny v2 - Agent Instructions
 
-## 项目现状（2026-02）
-- 增量预处理链路已落地：`preprocess/` 可扫描、解析、幂等导入并计算指标与 rating。
-- 后端已落地：`apps/api/`（FastAPI，含认证、学生画像、导入任务与 Agent 相关接口）。
-- 桌面端已落地：`apps/desktop/`（Electron + Vite + React）。
-- 导入控制台已落地：`apps/import-console/`（管理员 Web 控制台，SSE 进度流）。
-- 官网已落地：`apps/site/`（产品介绍与下载入口）。
-- `packages/shared/` 目前未落地；新增共享类型前先评估是否真的需要拆包。
+## Runtime ownership
 
-## 目标与约束
-- `practice/` 的**每一个单位数据 = 一场考试**（目录级别的一个子目录）。
-- 输入数据是**增量**的；旧数据需要**永久保留**。
-- 预处理/导入必须**可重复运行**：重复执行不会重复导入旧数据，只处理新增考试（或新增“快照”）。
-- 数据库为 PostgreSQL，只部署在 km6；应用默认通过 **6432 的 PgBouncer** 访问；连接参数必须可配置（不要写死）。
+- `backend/` 是唯一在线后端、业务规则、事务、durable job、SSE/WebSocket 与 migration 实现，语言为 Go。
+- `apps/web/`、`apps/desktop/`、`apps/mobile/`、`apps/import-console/`、`apps/site/` 与 Pintia exporter 使用 TypeScript strict mode。
+- `packages/sdk/` 必须由 `contracts/openapi/ascendany-v2.yaml` 生成；first-party app 禁止手写 endpoint string 和重复 DTO。
+- Python 只能存在于 `trainers/recommendation/`，只实现隔离模型训练 contract。Python child 不得持有数据库连接、网络能力、生产 credential 或生产文件系统路径。
 
-## 数据源实践规范（必须遵守）
-- `practice` 根目录必须来自配置（如 `PRACTICE_DATA_ROOT`），不要依赖机器固定路径。
-- 解析时要处理多编码，默认按顺序尝试：`utf-8` -> `utf-8-sig` -> `gb18030`。
-- 经验规则：
-  - `datastructure/.../提交记录/*.csv` 多为 `utf-8`。
-  - `pta_*` 提交记录 CSV 常见为 `gb18030`（检测可能显示 `iso-8859-1/unknown-8bit`）。
-- 解析 CSV/XLSX 时字段值常带尾部 `\t`，入库前需要 `strip()`。
+## Fresh data boundary
 
-## 数据库与导入硬性要求
-- 以“考试”为事务边界：单场考试导入要么全部成功，要么回滚。
-- 通过唯一约束 + 指纹（hash）实现幂等：
-  - 考试唯一键：`(exam_type, source_path)`。
-  - 行级唯一键：如 `submissions(exam_id, row_hash)`。
-- 增量状态必须可追踪：
-  - 导入批次：`ingest_runs`。
-  - 考试级结果：`ingest_exam_runs`。
-  - 控制台任务与事件流：`import_tasks`、`import_task_events`。
-- 公式与参数不要写死在代码里：半衰期、阈值、分位映射策略等应放配置或 DB，便于调参与回放。
+- v2 从独立空数据库 `ascendany_v2` 启动，不迁移旧账号、session、业务数据或旧导入格式。
+- 唯一允许的考试输入是 `ascendany.pintia.snapshot.v2`。
+- 数据源由 TypeScript Manifest V3 插件从用户当前登录的 Pintia 题目集页面采集；Go import worker 负责 strict schema/semantic validation。
+- Logical exam key 为 `(platform, problemSetId)`。相同 bytes、相同 typed domain content 和新 snapshot 必须分别具备确定的幂等语义。
+- snapshot、analytics generation、recommendation model、配置版本与事件都保存 immutable provenance。
 
-## 配置与安全约束
-- 预处理默认配置：`preprocess/config/default.yaml`，可被 `--config`、CLI 参数和环境变量覆盖。
-- API 默认配置：`apps/api/config/default.yaml`，可由 `ASCENDANY_API_CONFIG` 覆盖。
-- 数据库密码只放在 km6 的 `~/.pgpass` 或服务器环境变量（如 `ASCENDANY_DB_PASSWORD`），不要提交明文凭据。
-- 模型 API Key 必须使用环境变量，不得写入仓库文件。
+## Database and durability
 
-## 工程与测试
-- Python 统一使用仓库内 `.venv`（`uv` 管理），禁止安装到系统全局环境。
-- 运行测试时必须使用 `.venv` 解释器（如 `.venv/bin/pytest` 或 `uv run pytest`），不要直接用系统 `pytest`，避免出现 `ModuleNotFoundError`（如缺少 `fastapi`）等环境偏差问题。
-- 后端/预处理新增功能必须补 `pytest`，重点覆盖：增量幂等、编码解析、指标/rating、导入任务流程。
-- 前端使用 TypeScript 严格模式；关键交互（分栏拖拽、上下文清空、自动 compact）应有单测或 e2e 覆盖。
+- PostgreSQL 17 只部署在 km6。在线应用默认通过 6432 的 PgBouncer transaction mode 访问；migrate、backup 与 restore verification 直连 5432。
+- 连接参数必须来自配置。Database URL 禁止包含密码；密码只通过 systemd credential file path 传递。
+- migration 由 Go binary 内嵌固定 manifest 与 SHA-256，必须保持版本连续并拒绝 drift。
+- 单个 snapshot import 是一个事务；analytics publish 必须验证完整 input manifest 并 CAS 当前 heads。
+- artifact publish 使用 fsync、SHA-256、per-hash lock 与 atomic rename；backup/restore 必须验证数据库、artifact entry-set、size、mode 与 checksum。
 
-##
-使用 `ssh km6` 连接 km6 服务器。生产部署入口为 `deploy/README.md`。
+## Security
+
+- `ascendanyd`、migrator、backup、judge、LSP 和 trainer agent 使用独立 OS/数据库 capability identity。
+- Judge 与 LSP 不接收数据库 credential，且没有 network fallback。
+- Unknown fields、重复 identity、dangling reference、partial pagination、hash/count mismatch 和超限输入直接失败。
+- 禁止提交 plaintext secret、`.env.local`、token、password 或 API key。
+- 禁止加入 compatibility path、legacy parser、静默 fallback 或 host code execution。
+
+## Engineering and verification
+
+- Go 改动必须补测试；执行 `go test ./...`、`go vet ./...`，高并发/ownership 代码还需要 race test 与 PostgreSQL 17 integration test。
+- 大型 Go/Node build 使用 guarded heavy-run，避免无界并发和全局 OOM。
+- TypeScript app 改动必须通过对应 package 的 tests、strict typecheck 与 production build。
+- OpenAPI 改动后执行 `pnpm --filter @ascendany/sdk generate` 和 `pnpm --filter @ascendany/sdk check`。
+- Pintia contract 改动必须覆盖 JSON Schema、semantic negative fixtures、domain hash 与真实形状脱敏 fixture。
+- Python trainer 测试使用 Python 3.14 standard-library unittest；仓库 policy scan 必须证明其他 production 路径没有 Python。
+
+使用 `ssh km6` 连接生产服务器。唯一生产部署入口和 acceptance sequence 位于 `deploy/v2/README.md`；架构与最终验收边界位于 `doc/重写v2架构与验收.md`。

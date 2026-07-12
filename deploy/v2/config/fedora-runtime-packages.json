@@ -1,0 +1,37 @@
+{
+  "architecture": "x86_64",
+  "fedoraRelease": 44,
+  "packages": {
+    "cloudflared": {
+      "files": [
+        {
+          "group": "root",
+          "mode": "0755",
+          "owner": "root",
+          "path": "/usr/bin/cloudflared",
+          "sha256": "79a0ade7fc854f62c1aaef48424d9d979e8c2fcd039189d24db82b84cd146be1",
+          "size": 39251522
+        }
+      ],
+      "nevra": "cloudflared-2026.7.1-1.x86_64",
+      "rpmSHA256": "b9143a52ee388e330fb7300fa740de0c488415e777fb219af7ec9a070982f790",
+      "signingFingerprint": "cc94b39c77ae7342a68b89628a682d308d4e5e73"
+    },
+    "pgbouncer": {
+      "files": [
+        {
+          "group": "root",
+          "mode": "0755",
+          "owner": "root",
+          "path": "/usr/bin/pgbouncer",
+          "sha256": "42c722ab7352ccbb1eaba8dcc6d7fb9d28df11fbe1a73aa8b177c88dcd0bb318",
+          "size": 467960
+        }
+      ],
+      "nevra": "pgbouncer-1.25.2-1.fc44.x86_64",
+      "rpmSHA256": "ad409c6bef77aba14288cd2464128eb5a151d75d7c28aa0b66451febb0d978c2",
+      "signingFingerprint": "36f612dcf27f7d1a48a835e4dbfcf71c6d9f90a6"
+    }
+  },
+  "schema": "ascendany.fedora-runtime-packages.v1"
+}

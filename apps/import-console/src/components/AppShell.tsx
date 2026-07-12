@@ -1,68 +1,94 @@
+import { useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import type { AccountInfo } from "../hooks/useAuth";
+import type { Account } from "@ascendany/sdk";
+import { AccountsPage } from "../pages/AccountsPage";
+import { AuditPage } from "../pages/AuditPage";
 import { ImportPage } from "../pages/ImportPage";
-import { ModelConfigPage } from "../pages/ModelConfigPage";
-import { PreprocessConfigPage } from "../pages/PreprocessConfigPage";
-import { PromptConfigPage } from "../pages/PromptConfigPage";
-import { StudentReportsPage } from "../pages/StudentReportsPage";
-import { UsersPage } from "../pages/UsersPage";
-import { AuditLogPage } from "../pages/AuditLogPage";
+import { ConfigurationPage } from "../pages/ConfigurationPage";
+import { RecommendationTrainingPage } from "../pages/RecommendationTrainingPage";
+import { StudentsPage } from "../pages/StudentsPage";
+import { HelpDrawer } from "./HelpDrawer";
 
 interface Props {
-  account: AccountInfo | null;
-  onLogout: () => void;
+  account: Account;
+  authError: string | null;
+  onLogout: () => Promise<void>;
 }
 
-const navItems = [
-  { to: "/import", label: "数据导入" },
-  { to: "/models", label: "模型配置" },
-  { to: "/prompts", label: "提示词管理" },
-  { to: "/preprocess", label: "预处理参数" },
-  { to: "/students", label: "学生报告" },
-  { to: "/users", label: "用户与权限" },
-  { to: "/audit", label: "审计日志" },
-];
+export function AppShell({ account, authError, onLogout }: Props) {
+  const [helpOpen, setHelpOpen] = useState(false);
 
-export function AppShell({ account, onLogout }: Props) {
   return (
     <div className="admin-shell">
       <aside className="admin-sidebar" aria-label="管理员导航">
+        <div className="admin-product">AscendAny</div>
         <nav className="admin-nav">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          <NavLink
+            to="/import"
+            className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
+          >
+            Pintia 数据导入
+          </NavLink>
+          <NavLink
+            to="/configuration"
+            className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
+          >
+            运行配置
+          </NavLink>
+          <NavLink
+            to="/recommendation"
+            className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
+          >
+            推荐训练
+          </NavLink>
+          <NavLink
+            to="/accounts"
+            className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
+          >
+            账户管理
+          </NavLink>
+          <NavLink
+            to="/students"
+            className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
+          >
+            学生身份
+          </NavLink>
+          <NavLink
+            to="/audit"
+            className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
+          >
+            审计日志
+          </NavLink>
         </nav>
       </aside>
       <main className="admin-main">
         <header className="admin-topbar">
+          <button className="button button-ghost" type="button" onClick={() => setHelpOpen(true)}>
+            操作指南
+          </button>
           <div className="admin-topbar-spacer" />
           <div className="admin-account">
-            <span>{account?.username ?? "admin"}</span>
-            <button className="button button-ghost" type="button" onClick={onLogout}>
+            <span>{account.displayName}</span>
+            <button className="button button-ghost" type="button" onClick={() => void onLogout()}>
               退出
             </button>
           </div>
         </header>
+        {authError ? <div className="session-error" role="alert">{authError}</div> : null}
         <div className="admin-workspace">
           <Routes>
             <Route path="/" element={<Navigate to="/import" replace />} />
             <Route path="/import" element={<ImportPage />} />
-            <Route path="/models" element={<ModelConfigPage />} />
-            <Route path="/prompts" element={<PromptConfigPage />} />
-            <Route path="/preprocess" element={<PreprocessConfigPage />} />
-            <Route path="/students" element={<StudentReportsPage />} />
-            <Route path="/users" element={<UsersPage account={account} />} />
-            <Route path="/audit" element={<AuditLogPage />} />
+            <Route path="/configuration" element={<ConfigurationPage />} />
+            <Route path="/recommendation" element={<RecommendationTrainingPage />} />
+            <Route path="/accounts" element={<AccountsPage />} />
+            <Route path="/students" element={<StudentsPage />} />
+            <Route path="/audit" element={<AuditPage />} />
             <Route path="*" element={<Navigate to="/import" replace />} />
           </Routes>
         </div>
       </main>
+      <HelpDrawer open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

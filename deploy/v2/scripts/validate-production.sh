@@ -1,0 +1,2799 @@
+#!/usr/bin/bash -p
+set +x
+set -euo pipefail
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  validator_environment_is_clean=1
+  while IFS= read -r -d '' entry; do
+    name="${entry%%=*}"
+    case "$name" in
+      PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_VALIDATOR_CLEAN_ENV|ASCENDANY_VALIDATION_PHASE|ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS)
+        ;;
+      PGPASSFILE)
+        [[ "${ASCENDANY_VALIDATION_PHASE-}" == "staged" ]] || validator_environment_is_clean=0
+        ;;
+      *)
+        validator_environment_is_clean=0
+        ;;
+    esac
+  done < <(/usr/bin/env -0)
+  if [[ "${ASCENDANY_VALIDATOR_CLEAN_ENV-}" != "1" ||
+        "${PATH-}" != "/usr/bin:/bin" || "${LC_ALL-}" != "C" ||
+        "$validator_environment_is_clean" != "1" ]]; then
+    validation_phase_input="${ASCENDANY_VALIDATION_PHASE-}"
+    feedback_bindings_input="${ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS-}"
+    staged_pgpass_input="${PGPASSFILE-}"
+    clean_environment=(
+      /usr/bin/env -i
+      PATH=/usr/bin:/bin
+      LC_ALL=C
+      ASCENDANY_VALIDATOR_CLEAN_ENV=1
+      "ASCENDANY_VALIDATION_PHASE=$validation_phase_input"
+      "ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS=$feedback_bindings_input"
+    )
+    if [[ "$validation_phase_input" == "staged" && -n "$staged_pgpass_input" ]]; then
+      clean_environment+=("PGPASSFILE=$staged_pgpass_input")
+    fi
+    exec "${clean_environment[@]}" /usr/bin/bash -p "$0" "$@"
+  fi
+fi
+
+umask 077
+
+release_root="/opt/ascendany/v2"
+artifact_root="/var/lib/ascendany/artifacts"
+backup_root="/var/backups/ascendany"
+restore_evidence="/var/lib/ascendany-acceptance/restore-verify.json"
+trainer_evidence="/var/lib/ascendany-acceptance/trainer-latest.json"
+expected_db_user="ascendanyd_login"
+runtime_pg_host="127.0.0.1"
+runtime_pg_port="6432"
+runtime_pg_database="ascendany_v2"
+runtime_pg_connect_timeout="5"
+postgres_network="podman"
+postgres_gateway="10.88.0.1"
+postgres_address="10.88.0.2"
+postgres_subnet="10.88.0.0/16"
+pgbouncer_config_root="/opt/ascendany/infra/pgbouncer"
+pgbouncer_unit="ascendany-pgbouncer.service"
+pgbouncer_package_unit="pgbouncer.service"
+pgbouncer_binary="/usr/bin/pgbouncer"
+pgbouncer_nevra="pgbouncer-1.25.2-1.fc44.x86_64"
+pgbouncer_binary_sha256="42c722ab7352ccbb1eaba8dcc6d7fb9d28df11fbe1a73aa8b177c88dcd0bb318"
+pgbouncer_binary_size="467960"
+pgbouncer_credential_source="/etc/ascendany/credentials/pgbouncer_userlist.cred"
+pgbouncer_runtime_credential="/run/credentials/ascendany-pgbouncer.service/pgbouncer_userlist"
+managed_ports="5432 6432 8000 18000"
+required_ports=""
+validation_phase="${ASCENDANY_VALIDATION_PHASE-}"
+expected_write_mode=""
+ascendanyd_active="0"
+smoke_dropin="/etc/systemd/system/ascendanyd.service.d/40-read-only-smoke.conf"
+expected_runtime_feedback_credential_bindings="${ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS:-}"
+temporary_pgpass=""
+release_manifest_commit=""
+release_manifest_version=""
+release_payload_verified="0"
+
+declare -a runtime_feedback_bindings=()
+declare -a runtime_feedback_credential_ids=()
+declare -a runtime_feedback_environment=()
+
+failures=0
+
+cleanup() {
+  if [[ -n "$temporary_pgpass" ]]; then
+    rm -f -- "$temporary_pgpass"
+  fi
+}
+trap cleanup EXIT
+
+pass() {
+  printf 'PASS %s\n' "$*"
+}
+
+fail() {
+  printf 'FAIL %s\n' "$*" >&2
+  failures=$((failures + 1))
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    fail "required command is missing: $1"
+    return 1
+  fi
+}
+
+canonical_path() {
+  realpath -m -- "$1"
+}
+
+is_under() {
+  local child parent
+  child="$(canonical_path "$1")"
+  parent="$(canonical_path "$2")"
+  [[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+}
+
+unit_property() {
+  local unit="$1" property="$2"
+  systemctl show "$unit" --property="$property" --value 2>/dev/null
+}
+
+normalize_word_set() {
+  tr '[:space:]' '\n' | sed '/^$/d' | LC_ALL=C sort
+}
+
+parse_runtime_feedback_bindings() {
+  local binding variable credential_id
+  local invalid=0
+  local -a unsorted=()
+  local -A seen_variables=() seen_ids=()
+  runtime_feedback_bindings=()
+  runtime_feedback_credential_ids=()
+  runtime_feedback_environment=()
+
+  if [[ -n "$expected_runtime_feedback_credential_bindings" ]]; then
+    mapfile -t unsorted < <(
+      printf '%s' "$expected_runtime_feedback_credential_bindings" |
+        tr '[:space:]' '\n' |
+        sed '/^$/d'
+    )
+  fi
+  for binding in "${unsorted[@]}"; do
+    if [[ "$binding" != *=* || "${binding#*=}" == *"="* ]]; then
+      fail "ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS contains a malformed binding"
+      invalid=1
+      continue
+    fi
+    variable="${binding%%=*}"
+    credential_id="${binding#*=}"
+    if [[ ! "$variable" =~ ^ASCENDANY_CREDENTIAL_FILE_REF_HEX_([0-9A-F]{2})+_AUTHORITY_HEX_([0-9A-F]{2})+$ ]]; then
+      fail "feedback credential binding has a noncanonical credential path variable: $variable"
+      invalid=1
+      continue
+    fi
+    if [[ ! "$credential_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+      fail "feedback credential binding has a noncanonical credential ID"
+      invalid=1
+      continue
+    fi
+    case "$credential_id" in
+      admin_password|db_password|runtime_db_password|backup_db_password|migrator_db_password|restore_db_password|jwt_signing_key|password_pepper|trainer_agent_rtx_01|trainer_agent_token)
+        fail "feedback credential binding reuses a core runtime credential ID: $credential_id"
+        invalid=1
+        continue
+        ;;
+    esac
+    if [[ -n "${seen_variables[$variable]:-}" ]]; then
+      fail "feedback credential path variable is repeated: $variable"
+      invalid=1
+      continue
+    fi
+    if [[ -n "${seen_ids[$credential_id]:-}" ]]; then
+      fail "feedback credential ID is bound more than once: $credential_id"
+      invalid=1
+      continue
+    fi
+    seen_variables["$variable"]=1
+    seen_ids["$credential_id"]=1
+    runtime_feedback_bindings+=("$binding")
+  done
+
+  if (( ${#runtime_feedback_bindings[@]} > 0 )); then
+    mapfile -t runtime_feedback_bindings < <(
+      printf '%s\n' "${runtime_feedback_bindings[@]}" | LC_ALL=C sort
+    )
+  fi
+  for binding in "${runtime_feedback_bindings[@]}"; do
+    variable="${binding%%=*}"
+    credential_id="${binding#*=}"
+    runtime_feedback_credential_ids+=("$credential_id")
+    runtime_feedback_environment+=("$variable=%d/$credential_id")
+  done
+  (( invalid == 0 ))
+}
+
+validate_input_contract() {
+  local starting_failures="$failures"
+  if [[ "$(id -u)" != 0 ]]; then
+    fail "production validation must run as root"
+  fi
+  case "$validation_phase" in
+    staged)
+      required_ports="5432 6432"
+      expected_write_mode="disabled"
+      ascendanyd_active="0"
+      ;;
+    smoke)
+      required_ports="5432 6432 18000"
+      expected_write_mode="disabled"
+      ascendanyd_active="1"
+      ;;
+    production)
+      required_ports="5432 6432 18000"
+      expected_write_mode="enabled"
+      ascendanyd_active="1"
+      ;;
+    *)
+      fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, or production"
+      ;;
+  esac
+  parse_runtime_feedback_bindings || true
+  (( failures == starting_failures ))
+}
+
+smoke_dropin_required() {
+  [[ "$validation_phase" == "staged" || "$validation_phase" == "smoke" ]]
+}
+
+production_phase() {
+  [[ "$validation_phase" == "production" ]]
+}
+
+check_effective_value() {
+  local unit="$1" property="$2" expected="$3" actual
+  if ! actual="$(unit_property "$unit" "$property")"; then
+    fail "$unit effective $property cannot be read"
+  elif [[ "$actual" != "$expected" ]]; then
+    fail "$unit effective $property is ${actual:-<empty>}; expected ${expected:-<empty>}"
+  else
+    pass "$unit effective $property is ${expected:-empty}"
+  fi
+}
+
+check_effective_word_set() {
+  local unit="$1" property="$2"
+  shift 2
+  local actual expected actual_normalized expected_normalized
+  if ! actual="$(unit_property "$unit" "$property")"; then
+    fail "$unit effective $property cannot be read"
+    return
+  fi
+  expected="$(printf '%s\n' "$@")"
+  actual_normalized="$(normalize_word_set <<<"$actual")"
+  expected_normalized="$(normalize_word_set <<<"$expected")"
+  if [[ "$actual_normalized" != "$expected_normalized" ]]; then
+    fail "$unit effective $property set differs from the deployment contract"
+  else
+    pass "$unit effective $property set matches the deployment contract"
+  fi
+}
+
+check_system_manager_environment() {
+  local raw actual
+  local expected=$'LANG=zh_CN.UTF-8\nPATH=/usr/local/bin:/usr/bin'
+  if ! raw="$(LC_ALL=C systemctl show-environment 2>/dev/null)"; then
+    fail "system manager global environment cannot be read"
+    return
+  fi
+  actual="$(printf '%s\n' "$raw" | sed '/^$/d' | LC_ALL=C sort)"
+  expected="$(printf '%s\n' "$expected" | LC_ALL=C sort)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "system manager global environment differs from the exact km6 production contract"
+  else
+    pass "system manager global environment contains only the reviewed LANG and PATH"
+  fi
+}
+
+check_effective_directive_sequence() {
+  local unit="$1" directive="$2" expected_text="$3" rendered
+  local index
+  local -a actual=() expected=()
+  if ! rendered="$(systemctl cat "$unit" 2>/dev/null)" || [[ -z "$rendered" ]]; then
+    fail "$unit configuration cannot be read for $directive validation"
+    return
+  fi
+  collect_effective_directives "$rendered" "$directive" actual
+  if [[ -n "$expected_text" ]]; then
+    mapfile -t expected <<<"$expected_text"
+  fi
+  if (( ${#actual[@]} != ${#expected[@]} )); then
+    fail "$unit effective $directive sequence differs from the reviewed raw unit contract"
+    return
+  fi
+  for index in "${!expected[@]}"; do
+    if [[ "${actual[$index]}" != "${expected[$index]}" ]]; then
+      fail "$unit effective $directive sequence differs from the reviewed raw unit contract"
+      return
+    fi
+  done
+  pass "$unit effective $directive sequence matches the reviewed raw unit contract"
+}
+
+check_unit_effective_shape() {
+  local unit="$1" fragment="$2" working_directory="$3" expected_dropins="$4"
+  local expected_start="$5" expected_start_pre="$6" expected_environment="$7"
+  check_effective_value "$unit" FragmentPath "$fragment"
+  if [[ -n "$expected_dropins" ]]; then
+    check_effective_word_set "$unit" DropInPaths "$expected_dropins"
+  else
+    check_effective_word_set "$unit" DropInPaths
+  fi
+  check_effective_value "$unit" WorkingDirectory "$working_directory"
+  check_effective_directive_sequence "$unit" ExecStart "$expected_start"
+  check_effective_directive_sequence "$unit" ExecStartPre "$expected_start_pre"
+  check_effective_directive_sequence "$unit" Environment "$expected_environment"
+}
+
+render_runtime_feedback_dropin() {
+  local binding variable credential_id
+  printf '[Service]\n'
+  for binding in "${runtime_feedback_bindings[@]}"; do
+    variable="${binding%%=*}"
+    credential_id="${binding#*=}"
+    printf 'LoadCredentialEncrypted=%s:/etc/ascendany/credentials/%s.cred\n' \
+      "$credential_id" "$credential_id"
+    printf 'Environment=%s=%%d/%s\n' "$variable" "$credential_id"
+  done
+}
+
+check_runtime_feedback_dropin_bytes() {
+  local dropin="$1"
+  if ! cmp --silent -- "$dropin" <(render_runtime_feedback_dropin); then
+    fail "ascendanyd feedback credential drop-in bytes differ from the canonical binding contract"
+  else
+    pass "ascendanyd feedback credential drop-in has exact canonical bytes"
+  fi
+}
+
+check_runtime_feedback_dropin_file() {
+  local dropin="$1"
+  if [[ ! -f "$dropin" || -L "$dropin" ||
+        "$dropin" != "$(realpath -m -- "$dropin")" ||
+        "$dropin" != "$(realpath -e -- "$dropin" 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a:%h' "$dropin" 2>/dev/null || true)" != "0:0:644:1" ]] ||
+     ! check_root_owned_ancestry "$dropin" 1; then
+    fail "ascendanyd feedback credential drop-in must be a canonical root:root 0644 single-link file with protected ancestry"
+  else
+    check_runtime_feedback_dropin_bytes "$dropin"
+  fi
+}
+
+check_runtime_feedback_dropin() {
+  local dropin="/etc/systemd/system/ascendanyd.service.d/50-feedback-credentials.conf"
+  if (( ${#runtime_feedback_bindings[@]} == 0 )); then
+    return
+  fi
+  check_runtime_feedback_dropin_file "$dropin"
+}
+
+render_read_only_smoke_dropin() {
+  printf '%s\n' \
+    '[Service]' \
+    'EnvironmentFile=' \
+    'EnvironmentFile=/etc/ascendany/v2/ascendanyd.env' \
+    'EnvironmentFile=/etc/ascendany/v2/ascendanyd-read-only-smoke.env'
+}
+
+check_read_only_smoke_dropin_bytes() {
+  local dropin="$1"
+  if ! cmp --silent -- "$dropin" <(render_read_only_smoke_dropin); then
+    fail "read-only smoke drop-in bytes differ from the reviewed contract"
+  else
+    pass "read-only smoke drop-in has exact canonical bytes"
+  fi
+}
+
+check_read_only_smoke_dropin() {
+  if smoke_dropin_required; then
+    if [[ ! -f "$smoke_dropin" || -L "$smoke_dropin" ||
+          "$smoke_dropin" != "$(realpath -m -- "$smoke_dropin")" ||
+          "$smoke_dropin" != "$(realpath -e -- "$smoke_dropin" 2>/dev/null || true)" ||
+          "$(stat -Lc '%u:%g:%a:%h' "$smoke_dropin" 2>/dev/null || true)" != "0:0:644:1" ]] ||
+       ! check_root_owned_ancestry "$smoke_dropin" 1; then
+      fail "read-only smoke drop-in must be a canonical root:root 0644 single-link file with protected ancestry"
+    else
+      check_read_only_smoke_dropin_bytes "$smoke_dropin"
+    fi
+  elif [[ -e "$smoke_dropin" || -L "$smoke_dropin" ]]; then
+    fail "production phase forbids the read-only smoke drop-in"
+  else
+    pass "production phase has no read-only smoke drop-in"
+  fi
+}
+
+check_fedora_global_service_dropin_bytes() {
+  local dropin="$1" directives
+  directives="$(
+    sed -E \
+      -e '/^[[:space:]]*#/d' \
+      -e '/^[[:space:]]*$/d' \
+      -e 's/^[[:space:]]+//' \
+      -e 's/[[:space:]]+$//' \
+      "$dropin" 2>/dev/null
+  )"
+  if [[ "$directives" != $'[Service]\nTimeoutStopFailureMode=abort' ]]; then
+    fail "Fedora global service drop-in has directives outside the reviewed timeout-abort contract"
+  else
+    pass "Fedora global service drop-in has only the reviewed timeout-abort directive"
+  fi
+}
+
+check_fedora_global_service_dropin() {
+  local dropin="/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+  if [[ ! -f "$dropin" || -L "$dropin" ||
+        "$dropin" != "$(realpath -m -- "$dropin")" ||
+        "$dropin" != "$(realpath -e -- "$dropin" 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a:%h' "$dropin" 2>/dev/null || true)" != "0:0:644:1" ]] ||
+     ! check_root_owned_ancestry "$dropin" 1; then
+    fail "Fedora global service drop-in must be a canonical root:root 0644 single-link file with protected ancestry"
+  else
+    check_fedora_global_service_dropin_bytes "$dropin"
+  fi
+}
+
+check_backup_timer_effective_shape() {
+  local unit="ascendany-backup.timer"
+  local raw calendar
+  check_effective_value "$unit" LoadState loaded
+  check_effective_value "$unit" NeedDaemonReload no
+  check_effective_value "$unit" FragmentPath /etc/systemd/system/ascendany-backup.timer
+  check_effective_word_set "$unit" DropInPaths
+  check_effective_value "$unit" Unit ascendany-backup.service
+  check_effective_value "$unit" AccuracyUSec 1min
+  check_effective_value "$unit" RandomizedDelayUSec 20min
+  check_effective_value "$unit" FixedRandomDelay no
+  check_effective_value "$unit" Persistent yes
+  if ! raw="$(unit_property "$unit" TimersCalendar)"; then
+    fail "$unit effective TimersCalendar cannot be read"
+  elif ! calendar="$(
+    LC_ALL=C sed -nE \
+      's/^\{ OnCalendar=(.*) ; next_elapse=.* \}$/\1/p' \
+      <<<"$raw"
+  )" || [[ "$calendar" != "*-*-* 03:20:00" ]]; then
+    fail "$unit effective OnCalendar differs from the reviewed schedule"
+  else
+    pass "$unit effective OnCalendar matches the reviewed schedule"
+  fi
+}
+
+check_all_unit_effective_shapes() {
+  local global_service_dropin="/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+  local ascendanyd_dropins="$global_service_dropin"
+  local ascendanyd_start ascendanyd_pre admin_start admin_pre admin_environment
+  local backup_start backup_pre ascendanyd_environment judge_environment backup_environment
+  local judge_start lsp_start migrate_start migrate_pre restore_start restore_pre restore_environment environment
+  if smoke_dropin_required; then
+    ascendanyd_dropins+=$'\n'"$smoke_dropin"
+  fi
+  if (( ${#runtime_feedback_bindings[@]} > 0 )); then
+    ascendanyd_dropins+=$'\n/etc/systemd/system/ascendanyd.service.d/50-feedback-credentials.conf'
+  fi
+
+  ascendanyd_start='/opt/ascendany/v2/bin/ascendanyd serve'
+  ascendanyd_pre=$'/usr/bin/test -s %d/db_password\n/usr/bin/test -s %d/jwt_signing_key\n/usr/bin/test -s %d/password_pepper\n/usr/bin/test -s %d/trainer_agent_rtx_01'
+  ascendanyd_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password\nASCENDANY_JWT_SIGNING_KEY_FILE=%d/jwt_signing_key\nASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper\nASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031=%d/trainer_agent_rtx_01'
+  for environment in "${runtime_feedback_environment[@]}"; do
+    ascendanyd_environment+=$'\n'"$environment"
+  done
+  backup_start='/opt/ascendany/v2/bin/ascendany-backup create'
+  backup_pre='/usr/bin/test -s %d/backup_db_password'
+  backup_environment=$'ASCENDANY_DATABASE_PASSWORD_FILE=%d/backup_db_password\nASCENDANY_BACKUP_RUNTIME_ROOT=/run/ascendany-backup'
+  judge_start='/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --container-image ${ASCENDANY_JUDGE_CPP20_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup'
+  judge_environment=$'HOME=/var/lib/ascendany-judge\nXDG_RUNTIME_DIR=/run/ascendany-judge-podman/%i\nXDG_DATA_HOME=/var/lib/ascendany-judge/.local/share\nXDG_CONFIG_HOME=/var/lib/ascendany-judge/.config\nXDG_CACHE_HOME=/var/lib/ascendany-judge/.cache'
+  lsp_start='/opt/ascendany/v2/bin/ascendany-lsp serve --session-id %i --control-socket /run/ascendany-lsp-control/control.sock --workspace /tmp/ascendany-lsp-sessions/%i'
+  migrate_start='/opt/ascendany/v2/bin/ascendany-migrate up'
+  migrate_pre='/usr/bin/test -s %d/migrator_db_password'
+  admin_start='/opt/ascendany/v2/bin/ascendany-admin-bootstrap create --username admin --display-name admin'
+  admin_pre=$'+/usr/bin/test -x /opt/ascendany/v2/bin/ascendany-admin-bootstrap\n+/usr/bin/test -r /etc/ascendany/v2/ascendanyd.env\n+/usr/bin/test -s /run/ascendany-admin-bootstrap-input/admin_password.cred\n/usr/bin/test -s %d/db_password\n/usr/bin/test -s %d/password_pepper\n/usr/bin/test -s %d/admin_password'
+  admin_environment=$'ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password\nASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper'
+  restore_start='/opt/ascendany/v2/scripts/restore-verify-operator.sh run %i'
+  restore_pre=$'/usr/bin/test -s %d/restore_db_password\n/usr/bin/test -f /run/ascendany-restore-operator/operator.lock\n/usr/bin/test -f /run/ascendany-restore-operator/publication.lock'
+  restore_environment=$'ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE=%d/restore_db_password\nASCENDANY_RESTORE_RUNTIME_ROOT=%t/ascendany-restore-verify-%i'
+
+  check_unit_effective_shape \
+    ascendanyd.service \
+    /etc/systemd/system/ascendanyd.service \
+    /var/lib/ascendany \
+    "$ascendanyd_dropins" \
+    "$ascendanyd_start" \
+    "$ascendanyd_pre" \
+    "$ascendanyd_environment"
+  check_unit_effective_shape \
+    ascendany-judge@validation.service \
+    /etc/systemd/system/ascendany-judge@.service \
+    /var/lib/ascendany-judge \
+    "$global_service_dropin" \
+    "$judge_start" \
+    "" \
+    "$judge_environment"
+  check_unit_effective_shape \
+    ascendany-lsp@validation.service \
+    /etc/systemd/system/ascendany-lsp@.service \
+    /tmp \
+    "$global_service_dropin" \
+    "$lsp_start" \
+    "" \
+    ""
+  check_unit_effective_shape \
+    ascendany-admin-bootstrap.service \
+    /etc/systemd/system/ascendany-admin-bootstrap.service \
+    /var/lib/ascendany \
+    "$global_service_dropin" \
+    "$admin_start" \
+    "$admin_pre" \
+    "$admin_environment"
+  check_effective_directive_sequence \
+    ascendany-admin-bootstrap.service \
+    ExecStopPost \
+    '+/usr/bin/rm -f -- /run/ascendany-admin-bootstrap-input/admin_password.cred'
+  check_unit_effective_shape \
+    ascendany-backup.service \
+    /etc/systemd/system/ascendany-backup.service \
+    /var/backups/ascendany \
+    "$global_service_dropin" \
+    "$backup_start" \
+    "$backup_pre" \
+    "$backup_environment"
+  check_unit_effective_shape \
+    ascendany-migrate.service \
+    /etc/systemd/system/ascendany-migrate.service \
+    /var/lib/ascendany-migrate \
+    "$global_service_dropin" \
+    "$migrate_start" \
+    "$migrate_pre" \
+    'ASCENDANY_DATABASE_PASSWORD_FILE=%d/migrator_db_password'
+  check_unit_effective_shape \
+    ascendany-restore-verify@validation.service \
+    /etc/systemd/system/ascendany-restore-verify@.service \
+    /var/lib/ascendany-restore \
+    "$global_service_dropin" \
+    "$restore_start" \
+    "$restore_pre" \
+    "$restore_environment"
+  check_effective_directive_sequence \
+    ascendany-restore-verify@validation.service \
+    ExecStartPost \
+    '+/opt/ascendany/v2/scripts/publish-restore-evidence.sh %i'
+  check_effective_value ascendanyd.service StandardOutput journal
+  check_effective_value ascendanyd.service StandardError journal
+  check_effective_value ascendanyd.service MemoryPressureWatch yes
+  check_effective_value ascendanyd.service MemoryPressureThresholdUSec 200ms
+  check_effective_value ascendanyd.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-judge@validation.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-lsp@validation.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-backup.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-admin-bootstrap.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-migrate.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-restore-verify@validation.service TimeoutStopFailureMode abort
+  check_backup_timer_effective_shape
+  check_fedora_global_service_dropin
+  check_read_only_smoke_dropin
+  check_runtime_feedback_dropin
+}
+
+check_unit_identity() {
+  local unit="$1" expected_user="$2" expected_group="$3"
+  shift 3
+  local load_state need_reload user group supplementary expected_supplementary
+  load_state="$(unit_property "$unit" LoadState || true)"
+  if [[ "$load_state" != "loaded" ]]; then
+    fail "$unit is not loaded"
+    return
+  fi
+  need_reload="$(unit_property "$unit" NeedDaemonReload || true)"
+  if [[ "$need_reload" != "no" ]]; then
+    fail "$unit requires daemon-reload before its effective configuration can be validated"
+  fi
+  user="$(unit_property "$unit" User || true)"
+  group="$(unit_property "$unit" Group || true)"
+  supplementary="$(unit_property "$unit" SupplementaryGroups || true)"
+  expected_supplementary="$(printf '%s\n' "$@" | normalize_word_set)"
+  if [[ "$user" != "$expected_user" || "$group" != "$expected_group" ||
+        "$(normalize_word_set <<<"$supplementary")" != "$expected_supplementary" ]]; then
+    fail "$unit effective User/Group/SupplementaryGroups differ from the capability identity"
+  else
+    pass "$unit uses the exact $expected_user:$expected_group capability identity"
+  fi
+}
+
+check_root_owned_ancestry() {
+  local path="$1" require_root_group="$2" current metadata owner group mode
+  if [[ "$path" != /* || "$path" != "$(realpath -m -- "$path")" ||
+        ! -e "$path" || "$path" != "$(realpath -e -- "$path" 2>/dev/null || true)" ]]; then
+    return 1
+  fi
+  current="$(dirname -- "$path")"
+  while :; do
+    [[ ! -L "$current" && -d "$current" ]] || return 1
+    metadata="$(stat -c '%u:%g:%a' "$current" 2>/dev/null)" || return 1
+    IFS=: read -r owner group mode <<<"$metadata"
+    [[ "$owner" == "0" ]] || return 1
+    if [[ "$require_root_group" == "1" && "$group" != "0" ]]; then
+      return 1
+    fi
+    if (( 8#$mode & 8#022 )); then
+      return 1
+    fi
+    [[ "$current" == "/" ]] && break
+    current="$(dirname -- "$current")"
+  done
+}
+
+check_credential_source() {
+  local unit="$1" credential_id="$2" source="$3"
+  if [[ ! -s "$source" || ! -f "$source" || -L "$source" ||
+        "$(stat -c '%u:%g:%a:%h' "$source" 2>/dev/null || true)" != "0:0:400:1" ||
+        ! "$source" =~ ^/ || "$source" != "$(realpath -m -- "$source")" ||
+        "$source" != "$(realpath -e -- "$source" 2>/dev/null || true)" ]] ||
+     ! check_root_owned_ancestry "$source" 1; then
+    fail "$unit encrypted credential $credential_id must be a real root:root 0400 single-link file with root-owned non-writable ancestry"
+    return 1
+  elif is_under "$source" "$release_root"; then
+    fail "$unit encrypted credential $credential_id is stored under the release root: $source"
+    return 1
+  else
+    pass "$unit encrypted credential $credential_id has a protected external source"
+    return 0
+  fi
+}
+
+collect_effective_directives() {
+  local rendered="$1" directive="$2" output_name="$3" line value section=""
+  local -n output="$output_name"
+  output=()
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [[ "$line" =~ ^\[([A-Za-z]+)\]$ ]]; then
+      section="${BASH_REMATCH[1]}"
+      continue
+    fi
+    [[ "$section" == "Service" ]] || continue
+    [[ "$line" =~ ^${directive}[[:space:]]*=(.*)$ ]] || continue
+    value="${BASH_REMATCH[1]}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    if [[ -z "$value" ]]; then
+      output=()
+    else
+      output+=("$value")
+    fi
+  done <<<"$rendered"
+}
+
+check_unit_credentials() {
+  local unit="$1"
+  shift
+  local rendered entry credential_id source expected actual
+  local invalid=0
+  local -a plaintext=() encrypted=()
+  local -A seen=()
+  if ! rendered="$(systemctl cat "$unit" 2>/dev/null)" || [[ -z "$rendered" ]]; then
+    fail "$unit configuration cannot be read for credential validation"
+    return
+  fi
+  collect_effective_directives "$rendered" LoadCredential plaintext
+  collect_effective_directives "$rendered" LoadCredentialEncrypted encrypted
+  if (( ${#plaintext[@]} != 0 )); then
+    fail "$unit has an effective plaintext LoadCredential directive"
+    invalid=1
+  else
+    pass "$unit has no effective plaintext LoadCredential directive"
+  fi
+  for entry in "${encrypted[@]}"; do
+    credential_id="${entry%%:*}"
+    source="${entry#*:}"
+    if [[ "$source" == "$entry" || ! "$credential_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ||
+          "$source" != /* || -n "${seen[$credential_id]:-}" ]]; then
+      fail "$unit has a duplicate or noncanonical LoadCredentialEncrypted entry"
+      invalid=1
+      continue
+    fi
+    seen["$credential_id"]=1
+    if ! check_credential_source "$unit" "$credential_id" "$source"; then
+      invalid=1
+    fi
+  done
+  actual="$(printf '%s\n' "${!seen[@]}" | normalize_word_set)"
+  expected="$(printf '%s\n' "$@" | normalize_word_set)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$unit effective LoadCredentialEncrypted IDs differ from the exact expected set"
+    invalid=1
+  elif (( invalid == 0 )); then
+    pass "$unit effective encrypted credential ID set is exact"
+  fi
+}
+
+check_environment_file() {
+  local unit="$1" path="$2" metadata owner mode
+  if [[ ! -f "$path" || -L "$path" || "$path" != "$(realpath -m -- "$path")" ||
+        "$path" != "$(realpath -e -- "$path" 2>/dev/null || true)" ]] ||
+     ! check_root_owned_ancestry "$path" 0; then
+    fail "$unit EnvironmentFile is missing, linked, or has unsafe ancestry: $path"
+    return
+  fi
+  metadata="$(stat -c '%u:%a' "$path" 2>/dev/null || true)"
+  IFS=: read -r owner mode <<<"$metadata"
+  if [[ "$owner" != "0" ]] || (( 8#$mode & 8#022 )); then
+    fail "$unit EnvironmentFile must be root-owned and non-writable by group/other: $path"
+  else
+    pass "$unit EnvironmentFile is root-owned and immutable to service identities"
+  fi
+}
+
+check_unit_environment_files_with_policy() {
+  local unit="$1" ignore_errors="$2"
+  shift 2
+  local raw actual expected path
+  [[ "$ignore_errors" == "yes" || "$ignore_errors" == "no" ]] || {
+    fail "$unit EnvironmentFiles validation policy is invalid"
+    return
+  }
+  if ! raw="$(unit_property "$unit" EnvironmentFiles)"; then
+    fail "$unit effective EnvironmentFiles cannot be read"
+    return
+  fi
+  actual="$(sed '/^$/d' <<<"$raw" | LC_ALL=C sort)"
+  expected="$(printf '%s\n' "$@" | sed "/^$/d; s/\$/ (ignore_errors=${ignore_errors})/" | LC_ALL=C sort)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$unit effective EnvironmentFiles set differs from the exact required set"
+    return
+  fi
+  for path in "$@"; do
+    check_environment_file "$unit" "$path"
+  done
+  pass "$unit effective EnvironmentFiles set is exact"
+}
+
+check_unit_environment_files() {
+  local unit="$1"
+  shift
+  check_unit_environment_files_with_policy "$unit" no "$@"
+}
+
+check_unit_optional_environment_files() {
+  local unit="$1"
+  shift
+  check_unit_environment_files_with_policy "$unit" yes "$@"
+}
+
+check_ascendanyd_config_contract() {
+  local path="${1:-/etc/ascendany/v2/ascendanyd.env}"
+  local smoke_path="${2:-/etc/ascendany/v2/ascendanyd-read-only-smoke.env}"
+  local -a write_lines=() listen_lines=() smoke_entries=()
+  mapfile -t write_lines < <(grep -E '^ASCENDANY_WRITE_MODE=' "$path" 2>/dev/null || true)
+  mapfile -t listen_lines < <(grep -E '^ASCENDANY_HTTP_LISTEN=' "$path" 2>/dev/null || true)
+  mapfile -t smoke_entries < <(sed '/^#/d; /^$/d' "$smoke_path" 2>/dev/null || true)
+  if (( ${#write_lines[@]} != 1 )) || [[ "${write_lines[0]:-}" != "ASCENDANY_WRITE_MODE=enabled" ]]; then
+    fail "ascendanyd.env must contain one production write-mode value: enabled"
+  elif (( ${#listen_lines[@]} != 1 )) || [[ "${listen_lines[0]:-}" != "ASCENDANY_HTTP_LISTEN=127.0.0.1:18000" ]]; then
+    fail "ascendanyd.env must contain the fixed v2 loopback listener 127.0.0.1:18000"
+  elif (( ${#smoke_entries[@]} != 1 )) || [[ "${smoke_entries[0]:-}" != "ASCENDANY_WRITE_MODE=disabled" ]]; then
+    fail "ascendanyd read-only smoke environment must contain only the disabled write mode"
+  else
+    pass "ascendanyd production and read-only smoke environments own exact write modes on loopback port 18000"
+  fi
+}
+
+check_ascendanyd_phase_state() {
+  local active_state enabled_state
+  active_state="$(unit_property ascendanyd.service ActiveState || true)"
+  enabled_state="$(systemctl is-enabled ascendanyd.service 2>/dev/null || true)"
+  if [[ "$validation_phase" == "staged" ]]; then
+    if [[ "$active_state" != "inactive" ]]; then
+      fail "staged phase requires ascendanyd.service to be inactive"
+    else
+      pass "staged phase keeps ascendanyd.service inactive"
+    fi
+  elif [[ "$active_state" != "active" ]]; then
+    fail "$validation_phase phase requires ascendanyd.service to be active"
+  else
+    pass "$validation_phase phase has an active ascendanyd.service"
+  fi
+
+  if production_phase; then
+    if [[ "$enabled_state" != "enabled" ]]; then
+      fail "production phase requires ascendanyd.service to be enabled"
+    else
+      pass "production phase enables ascendanyd.service"
+    fi
+  elif [[ "$enabled_state" != "disabled" ]]; then
+    fail "$validation_phase phase requires ascendanyd.service to remain disabled"
+  else
+    pass "$validation_phase phase keeps ascendanyd.service disabled"
+  fi
+}
+
+check_inactive_backup_timer() {
+  local active_state enabled_state
+  active_state="$(unit_property ascendany-backup.timer ActiveState || true)"
+  enabled_state="$(systemctl is-enabled ascendany-backup.timer 2>/dev/null || true)"
+  if [[ "$active_state" != "inactive" || "$enabled_state" != "disabled" ]]; then
+    fail "$validation_phase phase requires ascendany-backup.timer to be disabled and inactive"
+  else
+    pass "$validation_phase phase keeps ascendany-backup.timer disabled and inactive"
+  fi
+}
+
+check_worker_isolation() {
+  local unit="$1" rendered effective_environment
+  local -a environment=()
+  check_unit_credentials "$unit"
+  if ! rendered="$(systemctl cat "$unit" 2>/dev/null)" || [[ -z "$rendered" ]]; then
+    fail "$unit configuration cannot be read for secret environment validation"
+  else
+    collect_effective_directives "$rendered" Environment environment
+    effective_environment="$(printf '%s\n' "${environment[@]}")"
+  fi
+  if [[ -z "${rendered:-}" ]]; then
+    :
+  elif grep -Eq '(^|[[:space:]])[^=]*(DB_|DATABASE|PASSWORD|JWT|SECRET|TOKEN)[^=]*=' <<<"$effective_environment"; then
+    fail "$unit receives a database or secret environment variable"
+  else
+    pass "$unit has no database/secret environment"
+  fi
+  check_effective_value "$unit" PrivateNetwork yes
+  check_effective_value "$unit" DevicePolicy closed
+  check_effective_value "$unit" ProtectSystem strict
+  if [[ "$unit" == "ascendany-judge@validation.service" ]]; then
+    check_effective_value "$unit" ProtectControlGroupsEx private
+    check_effective_word_set "$unit" ReadWritePaths \
+      /var/lib/ascendany-judge \
+      /run/ascendany-judge \
+      /run/ascendany-judge-podman
+  fi
+}
+
+run_as_judge() {
+  (
+    cd /var/lib/ascendany-judge || exit 1
+    exec /usr/bin/runuser -u ascendany-judge -- /usr/bin/env -i \
+      PATH=/usr/bin:/bin \
+      LANG=C.UTF-8 \
+      HOME=/var/lib/ascendany-judge \
+      XDG_RUNTIME_DIR=/run/ascendany-judge-image-podman \
+      XDG_DATA_HOME=/var/lib/ascendany-judge/.local/share \
+      XDG_CONFIG_HOME=/var/lib/ascendany-judge/.config \
+      XDG_CACHE_HOME=/var/lib/ascendany-judge/.cache \
+      "$@"
+  )
+}
+
+check_judge_runtime() {
+  local unit="ascendany-judge@validation.service"
+  local no_new_privileges ambient bounding image locked_image env_file polkit_rule judge_uid judge_gid runtime_gid
+  no_new_privileges="$(unit_property "$unit" NoNewPrivileges || true)"
+  ambient="$(unit_property "$unit" AmbientCapabilities || true)"
+  bounding="$(unit_property "$unit" CapabilityBoundingSet || true)"
+  if [[ "$no_new_privileges" != "no" ]]; then
+    fail "$unit blocks the rootless newuidmap/newgidmap helpers"
+  elif [[ -n "$ambient" ]]; then
+    fail "$unit grants ambient capabilities: $ambient"
+  elif [[ " $bounding " != *" cap_setuid "* || " $bounding " != *" cap_setgid "* ]]; then
+    fail "$unit lacks the two rootless user-namespace helper capabilities: $bounding"
+  else
+    local remaining=" ${bounding//cap_setuid/} "
+    remaining=" ${remaining//cap_setgid/} "
+    if [[ -n "${remaining//[[:space:]]/}" ]]; then
+      fail "$unit capability boundary is broader than CAP_SETUID/CAP_SETGID: $bounding"
+    else
+      pass "$unit grants no ambient capability and bounds helpers to CAP_SETUID/CAP_SETGID"
+    fi
+  fi
+  check_effective_value "$unit" Delegate yes
+  check_effective_word_set "$unit" DelegateControllers cpu memory pids
+  check_effective_value "$unit" DelegateSubgroup supervisor
+  check_effective_value "$unit" RuntimeDirectory ascendany-judge-podman/validation
+  check_effective_value "$unit" RuntimeDirectoryMode 0700
+  check_effective_value "$unit" RuntimeDirectoryPreserve no
+  check_effective_value "$unit" ProtectHostname no
+  check_effective_value "$unit" PrivateTmp no
+  check_effective_word_set "$unit" TemporaryFileSystem \
+    /tmp:rw,nosuid,nodev,noexec \
+    /var/tmp:rw,nosuid,nodev,noexec
+  check_effective_value "$unit" ProtectKernelTunables no
+  check_effective_value "$unit" ProtectKernelLogs no
+  check_effective_value "$unit" ProtectProc invisible
+  check_effective_value "$unit" ProcSubset all
+  check_effective_value "$unit" RemoveIPC no
+
+  if [[ ! -d /var/empty || -n "$(find /var/empty -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ||
+        "$(stat -c '%u:%a' /var/empty 2>/dev/null || true)" != "0:755" ]]; then
+    fail "/var/empty is not an exact root-owned empty 0755 OCI hooks directory"
+  else
+    pass "rootless Judge OCI hooks directory is empty and root-owned"
+  fi
+
+  judge_uid="$(id -u ascendany-judge 2>/dev/null || true)"
+  judge_gid="$(id -g ascendany-judge 2>/dev/null || true)"
+  runtime_gid="$(getent group ascendany-runtime 2>/dev/null | cut -d: -f3 || true)"
+  if [[ -z "$judge_uid" || -z "$runtime_gid" ||
+        ! -d /run/ascendany-judge || -L /run/ascendany-judge ||
+        "/run/ascendany-judge" != "$(realpath -e -- /run/ascendany-judge 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a' /run/ascendany-judge 2>/dev/null || true)" != "$judge_uid:$runtime_gid:2770" ]]; then
+    fail "Judge socket directory is not the exact persistent setgid 2770 boundary"
+  else
+    pass "Judge socket directory has one persistent tmpfiles owner"
+  fi
+
+  if [[ -z "$judge_uid" || -z "$judge_gid" ||
+        ! -d /run/ascendany-judge-podman || -L /run/ascendany-judge-podman ||
+        "/run/ascendany-judge-podman" != "$(realpath -e -- /run/ascendany-judge-podman 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a' /run/ascendany-judge-podman 2>/dev/null || true)" != "$judge_uid:$judge_gid:700" ||
+        -n "$(find /run/ascendany-judge-podman -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    fail "rootless Judge per-job runtime parent is not an empty dedicated 0700 boundary"
+  else
+    pass "rootless Judge per-job runtime parent is empty and private"
+  fi
+
+  if [[ -z "$judge_uid" || -z "$judge_gid" ||
+        ! -d /run/ascendany-judge-image-podman || -L /run/ascendany-judge-image-podman ||
+        "/run/ascendany-judge-image-podman" != "$(realpath -e -- /run/ascendany-judge-image-podman 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a' /run/ascendany-judge-image-podman 2>/dev/null || true)" != "$judge_uid:$judge_gid:700" ]]; then
+    fail "rootless Judge image-operator runtime is not the exact dedicated 0700 boundary"
+  else
+    pass "rootless Judge image-operator runtime is dedicated and private"
+  fi
+
+  polkit_rule="/etc/polkit-1/rules.d/60-ascendany-judge.rules"
+  if [[ ! -f "$polkit_rule" || "$(stat -c '%u:%g:%a' "$polkit_rule" 2>/dev/null || true)" != "0:0:644" ]]; then
+    fail "Judge polkit rule is missing or not root:root 0644"
+  else
+    pass "Judge systemd authorization rule is root-owned"
+  fi
+
+  env_file="/etc/ascendany/v2/judge.env"
+  image="$(grep -E '^ASCENDANY_JUDGE_CPP20_IMAGE=[a-z0-9][a-z0-9._:/-]{0,255}@sha256:[0-9a-f]{64}$' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  locked_image="$(jq -er '.image.leaf' /opt/ascendany/v2/config/judge-image-lock.json 2>/dev/null || true)"
+  if [[ -z "$image" ]]; then
+    fail "judge.env has no single digest-pinned C++20 image"
+  elif [[ "$image" != "$locked_image" ]]; then
+    fail "judge.env does not select the release-bound linux/amd64 leaf image"
+  elif ! run_as_judge /usr/bin/podman --cgroup-manager=cgroupfs \
+      --runroot=/run/ascendany-judge-image-podman/containers image exists "$image"; then
+    fail "digest-pinned Judge image is not preloaded for ascendany-judge: $image"
+  elif ! run_as_judge /opt/ascendany/v2/scripts/attest-judge-image.sh >/dev/null; then
+    fail "preloaded Judge image failed release-bound config and toolchain attestation"
+  else
+    pass "release-bound Judge image and compiler are attested for ascendany-judge"
+  fi
+}
+
+check_lsp_runtime() {
+  local unit="ascendany-lsp@validation.service"
+  local polkit_rule root actual expected metadata groups
+  check_effective_value "$unit" NoNewPrivileges yes
+  check_effective_value "$unit" PrivateTmp yes
+  check_effective_value "$unit" PrivateTmpEx disconnected
+  check_effective_value "$unit" PrivatePIDs yes
+  check_effective_value "$unit" PrivateDevices yes
+  check_effective_value "$unit" LimitFSIZE 33554432
+  check_effective_value "$unit" StateDirectory ""
+  check_effective_value "$unit" ReadWritePaths ""
+  check_effective_value "$unit" RootDirectory /var/lib/ascendany-lsp-root
+  check_effective_value "$unit" MountAPIVFS yes
+
+  groups="$(id -nG ascendany-lsp 2>/dev/null | normalize_word_set)"
+  expected="$(printf '%s\n' ascendany-lsp ascendany-lsp-control | normalize_word_set)"
+  if [[ "$groups" != "$expected" ]]; then
+    fail "ascendany-lsp OS identity has a group outside the dedicated control boundary"
+  else
+    pass "ascendany-lsp belongs only to its primary and dedicated control groups"
+  fi
+
+  if [[ "$ascendanyd_active" == "1" ]]; then
+    local control_socket=/run/ascendany-lsp-control/control.sock
+    metadata="$(stat -Lc '%U:%G:%a' "$control_socket" 2>/dev/null || true)"
+    if [[ ! -S "$control_socket" || -L "$control_socket" ||
+          "$metadata" != 'ascendany:ascendany-lsp-control:660' ]]; then
+      fail "active LSP control socket lacks the exact non-root server identity boundary"
+    else
+      pass "active LSP control socket binds its non-root inode owner to peer authentication"
+    fi
+  fi
+
+  root=/var/lib/ascendany-lsp-root
+  expected=$'bin\ndev\netc\nhome\nlib\nlib64\nopt\nproc\nrun\nsys\ntmp\nusr\nvar'
+  actual="$(find "$root" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort || true)"
+  if [[ ! -d "$root" || -L "$root" || "$(stat -c '%u:%g:%a' "$root" 2>/dev/null || true)" != '0:0:755' || "$actual" != "$expected" ]]; then
+    fail "LSP RootDirectory top-level skeleton is not the exact root-owned closure"
+  else
+    pass "LSP RootDirectory top-level skeleton is exact and root-owned"
+  fi
+  for entry in bin:usr/bin lib:usr/lib lib64:usr/lib64; do
+    local name="${entry%%:*}" target="${entry#*:}"
+    if [[ ! -L "$root/$name" || "$(readlink -- "$root/$name" 2>/dev/null || true)" != "$target" ||
+          "$(stat -c '%u:%g:%a' "$root/$name" 2>/dev/null || true)" != '0:0:777' ]]; then
+      fail "LSP RootDirectory $name link differs from the reviewed /usr closure"
+    else
+      pass "LSP RootDirectory $name link is exact"
+    fi
+  done
+  for directory in dev etc home opt opt/ascendany opt/ascendany/v2 opt/ascendany/v2/bin proc run run/ascendany-lsp-control sys usr var; do
+    metadata="$(stat -c '%u:%g:%a' "$root/$directory" 2>/dev/null || true)"
+    if [[ ! -d "$root/$directory" || -L "$root/$directory" || "$metadata" != '0:0:755' ]]; then
+      fail "LSP RootDirectory mount skeleton directory is invalid: $directory"
+    fi
+  done
+  if [[ "$(stat -c '%u:%g:%a' "$root/tmp" 2>/dev/null || true)" != '0:0:1777' ]]; then
+    fail "LSP RootDirectory /tmp mountpoint is not root:root mode 1777"
+  fi
+  for placeholder in opt/ascendany/v2/bin/ascendany-lsp run/ascendany-lsp-control/control.sock; do
+    if [[ ! -f "$root/$placeholder" || -L "$root/$placeholder" ||
+          "$(stat -c '%u:%g:%a:%s:%h' "$root/$placeholder" 2>/dev/null || true)" != '0:0:0:0:1' ]]; then
+      fail "LSP RootDirectory bind mount placeholder is invalid: $placeholder"
+    fi
+  done
+  for empty in dev etc home proc sys usr var; do
+    if [[ -n "$(find "$root/$empty" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+      fail "LSP RootDirectory host skeleton unexpectedly exposes content under /$empty"
+    fi
+  done
+
+  polkit_rule="/etc/polkit-1/rules.d/61-ascendany-lsp.rules"
+  if [[ ! -f "$polkit_rule" || "$(stat -c '%u:%g:%a' "$polkit_rule" 2>/dev/null || true)" != "0:0:644" ]]; then
+    fail "LSP polkit rule is missing or not root:root 0644"
+  else
+    pass "LSP systemd authorization rule is root-owned"
+  fi
+}
+
+check_credentials() {
+  local unit="ascendanyd.service" credential_id
+  local -a expected_ids=(
+    db_password
+    jwt_signing_key
+    password_pepper
+    trainer_agent_rtx_01
+  )
+  for credential_id in "${runtime_feedback_credential_ids[@]}"; do
+    expected_ids+=("$credential_id")
+  done
+  check_unit_credentials "$unit" "${expected_ids[@]}"
+  if smoke_dropin_required; then
+    check_unit_environment_files "$unit" \
+      /etc/ascendany/v2/ascendanyd.env \
+      /etc/ascendany/v2/ascendanyd-read-only-smoke.env
+  else
+    check_unit_environment_files "$unit" /etc/ascendany/v2/ascendanyd.env
+  fi
+
+  if [[ "$ascendanyd_active" == "1" ]]; then
+    local active_credential="/run/credentials/${unit}/jwt_signing_key"
+    if [[ ! -s "$active_credential" ]]; then
+      fail "active JWT credential is missing: $active_credential"
+    elif (( $(stat -c '%s' "$active_credential") < 32 )); then
+      fail "active JWT credential is shorter than 32 bytes"
+    else
+      pass "active JWT credential exists and is at least 32 bytes"
+    fi
+  fi
+
+  if [[ "$ascendanyd_active" == "1" ]]; then
+    local active_pepper="/run/credentials/${unit}/password_pepper"
+    if [[ ! -s "$active_pepper" ]]; then
+      fail "active password pepper credential is missing: $active_pepper"
+    elif (( $(stat -c '%s' "$active_pepper") < 32 )); then
+      fail "active password pepper credential is shorter than 32 bytes"
+    else
+      pass "active password pepper credential exists and is at least 32 bytes"
+    fi
+  fi
+}
+
+check_admin_bootstrap_unit() {
+  local unit="ascendany-admin-bootstrap.service"
+  local one_time_source="/run/ascendany-admin-bootstrap-input/admin_password.cred"
+  local input_directory="/run/ascendany-admin-bootstrap-input"
+  local rendered actual expected active_state enabled_state
+  local -a plaintext=() encrypted=()
+
+  if ! rendered="$(systemctl cat "$unit" 2>/dev/null)" || [[ -z "$rendered" ]]; then
+    fail "$unit configuration cannot be read"
+    return
+  fi
+  collect_effective_directives "$rendered" LoadCredential plaintext
+  collect_effective_directives "$rendered" LoadCredentialEncrypted encrypted
+  if (( ${#plaintext[@]} != 0 )); then
+    fail "$unit has an effective plaintext LoadCredential directive"
+  fi
+  actual="$(printf '%s\n' "${encrypted[@]}" | normalize_word_set)"
+  expected="$(printf '%s\n' \
+    'admin_password:/run/ascendany-admin-bootstrap-input/admin_password.cred' \
+    'db_password:/etc/ascendany/credentials/runtime_db_password.cred' \
+    'password_pepper:/etc/ascendany/credentials/password_pepper.cred' |
+    normalize_word_set)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$unit encrypted credential declarations differ from the exact bootstrap contract"
+  else
+    pass "$unit encrypted credential declarations are exact"
+  fi
+  check_credential_source "$unit" db_password /etc/ascendany/credentials/runtime_db_password.cred || true
+  check_credential_source "$unit" password_pepper /etc/ascendany/credentials/password_pepper.cred || true
+
+  if [[ ! -d "$input_directory" || -L "$input_directory" ||
+        "$(stat -Lc '%u:%g:%a' "$input_directory" 2>/dev/null || true)" != "0:0:700" ]] ||
+     ! check_root_owned_ancestry "$input_directory" 1; then
+    fail "administrator bootstrap input directory must be root:root mode 0700"
+  elif [[ -e "$one_time_source" || -L "$one_time_source" ]]; then
+    fail "one-time administrator password credential remains after the bootstrap window"
+  else
+    pass "one-time administrator password credential is absent"
+  fi
+
+  active_state="$(unit_property "$unit" ActiveState || true)"
+  enabled_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+  if [[ "$active_state" != "inactive" || "$enabled_state" != "static" ]]; then
+    fail "$unit must remain inactive and static outside its one-shot bootstrap window"
+  elif [[ "$validation_phase" != "staged" &&
+          ( "$(unit_property "$unit" Result || true)" != "success" ||
+            "$(unit_property "$unit" ExecMainStatus || true)" != "0" ) ]]; then
+    fail "$unit has no successful one-shot result after administrator bootstrap"
+  else
+    pass "$unit is inactive and cannot be enabled for boot"
+  fi
+}
+
+check_active_ascendanyd_environment() {
+  local pid="$1" environ_path="$2" environment_file="$3"
+  local line name value entry generated_invalid
+  local invalid=0
+  local -A expected=() seen=() required_generated=()
+
+  if [[ ! -r "$environment_file" ]]; then
+    fail "active ascendanyd environment contract cannot read $environment_file"
+    return
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if [[ ! "$line" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]]; then
+      fail "ascendanyd.env contains a noncanonical environment entry"
+      invalid=1
+      continue
+    fi
+    name="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "$name" in
+      LANG|PATH|USER|LOGNAME|HOME|SHELL|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MEMORY_PRESSURE_WATCH|MEMORY_PRESSURE_WRITE|CREDENTIALS_DIRECTORY|RUNTIME_DIRECTORY|STATE_DIRECTORY|LOGS_DIRECTORY|ASCENDANY_DATABASE_PASSWORD_FILE|ASCENDANY_JWT_SIGNING_KEY_FILE|ASCENDANY_PASSWORD_PEPPER_FILE|ASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031|ASCENDANY_CREDENTIAL_FILE_REF_HEX_*)
+        fail "ascendanyd.env attempts to own reserved environment name $name"
+        invalid=1
+        continue
+        ;;
+    esac
+    if [[ -n "${expected[$name]+present}" ]]; then
+      fail "ascendanyd.env repeats environment name $name"
+      invalid=1
+      continue
+    fi
+    expected["$name"]="$value"
+  done <"$environment_file"
+
+  expected[ASCENDANY_WRITE_MODE]="$expected_write_mode"
+
+  expected[LANG]='zh_CN.UTF-8'
+  expected[PATH]='/usr/local/bin:/usr/bin'
+  expected[USER]='ascendany'
+  expected[LOGNAME]='ascendany'
+  expected[HOME]='/var/lib/ascendany'
+  expected[SHELL]='/usr/sbin/nologin'
+  expected[ASCENDANY_DATABASE_PASSWORD_FILE]='/run/credentials/ascendanyd.service/db_password'
+  expected[ASCENDANY_JWT_SIGNING_KEY_FILE]='/run/credentials/ascendanyd.service/jwt_signing_key'
+  expected[ASCENDANY_PASSWORD_PEPPER_FILE]='/run/credentials/ascendanyd.service/password_pepper'
+  expected[ASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031]='/run/credentials/ascendanyd.service/trainer_agent_rtx_01'
+  for entry in "${runtime_feedback_bindings[@]}"; do
+    name="${entry%%=*}"
+    value="${entry#*=}"
+    expected["$name"]="/run/credentials/ascendanyd.service/$value"
+  done
+
+  required_generated[INVOCATION_ID]=1
+  required_generated[JOURNAL_STREAM]=1
+  required_generated[SYSTEMD_EXEC_PID]=1
+  required_generated[MEMORY_PRESSURE_WATCH]=1
+  required_generated[MEMORY_PRESSURE_WRITE]=1
+  required_generated[CREDENTIALS_DIRECTORY]=1
+  required_generated[RUNTIME_DIRECTORY]=1
+  required_generated[STATE_DIRECTORY]=1
+  required_generated[LOGS_DIRECTORY]=1
+
+  if [[ ! -r "$environ_path" ]]; then
+    fail "active ascendanyd process environment cannot be read"
+    return
+  fi
+  while IFS= read -r -d '' entry; do
+    if [[ ! "$entry" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      fail "active ascendanyd process has a malformed environment entry"
+      invalid=1
+      continue
+    fi
+    name="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    if [[ -n "${seen[$name]+present}" ]]; then
+      fail "active ascendanyd process repeats environment name $name"
+      invalid=1
+      continue
+    fi
+    seen["$name"]=1
+    if [[ -n "${expected[$name]+present}" ]]; then
+      if [[ "$value" != "${expected[$name]}" ]]; then
+        fail "active ascendanyd process environment value drifted for $name"
+        invalid=1
+      fi
+      continue
+    fi
+    generated_invalid=0
+    case "$name" in
+      INVOCATION_ID)
+        [[ "$value" =~ ^[0-9a-f]{32}$ ]] || generated_invalid=1
+        ;;
+      JOURNAL_STREAM)
+        [[ "$value" =~ ^[0-9]+:[0-9]+$ ]] || generated_invalid=1
+        ;;
+      SYSTEMD_EXEC_PID)
+        [[ "$value" == "$pid" ]] || generated_invalid=1
+        ;;
+      MEMORY_PRESSURE_WATCH)
+        [[ "$value" == "/sys/fs/cgroup/system.slice/ascendanyd.service/memory.pressure" ]] || generated_invalid=1
+        ;;
+      MEMORY_PRESSURE_WRITE)
+        [[ "$value" == 'c29tZSAyMDAwMDAgMjAwMDAwMAA=' ]] || generated_invalid=1
+        ;;
+      CREDENTIALS_DIRECTORY)
+        [[ "$value" == "/run/credentials/ascendanyd.service" ]] || generated_invalid=1
+        ;;
+      RUNTIME_DIRECTORY)
+        [[ "$value" == "/run/ascendany" ]] || generated_invalid=1
+        ;;
+      STATE_DIRECTORY)
+        [[ "$value" == "/var/lib/ascendany" ]] || generated_invalid=1
+        ;;
+      LOGS_DIRECTORY)
+        [[ "$value" == "/var/log/ascendany" ]] || generated_invalid=1
+        ;;
+      *)
+        fail "active ascendanyd process has an undeclared environment name: $name"
+        invalid=1
+        continue
+        ;;
+    esac
+    if (( generated_invalid != 0 )); then
+      fail "active ascendanyd process has an invalid systemd-generated value for $name"
+      invalid=1
+    fi
+  done <"$environ_path"
+
+  for name in "${!expected[@]}" "${!required_generated[@]}"; do
+    if [[ -z "${seen[$name]+present}" ]]; then
+      fail "active ascendanyd process is missing required environment name $name"
+      invalid=1
+    fi
+  done
+  if (( invalid == 0 )); then
+    pass "active ascendanyd process environment is the exact reviewed and systemd-generated closed set"
+  fi
+}
+
+check_active_ascendanyd_process() {
+  local pid executable
+  local -a argv=()
+  [[ "$ascendanyd_active" == "1" ]] || return 0
+  pid="$(unit_property ascendanyd.service MainPID || true)"
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ || ! -r "/proc/$pid/cmdline" ]]; then
+    fail "ascendanyd.service has no readable positive MainPID"
+    return
+  fi
+  executable="$(realpath -e -- "/proc/$pid/exe" 2>/dev/null || true)"
+  mapfile -d '' -t argv <"/proc/$pid/cmdline" || true
+  if [[ "$executable" != "$release_root/bin/ascendanyd" ]]; then
+    fail "active ascendanyd executable does not match the staged release binary"
+  elif (( ${#argv[@]} != 2 )) ||
+       [[ "${argv[0]}" != "$release_root/bin/ascendanyd" || "${argv[1]}" != "serve" ]]; then
+    fail "active ascendanyd argv differs from the exact release binary/serve contract"
+  else
+    pass "active ascendanyd executable and argv match the staged release"
+  fi
+  check_active_ascendanyd_environment \
+    "$pid" "/proc/$pid/environ" /etc/ascendany/v2/ascendanyd.env
+}
+
+check_active_ascendanyd_health() {
+  local liveness readiness
+  [[ "$ascendanyd_active" == "1" ]] || return 0
+  if ! liveness="$(curl --disable --fail --silent --show-error --max-time 5 --noproxy '*' --proto '=http' http://127.0.0.1:18000/livez)"; then
+    fail "active ascendanyd liveness cannot be read"
+  elif ! jq -e '
+      type == "object" and keys == ["status"] and .status == "alive"
+    ' <<<"$liveness" >/dev/null 2>&1; then
+    fail "active ascendanyd liveness violates the closed response contract"
+  else
+    pass "active ascendanyd liveness is healthy"
+  fi
+
+  if ! readiness="$(curl --disable --fail --silent --show-error --max-time 5 --noproxy '*' --proto '=http' http://127.0.0.1:18000/readyz)"; then
+    fail "active ascendanyd readiness cannot be read"
+  elif ! jq -e '
+      type == "object" and
+      keys == ["checks", "status"] and
+      .status == "ready" and
+      (.checks | type == "object" and keys == ["database", "migrations"]) and
+      (.checks.database | type == "object" and keys == ["status"] and .status == "pass") and
+      (.checks.migrations | type == "object" and
+        keys == ["currentVersion", "expectedVersion", "status"] and
+        .status == "pass" and .currentVersion == 5 and .expectedVersion == 5)
+    ' <<<"$readiness" >/dev/null 2>&1; then
+    fail "active ascendanyd readiness violates the schema-v5 closed response contract"
+  else
+    pass "active ascendanyd database and migration readiness are healthy at schema v5"
+  fi
+}
+
+check_release_for_secret_files() {
+  local -a found=()
+  if [[ ! -d "$release_root" ]]; then
+    fail "release root is missing: $release_root"
+    return
+  fi
+  mapfile -t found < <(
+    find "$release_root" -xdev -type f \
+      \( -name '.env' -o -name '.env.*' -o -name '*.key' -o -name '*.pem' \
+         -o -name '*.cred' -o -name '.pgpass' -o -iname '*password*' \
+         -o -iname '*secret*' -o -iname '*token*' \) -print
+  )
+  if (( ${#found[@]} > 0 )); then
+    printf 'Secret-like files under release root:\n' >&2
+    printf '  %s\n' "${found[@]}" >&2
+    fail "release root contains secret-like files"
+  else
+    pass "release root contains no secret-like files"
+  fi
+}
+
+check_release_directory_metadata() {
+  local path="$1" description="$2"
+  local metadata
+
+  metadata="$(stat -Lc '%u:%g:%a' -- "$path" 2>/dev/null || true)"
+  if [[ "$path" != /* || "$path" != "$(realpath -m -- "$path")" ||
+        ! -d "$path" || -L "$path" ||
+        "$path" != "$(realpath -e -- "$path" 2>/dev/null || true)" ||
+        "$metadata" != "0:0:755" ]]; then
+    fail "$description must be a canonical non-symbolic-link root:root mode 0755 directory"
+    return 1
+  fi
+  pass "$description is a canonical root:root mode 0755 directory"
+}
+
+check_release_payload() {
+  local manifest="$release_root/release-manifest.json"
+  local payload_failures_before="$failures"
+  local relative path expected_sha expected_size expected_mode
+  local actual_sha actual_size actual_mode owner_group runtime_metadata runtime_capabilities
+  local expected_writes_json
+  local expected_build_time manifest_go_version manifest_goos manifest_goarch
+  local manifest_goamd64 manifest_go_experiment manifest_go_fips manifest_cgo_enabled
+  local -a required_paths=(
+    bin/ascendanyd
+    bin/ascendany-admin-bootstrap
+    bin/ascendany-backup
+    bin/ascendany-judge
+    bin/ascendany-lsp
+    bin/ascendany-migrate
+    bin/ascendany-release-ops
+    bin/ascendany-trainer-agent
+    trainers/recommendation/ascendany_recommendation_trainer/__init__.py
+    trainers/recommendation/ascendany_recommendation_trainer/__main__.py
+    trainers/recommendation/ascendany_recommendation_trainer/attestation.py
+    trainers/recommendation/ascendany_recommendation_trainer/cli.py
+    trainers/recommendation/ascendany_recommendation_trainer/contract.py
+    trainers/recommendation/ascendany_recommendation_trainer/model.py
+    trainers/recommendation/ascendany_recommendation_trainer/train.py
+    trainers/recommendation/runtime-closure-cu130.json
+    trainers/recommendation/runtime-python-cu130.json
+    trainers/recommendation/runtime-requirements-cu130.lock
+    trainers/recommendation/runtime-wheels-cu130.json
+    README.md
+    OJ_JUDGE_CONTRACT.md
+    LSP_CONTROL_CONTRACT.md
+    TRAINER_AGENT_CONTRACT.md
+    contracts/openapi/ascendany-v2.yaml
+    contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
+    db/roles/README.md
+    db/roles/001_v2_roles.sql
+    db/roles/verify_v2_roles.sql
+    config/analytics.json
+    config/ascendanyd.env
+    config/ascendanyd-read-only-smoke.env
+    config/backup.env
+    config/cloudflared.yaml
+    config/fedora-runtime-packages.json
+    config/judge.env
+    config/judge-image-lock.json
+    config/migrate.env
+    config/pgbouncer-hba.conf
+    config/pgbouncer.ini
+    config/postgresql-hba-bootstrap.conf
+    config/postgresql-hba.conf
+    config/postgresql-ident-bootstrap.conf
+    config/postgresql-ident.conf
+    config/restore.env
+    config/trainer-agent.env
+    systemd/ascendanyd.service
+    systemd/ascendanyd.service.d/40-read-only-smoke.conf
+    systemd/ascendany-admin-bootstrap.service
+    systemd/ascendany-backup.service
+    systemd/ascendany-backup.timer
+    systemd/ascendany-judge@.service
+    systemd/ascendany-lsp@.service
+    systemd/ascendany-migrate.service
+    systemd/ascendany-pgbouncer.service
+    systemd/ascendany-restore-verify@.service
+    systemd/ascendany-trainer-agent.service
+    systemd/ascendany-cloudflared.service
+    polkit-1/rules.d/60-ascendany-judge.rules
+    polkit-1/rules.d/61-ascendany-lsp.rules
+    sysusers.d/ascendany-v2.conf
+    tmpfiles.d/ascendany-v2.conf
+    scripts/publish-restore-evidence.sh
+    scripts/restore-verify-operator.sh
+    scripts/install-trainer-runtime.sh
+    scripts/install-v2-release.sh
+    scripts/acquire-pgbouncer-rpm.sh
+    scripts/acquire-judge-image.sh
+    scripts/attest-pgbouncer-rpm.sh
+    scripts/attest-judge-image.sh
+    scripts/judge-image-contract.sh
+    scripts/preload-judge-image.sh
+    scripts/provision-postgres-pgbouncer.sh
+    scripts/trainer-host-capability-identity.sh
+    scripts/trainer-runtime-tree-identity.sh
+    scripts/validate-cloudflared.sh
+    scripts/validate-production.sh
+    scripts/validate-trainer-host.sh
+  )
+  local -a required_directories=(
+    bin
+    config
+    contracts
+    contracts/openapi
+    contracts/pintia
+    db
+    db/roles
+    polkit-1
+    polkit-1/rules.d
+    scripts
+    systemd
+    systemd/ascendanyd.service.d
+    sysusers.d
+    tmpfiles.d
+    trainers
+    trainers/recommendation
+    trainers/recommendation/ascendany_recommendation_trainer
+  )
+  local -a actual_files=()
+  local -a declared_files=()
+  local -a actual_directories=()
+  local -a expected_directories=()
+  declare -A declared=()
+
+  if ! check_release_directory_metadata "$release_root" "release root"; then
+    return
+  fi
+  if find "$release_root" -xdev -type l -print -quit | grep -q .; then
+    fail "release payload contains a symbolic link"
+  fi
+  if find "$release_root" -xdev ! -type d ! -type f -print -quit | grep -q .; then
+    fail "release payload contains a special filesystem node"
+  fi
+  if find "$release_root" -xdev \( ! -user root -o ! -group root -o -perm /022 \) -print -quit | grep -q .; then
+    fail "release payload contains an entry that is not root:root or is writable by group/other"
+  else
+    pass "release payload is root-owned and immutable to service identities"
+  fi
+
+  if [[ ! -f "$manifest" || -L "$manifest" ]]; then
+    fail "release manifest is missing or is a symbolic link: $manifest"
+    return
+  fi
+  if ! jq -e '
+      type == "object" and
+      (keys == ["build", "commit", "files", "schema", "sourceDateEpoch", "version"]) and
+      .schema == "ascendany.release.v2" and
+      (.commit | type == "string" and test("^[0-9a-f]{40}$")) and
+      (.version | type == "string" and length <= 128 and test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)([.]((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$")) and
+      (.sourceDateEpoch | type == "number" and floor == . and . >= 0) and
+      (.build | type == "object" and
+        (keys == ["cgoEnabled", "goExperiment", "goVersion", "goamd64", "goarch", "gofips140", "goos"]) and
+        (.goVersion | type == "string" and test("^go[0-9]+[.][0-9]+([.][0-9]+)?[0-9A-Za-z.:_+~-]*$")) and
+        .goos == "linux" and
+        .goarch == "amd64" and
+        .goamd64 == "v1" and
+        (.goExperiment | type == "string" and test("^(none|[0-9A-Za-z_,.-]+)$")) and
+        .gofips140 == "off" and
+        .cgoEnabled == false) and
+      (.files | type == "array" and length == 77) and
+      (all(.files[];
+        type == "object" and
+        (keys == ["mode", "path", "sha256", "size"]) and
+        (.path | type == "string" and test("^[0-9A-Za-z][0-9A-Za-z._@/-]*$") and
+          (startswith("/") | not) and
+          (contains("//") | not) and
+          (contains("/../") | not) and
+          (endswith("/..") | not) and
+          (contains("/./") | not) and
+          (endswith("/.") | not)) and
+        (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+        (.size | type == "number" and floor == . and . > 0) and
+        (.mode | type == "string" and test("^0[0-7]{3}$")))) and
+      (([.files[].path] | length) == ([.files[].path] | unique | length))
+    ' "$manifest" >/dev/null; then
+    fail "release manifest violates ascendany.release.v2"
+    return
+  fi
+
+  release_manifest_commit="$(jq -r '.commit' "$manifest")"
+  release_manifest_version="$(jq -r '.version' "$manifest")"
+  manifest_go_version="$(jq -r '.build.goVersion' "$manifest")"
+  manifest_goos="$(jq -r '.build.goos' "$manifest")"
+  manifest_goarch="$(jq -r '.build.goarch' "$manifest")"
+  manifest_goamd64="$(jq -r '.build.goamd64' "$manifest")"
+  manifest_go_experiment="$(jq -r '.build.goExperiment' "$manifest")"
+  manifest_go_fips="$(jq -r '.build.gofips140' "$manifest")"
+  manifest_cgo_enabled="$(jq -r '.build.cgoEnabled' "$manifest")"
+  expected_build_time="$(date -u -d "@$(jq -r '.sourceDateEpoch' "$manifest")" +%FT%TZ 2>/dev/null || true)"
+  if [[ -z "$expected_build_time" ]]; then
+    fail "release sourceDateEpoch cannot be rendered as UTC build time"
+  fi
+  while IFS=$'\t' read -r relative expected_sha expected_size expected_mode; do
+    if [[ -n "${declared[$relative]:-}" ]]; then
+      fail "release manifest repeats path: $relative"
+      continue
+    fi
+    declared["$relative"]=1
+    declared_files+=("$relative")
+    path="$release_root/$relative"
+    if ! is_under "$path" "$release_root" || [[ ! -f "$path" || -L "$path" ]]; then
+      fail "release manifest path is missing, outside the root, or a symbolic link: $relative"
+      continue
+    fi
+    owner_group="$(stat -Lc '%u:%g' "$path" 2>/dev/null || true)"
+    actual_mode="$(stat -Lc '%a' "$path" 2>/dev/null || true)"
+    actual_size="$(stat -Lc '%s' "$path" 2>/dev/null || true)"
+    actual_sha="$(sha256sum -- "$path" 2>/dev/null | awk '{print $1}')"
+    if [[ "$owner_group" != "0:0" ]]; then
+      fail "release file is not root:root: $relative"
+    elif [[ "$actual_mode" != "${expected_mode#0}" ]]; then
+      fail "release file mode drifted for $relative: $actual_mode != ${expected_mode#0}"
+    elif [[ "$actual_size" != "$expected_size" ]]; then
+      fail "release file size drifted for $relative"
+    elif [[ "$actual_sha" != "$expected_sha" ]]; then
+      fail "release file digest drifted for $relative"
+    fi
+  done < <(jq -r '.files[] | [.path, .sha256, (.size | tostring), .mode] | @tsv' "$manifest")
+
+  for relative in "${required_paths[@]}"; do
+    if [[ -z "${declared[$relative]:-}" ]]; then
+      fail "release manifest omits required payload: $relative"
+    elif [[ "$relative" == bin/* && ! -x "$release_root/$relative" ]]; then
+      fail "release binary is not executable: $relative"
+    elif [[ "$relative" == trainers/recommendation/ascendany_recommendation_trainer/*.py &&
+            ! -r "$release_root/$relative" ]]; then
+      fail "isolated trainer package source is not readable: $relative"
+    fi
+  done
+
+  mapfile -t expected_directories < <(printf '%s\n' "${required_directories[@]}" | LC_ALL=C sort)
+  mapfile -t actual_directories < <(find "$release_root" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
+  if [[ "$(printf '%s\n' "${expected_directories[@]}")" != "$(printf '%s\n' "${actual_directories[@]}")" ]]; then
+    fail "release root directory set differs from the exact deployment contract"
+  else
+    pass "release root directory set is exact"
+  fi
+  for relative in "${required_directories[@]}"; do
+    check_release_directory_metadata "$release_root/$relative" "release directory $relative" || true
+  done
+
+  declared_files+=("release-manifest.json")
+  mapfile -t declared_files < <(printf '%s\n' "${declared_files[@]}" | LC_ALL=C sort)
+  mapfile -t actual_files < <(find "$release_root" -xdev -type f -printf '%P\n' | LC_ALL=C sort)
+  if [[ "$(printf '%s\n' "${declared_files[@]}")" != "$(printf '%s\n' "${actual_files[@]}")" ]]; then
+    fail "release root contains an unmanifested file or omits a declared file"
+  else
+    pass "release manifest closes the complete staged file set"
+  fi
+
+  if [[ "$ascendanyd_active" == "1" ]]; then
+    if ! runtime_metadata="$(curl --disable --fail --silent --show-error --max-time 5 --noproxy '*' --proto '=http' http://127.0.0.1:18000/version)"; then
+      fail "active ascendanyd version metadata cannot be read"
+    elif ! jq -e \
+        --arg version "$release_manifest_version" \
+        --arg commit "$release_manifest_commit" \
+        --arg buildTime "$expected_build_time" \
+        --arg goVersion "$manifest_go_version" \
+        --arg goos "$manifest_goos" \
+        --arg goarch "$manifest_goarch" \
+        --arg goamd64 "$manifest_goamd64" \
+        --arg goExperiment "$manifest_go_experiment" \
+        --arg gofips140 "$manifest_go_fips" \
+        --argjson cgoEnabled "$manifest_cgo_enabled" '
+          type == "object" and
+          (keys == ["buildTime", "cgoEnabled", "commit", "goExperiment", "goVersion", "goamd64", "goarch", "gofips140", "goos", "version"]) and
+          .version == $version and .commit == $commit and .buildTime == $buildTime and
+          .goVersion == $goVersion and .goos == $goos and .goarch == $goarch and
+          .goamd64 == $goamd64 and .goExperiment == $goExperiment and
+          .gofips140 == $gofips140 and .cgoEnabled == $cgoEnabled
+        ' <<<"$runtime_metadata" >/dev/null 2>&1; then
+      fail "active ascendanyd was not built from the staged release manifest"
+    else
+      pass "active ascendanyd matches release source, build time, toolchain, and linux/amd64 target"
+    fi
+    expected_writes_json=false
+    [[ "$expected_write_mode" != "enabled" ]] || expected_writes_json=true
+    if ! runtime_capabilities="$(curl --disable --fail --silent --show-error --max-time 5 --noproxy '*' --proto '=http' --header 'CF-Connecting-IP: 127.0.0.1' http://127.0.0.1:18000/api/v2/capabilities)"; then
+      fail "active ascendanyd capability metadata cannot be read"
+    elif ! jq -e --argjson expected "$expected_writes_json" \
+        'type == "object" and .writesEnabled == $expected' \
+        <<<"$runtime_capabilities" >/dev/null 2>&1; then
+      fail "active ascendanyd write capability differs from the validation phase"
+    else
+      pass "active ascendanyd write capability matches the $validation_phase phase"
+    fi
+  fi
+  if (( failures == payload_failures_before )); then
+    release_payload_verified="1"
+  fi
+}
+
+check_installed_release_copy() {
+  local relative="$1" installed="$2" preserve_mode="$3"
+  local source="$release_root/$relative" source_mode installed_mode metadata owner group
+  if [[ ! -f "$source" || -L "$source" || ! -f "$installed" || -L "$installed" ||
+        "$installed" != "$(realpath -m -- "$installed")" ||
+        "$installed" != "$(realpath -e -- "$installed" 2>/dev/null || true)" ]] ||
+     ! check_root_owned_ancestry "$installed" 0; then
+    fail "installed release input is missing, linked, or has unsafe ancestry: $installed"
+    return
+  fi
+  metadata="$(stat -Lc '%u:%g:%a' "$installed" 2>/dev/null || true)"
+  IFS=: read -r owner group installed_mode <<<"$metadata"
+  source_mode="$(stat -Lc '%a' "$source" 2>/dev/null || true)"
+  if [[ ! "$installed_mode" =~ ^[0-7]{3,4}$ || ! "$source_mode" =~ ^[0-7]{3,4}$ ]]; then
+    fail "installed release input metadata cannot be read: $installed"
+  elif [[ "$owner" != "0" ]] || (( 8#$installed_mode & 8#022 )); then
+    fail "installed release input is writable by a service identity: $installed"
+  elif [[ "$preserve_mode" == "1" && ( "$group" != "0" || "$installed_mode" != "$source_mode" ) ]]; then
+    fail "installed immutable release input changed owner group or mode: $installed"
+  elif ! cmp --silent -- "$source" "$installed"; then
+    fail "installed release input bytes differ from the reviewed release: $installed"
+  else
+    pass "installed release input matches $relative"
+  fi
+}
+
+check_installed_release_inputs() {
+  local -a immutable_relatives=(
+    systemd/ascendany-cloudflared.service
+    systemd/ascendanyd.service
+    systemd/ascendany-admin-bootstrap.service
+    systemd/ascendany-backup.service
+    systemd/ascendany-backup.timer
+    systemd/ascendany-judge@.service
+    systemd/ascendany-lsp@.service
+    systemd/ascendany-migrate.service
+    systemd/ascendany-pgbouncer.service
+    systemd/ascendany-restore-verify@.service
+    polkit-1/rules.d/60-ascendany-judge.rules
+    polkit-1/rules.d/61-ascendany-lsp.rules
+    sysusers.d/ascendany-v2.conf
+    tmpfiles.d/ascendany-v2.conf
+  )
+  local -a immutable_targets=(
+    /etc/systemd/system/ascendany-cloudflared.service
+    /etc/systemd/system/ascendanyd.service
+    /etc/systemd/system/ascendany-admin-bootstrap.service
+    /etc/systemd/system/ascendany-backup.service
+    /etc/systemd/system/ascendany-backup.timer
+    /etc/systemd/system/ascendany-judge@.service
+    /etc/systemd/system/ascendany-lsp@.service
+    /etc/systemd/system/ascendany-migrate.service
+    /etc/systemd/system/ascendany-pgbouncer.service
+    /etc/systemd/system/ascendany-restore-verify@.service
+    /etc/polkit-1/rules.d/60-ascendany-judge.rules
+    /etc/polkit-1/rules.d/61-ascendany-lsp.rules
+    /etc/sysusers.d/ascendany-v2.conf
+    /etc/tmpfiles.d/ascendany-v2.conf
+  )
+  local -a config_relatives=(
+    config/analytics.json
+    config/ascendanyd.env
+    config/ascendanyd-read-only-smoke.env
+    config/backup.env
+    config/judge.env
+    config/migrate.env
+    config/pgbouncer-hba.conf
+    config/pgbouncer.ini
+    config/restore.env
+  )
+  local -a config_targets=(
+    /etc/ascendany/v2/analytics.json
+    /etc/ascendany/v2/ascendanyd.env
+    /etc/ascendany/v2/ascendanyd-read-only-smoke.env
+    /etc/ascendany/v2/backup.env
+    /etc/ascendany/v2/judge.env
+    /etc/ascendany/v2/migrate.env
+    /opt/ascendany/infra/pgbouncer/pgbouncer-hba.conf
+    /opt/ascendany/infra/pgbouncer/pgbouncer.ini
+    /etc/ascendany/v2/restore.env
+  )
+  local index
+  if [[ "${#immutable_relatives[@]}" != "${#immutable_targets[@]}" ||
+        "${#config_relatives[@]}" != "${#config_targets[@]}" ]]; then
+    fail "installed release input mapping contract is internally inconsistent"
+    return
+  fi
+  for index in "${!immutable_relatives[@]}"; do
+    check_installed_release_copy "${immutable_relatives[$index]}" "${immutable_targets[$index]}" 1
+  done
+  for index in "${!config_relatives[@]}"; do
+    check_installed_release_copy "${config_relatives[$index]}" "${config_targets[$index]}" 0
+  done
+  if smoke_dropin_required; then
+    check_installed_release_copy \
+      systemd/ascendanyd.service.d/40-read-only-smoke.conf \
+      "$smoke_dropin" \
+      1
+  fi
+}
+
+run_pgbouncer_rejection_psql() {
+  local user="$1" database="$2"
+  /usr/bin/env -i \
+    PATH=/usr/bin:/bin \
+    LC_ALL=C \
+    PGHOST="$runtime_pg_host" \
+    PGPORT="$runtime_pg_port" \
+    PGDATABASE="$database" \
+    PGUSER="$user" \
+    PGCONNECT_TIMEOUT="$runtime_pg_connect_timeout" \
+    /usr/bin/psql -X --no-password -c 'SELECT 1'
+}
+
+probe_pgbouncer_hba_rejection() {
+  local user="$1" database="$2" output expected
+  expected="psql: error: connection to server at \"127.0.0.1\", port 6432 failed: FATAL:  login rejected"
+  if output="$(run_pgbouncer_rejection_psql "$user" "$database" 2>&1)"; then
+    fail "PgBouncer accepted forbidden $user access to $database"
+  elif [[ "$output" != "$expected" ]]; then
+    fail "PgBouncer did not return the exact HBA rejection for $user on $database"
+  else
+    pass "PgBouncer HBA rejects $user on $database before password authentication"
+  fi
+}
+
+check_pgbouncer_contract() {
+  local failures_before="$failures" entries metadata installed_nevra binary_sha verify_output verify_status=0
+  local active enabled fragment dropins reload dynamic user group main_pid executable
+  local uid_line gid_line uid_real uid_effective uid_saved uid_fs
+  local gid_real gid_effective gid_saved gid_fs field value runtime_metadata
+  local relative path retired_containers
+  local -a argv=()
+
+  installed_nevra="$(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' pgbouncer 2>/dev/null || true)"
+  metadata="$(stat -Lc '%u:%g:%a:%s:%h' "$pgbouncer_binary" 2>/dev/null || true)"
+  binary_sha="$(sha256sum "$pgbouncer_binary" 2>/dev/null | awk '{print $1}' || true)"
+  verify_output="$(rpm --verify pgbouncer 2>&1)" || verify_status=$?
+  if [[ "$installed_nevra" != "$pgbouncer_nevra" ||
+        "$metadata" != "0:0:755:$pgbouncer_binary_size:1" ||
+        "$binary_sha" != "$pgbouncer_binary_sha256" || "$verify_status" != 0 ||
+        -n "$verify_output" ]] ||
+     [[ "$($pgbouncer_binary --version 2>&1 | head -n 1)" != "PgBouncer 1.25.2" ]] ||
+     ! check_root_owned_ancestry "$pgbouncer_binary" 1; then
+    fail "installed PgBouncer package differs from the signed Fedora runtime lock"
+  else
+    pass "installed PgBouncer package matches the signed Fedora runtime lock"
+  fi
+
+  if [[ "$(systemctl is-enabled "$pgbouncer_package_unit" 2>/dev/null || true)" != masked ||
+        "$(systemctl is-active "$pgbouncer_package_unit" 2>/dev/null || true)" != inactive ]]; then
+    fail "package-owned PgBouncer service is not masked and inactive"
+  else
+    pass "package-owned PgBouncer service is masked and inactive"
+  fi
+
+  retired_containers="$(podman ps -a --format '{{.Names}}' 2>/dev/null |
+    grep -E '^ascendany-pgbouncer($|-rollback-)' || true)"
+  if [[ -n "$retired_containers" ]]; then
+    fail "retired PgBouncer container state remains after native replacement"
+  else
+    pass "retired PgBouncer container state is absent"
+  fi
+
+  if [[ ! -d "$pgbouncer_config_root" || -L "$pgbouncer_config_root" ||
+        "$pgbouncer_config_root" != "$(realpath -m -- "$pgbouncer_config_root")" ||
+        "$pgbouncer_config_root" != "$(realpath -e -- "$pgbouncer_config_root" 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a' "$pgbouncer_config_root" 2>/dev/null || true)" != "0:0:755" ]] ||
+     ! check_root_owned_ancestry "$pgbouncer_config_root/pgbouncer.ini" 1; then
+    fail "PgBouncer configuration root must be canonical root:root mode 0755"
+    return
+  fi
+  entries="$(find "$pgbouncer_config_root" -mindepth 1 -maxdepth 1 -printf '%f|%y\n' | LC_ALL=C sort)"
+  if [[ "$entries" != $'pgbouncer-hba.conf|f\npgbouncer.ini|f' ]]; then
+    fail "PgBouncer configuration root differs from the exact two-file closure"
+  else
+    pass "PgBouncer configuration root has the exact two-file closure"
+  fi
+  for relative in pgbouncer-hba.conf pgbouncer.ini; do
+    path="$pgbouncer_config_root/$relative"
+    metadata="$(stat -Lc '%u:%g:%a:%h' "$path" 2>/dev/null || true)"
+    if [[ ! -f "$path" || -L "$path" || "$metadata" != "0:0:644:1" ]]; then
+      fail "PgBouncer input $relative must be a root:root mode 0644 single-link file"
+    fi
+  done
+
+  active="$(systemctl is-active "$pgbouncer_unit" 2>/dev/null || true)"
+  enabled="$(systemctl is-enabled "$pgbouncer_unit" 2>/dev/null || true)"
+  fragment="$(unit_property "$pgbouncer_unit" FragmentPath || true)"
+  dropins="$(unit_property "$pgbouncer_unit" DropInPaths || true)"
+  reload="$(unit_property "$pgbouncer_unit" NeedDaemonReload || true)"
+  dynamic="$(unit_property "$pgbouncer_unit" DynamicUser || true)"
+  user="$(unit_property "$pgbouncer_unit" User || true)"
+  group="$(unit_property "$pgbouncer_unit" Group || true)"
+  main_pid="$(unit_property "$pgbouncer_unit" MainPID || true)"
+  if [[ "$active" != active || "$enabled" != enabled ||
+        "$fragment" != /etc/systemd/system/ascendany-pgbouncer.service ||
+        "$dropins" != /usr/lib/systemd/system/service.d/10-timeout-abort.conf ||
+        "$reload" != no || "$dynamic" != yes ||
+        "$user" != ascendany-pgbouncer || "$group" != ascendany-pgbouncer ||
+        ! "$main_pid" =~ ^[1-9][0-9]*$ ]]; then
+    fail "native PgBouncer systemd state or dynamic capability identity differs from the contract"
+    return
+  fi
+  check_unit_effective_shape \
+    "$pgbouncer_unit" \
+    /etc/systemd/system/ascendany-pgbouncer.service \
+    '' \
+    /usr/lib/systemd/system/service.d/10-timeout-abort.conf \
+    '/usr/bin/pgbouncer -q /opt/ascendany/infra/pgbouncer/pgbouncer.ini' \
+    $'/usr/bin/test -x /usr/bin/pgbouncer\n/usr/bin/test -r /opt/ascendany/infra/pgbouncer/pgbouncer.ini\n/usr/bin/test -r /opt/ascendany/infra/pgbouncer/pgbouncer-hba.conf\n/usr/bin/test -s %d/pgbouncer_userlist' \
+    ''
+  check_unit_credentials "$pgbouncer_unit" pgbouncer_userlist
+  check_unit_environment_files "$pgbouncer_unit"
+  for property_value in \
+    'Type notify-reload' \
+    'KillSignal 2' \
+    'NoNewPrivileges yes' \
+    'PrivateTmp yes' \
+    'PrivateDevices yes' \
+    'ProtectSystem strict' \
+    'ProtectHome yes' \
+    'ProtectControlGroups yes' \
+    'ProtectKernelTunables yes' \
+    'ProtectKernelModules yes' \
+    'ProtectKernelLogs yes' \
+    'ProtectClock yes' \
+    'ProtectHostname yes' \
+    'ProtectProc invisible' \
+    'ProcSubset pid' \
+    'RestrictNamespaces yes' \
+    'RestrictRealtime yes' \
+    'RestrictSUIDSGID yes' \
+    'LockPersonality yes' \
+    'MemoryDenyWriteExecute yes' \
+    'RemoveIPC yes' \
+    'KeyringMode private' \
+    'DevicePolicy closed'; do
+    check_effective_value "$pgbouncer_unit" "${property_value%% *}" "${property_value#* }"
+  done
+  check_effective_word_set "$pgbouncer_unit" RestrictAddressFamilies AF_UNIX AF_INET
+  check_effective_word_set "$pgbouncer_unit" CapabilityBoundingSet
+  check_effective_word_set "$pgbouncer_unit" AmbientCapabilities
+
+  executable="$(readlink -e -- "/proc/$main_pid/exe" 2>/dev/null || true)"
+  mapfile -d '' -t argv <"/proc/$main_pid/cmdline" || true
+  if [[ "$executable" != "$pgbouncer_binary" || "${#argv[@]}" != 3 ||
+        "${argv[0]:-}" != "$pgbouncer_binary" || "${argv[1]:-}" != -q ||
+        "${argv[2]:-}" != "$pgbouncer_config_root/pgbouncer.ini" ]]; then
+    fail "native PgBouncer process executable or argv differs from the reviewed unit"
+  fi
+  uid_line="$(awk '$1 == "Uid:" {print $2, $3, $4, $5}' "/proc/$main_pid/status" 2>/dev/null || true)"
+  gid_line="$(awk '$1 == "Gid:" {print $2, $3, $4, $5}' "/proc/$main_pid/status" 2>/dev/null || true)"
+  read -r uid_real uid_effective uid_saved uid_fs <<<"$uid_line"
+  read -r gid_real gid_effective gid_saved gid_fs <<<"$gid_line"
+  if [[ -z "$uid_real" || "$uid_real" == 0 || "$uid_real" != "$uid_effective" ||
+        "$uid_real" != "$uid_saved" || "$uid_real" != "$uid_fs" ||
+        -z "$gid_real" || "$gid_real" == 0 || "$gid_real" != "$gid_effective" ||
+        "$gid_real" != "$gid_saved" || "$gid_real" != "$gid_fs" ]]; then
+    fail "native PgBouncer process does not use one non-root dynamic UID/GID"
+  fi
+  if [[ "$(awk '$1 == "NoNewPrivs:" {print $2}' "/proc/$main_pid/status")" != 1 ||
+        "$(awk '$1 == "Seccomp:" {print $2}' "/proc/$main_pid/status")" != 2 ]]; then
+    fail "native PgBouncer process lacks no-new-privileges or seccomp enforcement"
+  fi
+  for field in CapInh CapPrm CapEff CapBnd CapAmb; do
+    value="$(awk -v field="$field:" '$1 == field {print $2; exit}' "/proc/$main_pid/status")"
+    [[ "$value" == 0000000000000000 ]] || fail "native PgBouncer process $field is not empty"
+  done
+  if tr '\0' '\n' <"/proc/$main_pid/environ" |
+      grep -E '(^|_)(HTTP|HTTPS|ALL|NO)_PROXY=|PASSWORD=|TOKEN=|SECRET=|CREDENTIAL=' >/dev/null; then
+    fail "native PgBouncer process inherited proxy or plaintext secret environment"
+  fi
+
+  runtime_metadata="$(stat -Lc '%u:%g:%a:%h' "$pgbouncer_runtime_credential" 2>/dev/null || true)"
+  if [[ ! -s "$pgbouncer_runtime_credential" || -L "$pgbouncer_runtime_credential" ||
+        "$runtime_metadata" != "0:0:440:1" ||
+        -n "$(tail -c 1 -- "$pgbouncer_runtime_credential" 2>/dev/null || true)" ]] ||
+     ! LC_ALL=C awk '
+       BEGIN {
+         b64 = "[A-Za-z0-9+/]+={0,2}"
+         verifier = "SCRAM-SHA-256\\$4096:" b64 "\\$" b64 ":" b64
+       }
+       NR == 1 {
+         if ($0 !~ ("^\"AscendAny\" \"" verifier "\"$")) exit 1
+         first = $0
+         sub(/^"AscendAny" "/, "", first)
+         next
+       }
+       NR == 2 {
+         if ($0 !~ ("^\"ascendanyd_login\" \"" verifier "\"$")) exit 1
+         second = $0
+         sub(/^"ascendanyd_login" "/, "", second)
+         if (second == first) exit 1
+         next
+       }
+       { exit 1 }
+       END { if (NR != 2) exit 1 }
+     ' "$pgbouncer_runtime_credential"; then
+    fail "decrypted PgBouncer userlist violates the two-record distinct SCRAM contract"
+  else
+    pass "native PgBouncer runs with the exact encrypted two-role SCRAM capability"
+  fi
+
+  if (( failures == failures_before )); then
+    probe_pgbouncer_hba_rejection ascendanyd_login AscendAny
+    probe_pgbouncer_hba_rejection AscendAny ascendany_v2
+  fi
+}
+
+postgres_admin_psql() {
+  podman exec -i --user postgres ascendany-postgres \
+    /usr/bin/env -i \
+      HOME=/var/lib/postgresql \
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+      LC_ALL=C \
+      /usr/bin/psql -X --no-psqlrc --no-password --set=ON_ERROR_STOP=1 \
+        --username=ascendany_cluster_admin "$@"
+}
+
+check_provisioning_terminal_state() {
+  local retained_tombstones retained_pool_paths
+  retained_tombstones="$(find /var/lib -mindepth 1 -maxdepth 1 \
+    \( -name 'ascendany-pgbouncer-provision.initializing-*' \
+       -o -name 'ascendany-pgbouncer-provision.committed-*' \
+       -o -name 'ascendany-pgbouncer-provision.recovered-*' \) \
+    -printf '%f\n' | LC_ALL=C sort)"
+  retained_pool_paths="$(find /opt/ascendany/infra -mindepth 1 -maxdepth 1 \
+    \( -name '.pgbouncer.stage.*' -o -name '.pgbouncer.rollback.*' \
+       -o -name 'pgbouncer.deleting-*' \) \
+    -printf '%f\n' | LC_ALL=C sort)"
+  if [[ -e /var/lib/ascendany-pgbouncer-provision ||
+        -L /var/lib/ascendany-pgbouncer-provision ||
+        -e /run/ascendany-v2-provision ||
+        -L /run/ascendany-v2-provision ||
+        -n "$retained_tombstones" ||
+        -n "$retained_pool_paths" ]]; then
+    fail "PostgreSQL/PgBouncer provisioning did not reach its consumed terminal state"
+  else
+    pass "PostgreSQL/PgBouncer provisioning state and plaintext input root are fully consumed"
+  fi
+}
+
+check_postgresql_access_contract() {
+  local inspect_json network_json network_contract result legacy_result relative source target expected_sha actual_sha
+  local expected_size metadata file_mtime hba_mtime='' ident_mtime=''
+
+  if ! podman container exists ascendany-postgres >/dev/null 2>&1 ||
+     [[ "$(podman inspect --format '{{.State.Running}}' ascendany-postgres 2>/dev/null || true)" != true ]]; then
+    fail "PostgreSQL 17 production container is missing or inactive"
+    return
+  fi
+  inspect_json="$(podman inspect ascendany-postgres 2>/dev/null || true)"
+  network_json="$(podman network inspect "$postgres_network" 2>/dev/null || true)"
+  network_contract="$(jq -r \
+    --arg network "$postgres_network" \
+    --arg gateway "$postgres_gateway" \
+    --arg address "$postgres_address" '
+      if type == "array" and length == 1 and
+         (.[0].NetworkSettings.Networks | keys) == [$network] and
+         .[0].NetworkSettings.Networks[$network].Gateway == $gateway and
+         .[0].NetworkSettings.Networks[$network].IPAddress == $address and
+         .[0].NetworkSettings.Networks[$network].IPPrefixLen == 16
+      then "exact" else "" end
+    ' <<<"$inspect_json" 2>/dev/null || true)"
+  if [[ "$network_contract" != exact ]] || ! jq -e \
+      --arg network "$postgres_network" \
+      --arg gateway "$postgres_gateway" \
+      --arg subnet "$postgres_subnet" '
+        type == "array" and length == 1 and
+        .[0].name == $network and
+        .[0].driver == "bridge" and
+        .[0].network_interface == "podman0" and
+        .[0].internal == false and
+        .[0].ipv6_enabled == false and
+        .[0].subnets == [{"subnet": $subnet, "gateway": $gateway}]
+      ' <<<"$network_json" >/dev/null 2>&1; then
+    fail "PostgreSQL container network differs from the release-owned native service boundary"
+  else
+    pass "PostgreSQL container network matches the release-owned native service boundary"
+  fi
+
+  for relative in postgresql-hba.conf postgresql-ident.conf; do
+    source="$release_root/config/$relative"
+    case "$relative" in
+      postgresql-hba.conf) target=/var/lib/postgresql/data/pg_hba.conf ;;
+      postgresql-ident.conf) target=/var/lib/postgresql/data/pg_ident.conf ;;
+    esac
+    expected_sha="$(sha256sum "$source" | awk '{print $1}')"
+    expected_size="$(stat -Lc '%s' "$source")"
+    actual_sha="$(podman exec ascendany-postgres /usr/bin/sha256sum "$target" 2>/dev/null |
+      awk '{print $1}' || true)"
+    metadata="$(podman exec ascendany-postgres /usr/bin/stat -Lc '%u:%g:%a:%h:%s' "$target" 2>/dev/null || true)"
+    file_mtime="$(podman exec ascendany-postgres /usr/bin/stat -Lc '%y' "$target" 2>/dev/null || true)"
+    case "$relative" in
+      postgresql-hba.conf) hba_mtime="$file_mtime" ;;
+      postgresql-ident.conf) ident_mtime="$file_mtime" ;;
+    esac
+    if [[ "$actual_sha" != "$expected_sha" || "$metadata" != "999:999:600:1:$expected_size" ]]; then
+      fail "live PostgreSQL $relative differs from the immutable release bytes or metadata"
+    else
+      pass "live PostgreSQL $relative matches the immutable release bytes and metadata"
+    fi
+  done
+
+  if ! result="$(postgres_admin_psql --dbname=postgres --tuples-only --no-align --field-separator='|' \
+    --set=hba_mtime="$hba_mtime" --set=ident_mtime="$ident_mtime" <<'SQL'
+SELECT
+  current_user = 'ascendany_cluster_admin',
+  current_setting('server_version_num')::int / 10000 = 17,
+  current_setting('password_encryption') = 'scram-sha-256',
+  current_setting('fsync') = 'on',
+  current_setting('synchronous_commit') = 'on',
+  current_setting('full_page_writes') = 'on',
+  current_setting('hba_file') = '/var/lib/postgresql/data/pg_hba.conf',
+  current_setting('ident_file') = '/var/lib/postgresql/data/pg_ident.conf',
+  :'hba_mtime'::timestamptz <= pg_conf_load_time(),
+  :'ident_mtime'::timestamptz <= pg_conf_load_time(),
+  NOT EXISTS (SELECT 1 FROM pg_hba_file_rules WHERE error IS NOT NULL),
+  NOT EXISTS (SELECT 1 FROM pg_ident_file_mappings WHERE error IS NOT NULL),
+  EXISTS (
+    SELECT 1 FROM pg_authid AS auth
+    WHERE auth.oid = 10 AND auth.rolname = 'ascendany_cluster_admin'
+      AND auth.rolcanlogin AND auth.rolsuper AND NOT auth.rolinherit
+      AND NOT auth.rolcreatedb AND NOT auth.rolcreaterole
+      AND NOT auth.rolreplication AND NOT auth.rolbypassrls
+      AND auth.rolconnlimit = -1 AND auth.rolpassword IS NULL
+      AND (SELECT config.rolconfig FROM pg_roles AS config WHERE config.oid = auth.oid) IS NULL
+      AND shobj_description(auth.oid, 'pg_authid') = 'ascendany.cluster.bootstrap.v2'
+  ),
+  EXISTS (
+    SELECT 1 FROM pg_authid AS auth
+    WHERE auth.oid <> 10 AND auth.rolname = 'AscendAny'
+      AND auth.rolcanlogin AND NOT auth.rolsuper AND auth.rolinherit
+      AND NOT auth.rolcreatedb AND NOT auth.rolcreaterole
+      AND NOT auth.rolreplication AND NOT auth.rolbypassrls
+      AND auth.rolconnlimit = -1
+      AND (SELECT config.rolconfig FROM pg_roles AS config WHERE config.oid = auth.oid) IS NULL
+      AND auth.rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$'
+      AND shobj_description(auth.oid, 'pg_authid') = 'ascendany.legacy.runtime.v2'
+  ),
+  NOT EXISTS (
+    SELECT 1 FROM pg_auth_members AS edge
+    WHERE edge.roleid IN (
+      SELECT oid FROM pg_roles WHERE rolname IN ('AscendAny', 'ascendany_cluster_admin')
+    ) OR edge.member IN (
+      SELECT oid FROM pg_roles WHERE rolname IN ('AscendAny', 'ascendany_cluster_admin')
+    )
+  ),
+  (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'AscendAny') = 'ascendany_cluster_admin',
+  (SELECT count(*) FROM pg_database
+   WHERE datname IN ('AscendAny', 'postgres', 'template0', 'template1')
+     AND datdba = 10) = 4,
+  (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'ascendany_v2') = 'ascendany_database_owner',
+  (SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname !~ '^pg_') =
+    'AscendAny,ascendany_backup,ascendany_backup_login,ascendany_cluster_admin,ascendany_database_owner,ascendany_migrator,ascendany_migrator_login,ascendany_owner,ascendany_restore_login,ascendany_runtime,ascendanyd_login',
+  (SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database) =
+    'AscendAny,ascendany_v2,postgres,template0,template1',
+  NOT EXISTS (SELECT 1 FROM pg_db_role_setting),
+  NOT EXISTS (SELECT 1 FROM pg_replication_slots),
+  (SELECT count(*) = 4 AND count(DISTINCT rolpassword) = 4
+   FROM pg_authid
+   WHERE rolname = ANY(ARRAY[
+     'ascendanyd_login', 'ascendany_migrator_login',
+     'ascendany_backup_login', 'ascendany_restore_login'
+   ])
+     AND rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$');
+SQL
+)"; then
+    fail "PostgreSQL peer-admin access or role/HBA catalog verification failed"
+  elif [[ "$result" != 't|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t' ]]; then
+    fail "PostgreSQL durability, loaded access-file receipt, bootstrap split, or ownership differs from the closed contract"
+  else
+    pass "PostgreSQL durability, loaded access-file receipt, bootstrap split, and ownership match the closed contract"
+  fi
+  if ! legacy_result="$(postgres_admin_psql --dbname=AscendAny --tuples-only --no-align --field-separator='|' <<'SQL'
+SELECT pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = 'ascendany.import_tasks'::regclass)) = 'AscendAny',
+       pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = 'ascendany.import_task_events'::regclass)) = 'AscendAny',
+       (SELECT string_agg(nspname, ',' ORDER BY nspname)
+        FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema') = 'ascendany,public',
+       NOT EXISTS (
+         SELECT 1 FROM pg_proc AS routine
+         JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+         WHERE namespace.nspname !~ '^pg_' AND namespace.nspname <> 'information_schema'
+       );
+SQL
+)"; then
+    fail "legacy task ownership verification failed"
+  elif [[ "$legacy_result" != 't|t|t|t' ]]; then
+    fail "legacy import task relations are outside the narrowed application owner boundary"
+  else
+    pass "legacy import task relations retain the narrowed application owner boundary"
+  fi
+}
+
+check_backup_schedule() {
+  local timer="ascendany-backup.timer"
+  local service="ascendany-backup.service"
+  local latest_backup latest_manifest evidence_backup evidence_manifest_sha evidence_time
+  local evidence_release_commit evidence_release_version
+  local actual_manifest_sha evidence_epoch now_epoch evidence_parent manifest_epoch
+  local next_elapse next_elapse_epoch service_started service_started_epoch service_exited service_exited_epoch
+  local scratch_database_count restore_state
+  local backup_binary="$release_root/bin/ascendany-backup"
+  local restore_lock_directory="/run/ascendany-restore-operator"
+
+  if [[ "$(unit_property "$timer" LoadState || true)" != "loaded" ]]; then
+    fail "$timer is not loaded"
+    return
+  fi
+  if production_phase; then
+    if ! systemctl is-enabled --quiet "$timer"; then
+      fail "$timer is not enabled"
+    elif [[ "$(unit_property "$timer" ActiveState || true)" != "active" ]]; then
+      fail "$timer is not active"
+    else
+      pass "$timer is enabled and active"
+    fi
+    now_epoch="$(date -u +%s)"
+    next_elapse="$(unit_property "$timer" NextElapseUSecRealtime || true)"
+    next_elapse_epoch="$(date -u -d "$next_elapse" +%s 2>/dev/null || true)"
+    if [[ -z "$next_elapse_epoch" || "$next_elapse_epoch" -le "$now_epoch" ]]; then
+      fail "$timer has no valid future realtime elapse"
+    elif [[ "$(unit_property "$service" Result || true)" != "success" ||
+            "$(unit_property "$service" ExecMainCode || true)" != "exited" ||
+            "$(unit_property "$service" ExecMainStatus || true)" != "0" ]]; then
+      fail "$service has no successful completed result"
+    else
+      pass "$timer has a future elapse and $service has a successful completed result"
+    fi
+  fi
+
+  if [[ ! -d "$backup_root" || -L "$backup_root" ||
+        "$(stat -Lc '%U:%G:%a' "$backup_root" 2>/dev/null || true)" != "ascendany-backup:ascendany-backup-readers:750" ]]; then
+    fail "backup root must be a real ascendany-backup:ascendany-backup-readers mode 0750 directory"
+    return
+  fi
+  if find "$backup_root" -mindepth 1 -maxdepth 1 \
+       \( -name '.incoming-backup-*' -o -name '*.pgpass' -o -name '.pgpass' \) \
+       -print -quit | grep -q .; then
+    fail "backup root retains an unpublished staging tree or plaintext pgpass"
+  else
+    pass "backup root contains no unpublished staging tree or plaintext pgpass"
+  fi
+  latest_backup="$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -printf '%f\n' | LC_ALL=C sort | tail -n 1)"
+  if [[ -z "$latest_backup" ]]; then
+    fail "backup root contains no published bundle"
+    return
+  fi
+  latest_manifest="$backup_root/$latest_backup/manifest.json"
+  if [[ ! -d "$backup_root/$latest_backup" || -L "$backup_root/$latest_backup" ||
+        "$(stat -Lc '%U:%G:%a' "$backup_root/$latest_backup" 2>/dev/null || true)" != "ascendany-backup:ascendany-backup-readers:750" ]] ||
+     find "$backup_root/$latest_backup" -mindepth 1 -maxdepth 1 \
+       \( ! -type f -o ! -user ascendany-backup -o ! -group ascendany-backup-readers -o ! -perm 0640 -o ! -links 1 \) \
+       -print -quit | grep -q .; then
+    fail "latest backup bundle violates the 0750/0640 reader-group publication contract"
+  elif ! runuser -u ascendany-restore -- test -r "$latest_manifest"; then
+    fail "restore verifier identity cannot read the published backup bundle"
+  elif ! jq -e --arg id "$latest_backup" '
+      .schema == "ascendany.backup.bundle.v1" and
+      .backupId == $id and
+      .database.databaseName == "ascendany_v2" and
+      (.database.migrations | length == 5 and .[-1].version == 5)
+    ' "$latest_manifest" >/dev/null 2>&1; then
+    fail "latest backup manifest is missing, malformed, or not schema v5: $latest_backup"
+  elif ! runuser -u ascendany-backup -- env -i \
+      PATH=/usr/bin:/bin \
+      ASCENDANY_BACKUP_ROOT="$backup_root" \
+      ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+      ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
+      ASCENDANY_BACKUP_COMMAND_TIMEOUT=2h \
+      ASCENDANY_PG_DUMP_PATH=/usr/bin/pg_dump \
+      ASCENDANY_PG_RESTORE_PATH=/usr/bin/pg_restore \
+      ASCENDANY_ZSTD_PATH=/usr/bin/zstd \
+      "$backup_binary" verify "$latest_backup" >/dev/null 2>&1; then
+    fail "latest backup bundle failed live verification: $latest_backup"
+  else
+    pass "latest schema-v5 backup passed live verification: $latest_backup"
+  fi
+  if production_phase; then
+    manifest_epoch="$(jq -er '.createdAt | fromdateiso8601' "$latest_manifest" 2>/dev/null || true)"
+    service_started="$(unit_property "$service" ExecMainStartTimestamp || true)"
+    service_exited="$(unit_property "$service" ExecMainExitTimestamp || true)"
+    service_started_epoch="$(date -u -d "$service_started" +%s 2>/dev/null || true)"
+    service_exited_epoch="$(date -u -d "$service_exited" +%s 2>/dev/null || true)"
+    if [[ -z "$manifest_epoch" || -z "$service_started_epoch" || -z "$service_exited_epoch" ||
+          "$manifest_epoch" -lt "$service_started_epoch" || "$manifest_epoch" -gt "$service_exited_epoch" ]]; then
+      fail "latest backup manifest was not produced by the successful completed backup service result"
+    else
+      pass "latest backup manifest is bound to the successful backup service execution window"
+    fi
+  fi
+
+  evidence_parent="$(dirname -- "$restore_evidence")"
+  if [[ "$restore_evidence" != /* || "$restore_evidence" != "$(realpath -m -- "$restore_evidence")" ||
+        ! -f "$restore_evidence" || -L "$restore_evidence" ||
+        "$restore_evidence" != "$(realpath -e -- "$restore_evidence" 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a' "$restore_evidence" 2>/dev/null || true)" != "0:0:600" ||
+        ! -d "$evidence_parent" || -L "$evidence_parent" ||
+        "$(stat -Lc '%u:%g:%a' "$evidence_parent" 2>/dev/null || true)" != "0:0:700" ]] ||
+     ! check_root_owned_ancestry "$restore_evidence" 1; then
+    fail "restore verification evidence must be a canonical root:root 0600 file in a root:root 0700 directory"
+    return
+  fi
+  if ! jq -e '
+      type == "object" and
+      (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "msg", "releaseCommit", "releaseVersion", "time"]) and
+      .level == "INFO" and
+      .msg == "backup restore verified" and
+      .databaseName == "ascendany_v2_restore_verify" and
+      (.artifactCount | type == "number" and floor == . and . >= 0) and
+      (.releaseCommit | type == "string" and test("^[0-9a-f]{40}$")) and
+      (.releaseVersion | type == "string") and
+      (.time | type == "string")
+    ' "$restore_evidence" >/dev/null 2>&1 ||
+     ! evidence_backup="$(jq -er '.backupId | select(type == "string" and test("^backup-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"))' "$restore_evidence")" ||
+     ! evidence_manifest_sha="$(jq -er '.manifestSHA256 | select(type == "string" and test("^[0-9a-f]{64}$"))' "$restore_evidence")" ||
+     ! evidence_release_commit="$(jq -er '.releaseCommit' "$restore_evidence")" ||
+     ! evidence_release_version="$(jq -er '.releaseVersion' "$restore_evidence")" ||
+     ! evidence_time="$(jq -er '.time' "$restore_evidence")"; then
+    fail "restore verification evidence is malformed"
+    return
+  fi
+  latest_manifest="$backup_root/$evidence_backup/manifest.json"
+  actual_manifest_sha="$(sha256sum -- "$latest_manifest" 2>/dev/null | awk '{print $1}')"
+  evidence_epoch="$(date -u -d "$evidence_time" +%s 2>/dev/null || true)"
+  now_epoch="$(date -u +%s)"
+  if [[ "$evidence_release_commit" != "$release_manifest_commit" ||
+        "$evidence_release_version" != "$release_manifest_version" ]]; then
+    fail "restore verification evidence belongs to a different release"
+  elif [[ -z "$actual_manifest_sha" || "$actual_manifest_sha" != "$evidence_manifest_sha" ]]; then
+    fail "restore verification evidence does not bind an existing backup manifest"
+  elif ! jq -e '.database.migrations | length == 5 and .[-1].version == 5' "$latest_manifest" >/dev/null 2>&1; then
+    fail "restore verification evidence does not bind a schema-v5 backup"
+  elif [[ -z "$evidence_epoch" || "$evidence_epoch" -gt "$now_epoch" || $((now_epoch - evidence_epoch)) -gt 2678400 ]]; then
+    fail "restore verification evidence is invalid or older than 31 days"
+  else
+    pass "recent destructive restore verification evidence binds schema v5"
+  fi
+
+  restore_state="$(unit_property ascendany-restore-verify@validation.service ActiveState || true)"
+  if [[ "$restore_state" != "inactive" ||
+        "$(systemctl is-enabled ascendany-restore-verify@.service 2>/dev/null || true)" != "static" ]]; then
+    fail "restore verification template must remain inactive and static outside an operator run"
+  fi
+  if [[ ! -d /var/lib/ascendany-restore || -L /var/lib/ascendany-restore ||
+        "$(stat -Lc '%U:%G:%a' /var/lib/ascendany-restore 2>/dev/null || true)" != "ascendany-restore:ascendany-restore:700" ]] ||
+     find /var/lib/ascendany-restore -mindepth 1 -maxdepth 1 \
+       \( -name 'artifacts' -o -name '.restore-*' -o -name '*.pgpass' -o \
+          -name 'restore-verify.*.pending.json' -o -name '.restore-verify.*.pending.tmp' -o \
+          -name 'restore-verify.log' \) \
+       -print -quit | grep -q .; then
+    fail "restore verifier left scratch artifacts or private credentials behind"
+  else
+    pass "restore verifier left no scratch artifact or credential state"
+  fi
+  if [[ ! -d "$restore_lock_directory" || -L "$restore_lock_directory" ||
+        "$(stat -Lc '%U:%G:%a' "$restore_lock_directory" 2>/dev/null || true)" != "root:ascendany-restore:750" ||
+        ! -f "$restore_lock_directory/operator.lock" || -L "$restore_lock_directory/operator.lock" ||
+        "$(stat -Lc '%U:%G:%a:%h' "$restore_lock_directory/operator.lock" 2>/dev/null || true)" != "ascendany-restore:ascendany-restore:600:1" ||
+        ! -f "$restore_lock_directory/publication.lock" || -L "$restore_lock_directory/publication.lock" ||
+        "$(stat -Lc '%U:%G:%a:%h' "$restore_lock_directory/publication.lock" 2>/dev/null || true)" != "root:root:600:1" ]]; then
+    fail "restore verifier stable operator/publication lock inodes violate the tmpfiles contract"
+  elif [[ "$(stat -Lc '%d' /var/lib/ascendany-restore)" != "$(stat -Lc '%d' "$evidence_parent")" ]]; then
+    fail "restore pending and acceptance directories are not on one atomic-rename filesystem"
+  elif find /run -mindepth 1 -maxdepth 1 -type d -name 'ascendany-restore-verify-*' -print -quit | grep -q .; then
+    fail "inactive restore verifier retains a per-instance RuntimeDirectory"
+  else
+    pass "restore locks have stable tmpfiles-owned inodes and no instance runtime remains"
+  fi
+  scratch_database_count="$(run_runtime_psql -A -t -v ON_ERROR_STOP=1 -c \
+    "SELECT count(*) FROM pg_database WHERE datname = 'ascendany_v2_restore_verify'" 2>/dev/null || true)"
+  if [[ "$scratch_database_count" != "0" ]]; then
+    fail "restore verifier left its scratch database behind"
+  else
+    pass "restore verifier removed its scratch database"
+  fi
+}
+
+check_artifact_root() {
+  local path expected_mode actual_mode actual_owner actual_group groups
+  if is_under "$artifact_root" "$release_root"; then
+    fail "artifact root is inside the release root: $artifact_root"
+    return
+  fi
+  if [[ ! -d "$artifact_root" || -L "$artifact_root" ]]; then
+    fail "artifact root is missing: $artifact_root"
+    return
+  fi
+  for path in "$artifact_root" "$artifact_root/sha256"; do
+    expected_mode="750"
+    if [[ ! -d "$path" || -L "$path" ]]; then
+      fail "published artifact directory is missing: $path"
+      continue
+    fi
+    actual_mode="$(stat -c '%a' "$path")"
+    actual_owner="$(stat -c '%U' "$path")"
+    actual_group="$(stat -c '%G' "$path")"
+    if [[ "$actual_mode" != "$expected_mode" || "$actual_owner" != "ascendany" || "$actual_group" != "ascendany" ]]; then
+      fail "$path must be mode 0750 and owned by ascendany:ascendany"
+    fi
+  done
+  for path in "$artifact_root/incoming" "$artifact_root/.locks"; do
+    if [[ ! -d "$path" || -L "$path" ||
+          "$(stat -c '%U:%G:%a' "$path" 2>/dev/null || true)" != "ascendany:ascendany:700" ]]; then
+      fail "$path must be a real ascendany:ascendany mode 0700 private directory"
+    fi
+  done
+  groups="$(id -nG ascendany-backup 2>/dev/null || true)"
+  if [[ " $groups " != *" ascendany "* ]]; then
+    fail "ascendany-backup is not a member of the published-artifact read group"
+  elif ! runuser -u ascendany-backup -- test -x "$artifact_root/sha256"; then
+    fail "ascendany-backup cannot traverse the published artifact tree"
+  elif runuser -u ascendany-backup -- test -x "$artifact_root/incoming" || runuser -u ascendany-backup -- test -x "$artifact_root/.locks"; then
+    fail "ascendany-backup can traverse private upload or lock state"
+  else
+    pass "backup can read only the published artifact namespace"
+  fi
+  if find "$artifact_root/sha256" -mindepth 1 ! -type d ! -type f -print -quit | grep -q .; then
+    fail "published artifact tree contains a symbolic link or special node"
+  elif find "$artifact_root/sha256" -type f \
+      \( ! -perm 0640 -o ! -user ascendany -o ! -group ascendany \) -print -quit | grep -q .; then
+    fail "published artifact tree contains a file whose mode is not 0640"
+  elif find "$artifact_root/sha256" -type f ! -links 1 -print -quit | grep -q .; then
+    fail "published artifact tree contains a multiply-linked file"
+  elif find "$artifact_root/sha256" -type d \
+      \( ! -perm 0750 -o ! -user ascendany -o ! -group ascendany \) -print -quit | grep -q .; then
+    fail "published artifact tree contains a directory with invalid mode or ownership"
+  else
+    pass "published artifact modes and ownership are exact"
+  fi
+  pass "artifact root is durable and external to the release: $artifact_root"
+}
+
+run_runtime_psql() {
+  /usr/bin/env -i \
+    PATH=/usr/bin:/bin \
+    LC_ALL=C \
+    PGHOST="$runtime_pg_host" \
+    PGPORT="$runtime_pg_port" \
+    PGDATABASE="$runtime_pg_database" \
+    PGUSER="$expected_db_user" \
+    PGCONNECT_TIMEOUT="$runtime_pg_connect_timeout" \
+    PGPASSFILE="$PGPASSFILE" \
+    /usr/bin/psql -X "$@"
+}
+
+check_admin_bootstrap_database() {
+  local result admin_count active_admin_count canonical_admin_count
+  local bootstrap_audit_count canonical_bootstrap_audit_count
+  if [[ -z "${PGPASSFILE:-}" ]]; then
+    fail "administrator bootstrap verification has no authenticated database channel"
+    return
+  fi
+  if ! result="$(
+    run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 -c "
+SELECT
+  count(*) FILTER (WHERE account.role = 'admin'),
+  count(*) FILTER (WHERE account.role = 'admin' AND account.disabled_at IS NULL),
+  count(*) FILTER (
+    WHERE account.role = 'admin'
+      AND account.username = 'admin'
+      AND account.display_name = 'admin'
+      AND account.actor_id IS NULL
+      AND account.student_number IS NULL
+      AND account.auth_revision = 1
+      AND account.disabled_at IS NULL
+      AND account.password_phc LIKE '\$argon2id\$%'
+      AND account.created_at = account.updated_at
+  ),
+  (SELECT count(*) FROM ascendany.audit_events WHERE event_type = 'auth.admin_bootstrap'),
+  (SELECT count(*)
+   FROM ascendany.audit_events AS audit
+   JOIN ascendany.auth_accounts AS bootstrap_account
+     ON bootstrap_account.account_id = audit.account_id
+   WHERE audit.event_type = 'auth.admin_bootstrap'
+     AND audit.session_id IS NULL
+     AND audit.payload = '{}'::jsonb
+     AND audit.occurred_at = bootstrap_account.created_at
+     AND bootstrap_account.role = 'admin'
+     AND bootstrap_account.username = 'admin')
+FROM ascendany.auth_accounts AS account"
+  )"; then
+    fail "administrator bootstrap database evidence query failed"
+    return
+  fi
+  IFS='|' read -r admin_count active_admin_count canonical_admin_count \
+    bootstrap_audit_count canonical_bootstrap_audit_count <<<"$result"
+  if [[ ! "$admin_count" =~ ^[0-9]+$ || ! "$active_admin_count" =~ ^[0-9]+$ ||
+        ! "$canonical_admin_count" =~ ^[0-9]+$ || ! "$bootstrap_audit_count" =~ ^[0-9]+$ ||
+        ! "$canonical_bootstrap_audit_count" =~ ^[0-9]+$ ]]; then
+    fail "administrator bootstrap database evidence is noncanonical"
+    return
+  fi
+  case "$validation_phase" in
+    staged)
+      if [[ "$admin_count:$active_admin_count:$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "0:0:0:0:0" ]]; then
+        fail "staged database must contain no administrator or bootstrap audit before the one-shot bootstrap"
+      else
+        pass "staged database contains no administrator before bootstrap"
+      fi
+      ;;
+    smoke)
+      if [[ "$admin_count:$active_admin_count:$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "1:1:1:1:1" ]]; then
+        fail "smoke database must contain exactly one canonical active bootstrap administrator and audit"
+      else
+        pass "smoke database contains exactly one canonical active bootstrap administrator and audit"
+      fi
+      ;;
+    production)
+      if (( admin_count < 1 || active_admin_count < 1 )) ||
+         [[ "$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "1:1:1" ]]; then
+        fail "production database lacks the canonical active bootstrap administrator or exact bootstrap audit"
+      else
+        pass "production database retains the canonical active bootstrap administrator and exact audit"
+      fi
+      ;;
+  esac
+}
+
+check_database_role() {
+  local result db_user superuser createdb createrole replication bypassrls owner_member
+  local runtime_v2_connect runtime_legacy_connect legacy_v2_connect
+  local credential_file roles_verifier
+
+  if [[ "$release_payload_verified" != "1" ]]; then
+    fail "database role verification requires an intact release payload"
+    return
+  fi
+
+  if [[ "$validation_phase" == "staged" ]]; then
+    if [[ -z "${PGPASSFILE:-}" || ! -f "$PGPASSFILE" || -L "$PGPASSFILE" ||
+          "$PGPASSFILE" != "$(realpath -m -- "$PGPASSFILE" 2>/dev/null || true)" ||
+          "$PGPASSFILE" != "$(realpath -e -- "$PGPASSFILE" 2>/dev/null || true)" ||
+          "$(stat -Lc '%u:%g:%a:%h' "$PGPASSFILE" 2>/dev/null || true)" != "0:0:600:1" ]] ||
+       ! check_root_owned_ancestry "$PGPASSFILE" 1; then
+      fail "staged phase requires an explicit canonical root:root 0600 single-link operator PGPASSFILE"
+      return
+    fi
+    pass "staged phase uses an explicit protected operator PGPASSFILE"
+  fi
+
+  credential_file="/run/credentials/ascendanyd.service/db_password"
+  if [[ -z "${PGPASSFILE:-}" ]]; then
+    if [[ ! -s "$credential_file" ]]; then
+      fail "$validation_phase phase has no readable runtime DB credential for role validation"
+      return
+    fi
+    temporary_pgpass="$(mktemp /run/ascendany-validate-pgpass.XXXXXX)"
+    chmod 0600 "$temporary_pgpass"
+    if ! /usr/bin/awk \
+        -v host="$runtime_pg_host" \
+        -v port="$runtime_pg_port" \
+        -v database="$runtime_pg_database" \
+        -v user="$expected_db_user" '
+          NR == 1 {
+            password = $0
+            gsub(/\\/, "\\\\", password)
+            gsub(/:/, "\\:", password)
+            printf "%s:%s:%s:%s:%s\n", host, port, database, user, password
+            next
+          }
+          { exit 2 }
+          END { if (NR != 1 || length(password) == 0) exit 2 }
+        ' "$credential_file" >"$temporary_pgpass"; then
+      fail "$validation_phase phase runtime DB credential is not one non-empty line"
+      return
+    fi
+    export PGPASSFILE="$temporary_pgpass"
+  fi
+
+  if ! result="$(
+    run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 -c \
+      "SELECT current_user,
+              rolsuper,
+              rolcreatedb,
+              rolcreaterole,
+              rolreplication,
+              rolbypassrls,
+              pg_has_role(current_user, 'ascendany_owner', 'MEMBER'),
+              has_database_privilege(current_user, 'ascendany_v2', 'CONNECT'),
+              has_database_privilege(current_user, 'AscendAny', 'CONNECT'),
+              has_database_privilege('AscendAny', 'ascendany_v2', 'CONNECT')
+       FROM pg_roles
+       WHERE rolname = current_user"
+  )"; then
+    fail "database role query failed on ${runtime_pg_host}:${runtime_pg_port}/${runtime_pg_database}"
+    return
+  fi
+  IFS='|' read -r db_user superuser createdb createrole replication bypassrls owner_member \
+    runtime_v2_connect runtime_legacy_connect legacy_v2_connect <<<"$result"
+  if [[ "$db_user" != "$expected_db_user" ]]; then
+    fail "database authenticated as $db_user; expected $expected_db_user"
+  elif [[ "$superuser" == "t" || "$createdb" == "t" || "$createrole" == "t" || "$replication" == "t" || "$bypassrls" == "t" ]]; then
+    fail "runtime database role owns cluster-level privilege"
+  elif [[ "$owner_member" == "t" ]]; then
+    fail "runtime database role is a member of ascendany_owner"
+  elif [[ "$runtime_v2_connect:$runtime_legacy_connect:$legacy_v2_connect" != "t:f:f" ]]; then
+    fail "runtime and legacy database CONNECT capabilities are not isolated"
+  else
+    pass "runtime database role is non-superuser, outside owner membership, and isolated from the legacy database"
+  fi
+
+  roles_verifier="$release_root/db/roles/verify_v2_roles.sql"
+  if ! postgres_admin_psql --dbname=ascendany_v2 <"$roles_verifier" >/dev/null; then
+    fail "release-bound v2 database role and grant verification failed"
+  else
+    pass "release-bound v2 database role and grant contract is exact"
+  fi
+}
+
+check_trainer_acceptance_receipt() {
+  local evidence_parent run_id attempt_token agent_id request_sha input_sha output_sha model_id disposition
+  local runtime_construction runtime_provenance runtime_tree host_capability runtime_attestation
+  local result stored_input stored_request stored_result stored_model stored_output stored_status
+  local stored_runtime_construction stored_runtime_provenance stored_runtime_tree
+  local stored_host_capability stored_runtime_attestation model_runtime_construction
+  local model_runtime_provenance model_runtime_tree model_host_capability model_runtime_attestation
+  local expected_status artifact_path
+  evidence_parent="$(dirname -- "$trainer_evidence")"
+  if [[ "$trainer_evidence" != /* || "$trainer_evidence" != "$(realpath -m -- "$trainer_evidence")" ||
+        ! -f "$trainer_evidence" || -L "$trainer_evidence" ||
+        "$trainer_evidence" != "$(realpath -e -- "$trainer_evidence" 2>/dev/null || true)" ||
+        "$(stat -Lc '%u:%g:%a:%h' "$trainer_evidence" 2>/dev/null || true)" != "0:0:600:1" ||
+        ! -d "$evidence_parent" || -L "$evidence_parent" ||
+        "$(stat -Lc '%u:%g:%a' "$evidence_parent" 2>/dev/null || true)" != "0:0:700" ]] ||
+     ! check_root_owned_ancestry "$trainer_evidence" 1; then
+    fail "trainer acceptance evidence must be a canonical root:root 0600 file in a root:root 0700 directory"
+    return
+  fi
+  if ! "$release_root/bin/ascendany-trainer-agent" verify-acceptance <"$trainer_evidence" >/dev/null 2>&1; then
+    fail "trainer acceptance evidence is not exact canonical v3 JSON"
+    return
+  fi
+  if ! jq -e \
+      --arg commit "$release_manifest_commit" \
+      --arg version "$release_manifest_version" '
+        type == "object" and
+        (keys == ["agentId", "attemptToken", "claimAt", "disposition", "heartbeatAt", "hostCapabilitySha256", "inputManifestSHA256", "modelId", "origin", "outputBundleSHA256", "releaseCommit", "releaseVersion", "requestSHA256", "runId", "runtimeAttestationSha256", "runtimeConstructionSha256", "runtimeProvenanceSha256", "runtimeTreeSha256", "schema", "uploadAt"]) and
+        .schema == "ascendany.trainer.acceptance.v3" and
+        .releaseCommit == $commit and .releaseVersion == $version and
+        (.agentId | test("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")) and
+        (.runId | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+        (.attemptToken | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+        (.modelId | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+        (.requestSHA256 | test("^[0-9a-f]{64}$")) and
+        (.inputManifestSHA256 | test("^[0-9a-f]{64}$")) and
+        (.outputBundleSHA256 | test("^[0-9a-f]{64}$")) and
+        (.runtimeConstructionSha256 | test("^[0-9a-f]{64}$")) and
+        (.runtimeProvenanceSha256 | test("^[0-9a-f]{64}$")) and
+        (.runtimeTreeSha256 | test("^[0-9a-f]{64}$")) and
+        (.hostCapabilitySha256 | test("^[0-9a-f]{64}$")) and
+        (.runtimeAttestationSha256 | test("^[0-9a-f]{64}$")) and
+        .origin == "https://ascendany-trainer.kkkzbh.cn" and
+        (.disposition == "activated" or .disposition == "superseded") and
+        (all(.claimAt, .heartbeatAt, .uploadAt; type == "string"))
+      ' "$trainer_evidence" >/dev/null 2>&1; then
+    fail "trainer acceptance evidence violates the release-bound v2 receipt contract"
+    return
+  fi
+  run_id="$(jq -r '.runId' "$trainer_evidence")"
+  attempt_token="$(jq -r '.attemptToken' "$trainer_evidence")"
+  agent_id="$(jq -r '.agentId' "$trainer_evidence")"
+  request_sha="$(jq -r '.requestSHA256' "$trainer_evidence")"
+  input_sha="$(jq -r '.inputManifestSHA256' "$trainer_evidence")"
+  output_sha="$(jq -r '.outputBundleSHA256' "$trainer_evidence")"
+  model_id="$(jq -r '.modelId' "$trainer_evidence")"
+  disposition="$(jq -r '.disposition' "$trainer_evidence")"
+  runtime_construction="$(jq -r '.runtimeConstructionSha256' "$trainer_evidence")"
+  runtime_provenance="$(jq -r '.runtimeProvenanceSha256' "$trainer_evidence")"
+  runtime_tree="$(jq -r '.runtimeTreeSha256' "$trainer_evidence")"
+  host_capability="$(jq -r '.hostCapabilitySha256' "$trainer_evidence")"
+  runtime_attestation="$(jq -r '.runtimeAttestationSha256' "$trainer_evidence")"
+  if ! result="$(
+    run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 \
+      --set=run_id="$run_id" \
+      --set=attempt_token="$attempt_token" \
+      --set=agent_id="$agent_id" <<'SQL'
+SELECT run.input_manifest_sha256,
+       receipt.request_sha256,
+       receipt.result,
+       receipt.model_public_id::text,
+       receipt.runtime_construction_sha256,
+       receipt.runtime_provenance_sha256,
+       receipt.runtime_tree_sha256,
+       receipt.host_capability_sha256,
+       receipt.runtime_attestation_sha256,
+       model.model_manifest->>'runtimeConstructionSha256',
+       model.model_manifest->>'runtimeProvenanceSha256',
+       model.model_manifest->>'runtimeTreeSha256',
+       model.model_manifest->>'hostCapabilitySha256',
+       model.model_manifest->>'runtimeAttestationSha256',
+       artifact.sha256,
+       run.status
+FROM ascendany.recommendation_training_runs AS run
+JOIN ascendany.recommendation_trainer_attempt_receipts AS receipt
+  ON receipt.training_run_id = run.training_run_id
+JOIN ascendany.artifacts AS artifact
+  ON artifact.artifact_id = run.output_bundle_artifact_id
+JOIN ascendany.recommendation_models AS model
+  ON model.public_id = receipt.model_public_id
+WHERE run.public_id = :'run_id'::uuid
+  AND receipt.attempt_token = :'attempt_token'::uuid
+  AND receipt.agent_id = :'agent_id'
+SQL
+  )"; then
+    fail "durable trainer acceptance receipt query failed"
+    return
+  fi
+  IFS='|' read -r stored_input stored_request stored_result stored_model \
+    stored_runtime_construction stored_runtime_provenance stored_runtime_tree \
+    stored_host_capability stored_runtime_attestation model_runtime_construction \
+    model_runtime_provenance model_runtime_tree model_host_capability model_runtime_attestation \
+    stored_output stored_status <<<"$result"
+  expected_status=succeeded
+  if [[ "$disposition" == "superseded" ]]; then
+    expected_status=superseded
+  fi
+  artifact_path="$artifact_root/sha256/${output_sha:0:2}/$output_sha"
+  if [[ -z "$result" || "$stored_input" != "$input_sha" || "$stored_request" != "$request_sha" ||
+        "$stored_result" != "$disposition" || "$stored_model" != "$model_id" ||
+        "$stored_runtime_construction" != "$runtime_construction" ||
+        "$stored_runtime_provenance" != "$runtime_provenance" ||
+        "$stored_runtime_tree" != "$runtime_tree" ||
+        "$stored_host_capability" != "$host_capability" ||
+        "$stored_runtime_attestation" != "$runtime_attestation" ||
+        "$model_runtime_construction" != "$runtime_construction" ||
+        "$model_runtime_provenance" != "$runtime_provenance" ||
+        "$model_runtime_tree" != "$runtime_tree" ||
+        "$model_host_capability" != "$host_capability" ||
+        "$model_runtime_attestation" != "$runtime_attestation" ||
+        "$stored_output" != "$output_sha" || "$stored_status" != "$expected_status" ]]; then
+    fail "trainer acceptance evidence does not match one durable fenced terminal receipt"
+  elif [[ ! -f "$artifact_path" || -L "$artifact_path" ||
+          "$(sha256sum -- "$artifact_path" 2>/dev/null | awk '{print $1}')" != "$output_sha" ]]; then
+    fail "trainer acceptance output artifact is missing or differs from its durable digest"
+  else
+    pass "trainer acceptance evidence matches the durable receipt, model, run, and output artifact"
+  fi
+}
+
+check_cloudflared_connector() {
+  if ASCENDANY_VALIDATION_PHASE="$validation_phase" \
+      "$release_root/scripts/validate-cloudflared.sh"; then
+    pass "cloudflared connector matches the release-owned $validation_phase gate"
+  else
+    fail "cloudflared connector failed the release-owned $validation_phase gate"
+  fi
+}
+
+port_is_managed() {
+  local candidate="$1" port
+  for port in $managed_ports; do
+    [[ "$candidate" == "$port" ]] && return 0
+  done
+  return 1
+}
+
+check_loopback_ports() {
+  local state recvq sendq endpoint peer rest port address required
+  declare -A seen=()
+  while read -r state recvq sendq endpoint peer rest; do
+    [[ -n "${endpoint:-}" ]] || continue
+    port="${endpoint##*:}"
+    port_is_managed "$port" || continue
+    address="${endpoint%:*}"
+    address="${address#[}"
+    address="${address%]}"
+    address="${address%%%*}"
+    seen["$port"]=1
+    if [[ "$address" == "::1" || "$address" == 127.* ]]; then
+      pass "TCP $port listens on loopback $address"
+    else
+      fail "managed TCP $port listens on non-loopback address $address"
+    fi
+  done < <(ss -H -ltn)
+
+  for required in $required_ports; do
+    if [[ -z "${seen[$required]:-}" ]]; then
+      fail "required loopback TCP port is not listening: $required"
+    fi
+  done
+  if [[ "$validation_phase" == "staged" && -n "${seen[18000]:-}" ]]; then
+    fail "staged phase requires v2 TCP port 18000 to be unused"
+  fi
+}
+
+main() {
+  local command
+  if ! validate_input_contract; then
+    printf 'Production validation failed with %d finding(s).\n' "$failures" >&2
+    return 1
+  fi
+  for command in systemctl realpath find stat psql ss grep id runuser jq curl sha256sum awk cmp date dirname sed sort tail tr mktemp chmod readlink podman; do
+    require_command "$command" || true
+  done
+
+  check_release_for_secret_files
+  check_release_payload
+  if (( failures > 0 )) || [[ "$release_payload_verified" != "1" ]]; then
+    printf 'Production validation stopped before executing release-owned code because release verification failed with %d finding(s).\n' "$failures" >&2
+    return 1
+  fi
+
+  check_cloudflared_connector
+
+  check_system_manager_environment
+  check_unit_identity ascendanyd.service ascendany ascendany ascendany-runtime ascendany-lsp-control
+  check_unit_identity ascendany-admin-bootstrap.service ascendany ascendany ascendany-runtime
+  check_unit_identity ascendany-judge@validation.service ascendany-judge ascendany-judge ascendany-runtime
+  check_unit_identity ascendany-lsp@validation.service ascendany-lsp ascendany-lsp ascendany-lsp-control
+  check_unit_identity ascendany-backup.service ascendany-backup ascendany-backup-readers ascendany
+  check_unit_identity ascendany-migrate.service ascendany-migrator ascendany-migrator
+  check_unit_identity ascendany-restore-verify@validation.service ascendany-restore ascendany-restore ascendany-backup-readers
+  check_all_unit_effective_shapes
+
+  check_ascendanyd_phase_state
+
+  check_worker_isolation ascendany-judge@validation.service
+  check_worker_isolation ascendany-lsp@validation.service
+  check_unit_environment_files ascendany-judge@validation.service /etc/ascendany/v2/judge.env
+  check_unit_environment_files ascendany-lsp@validation.service
+  check_unit_credentials ascendany-backup.service backup_db_password
+  check_unit_environment_files ascendany-backup.service /etc/ascendany/v2/backup.env
+  check_admin_bootstrap_unit
+  check_unit_optional_environment_files ascendany-admin-bootstrap.service /etc/ascendany/v2/ascendanyd.env
+  check_unit_credentials ascendany-migrate.service migrator_db_password
+  check_unit_environment_files ascendany-migrate.service /etc/ascendany/v2/migrate.env
+  check_unit_credentials ascendany-restore-verify@validation.service restore_db_password
+  check_unit_environment_files ascendany-restore-verify@validation.service /etc/ascendany/v2/restore.env
+  check_lsp_runtime
+  check_judge_runtime
+  check_credentials
+  check_ascendanyd_config_contract
+  check_active_ascendanyd_process
+  check_active_ascendanyd_health
+  check_installed_release_inputs
+  check_provisioning_terminal_state
+  check_pgbouncer_contract
+  check_artifact_root
+  check_database_role
+  check_postgresql_access_contract
+  check_admin_bootstrap_database
+  if production_phase; then
+    check_trainer_acceptance_receipt
+    check_backup_schedule
+  else
+    check_inactive_backup_timer
+  fi
+  check_loopback_ports
+
+  if (( failures > 0 )); then
+    printf 'Production validation failed with %d finding(s).\n' "$failures" >&2
+    return 1
+  fi
+
+  printf 'AscendAny %s validation passed.\n' "$validation_phase"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

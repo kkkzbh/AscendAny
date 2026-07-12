@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ascendany-recommendation-trainer"
+version = "0.2.0"
+description = "Isolated AscendAny recommendation model trainer"
+requires-python = ">=3.14,<3.15"
+dependencies = ["numpy==2.4.4", "torch==2.13.0"]
+
+[project.scripts]
+ascendany-recommendation-trainer = "ascendany_recommendation_trainer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

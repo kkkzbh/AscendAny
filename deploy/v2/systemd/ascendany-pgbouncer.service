@@ -1,0 +1,68 @@
+[Unit]
+Description=AscendAny PostgreSQL transaction pooler
+Documentation=file:/opt/ascendany/v2/README.md
+Wants=network-online.target
+After=network-online.target
+Conflicts=pgbouncer.service
+AssertFileIsExecutable=/usr/bin/pgbouncer
+AssertPathExists=/opt/ascendany/infra/pgbouncer/pgbouncer.ini
+AssertPathExists=/opt/ascendany/infra/pgbouncer/pgbouncer-hba.conf
+AssertPathExists=/etc/ascendany/credentials/pgbouncer_userlist.cred
+
+[Service]
+Type=notify-reload
+DynamicUser=yes
+UMask=0077
+LoadCredentialEncrypted=pgbouncer_userlist:/etc/ascendany/credentials/pgbouncer_userlist.cred
+ExecStartPre=/usr/bin/test -x /usr/bin/pgbouncer
+ExecStartPre=/usr/bin/test -r /opt/ascendany/infra/pgbouncer/pgbouncer.ini
+ExecStartPre=/usr/bin/test -r /opt/ascendany/infra/pgbouncer/pgbouncer-hba.conf
+ExecStartPre=/usr/bin/test -s %d/pgbouncer_userlist
+ExecStart=/usr/bin/pgbouncer -q /opt/ascendany/infra/pgbouncer/pgbouncer.ini
+ExecReload=/usr/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+KillSignal=SIGINT
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+RuntimeDirectory=ascendany-pgbouncer
+RuntimeDirectoryMode=0700
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+DevicePolicy=closed
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.88.0.2/32
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadOnlyPaths=/opt/ascendany/infra/pgbouncer
+InaccessiblePaths=/etc/pgbouncer /var/log/pgbouncer
+
+[Install]
+WantedBy=multi-user.target

@@ -2,9 +2,10 @@ import { FormEvent, useState } from "react";
 
 interface Props {
   onLogin: (username: string, password: string) => Promise<void>;
+  sessionError?: string | null;
 }
 
-export function LoginPage({ onLogin }: Props) {
+export function LoginPage({ onLogin, sessionError }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -12,7 +13,7 @@ export function LoginPage({ onLogin }: Props) {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim()) return;
+    if (!username.trim() || password.length === 0) return;
     setLoading(true);
     setError(null);
     try {
@@ -29,12 +30,12 @@ export function LoginPage({ onLogin }: Props) {
       <div className="login-card">
         <div className="login-header">
           <h1>AscendAny</h1>
-          <h2>管理员控制平台</h2>
+          <h2>数据导入控制台</h2>
           <p className="login-subtitle">管理员登录</p>
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
-          {error && <div className="login-error">{error}</div>}
+          {(error ?? sessionError) ? <div className="login-error" role="alert">{error ?? sessionError}</div> : null}
 
           <div className="form-group">
             <label htmlFor="username">用户名</label>

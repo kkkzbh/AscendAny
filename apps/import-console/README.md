@@ -1,131 +1,86 @@
-# AscendAny 数据导入控制台
+# AscendAny Pintia 数据导入控制台
 
-> 面向管理员的 Web 应用，用于图形化管理增量数据导入。
+面向管理员的 React Web 应用，负责接收 AscendAny 浏览器插件导出的 Pintia snapshot v2，并查看 Go runtime 中的持久导入任务。
 
-## 功能概览
+## 功能
 
-- **考试发现**：自动扫描 `practice/` 目录，检测新增 / 变更的考试数据
-- **增量导入**：一键执行增量导入，SSE 实时推送进度与日志
-- **Actor 关联**：将匿名提交记录关联到学生身份
-- **导入历史**：查看所有历史导入记录
-- **内置帮助**：打开右侧帮助面板即可了解完整操作流程
-
----
+- 上传一份完整的 `ascendany.pintia.snapshot.v2` JSON 快照
+- 上传成功后直接创建或复用按 artifact SHA-256 幂等的持久任务
+- 通过 durable event sequence 恢复 SSE 任务流
+- 使用游标分页查看导入历史
+- 通过 `@ascendany/sdk` 的 `BrowserSession` 管理 v2 管理员会话
 
 ## 本地开发
 
-### 前置条件
+前置条件：Node.js 22.18+、pnpm 9+，以及已启动的 AscendAny Go v2 runtime。
 
-- Node.js 20+, pnpm 9+
-- km6 FastAPI 已部署在 `https://ascendany.kkkzbh.cn`
-
-### 启动方式
-
-默认直连 km6 API：
-
-```bash
-VITE_API_BASE_URL=https://ascendany.kkkzbh.cn pnpm --filter @ascendany/import-console dev
-```
-
-浏览器打开 **http://localhost:6748**。本地只运行前端开发服务器，API 与数据库都使用 km6。
-
-需要调试本地临时 API 时，先按 `deploy/README.md` 建立 km6 数据库连接，再临时启动 FastAPI。随后运行：
+连接本地 runtime：
 
 ```bash
 pnpm --filter @ascendany/import-console dev
 ```
 
-此时 Vite dev server 将 `/api` 代理到本地临时 API。
+Vite 在 `http://localhost:6748/admin/` 提供页面，并将 `/api` 代理到 `http://127.0.0.1:18000`。
+
+连接已部署的 runtime：
+
+```bash
+VITE_API_BASE_URL=https://ascendany.kkkzbh.cn \
+  pnpm --filter @ascendany/import-console dev
+```
 
 ### 环境变量
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `VITE_API_BASE_URL` | 后端 API 地址（不含尾 `/`） | 本地开发显式设为 `https://ascendany.kkkzbh.cn`；为空仅用于临时本地 API 联调 |
-| `VITE_BASE_PATH` | 部署子路径 | `/` |
-| `VITE_TOKEN_HANDOFF` | `"true"` → 允许从 Action 传入登录 token（仅本地开发建议开启） | dev server 默认可用，生产构建默认关闭 |
-| `VITE_HASH_ROUTER` | `"true"` → 启用 HashRouter（静态托管场景） | 不设置 → BrowserRouter |
+| `VITE_API_BASE_URL` | Go v2 API 的 canonical origin，不含尾部 `/` | 当前页面 origin |
 
-### Codex Action 自动登录
+Production public base固定为 `/admin/`，router basename固定为 `/admin`。
 
-`启动管理平台` Action 默认只启动并打开页面。若当前终端环境同时存在以下变量，Action 会先调用 `/api/v1/auth/login`，再打开已写入 token 的管理页：
+`VITE_API_BASE_URL` 必须是 HTTPS origin；本地开发允许 canonical loopback HTTP origin。
 
-```bash
-export ASCENDANY_ADMIN_USERNAME=Admin
-export ASCENDANY_ADMIN_PASSWORD='你的本地管理员密码'
-```
+## 认证边界
 
-也可以写入 git 已忽略的本地文件 `.env.local` 或 `.env`：
+控制台直接使用 `@ascendany/sdk` 的 `BrowserSession`：
 
-```bash
-ASCENDANY_ADMIN_USERNAME=Admin
-ASCENDANY_ADMIN_PASSWORD=你的本地管理员密码
-```
+- access token 只保存在当前页面内存中；
+- refresh credential 由 Go runtime 写入 HttpOnly cookie；
+- 浏览器存储只保存与 API origin 绑定的旋转 CSRF token；
+- 页面启动时使用 refresh cookie 和 CSRF token 恢复会话；
+- 每次上传、读取任务和建立 SSE 连接前都会确保 access token 仍有足够有效期。
 
-账号密码不会写入 `.codex/environments/environment.toml`；前端收到 token 后会立即清理地址栏中的 token 参数。
-
----
-
-## 首次设置
-
-1. **应用数据库迁移**（在服务器上执行一次）
-
-   ```sql
-   -- 已包含在 db/schema/040_user_accounts.sql 的 DO 块中，
-   -- 也可单独执行：
-   ALTER TABLE ascendany.user_accounts
-     ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
-   ```
-
-2. **提权管理员账号**
-
-   ```sql
-   UPDATE ascendany.user_accounts
-   SET is_admin = TRUE
-   WHERE username = '你的用户名';
-   ```
-
-3. 按 `deploy/README.md` 更新 km6 上的 `Release` 实例并重启 `ascendany-api`，使 import 路由生效。
-
-4. 打开 `http://localhost:6748`，用管理员账号登录。
-
----
+管理员在页面中输入账号密码登录。应用不接受 URL token，也不持久化 access token 或 refresh credential。
 
 ## 使用流程
 
-1. **登录** → 进入主控制台
-2. **左侧面板** — 点击"扫描考试数据"，自动检测 `practice/` 下的考试
-   - 🟢 **new** = 新考试（从未导入）
-   - 🟡 **changed** = 数据内容有变更
-   - ⚪ **unchanged** = 无变化
-3. **勾选**要导入的考试（或全选）
-4. **点击"开始导入"** — 右侧控制台实时显示进度条 + 终端日志
-5. 导入完成后，点击 **"Link Actors"** 执行学生身份关联
-6. 切换 **"历史记录"** 标签查看所有导入记录
+1. 在 Pintia 题目集页面使用 AscendAny 浏览器插件导出完整 snapshot v2 JSON。
+2. 登录控制台并将单个 `.json` 文件拖入上传区域。
+3. 服务端持久化快照字节并立即创建任务；控制台自动连接任务事件流。
+4. 在当前任务、实时日志和导入历史中查看进度与最终状态。
 
-### 选项说明
-
-| 选项 | 说明 |
-| --- | --- |
-| **Dry Run** | 试运行，不写入数据库，仅预览 |
-| **Force** | 强制重新导入（忽略 fingerprint） |
-
-点击右上角 **❓ 帮助** 打开内置操作指引。
-
----
+上传入口只接受完整 snapshot v2。服务端完成严格结构校验、跨记录语义校验，并以整场考试为事务边界提交业务数据。
 
 ## 技术架构
 
-```
-浏览器 (React SPA, localhost:6748)
-  ├── JWT 认证 → /api/v1/auth/*
-  ├── 发现考试 → GET /api/v1/import/discover
-  ├── 启动导入 → POST /api/v1/import/run → 返回 runId
-  ├── SSE 流   → GET /api/v1/import/run/{runId}/stream
-  └── 导入历史 → GET /api/v1/import/history
+```text
+React Import Console
+  ├── BrowserSession → 内存 access token + HttpOnly refresh cookie + CSRF rotation
+  ├── POST /api/v2/imports/pintia
+  ├── GET  /api/v2/imports/{jobId}/events
+  ├── GET  /api/v2/imports/{jobId}
+  └── GET  /api/v2/imports?cursor=&limit=
 
-FastAPI 后端 (ascendany.kkkzbh.cn)
-  ├── Admin 鉴权 (JWT is_admin claim)
-  ├── TaskManager (内存任务队列 + SSE 事件流)
-  └── threading.Thread → preprocess.IngestService / LinkingService
+Go v2 runtime
+  ├── 管理员 session authorization
+  ├── immutable artifact 与 PostgreSQL durable job/event
+  ├── strict snapshot v2 validation
+  └── leased import/analytics worker 与考试事务
+```
+
+## 验证
+
+```bash
+pnpm --filter @ascendany/import-console exec tsc -b
+pnpm --filter @ascendany/import-console test
+pnpm --filter @ascendany/import-console build
 ```
