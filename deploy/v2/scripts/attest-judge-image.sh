@@ -80,7 +80,11 @@ version="$(podman --cgroup-manager=cgroupfs --runroot="$operator_runroot" run --
 elf_program_headers="$(podman --cgroup-manager=cgroupfs --runroot="$operator_runroot" run --userns=host --rm --pull=never --network=none --http-proxy=false --hosts-file=none \
   --read-only --cap-drop=all --security-opt=no-new-privileges --hooks-dir=/var/empty --volume="$probe_directory:/workspace:ro,Z" \
   "$JUDGE_COMPILER_IMAGE" /usr/bin/readelf -l /workspace/probe)" || die 'static probe ELF inspection failed'
-[[ "$elf_program_headers" != *INTERP* && "$elf_program_headers" != *DYNAMIC* ]] || die 'compiler emitted a dynamic executable'
+[[ "$elf_program_headers" != *INTERP* ]] || die 'compiler emitted an executable that requires a program interpreter'
+elf_dynamic_section="$(podman --cgroup-manager=cgroupfs --runroot="$operator_runroot" run --userns=host --rm --pull=never --network=none --http-proxy=false --hosts-file=none \
+  --read-only --cap-drop=all --security-opt=no-new-privileges --hooks-dir=/var/empty --volume="$probe_directory:/workspace:ro,Z" \
+  "$JUDGE_COMPILER_IMAGE" /usr/bin/readelf -d /workspace/probe)" || die 'static probe dynamic-section inspection failed'
+[[ "$elf_dynamic_section" != *'(NEEDED)'* ]] || die 'compiler emitted an executable with a shared-library dependency'
 podman --cgroup-manager=cgroupfs --runroot="$operator_runroot" run --userns=host --rm --pull=never --network=none --http-proxy=false --hosts-file=none \
   --read-only --cap-drop=all --security-opt=no-new-privileges --hooks-dir=/var/empty --pids-limit=16 --memory=64m --cpus=1 \
   --volume="$probe_directory:/workspace:ro,Z" --entrypoint=/workspace/probe "$JUDGE_RUNTIME_IMAGE" || die 'static probe cannot execute in the empty runtime image'
