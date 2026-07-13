@@ -8,7 +8,7 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly BACKEND_ROOT="${REPOSITORY_ROOT}/backend"
 readonly DATABASE_NAME="ascendany_v2"
 readonly EXPECTED_POSTGRES_MAJOR="17"
-readonly EXPECTED_SCHEMA_VERSION="5"
+readonly EXPECTED_SCHEMA_VERSION="6"
 readonly MIGRATOR_TEST_PASSWORD="local-rehearsal-password"
 readonly RESTORE_TEST_PASSWORD="local-restore-rehearsal-password"
 
@@ -89,8 +89,7 @@ if [[ "${MIGRATOR_PASSWORD}" != "${MIGRATOR_TEST_PASSWORD}" ]]; then
 fi
 
 if [[ ! "${PGBOUNCER_ADMIN_USER}" =~ ^[a-z][a-z0-9_]{0,62}$ ||
-  "${PGBOUNCER_ADMIN_USER}" == ascendanyd_login ||
-  "${PGBOUNCER_ADMIN_USER}" == AscendAny ]]; then
+  "${PGBOUNCER_ADMIN_USER}" == ascendanyd_login ]]; then
   printf 'ASCENDANY_CI_PGBOUNCER_ADMIN_USER must be one distinct canonical PostgreSQL identifier\n' >&2
   exit 2
 fi
@@ -109,7 +108,7 @@ if [[ ! -d "${PGBOUNCER_USERLIST_PARENT}" || -L "${PGBOUNCER_USERLIST_PARENT}" |
   exit 2
 fi
 
-for command_name in chmod diff dirname go grep mktemp mv psql realpath rg rm sed sort stat sync tr wc; do
+for command_name in chmod diff dirname go grep mktemp mv psql realpath rg rm sed sha256sum sort stat sync tr wc; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
     printf 'required command is unavailable: %s\n' "${command_name}" >&2
     exit 2
@@ -131,6 +130,18 @@ readonly REAL_SNAPSHOT_PATH="$(optional_absolute_file \
   ASCENDANY_CI_REAL_PINTIA_SNAPSHOT_PATH \
   "${REPOSITORY_ROOT}/contracts/pintia/fixtures/valid/complete.json")"
 readonly ANALYTICS_CONFIG_PATH="${REPOSITORY_ROOT}/deploy/v2/config/analytics.json.example"
+readonly RECOMMENDATION_CATALOG_PATH="$(optional_absolute_file \
+  ASCENDANY_CI_RECOMMENDATION_CATALOG_PATH \
+  "${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json")"
+readonly RECOMMENDATION_MODEL_PATH="$(optional_absolute_file \
+  ASCENDANY_CI_RECOMMENDATION_MODEL_PATH \
+  "${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json")"
+readonly RECOMMENDATION_MODEL_SHA256="$(required_environment ASCENDANY_CI_RECOMMENDATION_MODEL_SHA256)"
+if [[ ! "${RECOMMENDATION_MODEL_SHA256}" =~ ^[0-9a-f]{64}$ ||
+  "$(sha256sum -- "${RECOMMENDATION_MODEL_PATH}" | sed 's/[[:space:]].*$//')" != "${RECOMMENDATION_MODEL_SHA256}" ]]; then
+  printf 'ASCENDANY_CI_RECOMMENDATION_MODEL_SHA256 must exactly bind the test model artifact bytes\n' >&2
+  exit 2
+fi
 
 cleanup() {
   rm -rf -- "${WORK_ROOT}"
@@ -204,21 +215,16 @@ publish_pgbouncer_userlist() {
       >>"${temporary_userlist}" <<'SQL'
 SELECT format('"%s" "%s"', rolname, rolpassword)
 FROM pg_authid
-WHERE rolname IN ('AscendAny', 'ascendanyd_login')
+WHERE rolname = 'ascendanyd_login'
   AND rolpassword LIKE 'SCRAM-SHA-256$%'
-ORDER BY CASE rolname
-    WHEN 'AscendAny' THEN 0
-    WHEN 'ascendanyd_login' THEN 1
-END;
 SQL
-    if [[ "$(wc -l <"${temporary_userlist}" | tr -d ' ')" != 3 ||
-      "$(grep -c ' "SCRAM-SHA-256\$' "${temporary_userlist}")" != 3 ]]; then
+    if [[ "$(wc -l <"${temporary_userlist}" | tr -d ' ')" != 2 ||
+      "$(grep -c ' "SCRAM-SHA-256\$' "${temporary_userlist}")" != 2 ]]; then
       printf 'PostgreSQL did not yield the exact ordered PgBouncer SCRAM identities\n' >&2
       exit 1
     fi
     if [[ "$(sed -n '1s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != "${PGBOUNCER_ADMIN_USER}" ||
-      "$(sed -n '2s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != AscendAny ||
-      "$(sed -n '3s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != ascendanyd_login ]]; then
+      "$(sed -n '2s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != ascendanyd_login ]]; then
       printf 'PostgreSQL returned PgBouncer SCRAM identities in a noncanonical order\n' >&2
       exit 1
     fi
@@ -787,6 +793,9 @@ run_go_test() {
           GOPROXY=off \
           ASCENDANY_TEST_DATABASE_URL="${RUNTIME_DATABASE_URL}" \
           ASCENDANY_TEST_DATABASE_PASSWORD="${RUNTIME_PASSWORD}" \
+          ASCENDANY_TEST_RECOMMENDATION_CATALOG_PATH="${RECOMMENDATION_CATALOG_PATH}" \
+          ASCENDANY_TEST_RECOMMENDATION_MODEL_PATH="${RECOMMENDATION_MODEL_PATH}" \
+          ASCENDANY_TEST_RECOMMENDATION_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
           ASCENDANY_REAL_PINTIA_SNAPSHOT_PATH="${REAL_SNAPSHOT_PATH}" \
           ASCENDANY_REAL_ANALYTICS_CONFIG_PATH="${ANALYTICS_CONFIG_PATH}" \
           PGPASSFILE="${RUNTIME_PGPASS_FILE}" \
@@ -858,6 +867,7 @@ readonly -a TEST_CASES=(
   'runtime|./internal/auth|TestPostgresEnrollmentIssueConcurrentClaimAndRevocation|none'
   'runtime|./internal/chatagent|TestPostgresAgentRunIsIdempotentFencedAndAtomicallyPublished|none'
   'runtime|./internal/configuration|TestPostgresConfigurationVersionLifecycle|admin'
+  'runtime|./internal/configuration|TestPostgresRejectsReservedCatalogKeyWithWrongKind|none'
   'runtime|./internal/examcatalog|TestPostgresCatalogReadsOneImportedSnapshot|catalog'
   'runtime|./internal/examgeneration|TestPostgresCurrentGenerationUsesActiveSnapshotAndRevalidatesPrincipal|none'
   'runtime|./internal/feedback|TestPostgresAuthenticatedFeedbackIsIdempotentAndRateLimited|none'
@@ -865,11 +875,11 @@ readonly -a TEST_CASES=(
   'runtime|./internal/importing|TestPostgresRealPintiaSnapshotImport|none'
   'runtime|./internal/migrate|TestPostgresImportLifecycleCannotBeBypassed|none'
   'migrator|./internal/migrate|TestPostgresAchievementRuleVersionsAreAppendOnly|none'
+  'runtime|./internal/modelrelease|TestPostgresBindingPersistsVerifiedArtifact|none'
   'runtime|./internal/oj|TestPostgresOJProblemSubmissionAndFencedJudgeLifecycle|none'
   'runtime|./internal/oj|TestPostgresOJConcurrentNewSlugConvergesOnOneHead|none'
-  'runtime|./internal/recommendation|TestPostgresRecommendationTrainingLifecycleAndStudentFreshness|none'
-  'runtime|./internal/recommendation|TestPostgresRecommendationOperatorBootstrapReviewQueueAndEvents|none'
-  'runtime|./internal/recommendation|TestPostgresTrainerAgentTerminalReceiptsFenceAndReplay|none'
+  'runtime|./internal/recommendation|TestPostgresModelBindingMatchesVerifiedArtifact|admin'
+  'runtime|./internal/recommendation|TestPostgresRecommendationCatalogPublicationFencesAnalyticsReview|catalog'
   'runtime|./internal/studentanalytics|TestPostgresSelfAnalyticsReadPath|none'
 )
 
@@ -913,8 +923,8 @@ audit_test_manifest() {
     printf '%s|%s\n' "${package_path}" "${test_name}" >>"${expected}"
   done
 
-  sort -u -o "${discovered}" "${discovered}"
-  sort -u -o "${expected}" "${expected}"
+  sort -o "${discovered}" "${discovered}"
+  sort -o "${expected}" "${expected}"
   if ! diff -u "${discovered}" "${expected}"; then
     printf 'PostgreSQL integration manifest does not cover the env-gated test surface\n' >&2
     exit 1

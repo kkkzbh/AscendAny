@@ -17,6 +17,7 @@ import type {
   OjProblem,
   OjProblemPage,
   OjSubmissionDetail,
+  RecommendationModelProvenance,
   SelfAchievements,
   SelfRecommendation,
   SelfStudentAnalytics,
@@ -119,11 +120,24 @@ const achievements: SelfAchievements = {
     sortOrder: 1,
   }],
 };
+const recommendationModel: RecommendationModelProvenance = {
+  modelId: "123e4567-e89b-42d3-a456-426614174000",
+  purpose: "acceptance_test",
+  artifactSha256: "a".repeat(64), artifactSizeBytes: 4096, artifactMode: 420,
+  modelSchema: "ascendany.recommendation.inference-model.v1",
+  algorithm: "knowledge_mirt_feature_v1", inferenceContract: "ascendany.recommendation.inference.v1",
+  trainedAt: "2026-07-11T08:00:00Z", trainingProvenanceSha256: "b".repeat(64),
+  featureSchemaSha256: "c".repeat(64), knowledgeCatalogSha256: "d".repeat(64),
+  parameterSha256: "e".repeat(64), goldenVectorsSha256: "f".repeat(64),
+  modelHeadRevision: 5, applicationVersion: "0.2.0", applicationCommit: "1".repeat(40),
+  applicationBuildTime: "2026-07-11T08:05:00Z",
+};
 const recommendation: SelfRecommendation = {
   state: "unavailable",
-  unavailableReason: "no_active_model",
+  unavailableReason: "analytics_unavailable",
   currentAnalyticsHeadRevision: 0,
-  recommendationHeadRevision: 0,
+  modelHeadRevision: 5,
+  model: recommendationModel,
 };
 const leaderboard: StudentLeaderboard = {
   state: "not_generated",

@@ -148,6 +148,9 @@ func validateManifest(manifest Manifest, expectedID string) error {
 	if err := validateMigrations(manifest.Database.Migrations); err != nil {
 		return err
 	}
+	if err := validateRecommendationModelDescriptor(manifest.Database.RecommendationModel); err != nil {
+		return fmt.Errorf("recommendation model: %w", err)
+	}
 	if err := validateFileDescriptor(manifest.Artifacts.File, ArtifactArchiveFilename, "tar+zstd"); err != nil {
 		return fmt.Errorf("artifact archive: %w", err)
 	}

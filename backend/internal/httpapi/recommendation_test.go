@@ -8,10 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/kkkzbh/AscendAny/backend/internal/artifact"
-	"github.com/kkkzbh/AscendAny/backend/internal/canonicaljson"
 	"github.com/kkkzbh/AscendAny/backend/internal/health"
 	"github.com/kkkzbh/AscendAny/backend/internal/recommendation"
 )
@@ -24,329 +21,187 @@ func (stub recommendationReaderStub) ReadCurrent(ctx context.Context, token stri
 	return stub.read(ctx, token)
 }
 
-type recommendationQueueStub struct {
-	queue func(context.Context, string, string, int64, int64) (recommendation.QueueResult, error)
-}
-
 type recommendationAdminReaderStub struct {
-	review func(context.Context, string) (recommendation.ReviewContext, error)
-	run    func(context.Context, string, string) (recommendation.TrainingRunDetail, bool, error)
-	events func(context.Context, string, string, int64, int) (recommendation.TrainingEventPage, bool, error)
+	read func(context.Context, string) (recommendation.ReviewContext, error)
 }
 
 func (stub recommendationAdminReaderStub) ReadReviewContext(ctx context.Context, token string) (recommendation.ReviewContext, error) {
-	return stub.review(ctx, token)
+	return stub.read(ctx, token)
 }
 
-func (stub recommendationAdminReaderStub) ReadTrainingRun(ctx context.Context, token, runID string) (recommendation.TrainingRunDetail, bool, error) {
-	return stub.run(ctx, token, runID)
+func TestRecommendationHTTPReturnsFreshReadyAndInsufficientResults(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []recommendation.RecommendationResultStatus{
+		recommendation.RecommendationResultReady,
+		recommendation.RecommendationResultInsufficient,
+	} {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			value := testFreshRecommendation(status)
+			handler := newRecommendationHandler(t, recommendationReaderStub{read: func(_ context.Context, token string) (recommendation.CurrentRecommendation, error) {
+				if token != "student-access" {
+					t.Fatalf("token = %q", token)
+				}
+				return value, nil
+			}}, unusedRecommendationAdminReader{})
+
+			response := newTestResponseRecorder()
+			handler.ServeHTTP(response, recommendationRequest(http.MethodGet, "/api/v2/students/me/recommendation"))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+			}
+			var body recommendation.CurrentRecommendation
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.State != recommendation.RecommendationFresh || body.Result == nil || body.Result.Status != status ||
+				body.Model == nil || body.Model.ModelHeadRevision != 4 {
+				t.Fatalf("response = %#v", body)
+			}
+		})
+	}
 }
 
-func (stub recommendationAdminReaderStub) ReadTrainingEvents(ctx context.Context, token, runID string, after int64, limit int) (recommendation.TrainingEventPage, bool, error) {
-	return stub.events(ctx, token, runID, after, limit)
+func TestRecommendationHTTPReturnsEveryClosedUnavailableReason(t *testing.T) {
+	t.Parallel()
+
+	reasons := []recommendation.UnavailableReason{
+		recommendation.UnavailableAnalytics,
+		recommendation.UnavailableActorAnalytics,
+		recommendation.UnavailableKnowledge,
+		recommendation.UnavailableKnowledgeMatch,
+		recommendation.UnavailableEligibleProblem,
+	}
+	for _, reason := range reasons {
+		reason := reason
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			model := testRecommendationModel()
+			value := recommendation.CurrentRecommendation{
+				State: recommendation.RecommendationUnavailable, UnavailableReason: &reason,
+				CurrentAnalyticsHeadRevision: 0, ModelHeadRevision: 4, Model: &model,
+			}
+			handler := newRecommendationHandler(t, recommendationReaderStub{read: func(context.Context, string) (recommendation.CurrentRecommendation, error) {
+				return value, nil
+			}}, unusedRecommendationAdminReader{})
+			response := newTestResponseRecorder()
+			handler.ServeHTTP(response, recommendationRequest(http.MethodGet, "/api/v2/students/me/recommendation"))
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"unavailableReason":"`+string(reason)+`"`) {
+				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
 }
 
-func (stub recommendationQueueStub) QueueTraining(ctx context.Context, token, key string, generationID, headRevision int64) (recommendation.QueueResult, error) {
-	return stub.queue(ctx, token, key, generationID, headRevision)
+func TestRecommendationHTTPRejectsInvalidDomainOutputAndRemovedTrainingRoutes(t *testing.T) {
+	t.Parallel()
+
+	invalid := testFreshRecommendation(recommendation.RecommendationResultReady)
+	invalid.Model.ArtifactMode = 0o600
+	handler := newRecommendationHandler(t, recommendationReaderStub{read: func(context.Context, string) (recommendation.CurrentRecommendation, error) {
+		return invalid, nil
+	}}, unusedRecommendationAdminReader{})
+
+	response := newTestResponseRecorder()
+	handler.ServeHTTP(response, recommendationRequest(http.MethodGet, "/api/v2/students/me/recommendation"))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("invalid output status = %d body=%s", response.Code, response.Body.String())
+	}
+
+	for _, request := range []*http.Request{
+		recommendationRequest(http.MethodPost, "/api/v2/admin/recommendation/training-runs"),
+		recommendationRequest(http.MethodGet, "/api/v2/admin/recommendation/training-runs/123e4567-e89b-42d3-a456-426614174041"),
+		recommendationRequest(http.MethodPost, "/api/v2/internal/recommendation/trainer-agent/claims"),
+	} {
+		response := newTestResponseRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"route_not_found"`) {
+			t.Fatalf("removed route %s status=%d body=%s", request.URL.Path, response.Code, response.Body.String())
+		}
+	}
 }
 
-func TestGetSelfRecommendationExposesTypedFreshResultAndProvenance(t *testing.T) {
-	want := testFreshRecommendation()
-	handler := newRecommendationTestHandler(t, false, recommendationReaderStub{read: func(_ context.Context, token string) (recommendation.CurrentRecommendation, error) {
+func TestRecommendationReviewContextUsesCanonicalStringGenerationID(t *testing.T) {
+	t.Parallel()
+
+	admin := recommendationAdminReaderStub{read: func(_ context.Context, token string) (recommendation.ReviewContext, error) {
 		if token != "student-access" {
 			t.Fatalf("token = %q", token)
 		}
-		return want, nil
-	}}, nil)
-	request := recommendationRequest(http.MethodGet, "/api/v2/students/me/recommendation", "")
-	request.Header.Set("Authorization", "Bearer student-access")
-	response := newTestResponseRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
-	}
-	var got recommendation.CurrentRecommendation
-	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.State != recommendation.RecommendationFresh || got.Model == nil || got.Result == nil ||
-		got.Model.TrainingConfigurationKey != "recommendation.training.default" ||
-		got.Model.KnowledgeCatalogKey != "recommendation.knowledge.default" ||
-		got.Result.Status != recommendation.RecommendationResultReady ||
-		got.Result.KnowledgeMastery[1].KnowledgePointID != "graphs" || got.Result.LearningPath[1].KnowledgePointID != "graphs" ||
-		got.Result.SourceRating.String() != "1234.5" {
-		t.Fatalf("response = %#v", got)
-	}
-}
-
-func TestRecommendationReadRemainsAvailableWithWritesDisabled(t *testing.T) {
-	handler := newRecommendationTestHandler(t, false, recommendationReaderStub{read: func(context.Context, string) (recommendation.CurrentRecommendation, error) {
-		reason := "no_active_model"
-		return recommendation.CurrentRecommendation{
-			State: recommendation.RecommendationUnavailable, UnavailableReason: &reason,
-			CurrentAnalyticsHeadRevision: 0, RecommendationHeadRevision: 0,
+		return recommendation.ReviewContext{
+			AnalyticsGenerationID: 73, AnalyticsHeadRevision: 9,
+			InputManifestSHA256: strings.Repeat("a", 64),
+			Problems: []recommendation.ReviewProblemCandidate{{
+				ProblemKey: strings.Repeat("p", 74), SourceProblemKey: "pintia:1",
+				Platform: "pintia", ProblemID: "problem:1", ProblemFactSHA256: strings.Repeat("b", 64),
+				Title: "Array Practice", SourceProblemSets: testRecommendationSourceSets(),
+			}},
 		}, nil
-	}}, nil)
-	get := recommendationRequest(http.MethodGet, "/api/v2/students/me/recommendation", "")
-	get.Header.Set("Authorization", "Bearer student-access")
-	getResponse := newTestResponseRecorder()
-	handler.ServeHTTP(getResponse, get)
-	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"state":"unavailable"`) {
-		t.Fatalf("GET status = %d body = %s", getResponse.Code, getResponse.Body.String())
-	}
-
-	post := recommendationRequest(http.MethodPost, "/api/v2/admin/recommendation/training-runs", `{"trainingConfigurationKey":"recommendation.training.default"}`)
-	post.Header.Set("Authorization", "Bearer admin-access")
-	post.Header.Set("Content-Type", "application/json")
-	postResponse := newTestResponseRecorder()
-	handler.ServeHTTP(postResponse, post)
-	if postResponse.Code != http.StatusNotFound || !strings.Contains(postResponse.Body.String(), `"code":"route_not_found"`) {
-		t.Fatalf("POST status = %d body = %s", postResponse.Code, postResponse.Body.String())
-	}
-}
-
-func TestQueueRecommendationTrainingUsesCanonicalRequestAndStatus(t *testing.T) {
-	calls := 0
-	queue := recommendationQueueStub{queue: func(_ context.Context, token, key string, generationID, headRevision int64) (recommendation.QueueResult, error) {
-		calls++
-		if token != "admin-access" || key != "recommendation.training.default" || generationID != 73 || headRevision != 9 {
-			t.Fatalf("queue input = %q/%q/%d/%d", token, key, generationID, headRevision)
-		}
-		return testRecommendationQueueResult(calls == 1), nil
 	}}
-	handler := newRecommendationTestHandler(t, true, unusedRecommendationReader{}, queue)
-
-	for index, wantStatus := range []int{http.StatusAccepted, http.StatusOK} {
-		request := recommendationRequest(http.MethodPost, "/api/v2/admin/recommendation/training-runs", `{"trainingConfigurationKey":"recommendation.training.default","expectedAnalyticsGenerationId":"73","expectedAnalyticsHeadRevision":9}`)
-		request.Header.Set("Authorization", "Bearer admin-access")
-		request.Header.Set("Content-Type", "application/json")
-		response := newTestResponseRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != wantStatus {
-			t.Fatalf("request %d status = %d body = %s", index, response.Code, response.Body.String())
-		}
-		if !strings.Contains(response.Body.String(), `"trainingConfigurationKey":"recommendation.training.default"`) ||
-			!strings.Contains(response.Body.String(), `"sourceAnalyticsGenerationId":"73"`) ||
-			!strings.Contains(response.Body.String(), `"knowledgeCatalogVersionId":"52"`) {
-			t.Fatalf("response body = %s", response.Body.String())
-		}
-	}
-}
-
-func TestRecommendationTransportRejectsInvalidContractsAndMapsDomainErrors(t *testing.T) {
-	queueCalls := 0
-	handler := newRecommendationTestHandler(t, true, recommendationReaderStub{read: func(context.Context, string) (recommendation.CurrentRecommendation, error) {
-		return recommendation.CurrentRecommendation{}, &recommendation.Error{
-			Code: recommendation.ErrorPrincipalRejected, Permanent: true, Op: "read", Cause: errors.New("rejected"),
-		}
-	}}, recommendationQueueStub{queue: func(context.Context, string, string, int64, int64) (recommendation.QueueResult, error) {
-		queueCalls++
-		return recommendation.QueueResult{}, nil
-	}})
-
-	read := recommendationRequest(http.MethodGet, "/api/v2/students/me/recommendation", "")
-	read.Header.Set("Authorization", "Bearer student-access")
-	readResponse := newTestResponseRecorder()
-	handler.ServeHTTP(readResponse, read)
-	if readResponse.Code != http.StatusForbidden || !strings.Contains(readResponse.Body.String(), `"code":"auth_forbidden"`) {
-		t.Fatalf("read status = %d body = %s", readResponse.Code, readResponse.Body.String())
-	}
-
-	for _, body := range []string{
-		`{"trainingConfigurationKey":"recommendation.training.default","extra":true}`,
-		`{"trainingConfigurationKey":"recommendation.training.default"}{}`,
-	} {
-		request := recommendationRequest(http.MethodPost, "/api/v2/admin/recommendation/training-runs", body)
-		request.Header.Set("Authorization", "Bearer admin-access")
-		request.Header.Set("Content-Type", "application/json")
-		response := newTestResponseRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("body %q status = %d response = %s", body, response.Code, response.Body.String())
-		}
-	}
-	if queueCalls != 0 {
-		t.Fatalf("invalid payload reached queue %d times", queueCalls)
-	}
-}
-
-func TestRecommendationDependenciesMatchWriteCapability(t *testing.T) {
-	ready := health.Report{Status: health.StatusReady}
-	missingReader := testHandlerOptions(ready)
-	missingReader.RecommendationReader = nil
-	if _, err := New(missingReader); err == nil {
-		t.Fatal("New accepted a missing recommendation reader")
-	}
-
-	disabledWithQueue := testHandlerOptions(ready)
-	disabledWithQueue.Capabilities = testCapabilities(false)
-	disabledWithQueue.Artifacts = nil
-	disabledWithQueue.Imports = nil
-	if _, err := New(disabledWithQueue); err == nil {
-		t.Fatal("New accepted a recommendation queue while writes were disabled")
-	}
-
-	enabledWithoutQueue := testHandlerOptions(ready)
-	enabledWithoutQueue.RecommendationQueue = nil
-	if _, err := New(enabledWithoutQueue); err == nil {
-		t.Fatal("New accepted enabled writes without a recommendation queue")
-	}
-}
-
-func TestRecommendationReviewRunAndEventsAdminReads(t *testing.T) {
-	runID := "123e4567-e89b-42d3-a456-426614174041"
-	problemHash := strings.Repeat("a", 64)
-	admin := recommendationAdminReaderStub{
-		review: func(_ context.Context, token string) (recommendation.ReviewContext, error) {
-			if token != "admin-access" {
-				t.Fatalf("review token=%q", token)
-			}
-			return recommendation.ReviewContext{
-				AnalyticsGenerationID: 73, AnalyticsHeadRevision: 9, InputManifestSHA256: strings.Repeat("b", 64),
-				Problems: []recommendation.ReviewProblemCandidate{{
-					ProblemKey: "pintia:501:" + problemHash, SourceProblemKey: "pintia:501", Platform: "pintia",
-					ProblemID: "501", ProblemFactSHA256: problemHash, Title: "Problem A",
-					SourceProblemSets: []recommendation.TrainingSourceProblemSet{{ProblemSetID: "1001", SourceURL: "https://pintia.cn/problem-sets/1001"}},
-				}},
-			}, nil
-		},
-		run: func(_ context.Context, token, gotRunID string) (recommendation.TrainingRunDetail, bool, error) {
-			if token != "admin-access" || gotRunID != runID {
-				t.Fatalf("run input=%q/%q", token, gotRunID)
-			}
-			run := testRecommendationQueueResult(true).Run
-			run.DatabaseID = 1
-			return recommendation.TrainingRunDetail{Run: run, TrainingConfigurationKey: "recommendation.training.default"}, true, nil
-		},
-		events: func(_ context.Context, token, gotRunID string, after int64, limit int) (recommendation.TrainingEventPage, bool, error) {
-			if token != "admin-access" || gotRunID != runID || after != 1 || limit != 10 {
-				t.Fatalf("events input=%q/%q/%d/%d", token, gotRunID, after, limit)
-			}
-			return recommendation.TrainingEventPage{RunID: runID, Items: []recommendation.TrainingEvent{{
-				Sequence: 2, Type: "claimed", Payload: json.RawMessage(`{"attemptCount":1,"leaseOwner":"trainer-1"}`),
-				CreatedAt: time.Date(2026, 7, 11, 2, 4, 0, 0, time.UTC),
-			}}}, true, nil
-		},
-	}
-	options := testHandlerOptions(health.Report{Status: health.StatusReady})
-	options.RecommendationAdminReader = admin
-	handler, err := New(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{
-		"/api/v2/admin/recommendation/review-context",
-		"/api/v2/admin/recommendation/training-runs/" + runID,
-		"/api/v2/admin/recommendation/training-runs/" + runID + "/events?afterSequence=1&limit=10",
-	} {
-		request := recommendationRequest(http.MethodGet, path, "")
-		request.Header.Set("Authorization", "Bearer admin-access")
-		response := newTestResponseRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s status=%d body=%s", path, response.Code, response.Body.String())
-		}
-	}
-}
-
-func TestRecommendationAdminReadRejectsInvalidResultWith500(t *testing.T) {
-	options := testHandlerOptions(health.Report{Status: health.StatusReady})
-	options.RecommendationAdminReader = recommendationAdminReaderStub{
-		review: func(context.Context, string) (recommendation.ReviewContext, error) {
-			return recommendation.ReviewContext{AnalyticsGenerationID: 1, AnalyticsHeadRevision: 1}, nil
-		},
-		run: func(context.Context, string, string) (recommendation.TrainingRunDetail, bool, error) {
-			panic("unexpected")
-		},
-		events: func(context.Context, string, string, int64, int) (recommendation.TrainingEventPage, bool, error) {
-			panic("unexpected")
-		},
-	}
-	handler, err := New(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := recommendationRequest(http.MethodGet, "/api/v2/admin/recommendation/review-context", "")
-	request.Header.Set("Authorization", "Bearer admin-access")
+	handler := newRecommendationHandler(t, unusedRecommendationReader{}, admin)
 	response := newTestResponseRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"code":"internal_error"`) {
+	handler.ServeHTTP(response, recommendationRequest(http.MethodGet, "/api/v2/admin/recommendation/review-context"))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"analyticsGenerationId":"73"`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
-func TestParseRecommendationEventQueryRejectsNonCanonicalForms(t *testing.T) {
-	if after, limit, err := parseRecommendationEventQuery("", false); err != nil || after != 0 || limit != 50 {
-		t.Fatalf("defaults=%d/%d error=%v", after, limit, err)
-	}
-	if after, limit, err := parseRecommendationEventQuery("afterSequence=0&limit=100", false); err != nil || after != 0 || limit != 100 {
-		t.Fatalf("canonical=%d/%d error=%v", after, limit, err)
-	}
-	for _, input := range []struct {
-		raw   string
-		force bool
+func TestRecommendationHTTPMapsOwnedAndCanceledErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want int
 	}{
-		{"", true}, {"afterSequence=", false}, {"afterSequence=1&afterSequence=2", false},
-		{"after%53equence=1", false}, {"afterSequence=+1", false}, {"unknown=1", false},
-		{"afterSequence=-1", false}, {"afterSequence=01", false}, {"limit=0", false}, {"limit=101", false},
-	} {
-		if _, _, err := parseRecommendationEventQuery(input.raw, input.force); err == nil {
-			t.Fatalf("query raw=%q force=%t accepted", input.raw, input.force)
+		{name: "principal", err: &recommendation.Error{Code: recommendation.ErrorPrincipalRejected, Permanent: true, Op: "read", Cause: errors.New("rejected")}, want: http.StatusForbidden},
+		{name: "model inactive", err: &recommendation.Error{Code: recommendation.ErrorModelInactive, Permanent: true, Op: "read", Cause: errors.New("inactive")}, want: http.StatusServiceUnavailable},
+		{name: "analytics", err: &recommendation.Error{Code: recommendation.ErrorAnalyticsUnavailable, Permanent: true, Op: "read", Cause: errors.New("missing")}, want: http.StatusConflict},
+		{name: "canceled", err: &recommendation.Error{Code: recommendation.ErrorCanceled, Op: "read", Cause: context.Canceled}, want: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			handler := newRecommendationHandler(t, recommendationReaderStub{read: func(context.Context, string) (recommendation.CurrentRecommendation, error) {
+				return recommendation.CurrentRecommendation{}, test.err
+			}}, unusedRecommendationAdminReader{})
+			response := newTestResponseRecorder()
+			handler.ServeHTTP(response, recommendationRequest(http.MethodGet, "/api/v2/students/me/recommendation"))
+			if response.Code != test.want {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestRecommendationHTTPUsesAuthoritativePintiaIdentityContract(t *testing.T) {
+	t.Parallel()
+
+	problem := recommendation.ReviewProblemCandidate{
+		ProblemKey: strings.Repeat("p", 74), SourceProblemKey: "pintia:9:problem:1",
+		Platform: "pintia", ProblemID: "problem:1", ProblemFactSHA256: strings.Repeat("b", 64),
+		Title: "Array Practice", SourceProblemSets: testRecommendationSourceSets(),
+	}
+	if !validReviewProblem(problem) {
+		t.Fatal("authoritative Pintia identities were rejected")
+	}
+	for _, invalid := range []string{":problem", "problem/1", "problem 1", "题目1"} {
+		candidate := problem
+		candidate.ProblemID = invalid
+		if validReviewProblem(candidate) {
+			t.Fatalf("invalid Pintia problem ID %q was accepted", invalid)
 		}
 	}
 }
 
-func TestRecommendationQueueReturnsStructuredHeadConflictAndPreflight(t *testing.T) {
-	cases := []struct {
-		err        error
-		status     int
-		code       string
-		detailNeed string
-	}{
-		{
-			err: &recommendation.Error{Code: recommendation.ErrorStateConflict, Op: "queue", Cause: &recommendation.AnalyticsHeadConflict{
-				ExpectedGenerationID: 73, ExpectedHeadRevision: 9, CurrentGenerationID: 74, CurrentHeadRevision: 10,
-			}},
-			status: http.StatusConflict, code: "recommendation_analytics_head_conflict", detailNeed: `"currentAnalyticsGenerationId":"74"`,
-		},
-		{
-			err: &recommendation.Error{Code: recommendation.ErrorPreflightFailed, Permanent: true, Op: "preflight", Cause: &recommendation.PreflightFailure{
-				IssueCode: "knowledge_catalog_assignment_missing", ProblemKeys: []string{"pintia:501:" + strings.Repeat("a", 64)},
-			}},
-			status: http.StatusUnprocessableEntity, code: "recommendation_preflight_failed", detailNeed: `"issueCode":"knowledge_catalog_assignment_missing"`,
-		},
-	}
-	for _, testCase := range cases {
-		handler := newRecommendationTestHandler(t, true, unusedRecommendationReader{}, recommendationQueueStub{queue: func(context.Context, string, string, int64, int64) (recommendation.QueueResult, error) {
-			return recommendation.QueueResult{}, testCase.err
-		}})
-		request := recommendationRequest(http.MethodPost, "/api/v2/admin/recommendation/training-runs", `{"trainingConfigurationKey":"recommendation.training.default","expectedAnalyticsGenerationId":"73","expectedAnalyticsHeadRevision":9}`)
-		request.Header.Set("Authorization", "Bearer admin-access")
-		request.Header.Set("Content-Type", "application/json")
-		response := newTestResponseRecorder()
-		handler.ServeHTTP(response, request)
-		if response.Code != testCase.status || !strings.Contains(response.Body.String(), `"code":"`+testCase.code+`"`) || !strings.Contains(response.Body.String(), testCase.detailNeed) {
-			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-		}
-	}
-}
-
-func newRecommendationTestHandler(
-	t *testing.T,
-	writes bool,
-	reader RecommendationReader,
-	queue RecommendationQueue,
-) http.Handler {
+func newRecommendationHandler(t *testing.T, reader RecommendationReader, admin RecommendationAdminReader) http.Handler {
 	t.Helper()
 	options := testHandlerOptions(health.Report{Status: health.StatusReady})
 	options.RecommendationReader = reader
-	options.RecommendationQueue = queue
-	options.Capabilities = testCapabilities(writes)
-	if !writes {
-		options.Artifacts = nil
-		options.Imports = nil
-		options.ModelProbe = nil
-	}
+	options.RecommendationAdminReader = admin
 	handler, err := New(options)
 	if err != nil {
 		t.Fatal(err)
@@ -354,99 +209,80 @@ func newRecommendationTestHandler(
 	return handler
 }
 
-func recommendationRequest(method, path, body string) *http.Request {
-	request := httptest.NewRequest(method, path, strings.NewReader(body))
-	request.RemoteAddr = "192.0.2.1:44000"
-	request.Header.Set("Origin", "https://ascendany.example")
+func recommendationRequest(method, path string) *http.Request {
+	request := httptest.NewRequest(method, path, nil)
+	request.Header.Set("Authorization", "Bearer student-access")
+	request.RemoteAddr = "192.0.2.10:43210"
 	return request
 }
 
-func testFreshRecommendation() recommendation.CurrentRecommendation {
-	currentGenerationID := "73"
+func testFreshRecommendation(status recommendation.RecommendationResultStatus) recommendation.CurrentRecommendation {
+	generationID := "73"
+	model := testRecommendationModel()
+	result := testRecommendationResult(status)
 	return recommendation.CurrentRecommendation{
-		State:                        recommendation.RecommendationFresh,
-		CurrentAnalyticsGenerationID: &currentGenerationID,
-		CurrentAnalyticsHeadRevision: 9,
-		RecommendationHeadRevision:   4,
-		Model: &recommendation.ModelProvenance{
-			ModelID:               "123e4567-e89b-42d3-a456-426614174031",
-			TrainingRunID:         "123e4567-e89b-42d3-a456-426614174032",
-			AnalyticsGenerationID: "73", AnalyticsHeadRevision: 9,
-			InputManifestSHA256:            strings.Repeat("a", 64),
-			TrainingConfigurationVersionID: "41",
-			TrainingConfigurationKey:       "recommendation.training.default",
-			TrainingConfigurationVersion:   3,
-			TrainingConfigurationSchema:    "ascendany.training.recommendation.v2",
-			TrainingConfigurationSHA256:    strings.Repeat("b", 64),
-			KnowledgeCatalogVersionID:      "52",
-			KnowledgeCatalogKey:            "recommendation.knowledge.default",
-			KnowledgeCatalogVersion:        2,
-			KnowledgeCatalogSchema:         "ascendany.knowledge_catalog.recommendation.v1",
-			KnowledgeCatalogSHA256:         strings.Repeat("f", 64),
-			OutputArtifactSHA256:           strings.Repeat("c", 64),
-			ModelSchema:                    recommendation.ModelSchemaV2,
-			ModelManifest:                  json.RawMessage(`{"algorithm":"deterministic-rating-v1"}`),
-			ModelManifestSHA256:            strings.Repeat("d", 64),
-			Metrics:                        json.RawMessage(`{"studentCount":2}`),
-			CreatedAt:                      time.Date(2026, 7, 11, 1, 2, 3, 0, time.UTC),
-		},
-		Result: testRecommendationResultV2(),
+		State: recommendation.RecommendationFresh, CurrentAnalyticsGenerationID: &generationID,
+		CurrentAnalyticsHeadRevision: 9, ModelHeadRevision: 4, Model: &model, Result: &result,
 	}
 }
 
-func testRecommendationQueueResult(created bool) recommendation.QueueResult {
-	return recommendation.QueueResult{Created: created, Run: recommendation.TrainingRun{
-		ID:                          "123e4567-e89b-42d3-a456-426614174041",
-		SourceAnalyticsGenerationID: 73, SourceAnalyticsHeadRevision: 9,
-		InputArtifact:                  artifact.Artifact{Hash: strings.Repeat("a", 64), Size: 1024},
-		TrainingConfigurationVersionID: 41,
-		KnowledgeCatalogVersionID:      52,
-		BundleProtocol:                 recommendation.TrainingBundleProtocolV2,
-		InputManifestSHA256:            strings.Repeat("b", 64),
-		Status:                         recommendation.RunQueued, AttemptCount: 0,
-		CreatedAt: time.Date(2026, 7, 11, 2, 3, 4, 0, time.UTC),
+func testRecommendationModel() recommendation.ModelProvenance {
+	return recommendation.ModelProvenance{
+		ModelID: "123e4567-e89b-42d3-a456-426614174040", Purpose: "acceptance_test",
+		ArtifactSHA256: strings.Repeat("1", 64), ArtifactSizeBytes: 4096, ArtifactMode: 0o644,
+		ModelSchema: "ascendany.recommendation.inference-model.v1", Algorithm: "knowledge_mirt_feature_v1",
+		InferenceContract: "ascendany.recommendation.inference.v1", TrainedAt: "2026-07-13T00:00:00Z",
+		TrainingProvenanceSHA256: strings.Repeat("2", 64), FeatureSchemaSHA256: strings.Repeat("3", 64),
+		KnowledgeCatalogSHA256: strings.Repeat("4", 64), ParameterSHA256: strings.Repeat("5", 64),
+		GoldenVectorsSHA256: strings.Repeat("6", 64), ModelHeadRevision: 4,
+		ApplicationVersion: "2.0.0", ApplicationCommit: strings.Repeat("a", 40),
+		ApplicationBuildTime: "2026-07-13T00:05:00Z",
+	}
+}
+
+func testRecommendationResult(status recommendation.RecommendationResultStatus) recommendation.StudentRecommendationInferenceResult {
+	result := recommendation.StudentRecommendationInferenceResult{
+		Schema: recommendation.ResultSchemaV1, SHA256: strings.Repeat("f", 64), Status: status,
+		SourceRating: 1500, Evidence: recommendation.RecommendationInferenceEvidence{
+			ObservationCount: 8, DistinctProblemCount: 4, PassedProblemCount: 2,
+		},
+		KnowledgeMastery: []recommendation.RecommendationKnowledgeMastery{
+			{KnowledgePointID: "arrays", Label: "Arrays", Description: "", PrerequisiteIDs: []string{}, Mastery: 0.45, ObservationCount: 4},
+			{KnowledgePointID: "graphs", Label: "Graphs", Description: "Graph traversal", PrerequisiteIDs: []string{"arrays"}, Mastery: 0.25, ObservationCount: 4},
+		},
+	}
+	if status == recommendation.RecommendationResultInsufficient {
+		result.Insufficiency = &recommendation.RecommendationInsufficiency{
+			ReasonCode: "path_below_minimum", MinimumPathSteps: 2, CandidatePathSteps: 1,
+			ProblemsPerStep: 2, EligibleProblemCount: 1, BlockedKnowledgePointIDs: []string{"graphs"},
+		}
+		return result
+	}
+	result.LearningPath = []recommendation.RecommendationLearningPathStep{
+		testRecommendationStep(1, "arrays", "knowledge_gap"),
+		testRecommendationStep(2, "graphs", "prerequisite"),
+	}
+	return result
+}
+
+func testRecommendationStep(order int64, knowledgeID, reason string) recommendation.RecommendationLearningPathStep {
+	return recommendation.RecommendationLearningPathStep{
+		Order: order, KnowledgePointID: knowledgeID, Label: strings.ToUpper(knowledgeID[:1]) + knowledgeID[1:],
+		Description: "", PrerequisiteIDs: []string{}, Mastery: 0.25, TargetMastery: 0.75,
+		ReasonCode: reason, RecommendedProblems: []recommendation.RecommendationProblem{{
+			ProblemKey: "pintia:problem:" + knowledgeID, SourceProblemKey: "pintia:" + knowledgeID,
+			Platform: "pintia", ProblemID: knowledgeID, Title: "Practice " + knowledgeID,
+			SourceProblemSets: testRecommendationSourceSets(), PredictedSuccessProbability: 0.6,
+			RecommendationScore: 0.7, RankingEvidence: recommendation.RecommendationRankingEvidence{
+				KnowledgeGap: 0.5, SuccessDistance: 0.1, StepKnowledgeWeight: 1,
+			},
+		}},
+	}
+}
+
+func testRecommendationSourceSets() []recommendation.RecommendationSourceSet {
+	return []recommendation.RecommendationSourceSet{{
+		ProblemSetID: "set:2039341868571590656",
+		SourceURL:    "https://pintia.cn/problem-sets/set:2039341868571590656",
 	}}
-}
-
-func testRecommendationResultV2() *recommendation.StudentRecommendationResultV2 {
-	mastery := []recommendation.RecommendationKnowledgeMasteryV2{
-		{KnowledgePointID: "arrays", Label: "Arrays", Description: "Array fundamentals", PrerequisiteIDs: []string{}, Mastery: "0.45", TrainInteractionCount: 3},
-		{KnowledgePointID: "graphs", Label: "Graphs", Description: "Graph traversal", PrerequisiteIDs: []string{"arrays"}, Mastery: "0.3", TrainInteractionCount: 3},
-	}
-	path := []recommendation.RecommendationLearningPathStepV2{
-		{
-			Order: 1, KnowledgePointID: "arrays", Label: "Arrays", Description: "Array fundamentals", PrerequisiteIDs: []string{},
-			Mastery: "0.45", TargetMastery: "0.8", ReasonCode: "prerequisite",
-			RecommendedProblems: []recommendation.RecommendationProblemV2{{
-				ProblemKey: "pintia:501:" + strings.Repeat("1", 64), SourceProblemKey: "pintia:501", Platform: "pintia",
-				ProblemID: "501", Title: "Array Practice", SourceProblemSets: []recommendation.TrainingSourceProblemSet{{ProblemSetID: "1001", SourceURL: "https://pintia.cn/problem-sets/1001"}},
-				PredictedSuccessProbability: "0.65", RecommendationScore: "0.2",
-				RankingEvidence: recommendation.RecommendationRankingEvidenceV2{KnowledgeGap: "0.35", SuccessDistance: "0.05", StepKnowledgeWeight: "1"},
-			}},
-		},
-		{
-			Order: 2, KnowledgePointID: "graphs", Label: "Graphs", Description: "Graph traversal", PrerequisiteIDs: []string{"arrays"},
-			Mastery: "0.3", TargetMastery: "0.8", ReasonCode: "knowledge_gap",
-			RecommendedProblems: []recommendation.RecommendationProblemV2{{
-				ProblemKey: "pintia:502:" + strings.Repeat("2", 64), SourceProblemKey: "pintia:502", Platform: "pintia",
-				ProblemID: "502", Title: "Graph Practice", SourceProblemSets: []recommendation.TrainingSourceProblemSet{{ProblemSetID: "1001", SourceURL: "https://pintia.cn/problem-sets/1001"}},
-				PredictedSuccessProbability: "0.6", RecommendationScore: "0.3",
-				RankingEvidence: recommendation.RecommendationRankingEvidenceV2{KnowledgeGap: "0.5", SuccessDistance: "0.1", StepKnowledgeWeight: "1"},
-			}},
-		},
-	}
-	evidence := recommendation.RecommendationEvidenceV2{TrainInteractionCount: 6, ValidationInteractionCount: 2, DistinctProblemCount: 4, PassedProblemCount: 1}
-	body := map[string]any{"status": "ready", "sourceRating": json.Number("1234.5"), "evidence": evidence, "knowledgeMastery": mastery, "learningPath": path}
-	raw, err := json.Marshal(body)
-	if err != nil {
-		panic(err)
-	}
-	_, digest, err := canonicaljson.Object(raw, 1<<20)
-	if err != nil {
-		panic(err)
-	}
-	return &recommendation.StudentRecommendationResultV2{
-		Schema: recommendation.ResultSchemaV2, SHA256: digest, Status: recommendation.RecommendationResultReady,
-		SourceRating: "1234.5", Evidence: evidence, KnowledgeMastery: mastery, LearningPath: path,
-	}
 }

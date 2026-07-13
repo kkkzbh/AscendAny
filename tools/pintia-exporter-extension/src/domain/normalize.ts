@@ -481,6 +481,8 @@ export async function buildSnapshot(
     sourceUrl.port !== "" ||
     sourceUrl.username !== "" ||
     sourceUrl.password !== "" ||
+    source.sourceUrl.includes("?") ||
+    source.sourceUrl.includes("#") ||
     sourceProblemSetId !== problemSetId
   ) {
     throw new Error("exam.sourceUrl must identify the exported Pintia problem set.");

@@ -23,7 +23,6 @@ readonly RESET_CONFIRMATION="drop-disposable-ascendany-v2-backup-restore"
 readonly DEFAULT_POSTGRES_IMAGE="docker.io/library/postgres@sha256:030da09481c3876b71a7e49738a932e1c18c398201a1e4ccfdbff1e5a541215b"
 readonly LABEL_KEY="io.ascendany.v2-backup-restore-rehearsal"
 readonly SOURCE_DATABASE="ascendany_v2"
-readonly SOURCE_HOLD_DATABASE="ascendany_v2_rehearsal_source"
 readonly SCRATCH_DATABASE="ascendany_v2_restore_verify"
 readonly DATABASE_OWNER="ascendany_database_owner"
 readonly SCHEMA_OWNER="ascendany_owner"
@@ -38,6 +37,8 @@ usage() {
 Usage:
   tools/run-v2-backup-restore-podman-rehearsal.sh \
     --confirm-reset drop-disposable-ascendany-v2-backup-restore \
+    --recommendation-model /absolute/path/to/recommendation-model.json \
+    --recommendation-model-sha256 64_lowercase_hex \
     [--snapshot /absolute/path/to/ascendany-pintia-snapshot-v2.json]
 
 The default input is the committed sanitized Pintia v2 fixture. --snapshot can
@@ -64,6 +65,8 @@ fail() {
 
 CONFIRMATION=""
 SNAPSHOT_PATH=""
+RECOMMENDATION_MODEL_PATH=""
+RECOMMENDATION_MODEL_SHA256=""
 while (($# > 0)); do
   case "$1" in
     --confirm-reset)
@@ -75,6 +78,18 @@ while (($# > 0)); do
       (($# >= 2)) || fail '--snapshot requires a value'
       [[ -z "${SNAPSHOT_PATH}" ]] || fail '--snapshot may be specified only once'
       SNAPSHOT_PATH="$2"
+      shift 2
+      ;;
+    --recommendation-model)
+      (($# >= 2)) || fail '--recommendation-model requires a value'
+      [[ -z "${RECOMMENDATION_MODEL_PATH}" ]] || fail '--recommendation-model may be specified only once'
+      RECOMMENDATION_MODEL_PATH="$2"
+      shift 2
+      ;;
+    --recommendation-model-sha256)
+      (($# >= 2)) || fail '--recommendation-model-sha256 requires a value'
+      [[ -z "${RECOMMENDATION_MODEL_SHA256}" ]] || fail '--recommendation-model-sha256 may be specified only once'
+      RECOMMENDATION_MODEL_SHA256="$2"
       shift 2
       ;;
     --help|-h)
@@ -91,11 +106,18 @@ done
   fail "--confirm-reset must equal ${RESET_CONFIRMATION}"
 ((EUID != 0)) || fail 'the backup/restore rehearsal must run as a rootless user'
 [[ -n "${SNAPSHOT_PATH}" ]] || SNAPSHOT_PATH="${DEFAULT_SNAPSHOT_PATH}"
+[[ -n "${RECOMMENDATION_MODEL_PATH}" ]] || fail '--recommendation-model is required'
+[[ "${RECOMMENDATION_MODEL_SHA256}" =~ ^[0-9a-f]{64}$ ]] ||
+  fail '--recommendation-model-sha256 must be 64 lowercase hexadecimal characters'
 [[ "${SNAPSHOT_PATH}" == /* && ! "${SNAPSHOT_PATH}" =~ [[:cntrl:]] ]] ||
   fail '--snapshot must be one absolute path without control characters'
 [[ -f "${SNAPSHOT_PATH}" && ! -L "${SNAPSHOT_PATH}" ]] ||
   fail "the Pintia snapshot must be a regular non-symlink file: ${SNAPSHOT_PATH}"
 [[ -r "${SNAPSHOT_PATH}" ]] || fail 'the Pintia snapshot is not readable'
+[[ "${RECOMMENDATION_MODEL_PATH}" == /* && ! "${RECOMMENDATION_MODEL_PATH}" =~ [[:cntrl:]] ]] ||
+  fail '--recommendation-model must be one absolute path without control characters'
+[[ -f "${RECOMMENDATION_MODEL_PATH}" && ! -L "${RECOMMENDATION_MODEL_PATH}" && -r "${RECOMMENDATION_MODEL_PATH}" ]] ||
+  fail '--recommendation-model must identify one readable regular non-symlink file'
 [[ -f "${ROLE_BOOTSTRAP}" && -f "${ROLE_VERIFIER}" && -f "${PINTIA_SCHEMA}" ]] ||
   fail 'database role bootstrap, verifier, or Pintia schema is unavailable'
 
@@ -120,6 +142,12 @@ readonly PRIVATE_RUNTIME_ROOT="$(realpath -e -- "${XDG_RUNTIME_DIR}")"
 
 [[ "$(realpath -e -- "${SNAPSHOT_PATH}")" == "${SNAPSHOT_PATH}" ]] ||
   fail '--snapshot must already be canonical and have no symlink ancestry'
+[[ "$(realpath -e -- "${RECOMMENDATION_MODEL_PATH}")" == "${RECOMMENDATION_MODEL_PATH}" ]] ||
+  fail '--recommendation-model must already be canonical and have no symlink ancestry'
+[[ "$(stat -Lc '%a:%h' -- "${RECOMMENDATION_MODEL_PATH}")" == "644:1" ]] ||
+  fail '--recommendation-model must be one mode-0644 regular file with one hard link'
+[[ "$(sha256sum -- "${RECOMMENDATION_MODEL_PATH}" | awk '{print $1}')" == "${RECOMMENDATION_MODEL_SHA256}" ]] ||
+  fail 'recommendation model bytes differ from --recommendation-model-sha256'
 readonly SNAPSHOT_OWNER="$(stat -Lc '%u' -- "${SNAPSHOT_PATH}")"
 readonly SNAPSHOT_MODE_TEXT="$(stat -Lc '%a' -- "${SNAPSHOT_PATH}")"
 readonly SNAPSHOT_MODE="$((8#${SNAPSHOT_MODE_TEXT}))"
@@ -155,6 +183,7 @@ WORK_ROOT=""
 ADMIN_PASSWORD_FILE=""
 ADMIN_PGPASS_FILE=""
 RUNTIME_PASSWORD_FILE=""
+RUNTIME_PGPASS_FILE=""
 MIGRATOR_PASSWORD_FILE=""
 BACKUP_PASSWORD_FILE=""
 RESTORE_PASSWORD_FILE=""
@@ -192,7 +221,7 @@ cleanup() {
   local credential_path
   for credential_path in \
     "${OPERATOR_PGPASS_FILE}" "${ADMIN_PASSWORD_FILE}" "${ADMIN_PGPASS_FILE}" \
-    "${RUNTIME_PASSWORD_FILE}" "${MIGRATOR_PASSWORD_FILE}" "${BACKUP_PASSWORD_FILE}" \
+    "${RUNTIME_PASSWORD_FILE}" "${RUNTIME_PGPASS_FILE}" "${MIGRATOR_PASSWORD_FILE}" "${BACKUP_PASSWORD_FILE}" \
     "${RESTORE_PASSWORD_FILE}" "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}"; do
     if [[ -n "${credential_path}" ]]; then
       rm -f -- "${credential_path}"
@@ -306,11 +335,13 @@ readonly PINTIA_VALIDATOR_BINARY="${BIN_DIR}/ascendany-pintia-validate"
 readonly ADMIN_PASSWORD_FILE="${CREDENTIAL_DIR}/postgres-password"
 readonly ADMIN_PGPASS_FILE="${CREDENTIAL_DIR}/postgres.pgpass"
 readonly RUNTIME_PASSWORD_FILE="${CREDENTIAL_DIR}/runtime-password"
+readonly RUNTIME_PGPASS_FILE="${CREDENTIAL_DIR}/runtime.pgpass"
 readonly MIGRATOR_PASSWORD_FILE="${CREDENTIAL_DIR}/migrator-password"
 readonly BACKUP_PASSWORD_FILE="${CREDENTIAL_DIR}/backup-password"
 readonly RESTORE_PASSWORD_FILE="${CREDENTIAL_DIR}/restore-password"
 readonly PASSWORD_PEPPER_FILE="${CREDENTIAL_DIR}/password-pepper"
-readonly BOOTSTRAP_ADMIN_PASSWORD_FILE="${CREDENTIAL_DIR}/bootstrap-admin-password"
+readonly ADMIN_BOOTSTRAP_CREDENTIAL_DIR="${CREDENTIAL_DIR}/admin-bootstrap"
+readonly BOOTSTRAP_ADMIN_PASSWORD_FILE="${ADMIN_BOOTSTRAP_CREDENTIAL_DIR}/admin_password"
 readonly OPERATOR_PGPASS_FILE="${OPERATOR_RUNTIME_ROOT}/operator.pgpass"
 readonly BEFORE_CONTAINERS="${WORK_ROOT}/containers.before"
 readonly BEFORE_PODS="${WORK_ROOT}/pods.before"
@@ -325,6 +356,7 @@ readonly ADMIN_BOOTSTRAP_SECOND_RESULT="${LOG_DIR}/admin-bootstrap-second.json"
 readonly ADMIN_BOOTSTRAP_SECOND_ERROR="${LOG_DIR}/admin-bootstrap-second.error"
 
 mkdir -m 0700 -- "${BIN_DIR}" "${LOG_DIR}" "${CREDENTIAL_DIR}" \
+  "${ADMIN_BOOTSTRAP_CREDENTIAL_DIR}" \
   "${RESTORE_PARENT}" "${RUNTIME_PARENT}" "${BACKUP_RUNTIME_ROOT}" \
   "${OPERATOR_RUNTIME_ROOT}"
 install -d -m 0750 -- \
@@ -378,9 +410,10 @@ printf '%s' "${RESTORE_PASSWORD}" >"${RESTORE_PASSWORD_FILE}"
 printf '%s' "${PASSWORD_PEPPER}" >"${PASSWORD_PEPPER_FILE}"
 printf '%s' "${BOOTSTRAP_ADMIN_PASSWORD}" >"${BOOTSTRAP_ADMIN_PASSWORD_FILE}"
 printf '%s:5432:*:postgres:%s\n' "${DIRECT_HOST}" "${POSTGRES_ADMIN_PASSWORD}" >"${ADMIN_PGPASS_FILE}"
+printf '%s:5432:%s:%s:%s\n' "${DIRECT_HOST}" "${SOURCE_DATABASE}" "${RUNTIME_LOGIN}" "${RUNTIME_PASSWORD}" >"${RUNTIME_PGPASS_FILE}"
 printf '%s:5432:*:%s:%s\n' "${DIRECT_HOST}" "${RESTORE_LOGIN}" "${RESTORE_PASSWORD}" >"${OPERATOR_PGPASS_FILE}"
 chmod 0600 -- "${ADMIN_PASSWORD_FILE}" "${ADMIN_PGPASS_FILE}" \
-  "${RUNTIME_PASSWORD_FILE}" "${MIGRATOR_PASSWORD_FILE}" \
+  "${RUNTIME_PASSWORD_FILE}" "${RUNTIME_PGPASS_FILE}" "${MIGRATOR_PASSWORD_FILE}" \
   "${BACKUP_PASSWORD_FILE}" "${RESTORE_PASSWORD_FILE}" \
   "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}" \
   "${OPERATOR_PGPASS_FILE}"
@@ -520,83 +553,13 @@ FROM database_boundary")"
 }
 
 assert_restored_full_role_contract() {
-  # verify_v2_roles.sql deliberately owns one production database name and
-  # database-level boundary. Temporarily swap the two disposable database
-  # names and normalize only the restored database's database-level ACL so the
-  # authoritative verifier can inspect every restored schema object and ACL.
-  admin_psql postgres \
-    --set=source_database="${SOURCE_DATABASE}" \
-    --set=source_hold_database="${SOURCE_HOLD_DATABASE}" \
-    --set=scratch_database="${SCRATCH_DATABASE}" \
-    --set=database_owner="${DATABASE_OWNER}" \
-    --set=runtime_login="${RUNTIME_LOGIN}" \
-    --set=migrator_login="${MIGRATOR_LOGIN}" \
-    --set=backup_login="${BACKUP_LOGIN}" >/dev/null <<'SQL'
-SELECT format('ALTER DATABASE %I RENAME TO %I', :'source_database', :'source_hold_database')
-\gexec
-SELECT format('ALTER DATABASE %I RENAME TO %I', :'scratch_database', :'source_database')
-\gexec
-SELECT format('ALTER DATABASE %I OWNER TO %I', :'source_database', :'database_owner')
-\gexec
-
-SELECT format(
-    'REVOKE ALL PRIVILEGES ON DATABASE %I FROM %s',
-    :'source_database',
-    CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END
-)
-FROM pg_database AS database
-CROSS JOIN LATERAL aclexplode(database.datacl) AS acl
-LEFT JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-WHERE database.datname = :'source_database'
-\gexec
-SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM PUBLIC', :'source_database')
-\gexec
-SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'source_database', :'database_owner')
-\gexec
-SELECT format(
-    'GRANT CONNECT ON DATABASE %I TO %I, %I, %I',
-    :'source_database', :'runtime_login', :'migrator_login', :'backup_login'
-)
-\gexec
-SQL
-
-  admin_psql "${SOURCE_DATABASE}" --file="${ROLE_VERIFIER}" >/dev/null
-
-  # Restore the original names and the exact scratch database boundary. This
-  # touches no restored schema object, object ACL, or default ACL.
-  admin_psql postgres \
-    --set=source_database="${SOURCE_DATABASE}" \
-    --set=source_hold_database="${SOURCE_HOLD_DATABASE}" \
-    --set=scratch_database="${SCRATCH_DATABASE}" \
-    --set=schema_owner="${SCHEMA_OWNER}" \
-    --set=restore_login="${RESTORE_LOGIN}" >/dev/null <<'SQL'
-SELECT format('ALTER DATABASE %I RENAME TO %I', :'source_database', :'scratch_database')
-\gexec
-SELECT format('ALTER DATABASE %I RENAME TO %I', :'source_hold_database', :'source_database')
-\gexec
-SELECT format('ALTER DATABASE %I OWNER TO %I', :'scratch_database', :'schema_owner')
-\gexec
-
-SELECT format(
-    'REVOKE ALL PRIVILEGES ON DATABASE %I FROM %s',
-    :'scratch_database',
-    CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE format('%I', grantee.rolname) END
-)
-FROM pg_database AS database
-CROSS JOIN LATERAL aclexplode(database.datacl) AS acl
-LEFT JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-WHERE database.datname = :'scratch_database'
-\gexec
-SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM PUBLIC', :'scratch_database')
-\gexec
-SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'scratch_database', :'schema_owner')
-\gexec
-SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'scratch_database', :'restore_login')
-\gexec
-SELECT format('ALTER DATABASE %I WITH ALLOW_CONNECTIONS true', :'scratch_database')
-\gexec
-SQL
-
+  # Exercise the same restore login and explicit owner role used by the Go
+  # restore gate. The closed restore profile validates the scratch database in
+  # place, so this assertion never mutates database identity or ACLs.
+  owner_operator_psql \
+    --dbname="${SCRATCH_DATABASE}" \
+    --set=ascendany_verification_profile=restore \
+    --file="${ROLE_VERIFIER}" >/dev/null
   assert_scratch_contract
 }
 
@@ -679,7 +642,7 @@ if ! /usr/bin/env -i \
     ASCENDANY_DATABASE_ROLE="${SCHEMA_OWNER}" \
     ASCENDANY_DATABASE_SCHEMA=ascendany \
     ASCENDANY_MIGRATION_HISTORY_TABLE=ascendany.schema_migrations_v2 \
-    ASCENDANY_DATABASE_SCHEMA_VERSION=5 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=6 \
     ASCENDANY_MIGRATION_LOCK_TIMEOUT=30s \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
     "${MIGRATOR_BINARY}" up >/dev/null 2>"${LOG_DIR}/migrate.json"; then
@@ -692,6 +655,42 @@ fi
 admin_psql "${SOURCE_DATABASE}" --file="${ROLE_BOOTSTRAP}" >/dev/null
 admin_psql "${SOURCE_DATABASE}" --file="${ROLE_VERIFIER}" >/dev/null
 
+printf 'Binding the verified inference model through the production model release repository\n'
+if ! (
+  cd -- "${BACKEND_ROOT}"
+  /usr/bin/env -i \
+    PATH=/usr/bin:/bin \
+    HOME="${HOME}" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LC_ALL=C \
+    TZ=UTC \
+    GOTOOLCHAIN=local \
+    GOENV=off \
+    GOWORK=off \
+    GOFLAGS= \
+    GOPROXY=off \
+    PGPASSFILE="${RUNTIME_PGPASS_FILE}" \
+    ASCENDANY_TEST_DATABASE_URL="postgresql://${RUNTIME_LOGIN}@${DIRECT_HOST}:5432/${SOURCE_DATABASE}?sslmode=disable" \
+    ASCENDANY_TEST_RECOMMENDATION_MODEL_PATH="${RECOMMENDATION_MODEL_PATH}" \
+    ASCENDANY_TEST_RECOMMENDATION_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
+    go test -count=1 ./internal/modelrelease -run '^TestPostgresBindingPersistsVerifiedArtifact$'
+) >"${LOG_DIR}/model-binding.log" 2>&1; then
+  print_command_log_on_failure 'recommendation model binding' "${LOG_DIR}/model-binding.log"
+  exit 1
+fi
+
+readonly SOURCE_MODEL_PROVENANCE="$(admin_psql "${SOURCE_DATABASE}" --tuples-only --no-align <<'SQL'
+SELECT jsonb_build_object(
+  'releases', (SELECT jsonb_agg(to_jsonb(release) ORDER BY release.recommendation_model_release_id)
+               FROM ascendany.recommendation_model_releases AS release),
+  'activations', (SELECT jsonb_agg(to_jsonb(event) ORDER BY event.head_revision)
+                  FROM ascendany.recommendation_model_activation_events AS event),
+  'head', (SELECT to_jsonb(head) FROM ascendany.recommendation_model_head AS head WHERE singleton)
+)::text;
+SQL
+)"
+[[ -n "${SOURCE_MODEL_PROVENANCE}" ]] || fail 'source model provenance is empty'
+
 run_admin_bootstrap() {
   local stdout_path="$1"
   local stderr_path="$2"
@@ -701,7 +700,7 @@ run_admin_bootstrap() {
     ASCENDANY_DATABASE_URL="postgresql://${RUNTIME_LOGIN}@${DIRECT_HOST}:5432/${SOURCE_DATABASE}?sslmode=disable" \
     ASCENDANY_DATABASE_POOL_MODE=transaction \
     ASCENDANY_DATABASE_PASSWORD_FILE="${RUNTIME_PASSWORD_FILE}" \
-    ASCENDANY_DATABASE_SCHEMA_VERSION=5 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=6 \
     ASCENDANY_DATABASE_MAX_CONNECTIONS=1 \
     ASCENDANY_DATABASE_MIN_CONNECTIONS=0 \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
@@ -709,15 +708,16 @@ run_admin_bootstrap() {
     ASCENDANY_DATABASE_MAX_CONNECTION_IDLE_TIME=1m \
     ASCENDANY_DATABASE_HEALTH_TIMEOUT=5s \
     ASCENDANY_PASSWORD_PEPPER_FILE="${PASSWORD_PEPPER_FILE}" \
+    CREDENTIALS_DIRECTORY="${ADMIN_BOOTSTRAP_CREDENTIAL_DIR}" \
     "${ADMIN_BOOTSTRAP_BINARY}" create \
       --username admin \
       --display-name admin \
-      --password-file "${BOOTSTRAP_ADMIN_PASSWORD_FILE}" \
       >"${stdout_path}" 2>"${stderr_path}"
 }
 
-run_admin_bootstrap "${ADMIN_BOOTSTRAP_RESULT}" "${ADMIN_BOOTSTRAP_ERROR}" ||
-  fail 'the real administrator bootstrap failed against the fresh migrated database'
+if ! run_admin_bootstrap "${ADMIN_BOOTSTRAP_RESULT}" "${ADMIN_BOOTSTRAP_ERROR}"; then
+  fail 'administrator bootstrap command failed'
+fi
 [[ ! -s "${ADMIN_BOOTSTRAP_ERROR}" ]] || fail 'administrator bootstrap emitted unexpected stderr'
 [[ "$(wc -l <"${ADMIN_BOOTSTRAP_RESULT}" | tr -d ' ')" == "1" ]] ||
   fail 'administrator bootstrap must emit exactly one JSON line'
@@ -934,11 +934,26 @@ SELECT
        AND audit.event_type = 'auth.admin_bootstrap'
        AND audit.session_id IS NULL
        AND audit.payload = '{}'::jsonb
-       AND audit.occurred_at = account.created_at)::text;
+       AND audit.occurred_at = account.created_at)::text || '|' ||
+    (SELECT count(*) FROM ascendany.recommendation_model_releases)::text || '|' ||
+    (SELECT count(*) FROM ascendany.recommendation_model_activation_events)::text || '|' ||
+    (SELECT count(*) FROM ascendany.recommendation_model_head WHERE singleton)::text;
 SQL
 )"
-[[ "${RESTORED_DATABASE_SUMMARY}" == "5|1|1|1|1" ]] ||
-  fail 'restored migration, artifact, or administrator bootstrap state differs from the source manifest'
+[[ "${RESTORED_DATABASE_SUMMARY}" == "6|1|1|1|1|1|1|1" ]] ||
+  fail 'restored migration, artifact, administrator, or model release state differs from the source manifest'
+readonly RESTORED_MODEL_PROVENANCE="$(admin_psql "${SCRATCH_DATABASE}" --tuples-only --no-align <<'SQL'
+SELECT jsonb_build_object(
+  'releases', (SELECT jsonb_agg(to_jsonb(release) ORDER BY release.recommendation_model_release_id)
+               FROM ascendany.recommendation_model_releases AS release),
+  'activations', (SELECT jsonb_agg(to_jsonb(event) ORDER BY event.head_revision)
+                  FROM ascendany.recommendation_model_activation_events AS event),
+  'head', (SELECT to_jsonb(head) FROM ascendany.recommendation_model_head AS head WHERE singleton)
+)::text;
+SQL
+)"
+[[ "${RESTORED_MODEL_PROVENANCE}" == "${SOURCE_MODEL_PROVENANCE}" ]] ||
+  fail 'restored immutable model provenance differs from the source database'
 [[ -f "${RESTORE_ARTIFACT_ROOT}/${SOURCE_STORAGE_KEY}" &&
    ! -L "${RESTORE_ARTIFACT_ROOT}/${SOURCE_STORAGE_KEY}" ]] || fail 'restored artifact is unavailable'
 [[ "$(stat -Lc '%a' -- "${RESTORE_ARTIFACT_ROOT}")" == "750" ]] || fail 'restored artifact root mode is not 0750'
@@ -960,9 +975,10 @@ SQL
 owner_operator_psql --command="ALTER DATABASE ${SCRATCH_DATABASE} WITH ALLOW_CONNECTIONS false" >/dev/null
 owner_operator_psql --command="DROP DATABASE ${SCRATCH_DATABASE} WITH (FORCE)" >/dev/null
 rm -rf --one-file-system -- "${RESTORE_ARTIFACT_ROOT}" "${RESTORE_PARENT}/.restore-${BACKUP_ID}"
-rm -f -- "${OPERATOR_PGPASS_FILE}" "${RUNTIME_PASSWORD_FILE}" \
+rm -f -- "${OPERATOR_PGPASS_FILE}" "${RUNTIME_PASSWORD_FILE}" "${RUNTIME_PGPASS_FILE}" \
   "${MIGRATOR_PASSWORD_FILE}" "${BACKUP_PASSWORD_FILE}" "${RESTORE_PASSWORD_FILE}" \
   "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}"
+rmdir -- "${ADMIN_BOOTSTRAP_CREDENTIAL_DIR}"
 rmdir -- "${RESTORE_RUNTIME_ROOT}" "${OPERATOR_RUNTIME_ROOT}" "${RUNTIME_PARENT}"
 
 [[ "$(admin_psql postgres --tuples-only --no-align --command="SELECT count(*) FROM pg_database WHERE datname = '${SCRATCH_DATABASE}'")" == "0" ]] ||
@@ -987,7 +1003,7 @@ JOIN pg_roles AS owner ON owner.oid = database.datdba
 WHERE database.datname = '${SOURCE_DATABASE}'")"
 [[ "${SOURCE_OWNER}" == "${DATABASE_OWNER}" ]] || fail 'source database owner isolation changed'
 
-printf 'BACKUP_RESTORE_REHEARSAL_RESULT postgres_major=17 backup_commands=3 artifact_count=1 source_bytes=%s migrations=5 admin_bootstrap_exact=true second_admin_bootstrap_rejected=true restored_admin_bootstrap_exact=true scratch_owner=%s scratch_acl_exact=true restored_full_role_verifier=true xtrace_disabled_before_secrets=true repeated_role_bootstrap_verified=true scratch_cleanup=%s restore_credentials_removed=%s preexisting_containers=%s preexisting_pods=%s\n' \
+printf 'BACKUP_RESTORE_REHEARSAL_RESULT postgres_major=17 backup_commands=3 artifact_count=1 source_bytes=%s migrations=6 model_releases=1 model_activations=1 model_head_exact=true model_provenance_exact=true admin_bootstrap_exact=true second_admin_bootstrap_rejected=true restored_admin_bootstrap_exact=true scratch_owner=%s scratch_acl_exact=true restored_full_role_verifier=true xtrace_disabled_before_secrets=true repeated_role_bootstrap_verified=true scratch_cleanup=%s restore_credentials_removed=%s preexisting_containers=%s preexisting_pods=%s\n' \
   "${SOURCE_SIZE}" \
   "${SCHEMA_OWNER}" \
   "$([[ "${SCRATCH_CLEANED}" == "1" ]] && printf true || printf false)" \

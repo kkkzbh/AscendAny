@@ -132,7 +132,6 @@ func newFeedbackTestHandler(t *testing.T, service FeedbackService, writes bool) 
 	if !writes {
 		options.Artifacts = nil
 		options.Imports = nil
-		options.RecommendationQueue = nil
 		options.ModelProbe = nil
 	}
 	handler, err := New(options)

@@ -551,7 +551,7 @@ export type OjJudgeEvent = {
 
 export type ConfigurationKey = string;
 
-export type ConfigurationKind = 'prompt' | 'model_connection' | 'training' | 'knowledge_catalog' | 'feedback_policy' | 'feedback_delivery';
+export type ConfigurationKind = 'prompt' | 'model_connection' | 'knowledge_catalog' | 'feedback_policy' | 'feedback_delivery';
 
 /**
  * The segment after ascendany. must begin with the configuration kind.
@@ -598,10 +598,13 @@ export type ConfigurationVersionPage = {
     nextBeforeNumber: number | null;
 };
 
-export type CreateConfigurationVersionRequest = CreateGenericConfigurationVersionRequest | CreateRecommendationKnowledgeCatalogVersionRequest | CreateRecommendationTrainingConfigurationVersionRequest;
+export type CreateConfigurationVersionRequest = CreateGenericConfigurationVersionRequest | CreateRecommendationKnowledgeCatalogVersionRequest;
 
 export type CreateGenericConfigurationVersionRequest = {
-    key: ConfigurationKey;
+    /**
+     * recommendation.catalog.active is reserved exclusively for knowledge_catalog.
+     */
+    key: ConfigurationKey & unknown;
     kind: 'prompt' | 'model_connection' | 'feedback_policy' | 'feedback_delivery';
     expectedHeadRevision: number;
     schemaId: ConfigurationSchemaId;
@@ -615,20 +618,14 @@ export type CreateGenericConfigurationVersionRequest = {
 };
 
 export type CreateRecommendationKnowledgeCatalogVersionRequest = {
-    key: ConfigurationKey;
+    key: 'recommendation.catalog.active';
     kind: 'knowledge_catalog';
     expectedHeadRevision: number;
+    expectedAnalyticsGenerationId: CanonicalPositiveInt64String;
+    expectedAnalyticsHeadRevision: number;
+    expectedInputManifestSha256: string;
     schemaId: 'ascendany.knowledge_catalog.recommendation.v1';
     document: RecommendationKnowledgeCatalogV1;
-    credentialRef: null;
-};
-
-export type CreateRecommendationTrainingConfigurationVersionRequest = {
-    key: ConfigurationKey;
-    kind: 'training';
-    expectedHeadRevision: number;
-    schemaId: 'ascendany.training.recommendation.v2';
-    document: RecommendationTrainingConfigurationV2;
     credentialRef: null;
 };
 
@@ -669,61 +666,17 @@ export type RecommendationKnowledgePointV1 = {
 
 export type RecommendationProblemAssignmentV1 = {
     platform: 'pintia';
-    /**
-     * Trimmed Pintia source identity containing at most 256 UTF-8 bytes and no colon or NUL.
-     */
-    problemId: string;
+    problemId: PintiaId;
     problemFactSha256: string;
     knowledge: Array<RecommendationKnowledgeWeightV1>;
 };
 
 export type RecommendationKnowledgeWeightV1 = {
     knowledgePointId: ConfigurationKey;
-    weight: number;
-};
-
-export type RecommendationTrainingConfigurationV2 = {
-    algorithm: 'knowledge_mirt_v1';
-    knowledgeCatalogVersionId: CanonicalPositiveInt64String;
-    accelerator: 'cuda';
-    seed: number;
-    epochs: number;
-    patience: number;
-    batchSize: number;
-    learningRate: number;
-    weightDecay: number;
-    minTrainInteractions: number;
-    minActorInteractions: number;
-    minProblemInteractions: number;
-    validation: RecommendationTrainingValidationV2;
-    pathPolicy: RecommendationTrainingPathPolicyV2;
-    rankingWeights: RecommendationTrainingRankingWeightsV2;
-};
-
-export type RecommendationTrainingValidationV2 = {
-    minActors: number;
-    minInteractions: number;
-    minRelativeLogLossImprovement: number;
-};
-
-export type RecommendationTrainingPathPolicyV2 = {
-    targetMastery: number;
-    maxKnowledgeTargets: number;
-    minSteps: number;
-    maxSteps: number;
-    problemsPerStep: number;
-    targetSuccessProbability: number;
-};
-
-export type RecommendationTrainingRankingWeightsV2 = {
-    knowledgeGap: number;
-    successDistance: number;
-};
-
-export type QueueRecommendationTrainingRunRequest = {
-    trainingConfigurationKey: ConfigurationKey;
-    expectedAnalyticsGenerationId: CanonicalPositiveInt64String;
-    expectedAnalyticsHeadRevision: number;
+    /**
+     * Canonical positive decimal rational in (0,1], without exponent, redundant leading zeroes, or trailing fractional zeroes.
+     */
+    weight: string;
 };
 
 export type RecommendationReviewContext = {
@@ -737,152 +690,10 @@ export type RecommendationReviewProblem = {
     problemKey: string;
     sourceProblemKey: string;
     platform: 'pintia';
-    problemId: string;
+    problemId: PintiaId;
     problemFactSha256: string;
     title: string;
     sourceProblemSets: Array<RecommendationSourceProblemSetV2>;
-};
-
-export type QueueRecommendationTrainingRunResult = {
-    created: boolean;
-    trainingRun: RecommendationTrainingRun;
-};
-
-export type RecommendationTrainingRun = {
-    id: CanonicalUuiDv4;
-    sourceAnalyticsGenerationId: CanonicalPositiveInt64String;
-    sourceAnalyticsHeadRevision: number;
-    trainingConfigurationVersionId: CanonicalPositiveInt64String;
-    knowledgeCatalogVersionId: CanonicalPositiveInt64String;
-    trainingConfigurationKey: ConfigurationKey;
-    bundleProtocol: 'ascendany.recommendation.training-bundle.v2';
-    inputManifestSha256: string;
-    inputArtifactSha256: string;
-    inputArtifactSizeBytes: number;
-    status: 'queued' | 'running' | 'succeeded' | 'superseded' | 'failed';
-    attemptCount: number;
-    createdAt: string;
-    startedAt: string | null;
-    finishedAt: string | null;
-};
-
-export type RecommendationTrainingRunDetail = {
-    id: CanonicalUuiDv4;
-    sourceAnalyticsGenerationId: CanonicalPositiveInt64String;
-    sourceAnalyticsHeadRevision: number;
-    trainingConfigurationVersionId: CanonicalPositiveInt64String;
-    knowledgeCatalogVersionId: CanonicalPositiveInt64String;
-    trainingConfigurationKey: ConfigurationKey;
-    bundleProtocol: 'ascendany.recommendation.training-bundle.v2';
-    inputManifestSha256: string;
-    inputArtifactSha256: string;
-    inputArtifactSizeBytes: number;
-    status: 'queued' | 'running' | 'succeeded' | 'superseded' | 'failed';
-    attemptCount: number;
-    createdAt: string;
-    startedAt: string | null;
-    finishedAt: string | null;
-    failure: RecommendationTrainingFailure | null;
-};
-
-export type RecommendationTrainingFailure = {
-    code: string;
-    message: string;
-};
-
-export type RecommendationTrainingEventPage = {
-    runId: CanonicalUuiDv4;
-    items: Array<RecommendationTrainingEvent>;
-    nextAfterSequence: number | null;
-};
-
-export type RecommendationTrainingEvent = RecommendationTrainingQueuedEvent | RecommendationTrainingClaimedEvent | RecommendationTrainingReclaimedEvent | RecommendationTrainingLeaseRenewedEvent | RecommendationTrainingRetryScheduledEvent | RecommendationTrainingFailedEvent | RecommendationTrainingActivatedEvent | RecommendationTrainingSupersededEvent;
-
-export type RecommendationTrainingQueuedEvent = {
-    sequence: number;
-    type: 'queued';
-    payload: RecommendationTrainingQueuedPayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingClaimedEvent = {
-    sequence: number;
-    type: 'claimed';
-    payload: RecommendationTrainingLeasePayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingReclaimedEvent = {
-    sequence: number;
-    type: 'reclaimed';
-    payload: RecommendationTrainingLeasePayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingLeaseRenewedEvent = {
-    sequence: number;
-    type: 'lease_renewed';
-    payload: RecommendationTrainingLeasePayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingRetryScheduledEvent = {
-    sequence: number;
-    type: 'retry_scheduled';
-    payload: RecommendationTrainingRetryPayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingFailedEvent = {
-    sequence: number;
-    type: 'failed';
-    payload: RecommendationTrainingFailedPayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingActivatedEvent = {
-    sequence: number;
-    type: 'activated';
-    payload: RecommendationTrainingPublishedPayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingSupersededEvent = {
-    sequence: number;
-    type: 'superseded';
-    payload: RecommendationTrainingPublishedPayload;
-    createdAt: string;
-};
-
-export type RecommendationTrainingQueuedPayload = {
-    artifactSha256: string;
-    configurationVersionId: CanonicalPositiveInt64String;
-    knowledgeCatalogVersionId: CanonicalPositiveInt64String;
-    sourceAnalyticsGenerationId: CanonicalPositiveInt64String;
-    sourceAnalyticsHeadRevision: number;
-};
-
-export type RecommendationTrainingLeasePayload = {
-    attemptCount: number;
-    leaseOwner: string;
-};
-
-export type RecommendationTrainingRetryPayload = {
-    attemptCount: number;
-    delayMilliseconds: number;
-    reason: string;
-};
-
-export type RecommendationTrainingFailedPayload = {
-    attemptCount: number;
-    code: string;
-};
-
-export type RecommendationTrainingPublishedPayload = {
-    modelId: CanonicalUuiDv4;
-    outputArtifactSha256: string;
-    sourceAnalyticsGenerationId: CanonicalPositiveInt64String;
-    sourceAnalyticsHeadRevision: number;
 };
 
 export type AuthenticatedFeedbackRequest = {
@@ -973,6 +784,11 @@ export type Capabilities = {
 
 export type CanonicalUuiDv4 = string;
 
+/**
+ * Canonical Pintia snapshot v2 identity containing 1 to 256 ASCII bytes.
+ */
+export type PintiaId = string;
+
 export type CanonicalPositiveInt64String = string;
 
 export type LspSession = {
@@ -1036,8 +852,6 @@ export type AchievementProgressKey = 'exam_count' | 'positive_delta_count' | 'be
 export type SelfRecommendation = ({
     state: 'fresh';
 } & RecommendationFresh) | ({
-    state: 'stale';
-} & RecommendationStale) | ({
     state: 'unavailable';
 } & RecommendationUnavailable);
 
@@ -1045,97 +859,80 @@ export type RecommendationFresh = {
     state: 'fresh';
     currentAnalyticsGenerationId: CanonicalPositiveInt64String;
     currentAnalyticsHeadRevision: number;
-    recommendationHeadRevision: number;
+    modelHeadRevision: number;
     model: RecommendationModelProvenance;
-    result: RecommendationResultV2;
-};
-
-export type RecommendationStale = {
-    state: 'stale';
-    currentAnalyticsGenerationId: CanonicalPositiveInt64String;
-    currentAnalyticsHeadRevision: number;
-    recommendationHeadRevision: number;
-    model: RecommendationModelProvenance;
-    result: RecommendationResultV2;
+    result: RecommendationInferenceResultV1;
 };
 
 export type RecommendationUnavailable = {
     state: 'unavailable';
-    unavailableReason: 'no_active_model' | 'actor_not_in_active_model';
+    unavailableReason: 'analytics_unavailable' | 'actor_analytics_unavailable' | 'knowledge_catalog_unavailable' | 'knowledge_catalog_mismatch' | 'eligible_problems_unavailable';
     currentAnalyticsGenerationId?: CanonicalPositiveInt64String;
     currentAnalyticsHeadRevision: number;
-    recommendationHeadRevision: number;
-    model?: RecommendationModelProvenance;
+    modelHeadRevision: number;
+    model: RecommendationModelProvenance;
 };
 
 export type RecommendationModelProvenance = {
     modelId: CanonicalUuiDv4;
-    trainingRunId: CanonicalUuiDv4;
-    analyticsGenerationId: CanonicalPositiveInt64String;
-    analyticsHeadRevision: number;
-    inputManifestSha256: string;
-    trainingConfigurationVersionId: CanonicalPositiveInt64String;
-    trainingConfigurationKey: ConfigurationKey;
-    trainingConfigurationVersion: number;
-    trainingConfigurationSchema: ConfigurationSchemaId;
-    trainingConfigurationSha256: string;
-    knowledgeCatalogVersionId: CanonicalPositiveInt64String;
-    knowledgeCatalogKey: ConfigurationKey;
-    knowledgeCatalogVersion: number;
-    knowledgeCatalogSchema: ConfigurationSchemaId;
+    purpose: 'production' | 'acceptance_test';
+    artifactSha256: string;
+    artifactSizeBytes: number;
+    artifactMode: 420;
+    modelSchema: 'ascendany.recommendation.inference-model.v1';
+    algorithm: 'knowledge_mirt_feature_v1';
+    inferenceContract: 'ascendany.recommendation.inference.v1';
+    trainedAt: string;
+    trainingProvenanceSha256: string;
+    featureSchemaSha256: string;
     knowledgeCatalogSha256: string;
-    outputArtifactSha256: string;
-    modelSchema: 'ascendany.recommendation.model.v2';
-    modelManifest: {
-        [key: string]: unknown;
-    };
-    modelManifestSha256: string;
-    metrics: {
-        [key: string]: unknown;
-    };
-    createdAt: string;
+    parameterSha256: string;
+    goldenVectorsSha256: string;
+    modelHeadRevision: number;
+    applicationVersion: string;
+    applicationCommit: string;
+    applicationBuildTime: string;
 };
 
-export type RecommendationResultV2 = ({
+export type RecommendationInferenceResultV1 = ({
     status: 'ready';
-} & RecommendationReadyResultV2) | ({
+} & RecommendationInferenceReadyResultV1) | ({
     status: 'insufficient';
-} & RecommendationInsufficientResultV2);
+} & RecommendationInferenceInsufficientResultV1);
 
-export type RecommendationReadyResultV2 = {
-    schema: 'ascendany.recommendation.result.v2';
+export type RecommendationInferenceReadyResultV1 = {
+    schema: 'ascendany.recommendation.inference-result.v1';
     sha256: string;
     status: 'ready';
     sourceRating: number;
-    evidence: RecommendationEvidenceV2;
-    knowledgeMastery: Array<RecommendationKnowledgeMasteryV2>;
+    evidence: RecommendationInferenceEvidenceV1;
+    knowledgeMastery: Array<RecommendationKnowledgeMasteryV1>;
     learningPath: Array<RecommendationLearningPathStepV2>;
 };
 
-export type RecommendationInsufficientResultV2 = {
-    schema: 'ascendany.recommendation.result.v2';
+export type RecommendationInferenceInsufficientResultV1 = {
+    schema: 'ascendany.recommendation.inference-result.v1';
     sha256: string;
     status: 'insufficient';
     sourceRating: number;
-    evidence: RecommendationEvidenceV2;
-    knowledgeMastery: Array<RecommendationKnowledgeMasteryV2>;
+    evidence: RecommendationInferenceEvidenceV1;
+    knowledgeMastery: Array<RecommendationKnowledgeMasteryV1>;
     insufficiency: RecommendationInsufficiencyV2;
 };
 
-export type RecommendationEvidenceV2 = {
-    trainInteractionCount: number;
-    validationInteractionCount: number;
+export type RecommendationInferenceEvidenceV1 = {
+    observationCount: number;
     distinctProblemCount: number;
     passedProblemCount: number;
 };
 
-export type RecommendationKnowledgeMasteryV2 = {
+export type RecommendationKnowledgeMasteryV1 = {
     knowledgePointId: string;
     label: string;
     description: string;
     prerequisiteIds: Array<string>;
     mastery: number;
-    trainInteractionCount: number;
+    observationCount: number;
 };
 
 export type RecommendationLearningPathStepV2 = {
@@ -1154,7 +951,7 @@ export type RecommendationProblemV2 = {
     problemKey: string;
     sourceProblemKey: string;
     platform: 'pintia';
-    problemId: string;
+    problemId: PintiaId;
     title: string;
     sourceProblemSets: Array<RecommendationSourceProblemSetV2>;
     predictedSuccessProbability: number;
@@ -1163,7 +960,7 @@ export type RecommendationProblemV2 = {
 };
 
 export type RecommendationSourceProblemSetV2 = {
-    problemSetId: string;
+    problemSetId: PintiaId;
     sourceUrl: string;
 };
 
@@ -1288,7 +1085,7 @@ export type ExamSummary = {
     id: CanonicalUuiDv4;
     snapshotId: CanonicalUuiDv4;
     platform: 'pintia';
-    problemSetId: string;
+    problemSetId: PintiaId;
     title: string;
     sourceUrl: string;
     startsAt: string | null;
@@ -1309,7 +1106,7 @@ export type ExamDetail = {
     id: CanonicalUuiDv4;
     snapshotId: CanonicalUuiDv4;
     platform: 'pintia';
-    problemSetId: string;
+    problemSetId: PintiaId;
     title: string;
     sourceUrl: string;
     startsAt: string | null;
@@ -1328,8 +1125,8 @@ export type ExamDetail = {
 };
 
 export type ExamProblem = {
-    id: string;
-    problemId: string;
+    id: PintiaId;
+    problemId: PintiaId;
     label: string | null;
     title: string;
     maxScore: NullableCanonicalDecimal;
@@ -2533,75 +2330,6 @@ export type TestModelConnectionResponses = {
 
 export type TestModelConnectionResponse = TestModelConnectionResponses[keyof TestModelConnectionResponses];
 
-export type QueueRecommendationTrainingRunData = {
-    body: QueueRecommendationTrainingRunRequest;
-    path?: never;
-    query?: never;
-    url: '/api/v2/admin/recommendation/training-runs';
-};
-
-export type QueueRecommendationTrainingRunErrors = {
-    /**
-     * Request syntax or payload contract is invalid.
-     */
-    400: ApiError;
-    /**
-     * Authentication is missing or invalid.
-     */
-    401: ApiError;
-    /**
-     * Authorization, Origin, or CSRF policy rejected the request.
-     */
-    403: ApiError;
-    /**
-     * Resource does not exist within the caller's scope.
-     */
-    404: ApiError;
-    /**
-     * Request processing or stream setup exceeded its configured duration limit.
-     */
-    408: ApiError;
-    /**
-     * The requested state transition is unavailable without revealing its prior state.
-     */
-    409: ApiError;
-    /**
-     * Request payload exceeds the route's advertised hard byte limit.
-     */
-    413: ApiError;
-    /**
-     * Request Content-Type or Content-Encoding is unsupported by the route.
-     */
-    415: ApiError;
-    /**
-     * The active provider configuration or resolved credential violates the provider contract.
-     */
-    422: ApiError;
-    /**
-     * The operation exceeded its authentication/request rate limit or active SSE capacity.
-     */
-    429: ApiError;
-    /**
-     * The server could not complete the request without exposing internal failure details.
-     */
-    500: ApiError;
-};
-
-export type QueueRecommendationTrainingRunError = QueueRecommendationTrainingRunErrors[keyof QueueRecommendationTrainingRunErrors];
-
-export type QueueRecommendationTrainingRunResponses = {
-    /**
-     * The existing immutable training run was returned idempotently.
-     */
-    200: QueueRecommendationTrainingRunResult;
-    /**
-     * A new immutable training run was queued.
-     */
-    202: QueueRecommendationTrainingRunResult;
-};
-
-export type QueueRecommendationTrainingRunResponse = QueueRecommendationTrainingRunResponses[keyof QueueRecommendationTrainingRunResponses];
-
 export type GetRecommendationReviewContextData = {
     body?: never;
     path?: never;
@@ -2638,6 +2366,10 @@ export type GetRecommendationReviewContextErrors = {
      * The server could not complete the request without exposing internal failure details.
      */
     500: ApiError;
+    /**
+     * Writes are disabled or a required runtime dependency is unavailable.
+     */
+    503: ApiError;
 };
 
 export type GetRecommendationReviewContextError = GetRecommendationReviewContextErrors[keyof GetRecommendationReviewContextErrors];
@@ -2650,111 +2382,6 @@ export type GetRecommendationReviewContextResponses = {
 };
 
 export type GetRecommendationReviewContextResponse = GetRecommendationReviewContextResponses[keyof GetRecommendationReviewContextResponses];
-
-export type GetRecommendationTrainingRunData = {
-    body?: never;
-    path: {
-        runId: CanonicalUuiDv4;
-    };
-    query?: never;
-    url: '/api/v2/admin/recommendation/training-runs/{runId}';
-};
-
-export type GetRecommendationTrainingRunErrors = {
-    /**
-     * Request syntax or payload contract is invalid.
-     */
-    400: ApiError;
-    /**
-     * Authentication is missing or invalid.
-     */
-    401: ApiError;
-    /**
-     * Authorization, Origin, or CSRF policy rejected the request.
-     */
-    403: ApiError;
-    /**
-     * Resource does not exist within the caller's scope.
-     */
-    404: ApiError;
-    /**
-     * Request processing or stream setup exceeded its configured duration limit.
-     */
-    408: ApiError;
-    /**
-     * The operation exceeded its authentication/request rate limit or active SSE capacity.
-     */
-    429: ApiError;
-    /**
-     * The server could not complete the request without exposing internal failure details.
-     */
-    500: ApiError;
-};
-
-export type GetRecommendationTrainingRunError = GetRecommendationTrainingRunErrors[keyof GetRecommendationTrainingRunErrors];
-
-export type GetRecommendationTrainingRunResponses = {
-    /**
-     * The immutable run, current state, and safe terminal failure detail.
-     */
-    200: RecommendationTrainingRunDetail;
-};
-
-export type GetRecommendationTrainingRunResponse = GetRecommendationTrainingRunResponses[keyof GetRecommendationTrainingRunResponses];
-
-export type ListRecommendationTrainingRunEventsData = {
-    body?: never;
-    path: {
-        runId: CanonicalUuiDv4;
-    };
-    query?: {
-        afterSequence?: number;
-        limit?: number;
-    };
-    url: '/api/v2/admin/recommendation/training-runs/{runId}/events';
-};
-
-export type ListRecommendationTrainingRunEventsErrors = {
-    /**
-     * Request syntax or payload contract is invalid.
-     */
-    400: ApiError;
-    /**
-     * Authentication is missing or invalid.
-     */
-    401: ApiError;
-    /**
-     * Authorization, Origin, or CSRF policy rejected the request.
-     */
-    403: ApiError;
-    /**
-     * Resource does not exist within the caller's scope.
-     */
-    404: ApiError;
-    /**
-     * Request processing or stream setup exceeded its configured duration limit.
-     */
-    408: ApiError;
-    /**
-     * The operation exceeded its authentication/request rate limit or active SSE capacity.
-     */
-    429: ApiError;
-    /**
-     * The server could not complete the request without exposing internal failure details.
-     */
-    500: ApiError;
-};
-
-export type ListRecommendationTrainingRunEventsError = ListRecommendationTrainingRunEventsErrors[keyof ListRecommendationTrainingRunEventsErrors];
-
-export type ListRecommendationTrainingRunEventsResponses = {
-    /**
-     * Strictly ordered durable events after the requested sequence.
-     */
-    200: RecommendationTrainingEventPage;
-};
-
-export type ListRecommendationTrainingRunEventsResponse = ListRecommendationTrainingRunEventsResponses[keyof ListRecommendationTrainingRunEventsResponses];
 
 export type GetConfigurationData = {
     body?: never;
@@ -4245,6 +3872,10 @@ export type GetSelfRecommendationErrors = {
      * The server could not complete the request without exposing internal failure details.
      */
     500: ApiError;
+    /**
+     * Writes are disabled or a required runtime dependency is unavailable.
+     */
+    503: ApiError;
 };
 
 export type GetSelfRecommendationError = GetSelfRecommendationErrors[keyof GetSelfRecommendationErrors];

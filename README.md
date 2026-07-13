@@ -10,7 +10,7 @@ English | [简体中文](README.zh-CN.md)
   <strong>Student Ability Analytics Platform</strong>
 </p>
 
-AscendAny turns complete Pintia programming problem-set snapshots into traceable ability profiles, ratings, achievements, leaderboards, exam analyses, and personalized learning recommendations. Web, Desktop, and Mobile share the core student capabilities for accounts, profiles, exams, AI chat, and recommendations, while each client provides platform-specific interactions. Administrators use a separate Import Console for imports, accounts, configuration, audits, and model-training jobs.
+AscendAny turns complete Pintia programming problem-set snapshots into traceable ability profiles, ratings, achievements, leaderboards, exam analyses, and personalized learning recommendations. Web, Desktop, and Mobile share the core student capabilities for accounts, profiles, exams, AI chat, and recommendations, while each client provides platform-specific interactions. Administrators use a separate Import Console for imports, accounts, configuration, audits, and recommendation knowledge-catalog authoring.
 
 ## v2 architecture
 
@@ -22,10 +22,9 @@ AscendAny turns complete Pintia programming problem-set snapshots into traceable
 | Isolated OJ and C++ LSP | Go `ascendany-judge`, `ascendany-lsp` |
 | Web, Desktop, Mobile, Import Console, product site | TypeScript |
 | Pintia data capture | TypeScript Manifest V3 browser extension |
-| Recommendation training orchestration | Go `ascendany-trainer-agent` |
-| Recommendation model implementation | Isolated Python trainer |
+| Recommendation artifact verification and online inference | Go `ascendany-model`, `ascendanyd` |
 
-The online runtime has no Python dependency. The Python trainer only reads an immutable bundle produced by Go and writes one bounded output bundle from a child process with no network or database credential.
+Production receives one externally trained, immutable `ascendany.recommendation.inference-model.v1` artifact at release-build time. The release builder verifies its exact SHA-256, closed contract, feature schema, parameter digests, and golden vectors. `ascendanyd` binds that artifact to an immutable database model release and performs inference in Go. Training is a separate future module and is outside this repository, production release, systemd units, credentials, HTTP API, and database roles.
 
 ## Data boundary
 
@@ -40,10 +39,10 @@ The online runtime has no Python dependency. The Python trainer only reads an im
 - Enrollment claim, login, refresh, logout, profile, session revocation, and role authorization.
 - Five ability dimensions, rating history, achievements, leaderboard, exam catalog, and exam analysis.
 - Durable AI chat, automatic analysis, audited note tools, and resumable event streams.
-- Fresh, stale, and unavailable recommendation states with learning paths and knowledge detail.
+- Fresh and unavailable recommendation states with learning paths, evidence, immutable model provenance, and knowledge detail.
 - OJ run/submit and clangd LSP, with execution workers holding no database credential.
 - Pintia v2 import, job history, failure diagnostics, and reconnect-safe ordered events.
-- Account, student, audit, prompt/model configuration, model-connection probe, and training-job administration.
+- Account, student, audit, prompt/model configuration, model-connection probe, and recommendation knowledge-catalog administration.
 
 ## Repository entry points
 
@@ -57,8 +56,7 @@ The online runtime has no Python dependency. The Python trainer only reads an im
 | `apps/site/` | Product website. |
 | `packages/sdk/` | The only TypeScript SDK, generated from the final OpenAPI contract. |
 | `tools/pintia-exporter-extension/` | Pintia snapshot v2 Chrome extension. |
-| `trainers/recommendation/` | The isolated trainer and the only permitted Python runtime. |
-| `contracts/` | OpenAPI and Pintia snapshot v2 contracts and fixtures. |
+| `contracts/` | OpenAPI, Pintia snapshot v2, and external recommendation-model contracts and fixtures. |
 | `deploy/v2/` | systemd, privilege, configuration, and production acceptance contracts. |
 | `doc/重写v2架构与验收.md` | v2 ownership, data flow, cleanup scope, and acceptance gates. |
 
@@ -80,8 +78,6 @@ pnpm --filter @ascendany/mobile check
 pnpm --filter @ascendany/import-console check
 pnpm --filter @ascendany/desktop test
 pnpm --filter @ascendany/desktop build
-
-.venv/bin/python -m unittest discover -s trainers/recommendation/tests -v
 ```
 
 ### Rootless PostgreSQL rehearsal
@@ -93,7 +89,7 @@ release, receives only SCRAM verifiers in the private runtime tree, and binds to
 loopback. Pull the PostgreSQL image explicitly if it is absent; the rehearsal
 never pulls or starts a PgBouncer image.
 After each disposable role-password reset, the integration runner publishes the
-exact admin/legacy/runtime SCRAM verifier set with same-directory fsync and atomic
+exact v2 capability-role SCRAM verifier set with same-directory fsync and atomic
 rename, then issues explicit PgBouncer `RELOAD` and database `RECONNECT` commands.
 
 ```bash
@@ -125,11 +121,15 @@ cleanup paths:
 
 ```bash
 tools/run-v2-backup-restore-podman-rehearsal.sh \
-  --confirm-reset drop-disposable-ascendany-v2-backup-restore
+  --confirm-reset drop-disposable-ascendany-v2-backup-restore \
+  --recommendation-model /absolute/canonical/recommendation-model.json \
+  --recommendation-model-sha256 64_lowercase_hex
 ```
 
 Pass `--snapshot /absolute/canonical/snapshot.json` to rehearse a protected
-real export without changing the script or repository.
+real export without changing the script or repository. The model must be an
+externally trained, reviewed artifact; the rehearsal verifies and binds it for
+Go inference and does not execute training.
 
 The release-to-restore acceptance path, its guarded local invocation, and the
 separate fail-closed real Judge/LSP sandbox gate are documented in

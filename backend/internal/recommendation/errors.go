@@ -11,47 +11,15 @@ import (
 type ErrorCode string
 
 const (
-	ErrorInvalidConfiguration             ErrorCode = "recommendation_invalid_configuration"
-	ErrorInvalidInput                     ErrorCode = "recommendation_invalid_input"
-	ErrorPrincipalRejected                ErrorCode = "recommendation_principal_rejected"
-	ErrorAnalyticsUnavailable             ErrorCode = "recommendation_analytics_unavailable"
-	ErrorTrainingConfigurationUnavailable ErrorCode = "recommendation_training_configuration_unavailable"
-	ErrorPreflightFailed                  ErrorCode = "recommendation_preflight_failed"
-	ErrorInvalidBundle                    ErrorCode = "recommendation_invalid_bundle"
-	ErrorInvalidArtifact                  ErrorCode = "recommendation_invalid_artifact"
-	ErrorStateConflict                    ErrorCode = "recommendation_state_conflict"
-	ErrorLeaseLost                        ErrorCode = "recommendation_lease_lost"
-	ErrorTrainer                          ErrorCode = "recommendation_trainer_failure"
-	ErrorStoredDataInvalid                ErrorCode = "recommendation_stored_data_invalid"
-	ErrorDatabase                         ErrorCode = "recommendation_database_failure"
-	ErrorCanceled                         ErrorCode = "recommendation_canceled"
+	ErrorInvalidConfiguration ErrorCode = "recommendation_invalid_configuration"
+	ErrorInvalidInput         ErrorCode = "recommendation_invalid_input"
+	ErrorPrincipalRejected    ErrorCode = "recommendation_principal_rejected"
+	ErrorModelInactive        ErrorCode = "recommendation_model_inactive"
+	ErrorAnalyticsUnavailable ErrorCode = "recommendation_analytics_unavailable"
+	ErrorStoredDataInvalid    ErrorCode = "recommendation_stored_data_invalid"
+	ErrorDatabase             ErrorCode = "recommendation_database_failure"
+	ErrorCanceled             ErrorCode = "recommendation_canceled"
 )
-
-type PreflightFailure struct {
-	IssueCode   string
-	ProblemKeys []string
-}
-
-func (failure *PreflightFailure) Error() string {
-	return "recommendation preflight failed: " + failure.IssueCode
-}
-
-type AnalyticsHeadConflict struct {
-	ExpectedGenerationID int64
-	ExpectedHeadRevision int64
-	CurrentGenerationID  int64
-	CurrentHeadRevision  int64
-}
-
-func (conflict *AnalyticsHeadConflict) Error() string {
-	return "analytics head differs from the reviewed head"
-}
-
-func preflightFailure(issueCode string, problemKeys []string) error {
-	return domainError(ErrorPreflightFailed, true, "preflight recommendation training", &PreflightFailure{
-		IssueCode: issueCode, ProblemKeys: problemKeys,
-	})
-}
 
 type Error struct {
 	Code      ErrorCode

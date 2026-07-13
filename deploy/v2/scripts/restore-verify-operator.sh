@@ -18,6 +18,8 @@ readonly lock_directory="/run/ascendany-restore-operator"
 readonly lock_file="${lock_directory}/operator.lock"
 readonly backup_root="/var/backups/ascendany"
 readonly backup_binary="/opt/ascendany/v2/bin/ascendany-backup"
+readonly release_manifest="/opt/ascendany/v2/release-manifest.json"
+readonly recommendation_model="/opt/ascendany/v2/models/recommendation-model.json"
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -52,6 +54,8 @@ validate_context() {
      -f "${ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE}" &&
      ! -L "${ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE}" ]] || fail "restore database credential is unavailable"
   [[ -x "$backup_binary" && ! -L "$backup_binary" ]] || fail "restore binary is unavailable"
+  [[ -f "$release_manifest" && ! -L "$release_manifest" ]] || fail "installed release manifest is unavailable"
+  [[ -f "$recommendation_model" && ! -L "$recommendation_model" ]] || fail "installed recommendation model is unavailable"
   [[ -d "$restore_parent" && ! -L "$restore_parent" ]] || fail "restore state directory is unavailable"
   [[ -d "$ASCENDANY_RESTORE_RUNTIME_ROOT" && ! -L "$ASCENDANY_RESTORE_RUNTIME_ROOT" &&
      "$(stat -Lc '%U:%G:%a' "$ASCENDANY_RESTORE_RUNTIME_ROOT")" == "${restore_user}:${restore_user}:700" ]] ||
@@ -146,15 +150,52 @@ validate_result() {
   local backup_id="$1" result_file="$2" manifest_sha result_time
   [[ "$(wc -l <"$result_file")" == "1" ]] || fail "restore verifier must emit exactly one JSON log line"
   manifest_sha="$(sha256sum -- "$backup_root/$backup_id/manifest.json" | awk '{print $1}')"
-  jq -e --arg backupId "$backup_id" --arg manifestSHA256 "$manifest_sha" '
+  jq -e --arg backupId "$backup_id" --arg manifestSHA256 "$manifest_sha" \
+    --slurpfile manifest "$backup_root/$backup_id/manifest.json" \
+    --slurpfile release "$release_manifest" \
+    --slurpfile model "$recommendation_model" '
     type == "object" and
-    (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "msg", "releaseCommit", "releaseVersion", "time"]) and
+    (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"]) and
     .level == "INFO" and .msg == "backup restore verified" and
     .backupId == $backupId and .manifestSHA256 == $manifestSHA256 and
     .databaseName == "ascendany_v2_restore_verify" and
     (.artifactCount | type == "number" and floor == . and . >= 0) and
+    ($manifest | length == 1) and
+    $manifest[0].schema == "ascendany.backup.bundle.v2" and
+    .artifactCount == $manifest[0].artifacts.count and
+    (.modelId | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+    (.modelArtifactSHA256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.modelHeadRevision | type == "number" and floor == . and . > 0) and
+    (.modelApplicationVersion | type == "string" and length > 0 and length <= 128) and
+    (.modelApplicationCommit | type == "string" and length > 0 and length <= 128) and
+    (.modelApplicationBuildTime | type == "string" and length > 0 and length <= 128) and
+    (.modelFeatureSchemaSHA256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.modelKnowledgeCatalogSHA256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.modelManifestSHA256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.modelPurpose == "production") and
+    .modelId == $manifest[0].database.recommendationModel.modelId and
+    .modelArtifactSHA256 == $manifest[0].database.recommendationModel.artifactSha256 and
+    .modelHeadRevision == $manifest[0].database.recommendationModel.headRevision and
+    .modelApplicationVersion == $manifest[0].database.recommendationModel.applicationVersion and
+    .modelApplicationCommit == $manifest[0].database.recommendationModel.applicationCommit and
+    .modelApplicationBuildTime == $manifest[0].database.recommendationModel.applicationBuildTime and
+    .modelFeatureSchemaSHA256 == $manifest[0].database.recommendationModel.featureSchemaSha256 and
+    .modelKnowledgeCatalogSHA256 == $manifest[0].database.recommendationModel.knowledgeCatalogSha256 and
+    .modelManifestSHA256 == $manifest[0].database.recommendationModel.manifestSha256 and
+    .modelPurpose == $manifest[0].database.recommendationModel.modelPurpose and
     (.releaseCommit | type == "string" and test("^[0-9a-f]{40}$")) and
     (.releaseVersion | type == "string" and length > 0 and length <= 128) and
+    ($release | length == 1) and
+    ($release[0] | type == "object" and .schema == "ascendany.release.v2" and .purpose == "production") and
+    ($model | length == 1) and $model[0].manifest.purpose == "production" and
+    ([ $release[0].files[] | select(.path == "models/recommendation-model.json") ] | length == 1) and
+    .releaseCommit == $release[0].commit and
+    .releaseVersion == $release[0].version and
+    .modelArtifactSHA256 == ([ $release[0].files[] | select(.path == "models/recommendation-model.json") ][0].sha256) and
+    .modelPurpose == $release[0].purpose and .modelPurpose == $model[0].manifest.purpose and
+    .modelApplicationCommit == $release[0].commit and
+    .modelApplicationVersion == $release[0].version and
+    .modelApplicationBuildTime == ($release[0].sourceDateEpoch | todateiso8601) and
     (.time | type == "string" and test("^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$"))
   ' "$result_file" >/dev/null || fail "restore verifier result violates the canonical evidence contract"
   result_time="$(jq -er '.time' "$result_file")"

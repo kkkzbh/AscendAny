@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/browserorigin"
+	"github.com/kkkzbh/AscendAny/backend/internal/inferencemodel"
 	"github.com/kkkzbh/AscendAny/backend/internal/workerlease"
 )
 
@@ -131,11 +132,9 @@ type ChatAgentConfig struct {
 }
 
 type RecommendationConfig struct {
-	TrainerAgentID           string
-	TrainerLeaseDuration     time.Duration
-	TrainerRetryDelay        time.Duration
-	MaximumInputBundleBytes  int
-	MaximumOutputBundleBytes int
+	ModelPath    string
+	ModelSHA256  string
+	ModelPurpose inferencemodel.Purpose
 }
 
 type JudgeConfig struct {
@@ -398,52 +397,24 @@ func Load(lookup LookupEnv, readFile ReadFile) (Config, error) {
 	if chatAgentMaximumToolRounds > 64 {
 		return Config{}, errors.New("ASCENDANY_CHAT_AGENT_MAXIMUM_TOOL_ROUNDS must not exceed 64")
 	}
-	recommendationTrainerAgentID, err := requiredTrainerAgentID(
-		lookup,
-		"ASCENDANY_RECOMMENDATION_TRAINER_AGENT_ID",
-	)
+	recommendationModelPath, err := requiredTrimmed(lookup, "ASCENDANY_RECOMMENDATION_MODEL_PATH")
 	if err != nil {
 		return Config{}, err
 	}
-	recommendationTrainerLease, err := requiredPositiveDuration(
-		lookup,
-		"ASCENDANY_RECOMMENDATION_TRAINER_LEASE_DURATION",
-	)
+	if err := validateAbsoluteFilePath(recommendationModelPath); err != nil {
+		return Config{}, fmt.Errorf("ASCENDANY_RECOMMENDATION_MODEL_PATH: %w", err)
+	}
+	recommendationModelSHA256, err := requiredLowercaseSHA256(lookup, "ASCENDANY_RECOMMENDATION_MODEL_SHA256")
 	if err != nil {
 		return Config{}, err
 	}
-	if _, err := workerlease.ValidateDuration(recommendationTrainerLease); err != nil {
-		return Config{}, fmt.Errorf("ASCENDANY_RECOMMENDATION_TRAINER_LEASE_DURATION: %w", err)
-	}
-	if recommendationTrainerLease%time.Millisecond != 0 || recommendationTrainerLease > 24*time.Hour {
-		return Config{}, errors.New("ASCENDANY_RECOMMENDATION_TRAINER_LEASE_DURATION must be a whole-millisecond duration no longer than 24h")
-	}
-	recommendationTrainerRetry, err := requiredPositiveDuration(
-		lookup,
-		"ASCENDANY_RECOMMENDATION_TRAINER_RETRY_DELAY",
-	)
+	recommendationModelPurposeValue, err := requiredTrimmed(lookup, "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE")
 	if err != nil {
 		return Config{}, err
 	}
-	if recommendationTrainerRetry < time.Second || recommendationTrainerRetry%time.Millisecond != 0 {
-		return Config{}, errors.New("ASCENDANY_RECOMMENDATION_TRAINER_RETRY_DELAY must be a whole-millisecond duration of at least one second")
-	}
-	recommendationInputBytes, err := requiredPositivePlatformLimit(
-		lookup,
-		"ASCENDANY_RECOMMENDATION_MAXIMUM_INPUT_BUNDLE_BYTES",
-	)
+	recommendationModelPurpose, err := inferencemodel.ParsePurpose(recommendationModelPurposeValue)
 	if err != nil {
-		return Config{}, err
-	}
-	recommendationOutputBytes, err := requiredPositivePlatformLimit(
-		lookup,
-		"ASCENDANY_RECOMMENDATION_MAXIMUM_OUTPUT_BUNDLE_BYTES",
-	)
-	if err != nil {
-		return Config{}, err
-	}
-	if int64(recommendationInputBytes) > artifactMaxBytes || int64(recommendationOutputBytes) > artifactMaxBytes {
-		return Config{}, errors.New("recommendation bundle limits must not exceed ASCENDANY_ARTIFACT_MAX_BYTES")
+		return Config{}, fmt.Errorf("ASCENDANY_RECOMMENDATION_MODEL_PURPOSE: %w", err)
 	}
 	judgeSocketDirectory, err := requiredTrimmed(lookup, "ASCENDANY_JUDGE_SOCKET_DIRECTORY")
 	if err != nil {
@@ -733,11 +704,9 @@ func Load(lookup LookupEnv, readFile ReadFile) (Config, error) {
 			MaximumToolRounds:   int(chatAgentMaximumToolRounds),
 		},
 		Recommendation: RecommendationConfig{
-			TrainerAgentID:           recommendationTrainerAgentID,
-			TrainerLeaseDuration:     recommendationTrainerLease,
-			TrainerRetryDelay:        recommendationTrainerRetry,
-			MaximumInputBundleBytes:  recommendationInputBytes,
-			MaximumOutputBundleBytes: recommendationOutputBytes,
+			ModelPath:    recommendationModelPath,
+			ModelSHA256:  recommendationModelSHA256,
+			ModelPurpose: recommendationModelPurpose,
 		},
 		Judge: JudgeConfig{
 			SocketDirectory: judgeSocketDirectory,
@@ -784,26 +753,19 @@ func validConfigurationKey(value string) bool {
 	return true
 }
 
-func requiredTrainerAgentID(lookup LookupEnv, name string) (string, error) {
+func requiredLowercaseSHA256(lookup LookupEnv, name string) (string, error) {
 	value, err := requiredTrimmed(lookup, name)
 	if err != nil {
 		return "", err
 	}
-	if len(value) > 128 ||
-		!((value[0] >= 'a' && value[0] <= 'z') ||
-			(value[0] >= 'A' && value[0] <= 'Z') ||
-			(value[0] >= '0' && value[0] <= '9')) {
-		return "", fmt.Errorf("%s must use the canonical trainer-agent ID alphabet", name)
+	if len(value) != 64 {
+		return "", fmt.Errorf("%s must be a lowercase SHA-256", name)
 	}
-	for index := 1; index < len(value); index++ {
-		character := value[index]
-		if (character >= 'a' && character <= 'z') ||
-			(character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') ||
-			character == '.' || character == '_' || character == ':' || character == '-' {
+	for _, character := range value {
+		if character >= '0' && character <= '9' || character >= 'a' && character <= 'f' {
 			continue
 		}
-		return "", fmt.Errorf("%s must use the canonical trainer-agent ID alphabet", name)
+		return "", fmt.Errorf("%s must be a lowercase SHA-256", name)
 	}
 	return value, nil
 }

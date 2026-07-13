@@ -7,27 +7,27 @@
   },
   "files": [
     {
-      "path": "admin/assets/index-CJSQLiIF.css",
-      "sha256": "ab211bcb72d6a17a793fa502de0f12d30ccebf2ffa1681d644c3a776e817eb33",
-      "size": 23277,
+      "path": "admin/assets/index-Bt4PSuUC.css",
+      "sha256": "eb2db82b25cc2be1c07e186e70b4fdb80d62304395e70fee0944f181d96b0a2a",
+      "size": 22442,
       "cache": "immutable"
     },
     {
-      "path": "admin/assets/index-DisI9ruB.js",
-      "sha256": "b2d38967b08b25d22961636199e735f9c896e6a8c5177554867e1c4412da21ca",
-      "size": 318596,
+      "path": "admin/assets/index-CfDefd20.js",
+      "sha256": "42c196277bdf5aee066e56283672ad377cc4f52942593d54a849b889617f04b2",
+      "size": 315696,
       "cache": "immutable"
     },
     {
       "path": "admin/index.html",
-      "sha256": "a241084c7f1bcb8cb215a8b05a079cf5e4e6e48d43f6b2be5673ee86cea79dd6",
+      "sha256": "0a081b8c99b1600dd3f96494c3614d23bc30b4f765a520fdf78ddb3f9a7e7886",
       "size": 431,
       "cache": "revalidate"
     },
     {
-      "path": "app/assets/index-DHxR94Hy.js",
-      "sha256": "8d1ddaf6d635106466a765ece7bfecdaf5385e398f34529994930c45fb0a2aa8",
-      "size": 330815,
+      "path": "app/assets/index-BDk7VQDV.js",
+      "sha256": "75d8250e627d95a4962c700a30330d5e3136bc02accf153d36b6a52d0c06b655",
+      "size": 332305,
       "cache": "immutable"
     },
     {
@@ -38,7 +38,7 @@
     },
     {
       "path": "app/index.html",
-      "sha256": "fed2ed8440564e97bf75879d99f60288286882154e5b126c6d8a493faf5a9753",
+      "sha256": "651aa8f2288bbbbc429ca1b1ea5ce4f441a8830ba879b1f1527fda89a8d905df",
       "size": 504,
       "cache": "revalidate"
     },

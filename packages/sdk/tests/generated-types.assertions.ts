@@ -1,3 +1,4 @@
+import * as sdk from "../src";
 import type {
   Account,
   AccountProfileUpdateRequest,
@@ -10,6 +11,7 @@ import type {
   AgentRunEnqueueResult,
   AgentRunEvent,
   AutomaticAnalysisRequest,
+	CanonicalPositiveInt64String,
   ChatMessage,
   ChatThreadPage,
   ArchiveAgentNoteData,
@@ -23,7 +25,6 @@ import type {
   CreateConfigurationVersionResult,
   CreateGenericConfigurationVersionRequest,
   CreateRecommendationKnowledgeCatalogVersionRequest,
-  CreateRecommendationTrainingConfigurationVersionRequest,
   CreateAgentNoteData,
   CreateAgentNoteRequest,
   CreateAgentNoteResponses,
@@ -35,8 +36,6 @@ import type {
   GetConfigurationData,
   GetConfigurationResponses,
   GetRecommendationReviewContextResponses,
-  GetRecommendationTrainingRunData,
-  GetRecommendationTrainingRunResponses,
   GetAgentNoteData,
   GetAgentNoteResponses,
   GetAgentRunData,
@@ -62,27 +61,21 @@ import type {
   ListConfigurationsResponses,
   ListConfigurationVersionsData,
   ListConfigurationVersionsResponses,
-  ListRecommendationTrainingRunEventsData,
-  ListRecommendationTrainingRunEventsResponses,
   LogoutSessionData,
   RefreshSessionData,
   RefreshSessionResponses,
-  QueueRecommendationTrainingRunData,
-  QueueRecommendationTrainingRunRequest,
-  QueueRecommendationTrainingRunResponses,
-  QueueRecommendationTrainingRunResult,
+  ConfigurationKind,
   RecommendationFresh,
-  RecommendationInsufficientResultV2,
+  RecommendationInferenceEvidenceV1,
+  RecommendationInferenceInsufficientResultV1,
+  RecommendationInferenceReadyResultV1,
+  RecommendationInferenceResultV1,
+  RecommendationKnowledgeMasteryV1,
   RecommendationLearningPathStepV2,
   RecommendationKnowledgeCatalogV1,
   RecommendationKnowledgePointV1,
-  RecommendationReadyResultV2,
-  RecommendationResultV2,
+  RecommendationModelProvenance,
   RecommendationReviewContext,
-  RecommendationTrainingConfigurationV2,
-  RecommendationTrainingEventPage,
-  RecommendationTrainingRunDetail,
-  RecommendationStale,
   RecommendationUnavailable,
   ReplaceAgentNoteData,
   ReplaceAgentNoteRequest,
@@ -207,43 +200,123 @@ export type SelfRecommendationIsStateDiscriminated = Assert<
   Equal<
     SelfRecommendation,
     | ({ state: "fresh" } & RecommendationFresh)
-    | ({ state: "stale" } & RecommendationStale)
     | ({ state: "unavailable" } & RecommendationUnavailable)
   >
 >;
-export type RecommendationResultV2IsStatusDiscriminated = Assert<
+export type RecommendationInferenceResultV1IsStatusDiscriminated = Assert<
   Equal<
-    RecommendationResultV2,
-    | ({ status: "ready" } & RecommendationReadyResultV2)
-    | ({ status: "insufficient" } & RecommendationInsufficientResultV2)
+    RecommendationInferenceResultV1,
+    | ({ status: "ready" } & RecommendationInferenceReadyResultV1)
+    | ({ status: "insufficient" } & RecommendationInferenceInsufficientResultV1)
   >
 >;
-export type RecommendationReadyResultUsesTypedLearningPath = Assert<
-  Equal<RecommendationReadyResultV2["learningPath"], Array<RecommendationLearningPathStepV2>>
+export type RecommendationInferenceReadyResultUsesTypedLearningPath = Assert<
+  Equal<RecommendationInferenceReadyResultV1["learningPath"], Array<RecommendationLearningPathStepV2>>
 >;
-export type RecommendationResultV2SourceRatingIsNumber = Assert<
-  Equal<RecommendationResultV2["sourceRating"], number>
+export type RecommendationInferenceResultSourceRatingIsNumber = Assert<
+  Equal<RecommendationInferenceResultV1["sourceRating"], number>
+>;
+export type RecommendationInferenceResultUsesExactSchema = Assert<
+  Equal<RecommendationInferenceResultV1["schema"], "ascendany.recommendation.inference-result.v1">
+>;
+export type RecommendationInferenceEvidenceIsObservationOwned = Assert<
+  Equal<
+    RecommendationInferenceEvidenceV1,
+    {
+      observationCount: number;
+      distinctProblemCount: number;
+      passedProblemCount: number;
+    }
+  >
+>;
+export type RecommendationKnowledgeMasteryUsesObservationCount = Assert<
+  Equal<RecommendationKnowledgeMasteryV1["observationCount"], number>
+>;
+export type RecommendationKnowledgeMasteryHasNoTrainingCount = Assert<
+  Equal<Extract<keyof RecommendationKnowledgeMasteryV1, "trainInteractionCount">, never>
+>;
+export type RecommendationFreshUsesAnalyticsAndModelHeads = Assert<
+  Equal<
+    Pick<
+      RecommendationFresh,
+      "currentAnalyticsGenerationId" | "currentAnalyticsHeadRevision" | "modelHeadRevision"
+    >,
+    {
+      currentAnalyticsGenerationId: string;
+      currentAnalyticsHeadRevision: number;
+      modelHeadRevision: number;
+    }
+  >
 >;
 export type UnavailableRecommendationHasNoResult = Assert<
   Equal<Extract<keyof RecommendationUnavailable, "result">, never>
 >;
-export type RecommendationQueueBodyIsRequired = Assert<
-  Equal<QueueRecommendationTrainingRunData["body"], QueueRecommendationTrainingRunRequest>
->;
-export type RecommendationQueueRequiresReviewedAnalyticsFence = Assert<
+export type RecommendationHasNoLegacyHeadField = Assert<
   Equal<
-    QueueRecommendationTrainingRunRequest,
+    Extract<
+      keyof RecommendationFresh | keyof RecommendationUnavailable,
+      "recommendationHeadRevision"
+    >,
+    never
+  >
+>;
+export type UnavailableRecommendationUsesClosedInferenceReasons = Assert<
+  Equal<
+    RecommendationUnavailable["unavailableReason"],
+    | "analytics_unavailable"
+    | "actor_analytics_unavailable"
+    | "knowledge_catalog_unavailable"
+    | "knowledge_catalog_mismatch"
+    | "eligible_problems_unavailable"
+  >
+>;
+export type UnavailableRecommendationKeepsOptionalGenerationAndRequiredHeads = Assert<
+  Equal<
+    Pick<
+      RecommendationUnavailable,
+      "currentAnalyticsGenerationId" | "currentAnalyticsHeadRevision" | "modelHeadRevision"
+    >,
     {
-      trainingConfigurationKey: string;
-      expectedAnalyticsGenerationId: string;
-      expectedAnalyticsHeadRevision: number;
+      currentAnalyticsGenerationId?: string;
+      currentAnalyticsHeadRevision: number;
+      modelHeadRevision: number;
     }
   >
 >;
-export type RecommendationQueueCreateAndReplayShareOneEnvelope = Assert<
+export type RecommendationModelProvenanceIsExactInferenceRelease = Assert<
   Equal<
-    QueueRecommendationTrainingRunResponses,
-    { 200: QueueRecommendationTrainingRunResult; 202: QueueRecommendationTrainingRunResult }
+    RecommendationModelProvenance,
+    {
+      modelId: string;
+      purpose: "production" | "acceptance_test";
+      artifactSha256: string;
+      artifactSizeBytes: number;
+      artifactMode: 420;
+      modelSchema: "ascendany.recommendation.inference-model.v1";
+      algorithm: "knowledge_mirt_feature_v1";
+      inferenceContract: "ascendany.recommendation.inference.v1";
+      trainedAt: string;
+      trainingProvenanceSha256: string;
+      featureSchemaSha256: string;
+      knowledgeCatalogSha256: string;
+      parameterSha256: string;
+      goldenVectorsSha256: string;
+      modelHeadRevision: number;
+      applicationVersion: string;
+      applicationCommit: string;
+      applicationBuildTime: string;
+    }
+  >
+>;
+export type OnlineRecommendationTrainingOperationsAreAbsent = Assert<
+  Equal<
+    Extract<
+      keyof typeof sdk,
+      | "queueRecommendationTrainingRun"
+      | "getRecommendationTrainingRun"
+      | "listRecommendationTrainingRunEvents"
+    >,
+    never
   >
 >;
 export type RecommendationReviewContextIsGeneratedResponse = Assert<
@@ -261,38 +334,41 @@ export type RecommendationCatalogPublishUsesTypedDocument = Assert<
 export type RecommendationCatalogPublishDocumentIsGenerated = Assert<
   Equal<CreateRecommendationKnowledgeCatalogVersionRequest["document"], RecommendationKnowledgeCatalogV1>
 >;
-export type RecommendationTrainingPublishUsesTypedDocument = Assert<
+export type RecommendationCatalogPublishPinsReviewGeneration = Assert<
+  Equal<CreateRecommendationKnowledgeCatalogVersionRequest["expectedAnalyticsGenerationId"], CanonicalPositiveInt64String>
+>;
+export type RecommendationCatalogPublishPinsReviewHead = Assert<
+  Equal<CreateRecommendationKnowledgeCatalogVersionRequest["expectedAnalyticsHeadRevision"], number>
+>;
+export type RecommendationCatalogPublishPinsReviewManifest = Assert<
+  Equal<CreateRecommendationKnowledgeCatalogVersionRequest["expectedInputManifestSha256"], string>
+>;
+export type GenericConfigurationPublishCannotCarryRecommendationReview = Assert<
   Equal<
-    Extract<CreateConfigurationVersionRequest, { kind: "training" }>,
-    CreateRecommendationTrainingConfigurationVersionRequest
+	Extract<
+	  keyof CreateGenericConfigurationVersionRequest,
+	  | "expectedAnalyticsGenerationId"
+	  | "expectedAnalyticsHeadRevision"
+	  | "expectedInputManifestSha256"
+	>,
+	never
   >
 >;
-export type RecommendationTrainingPublishDocumentIsGenerated = Assert<
-  Equal<CreateRecommendationTrainingConfigurationVersionRequest["document"], RecommendationTrainingConfigurationV2>
->;
-export type GenericConfigurationPublishCannotOwnRecommendationKinds = Assert<
-  Equal<Extract<CreateGenericConfigurationVersionRequest["kind"], "training" | "knowledge_catalog">, never>
->;
-export type RecommendationTrainingV2UsesExactProtocolLiterals = Assert<
+export type ConfigurationContractHasNoTrainingKind = Assert<
   Equal<
-    Pick<RecommendationTrainingConfigurationV2, "algorithm" | "accelerator">,
-    { algorithm: "knowledge_mirt_v1"; accelerator: "cuda" }
+    ConfigurationKind,
+    | "prompt"
+    | "model_connection"
+    | "knowledge_catalog"
+    | "feedback_policy"
+    | "feedback_delivery"
   >
 >;
-export type RecommendationRunDetailUsesCanonicalRunPath = Assert<
-  Equal<GetRecommendationTrainingRunData["path"], { runId: string }>
+export type ConfigurationPublishHasNoTrainingVariant = Assert<
+  Equal<Extract<CreateConfigurationVersionRequest, { kind: "training" }>, never>
 >;
-export type RecommendationRunDetailIsGeneratedResponse = Assert<
-  Equal<GetRecommendationTrainingRunResponses[200], RecommendationTrainingRunDetail>
->;
-export type RecommendationEventCursorIsTyped = Assert<
-  Equal<
-    ListRecommendationTrainingRunEventsData["query"],
-    { afterSequence?: number; limit?: number } | undefined
-  >
->;
-export type RecommendationEventsAreGeneratedResponse = Assert<
-  Equal<ListRecommendationTrainingRunEventsResponses[200], RecommendationTrainingEventPage>
+export type GenericConfigurationPublishCannotOwnKnowledgeCatalog = Assert<
+  Equal<Extract<CreateGenericConfigurationVersionRequest["kind"], "knowledge_catalog">, never>
 >;
 export type SelfAnalyticsMissingHeadIsLiteralZero = Assert<
   Equal<StudentAnalyticsNotGenerated["headRevision"], 0>
@@ -331,7 +407,6 @@ export type ConfigurationListKindIsOptional = Assert<
     NonNullable<ListConfigurationsData["query"]>["kind"],
     | "prompt"
     | "model_connection"
-    | "training"
     | "knowledge_catalog"
     | "feedback_policy"
     | "feedback_delivery"

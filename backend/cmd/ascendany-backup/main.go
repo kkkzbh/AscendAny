@@ -116,6 +116,16 @@ func run(
 			"databaseName", result.DatabaseName,
 			"releaseCommit", release.Commit,
 			"releaseVersion", release.Version,
+			"modelId", result.RecommendationModel.ModelID,
+			"modelPurpose", result.RecommendationModel.ModelPurpose,
+			"modelArtifactSHA256", result.RecommendationModel.ArtifactSHA256,
+			"modelHeadRevision", result.RecommendationModel.HeadRevision,
+			"modelApplicationVersion", result.RecommendationModel.ApplicationVersion,
+			"modelApplicationCommit", result.RecommendationModel.ApplicationCommit,
+			"modelApplicationBuildTime", result.RecommendationModel.ApplicationBuildTime,
+			"modelFeatureSchemaSHA256", result.RecommendationModel.FeatureSchemaSHA256,
+			"modelKnowledgeCatalogSHA256", result.RecommendationModel.KnowledgeCatalogSHA256,
+			"modelManifestSHA256", result.RecommendationModel.ManifestSHA256,
 		)
 		return 0
 	default:

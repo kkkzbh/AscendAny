@@ -324,6 +324,10 @@ describe("Pintia snapshot v2 normalization", () => {
     "https://pintia.cn/problem-sets/90000000000000000010/problems",
     "https://pintia.cn/archive/problem-sets/9000000000000000001/problems",
     "https://user@pintia.cn/problem-sets/9000000000000000001/problems",
+    "https://pintia.cn/problem-sets/9000000000000000001/problems?page=1",
+    "https://pintia.cn/problem-sets/9000000000000000001/problems?",
+    "https://pintia.cn/problem-sets/9000000000000000001/problems#fragment",
+    "https://pintia.cn/problem-sets/9000000000000000001/problems#",
   ])("rejects an inconsistent exam source URL: %s", async (sourceUrl) => {
     const input = source();
     input.sourceUrl = sourceUrl;

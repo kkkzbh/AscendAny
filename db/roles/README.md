@@ -45,7 +45,7 @@ bootstrap before and after the embedded schema migrations. The first pass
 creates roles and owner default privileges. The second pass closes concrete
 ACLs, including PostgreSQL table row types, which do not accept default type
 ACLs. An idempotent rerun is accepted only for an empty schema or the exact
-embedded schema-v5 migration history. A non-empty unknown schema fails
+embedded schema-v6 migration history. A non-empty unknown schema fails
 directly.
 
 ```bash

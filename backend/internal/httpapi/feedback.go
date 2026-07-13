@@ -21,7 +21,7 @@ type submitFeedbackRequest struct {
 }
 
 func (handler *Handler) submitFeedback(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	access, ok := bearerToken(request)

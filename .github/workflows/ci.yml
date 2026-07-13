@@ -46,7 +46,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify Go/TypeScript/Python ownership
+      - name: Verify Go and TypeScript ownership
         run: ./tools/verify-v2-boundary.sh
 
   desktop-release-contract:
@@ -107,17 +107,11 @@ jobs:
           trap 'rm -rf -- "${runtime_dir}"' EXIT
           XDG_RUNTIME_DIR="${runtime_dir}" ./tools/tests/rehearsal-private-runtime-fixture.sh
 
-      - name: Verify online and quiesced trainer work roots
-        run: ./tools/tests/validate-trainer-work-root-fixture.sh
-
-      - name: Verify trainer runtime provenance closure
-        run: ./tools/tests/trainer-runtime-provenance-fixture.sh
-
-      - name: Verify trainer runtime tree mount closure
-        run: sudo ./tools/tests/trainer-runtime-tree-identity-fixture.sh
-
       - name: Verify production unit closure
         run: ./tools/tests/validate-production-unit-closure-fixture.sh
+
+      - name: Verify production lifecycle state contracts
+        run: ./tools/tests/validate-production-state-fixture.sh
 
       - name: Verify restore operator stable-lock concurrency
         run: ./tools/tests/restore-operator-concurrency-fixture.sh
@@ -251,31 +245,6 @@ jobs:
 
       - name: Rebuild and verify embedded public assets
         run: pnpm public-assets:check
-
-  isolated-trainer:
-    name: Isolated Python Trainer
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Setup exact uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          version: "0.9.26"
-
-      - name: Install hashed CPU trainer test runtime
-        run: |
-          uv pip install --system --require-hashes \
-            -r trainers/recommendation/test-requirements-cpu.lock
-
-      - name: Run trainer contract and isolation tests
-        run: python -m unittest discover -s trainers/recommendation/tests -v
 
   android-release-contract:
     name: Android Release Contract

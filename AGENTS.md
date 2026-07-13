@@ -5,7 +5,8 @@
 - `backend/` 是唯一在线后端、业务规则、事务、durable job、SSE/WebSocket 与 migration 实现，语言为 Go。
 - `apps/web/`、`apps/desktop/`、`apps/mobile/`、`apps/import-console/`、`apps/site/` 与 Pintia exporter 使用 TypeScript strict mode。
 - `packages/sdk/` 必须由 `contracts/openapi/ascendany-v2.yaml` 生成；first-party app 禁止手写 endpoint string 和重复 DTO。
-- Python 只能存在于 `trainers/recommendation/`，只实现隔离模型训练 contract。Python child 不得持有数据库连接、网络能力、生产 credential 或生产文件系统路径。
+- Production repository 与 deploy release 禁止 Python source、Python runtime、trainer process、trainer credential、training API 和 training database role。模型训练由后续独立模块负责。
+- Production build 只接收已训练的 immutable `ascendany.recommendation.inference-model.v1` artifact；Go 负责 strict verification、immutable release binding 与 online inference。
 
 ## Fresh data boundary
 
@@ -25,7 +26,7 @@
 
 ## Security
 
-- `ascendanyd`、migrator、backup、judge、LSP 和 trainer agent 使用独立 OS/数据库 capability identity。
+- `ascendanyd`、migrator、backup、judge 与 LSP 使用独立 OS/数据库 capability identity。
 - Judge 与 LSP 不接收数据库 credential，且没有 network fallback。
 - Unknown fields、重复 identity、dangling reference、partial pagination、hash/count mismatch 和超限输入直接失败。
 - 禁止提交 plaintext secret、`.env.local`、token、password 或 API key。
@@ -38,6 +39,6 @@
 - TypeScript app 改动必须通过对应 package 的 tests、strict typecheck 与 production build。
 - OpenAPI 改动后执行 `pnpm --filter @ascendany/sdk generate` 和 `pnpm --filter @ascendany/sdk check`。
 - Pintia contract 改动必须覆盖 JSON Schema、semantic negative fixtures、domain hash 与真实形状脱敏 fixture。
-- Python trainer 测试使用 Python 3.14 standard-library unittest；仓库 policy scan 必须证明其他 production 路径没有 Python。
+- 仓库 policy scan 必须证明 production tree、release manifest、systemd units、scripts 与 runtime closure 没有 Python 或 trainer execution path。
 
 使用 `ssh km6` 连接生产服务器。唯一生产部署入口和 acceptance sequence 位于 `deploy/v2/README.md`；架构与最终验收边界位于 `doc/重写v2架构与验收.md`。

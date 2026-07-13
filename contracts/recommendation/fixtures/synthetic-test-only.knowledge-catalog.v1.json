@@ -1,0 +1,1 @@
+{"knowledgePoints":[{"description":"Synthetic array knowledge used only by contract tests.","id":"arrays","label":"Synthetic Arrays","prerequisiteIds":[]},{"description":"Synthetic graph knowledge used only by contract tests.","id":"graphs","label":"Synthetic Graphs","prerequisiteIds":["arrays"]}],"problemAssignments":[],"taxonomyId":"synthetic_test_only"}

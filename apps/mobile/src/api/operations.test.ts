@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Account, AccountSessionList, BrowserSession, ExamDetail, ExamPage, SelfAchievements, SelfRecommendation, SelfStudentAnalytics, StudentLeaderboard } from "@ascendany/sdk";
+import type { Account, AccountSessionList, BrowserSession, ExamDetail, ExamPage, RecommendationModelProvenance, SelfAchievements, SelfRecommendation, SelfStudentAnalytics, StudentLeaderboard } from "@ascendany/sdk";
 import {
   enqueueAutomaticAnalysis,
   loadExam,
@@ -46,7 +46,19 @@ const achievements: SelfAchievements = {
   summary: { total: 1, locked: 1, bronze: 0, silver: 0, gold: 0 },
   items: [{ code: "first_exam", title: "初次登场", description: "完成第一场考试。", progressKey: "exam_count", tier: 0, progress: 0, bronzeTarget: 1, silverTarget: 5, goldTarget: 10, sortOrder: 1 }],
 };
-const recommendation: SelfRecommendation = { state: "unavailable", unavailableReason: "no_active_model", currentAnalyticsHeadRevision: 0, recommendationHeadRevision: 0 };
+const recommendationModel: RecommendationModelProvenance = {
+  modelId: "123e4567-e89b-42d3-a456-426614174000",
+  purpose: "acceptance_test",
+  artifactSha256: "a".repeat(64), artifactSizeBytes: 4096, artifactMode: 420,
+  modelSchema: "ascendany.recommendation.inference-model.v1",
+  algorithm: "knowledge_mirt_feature_v1", inferenceContract: "ascendany.recommendation.inference.v1",
+  trainedAt: "2026-07-11T08:00:00Z", trainingProvenanceSha256: "b".repeat(64),
+  featureSchemaSha256: "c".repeat(64), knowledgeCatalogSha256: "d".repeat(64),
+  parameterSha256: "e".repeat(64), goldenVectorsSha256: "f".repeat(64),
+  modelHeadRevision: 5, applicationVersion: "0.2.0", applicationCommit: "1".repeat(40),
+  applicationBuildTime: "2026-07-11T08:05:00Z",
+};
+const recommendation: SelfRecommendation = { state: "unavailable", unavailableReason: "analytics_unavailable", currentAnalyticsHeadRevision: 0, modelHeadRevision: 5, model: recommendationModel };
 const leaderboard: StudentLeaderboard = { state: "not_generated", headRevision: 0, population: 0, items: [] };
 const sessionList: AccountSessionList = { items: [] };
 const examPage: ExamPage = { items: [], nextCursor: null };

@@ -15,6 +15,7 @@ const (
 	ErrorPrincipalRejected    ErrorCode = "configuration_principal_rejected"
 	ErrorNotFound             ErrorCode = "configuration_not_found"
 	ErrorHeadConflict         ErrorCode = "configuration_head_conflict"
+	ErrorReviewConflict       ErrorCode = "configuration_review_conflict"
 	ErrorDocumentConflict     ErrorCode = "configuration_document_conflict"
 	ErrorStoredDataInvalid    ErrorCode = "configuration_stored_data_invalid"
 	ErrorDatabase             ErrorCode = "configuration_database_failure"

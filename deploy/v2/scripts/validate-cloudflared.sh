@@ -44,7 +44,6 @@ readonly package_signing_fingerprint=cc94b39c77ae7342a68b89628a682d308d4e5e73
 readonly tunnel_id=e448a34c-9274-4c9d-8c69-e1a7fa369e52
 readonly public_hostname=ascendany.kkkzbh.cn
 readonly shadow_hostname=ascendany-v2.kkkzbh.cn
-readonly trainer_hostname=ascendany-trainer.kkkzbh.cn
 readonly metrics_origin=http://127.0.0.1:20090
 readonly local_origin=http://127.0.0.1:18000
 readonly encrypted_credential=/etc/ascendany/credentials/cloudflare_tunnel_credentials.cred
@@ -341,52 +340,18 @@ probe_http_code() {
   fi
 }
 
-probe_pre_cutover_public_route() {
-  local nonce="$1"
-  local loopback_legacy="$temporary_workspace/loopback-legacy-meta"
-  local public_legacy="$temporary_workspace/public-legacy-meta"
-  local legacy_path="/api/v1/meta/latest_exam_imported_at?ascendany_acceptance=$nonce"
-
-  if ! /usr/bin/curl --disable --fail --silent --show-error --connect-timeout 5 \
-      --max-time 15 --max-filesize 65536 --noproxy '*' --proto '=http' \
-      --output "$loopback_legacy" "http://127.0.0.1:8000$legacy_path" ||
-     ! /usr/bin/jq -e '
-       type == "object" and keys == ["latestExamImportedAt"] and
-       (.latestExamImportedAt | type == "string" and
-         test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"))
-     ' "$loopback_legacy" >/dev/null; then
-    fail "legacy loopback ownership probe is unavailable"
-    return
-  fi
-  if ! /usr/bin/curl --disable --fail --silent --show-error --connect-timeout 5 \
-      --max-time 15 --max-filesize 65536 --noproxy '*' --proto '=https' \
-      --header 'Cache-Control: no-cache' --output "$public_legacy" \
-      "https://$public_hostname$legacy_path" ||
-     ! /usr/bin/cmp --silent -- "$loopback_legacy" "$public_legacy"; then
-    fail "public hostname left the exact legacy origin before the production cutover"
-  else
-    pass "public hostname remains bound to the exact legacy origin"
-  fi
-}
-
 probe_live_routes() {
-  local phase="$1" nonce local_version shadow_version trainer_version public_version
+  local phase="$1" nonce local_version shadow_version public_version
   if ! IFS= read -r nonce </proc/sys/kernel/random/uuid ||
      [[ ! "$nonce" =~ ^[0-9a-f-]{36}$ ]]; then
     fail "cloudflared route probe nonce cannot be generated"
     return
   fi
   probe_http_code "$metrics_origin/ready" 200 "cloudflared connector readiness"
-  probe_http_code "https://$trainer_hostname/__ascendany_unowned_$nonce" 404 \
-    "trainer hostname closed route"
-  if [[ "$phase" != production ]]; then
-    probe_pre_cutover_public_route "$nonce"
-  fi
-  [[ "$phase" == staged ]] && return
+  [[ "$phase" == staged || "$phase" == activation ]] && return
 
   local_version="$temporary_workspace/local-version"
   shadow_version="$temporary_workspace/shadow-version"
-  trainer_version="$temporary_workspace/trainer-version"
   public_version="$temporary_workspace/public-version"
   if ! /usr/bin/curl --disable --fail --silent --show-error --max-time 10 \
       --max-filesize 65536 --noproxy '*' --proto '=http' --output "$local_version" \
@@ -405,23 +370,12 @@ probe_live_routes() {
   fi
   if ! /usr/bin/curl --disable --fail --silent --show-error --connect-timeout 5 \
       --max-time 15 --max-filesize 65536 --noproxy '*' --proto '=https' \
-      --header 'Cache-Control: no-cache' --output "$trainer_version" \
-      "https://$trainer_hostname/version?ascendany_acceptance=$nonce" ||
-     ! /usr/bin/cmp --silent -- "$local_version" "$trainer_version"; then
-    fail "trainer hostname version route does not reach loopback v2"
+      --header 'Cache-Control: no-cache' --output "$public_version" \
+      "https://$public_hostname/version?ascendany_acceptance=$nonce" ||
+     ! /usr/bin/cmp --silent -- "$local_version" "$public_version"; then
+    fail "public hostname does not reach the exact loopback v2 version"
   else
-    pass "trainer hostname version route reaches loopback v2"
-  fi
-  if [[ "$phase" == production ]]; then
-    if ! /usr/bin/curl --disable --fail --silent --show-error --connect-timeout 5 \
-        --max-time 15 --max-filesize 65536 --noproxy '*' --proto '=https' \
-        --header 'Cache-Control: no-cache' --output "$public_version" \
-        "https://$public_hostname/version?ascendany_acceptance=$nonce" ||
-       ! /usr/bin/cmp --silent -- "$local_version" "$public_version"; then
-      fail "public hostname does not reach the exact loopback v2 version"
-    else
-      pass "public hostname reaches the exact loopback v2 version"
-    fi
+    pass "public hostname reaches the exact loopback v2 version"
   fi
 }
 
@@ -445,8 +399,8 @@ main() {
     fail "validate-cloudflared.sh must run as root"
   fi
   phase="${ASCENDANY_VALIDATION_PHASE-}"
-  [[ "$phase" == staged || "$phase" == smoke || "$phase" == production ]] ||
-    fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, or production"
+  [[ "$phase" == staged || "$phase" == smoke || "$phase" == activation || "$phase" == production ]] ||
+    fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production"
   for command in awk base64 cmp curl dirname grep id jq mapfile podman readlink realpath \
       rm rpm sed sha256sum sort stat systemctl tail tr wc; do
     command -v "$command" >/dev/null 2>&1 || fail "required command is missing: $command"

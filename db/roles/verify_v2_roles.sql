@@ -1,7 +1,19 @@
 \set ON_ERROR_STOP on
 
+\if :{?ascendany_verification_profile}
+SELECT set_config(
+    'ascendany.verification_profile',
+    :'ascendany_verification_profile',
+    false
+);
+\else
+SELECT set_config('ascendany.verification_profile', 'source_admin', false);
+\endif
+
+-- ascendany-go-verifier-begin
 DO $verify$
 DECLARE
+    verification_profile constant text := current_setting('ascendany.verification_profile', false);
     role_name text;
     capability_roles constant text[] := ARRAY[
         'ascendany_database_owner',
@@ -84,24 +96,9 @@ DECLARE
         'agent_notes.current_revision_id',
         'agent_notes.head_revision',
         'agent_notes.updated_at',
-        'recommendation_training_runs.output_bundle_artifact_id',
-        'recommendation_training_runs.status',
-        'recommendation_training_runs.attempt_count',
-        'recommendation_training_runs.attempt_token',
-        'recommendation_training_runs.lease_owner',
-        'recommendation_training_runs.lease_expires_at',
-        'recommendation_training_runs.next_attempt_at',
-        'recommendation_training_runs.error_code',
-        'recommendation_training_runs.error_detail',
-        'recommendation_training_runs.started_at',
-        'recommendation_training_runs.finished_at',
-        'recommendation_training_runs.updated_at',
-        'recommendation_head.current_model_id',
-        'recommendation_head.source_analytics_generation_id',
-        'recommendation_head.source_analytics_head_revision',
-        'recommendation_head.current_model_outcome',
-        'recommendation_head.head_revision',
-        'recommendation_head.updated_at',
+        'recommendation_model_head.current_release_id',
+        'recommendation_model_head.head_revision',
+        'recommendation_model_head.updated_at',
         'oj_problems.current_version_id',
         'oj_problems.head_revision',
         'oj_problems.updated_at',
@@ -165,11 +162,9 @@ DECLARE
         'agent_tool_calls',
         'agent_notes',
         'agent_note_revisions',
-        'recommendation_training_runs',
-        'recommendation_training_events',
-        'recommendation_models',
-        'student_recommendation_results',
-        'recommendation_trainer_attempt_receipts',
+        'recommendation_model_releases',
+        'recommendation_model_activation_events',
+        'recommendation_model_head',
         'oj_problems',
         'oj_problem_versions',
         'oj_submissions',
@@ -189,17 +184,30 @@ DECLARE
     database_owner_oid oid;
     owner_oid oid;
 BEGIN
-    IF current_database() <> 'ascendany_v2' THEN
-        RAISE EXCEPTION 'role verification requires database ascendany_v2; connected to %', current_database();
+    IF verification_profile NOT IN ('source_admin', 'source_snapshot', 'restore') THEN
+        RAISE EXCEPTION 'unknown database verification profile %', verification_profile;
     END IF;
-
-    SELECT oid INTO database_owner_oid
-    FROM pg_roles
-    WHERE rolname = 'ascendany_database_owner';
+    IF verification_profile IN ('source_admin', 'source_snapshot')
+       AND current_database() <> 'ascendany_v2' THEN
+        RAISE EXCEPTION 'source verification requires database ascendany_v2; connected to %', current_database();
+    END IF;
+    IF verification_profile = 'restore'
+       AND current_database() <> 'ascendany_v2_restore_verify' THEN
+        RAISE EXCEPTION 'restore verification requires database ascendany_v2_restore_verify; connected to %', current_database();
+    END IF;
 
     SELECT oid INTO owner_oid
     FROM pg_roles
     WHERE rolname = 'ascendany_owner';
+
+    IF owner_oid IS NULL THEN
+        RAISE EXCEPTION 'ascendany_owner is unavailable';
+    END IF;
+
+    IF verification_profile = 'source_admin' THEN
+        SELECT oid INTO database_owner_oid
+        FROM pg_roles
+        WHERE rolname = 'ascendany_database_owner';
 
     -- Exact pg_roles row contract. Password hashes and validity timestamps are
     -- provisioned externally; every behavioral flag, connection limit, and
@@ -238,7 +246,7 @@ BEGIN
         FROM pg_roles
         WHERE rolname !~ '^pg_'
           AND rolname <> ALL(managed_roles)
-          AND rolname <> ALL(ARRAY['AscendAny', 'ascendany_cluster_admin', 'postgres'])
+          AND rolname <> 'postgres'
     ) THEN
         RAISE EXCEPTION 'cluster contains an unowned non-system role';
     END IF;
@@ -297,41 +305,6 @@ BEGIN
         RAISE EXCEPTION 'database owner role must have no membership edges';
     END IF;
 
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_database
-        WHERE datname = current_database()
-          AND datdba = database_owner_oid
-    ) THEN
-        RAISE EXCEPTION 'database ascendany_v2 is not owned by isolated ascendany_database_owner';
-    END IF;
-
-    WITH actual AS (
-        SELECT CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE grantee.rolname END AS grantee_name,
-               acl.privilege_type,
-               acl.is_grantable
-        FROM pg_database AS database
-        CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) AS acl
-        LEFT JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
-        WHERE database.datname = current_database()
-    ), expected(grantee_name, privilege_type, is_grantable) AS (
-        VALUES
-            ('ascendany_database_owner', 'CONNECT', false),
-            ('ascendany_database_owner', 'CREATE', false),
-            ('ascendany_database_owner', 'TEMPORARY', false),
-            ('ascendanyd_login', 'CONNECT', false),
-            ('ascendany_migrator_login', 'CONNECT', false),
-            ('ascendany_backup_login', 'CONNECT', false)
-    ), difference AS (
-        (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)
-        UNION ALL
-        (SELECT * FROM expected EXCEPT ALL SELECT * FROM actual)
-    )
-    SELECT count(*) INTO violation_count FROM difference;
-    IF violation_count <> 0 THEN
-        RAISE EXCEPTION 'database ACL differs from the exact v2 contract';
-    END IF;
-
     WITH actual AS (
         SELECT acl.privilege_type,
                acl.is_grantable
@@ -351,6 +324,60 @@ BEGIN
         SELECT 1 FROM pg_database WHERE datname = 'postgres' AND datallowconn
     ) THEN
         RAISE EXCEPTION 'restore maintenance database CONNECT contract differs from the exact v2 boundary';
+    END IF;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_database AS database
+        JOIN pg_roles AS owner ON owner.oid = database.datdba
+        WHERE database.datname = current_database()
+          AND owner.rolname = CASE verification_profile
+              WHEN 'restore' THEN 'ascendany_owner'
+              ELSE 'ascendany_database_owner'
+          END
+    ) THEN
+        RAISE EXCEPTION 'database owner differs from verification profile %', verification_profile;
+    END IF;
+
+    WITH actual AS (
+        SELECT CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE grantee.rolname END AS grantee_name,
+               acl.privilege_type,
+               acl.is_grantable
+        FROM pg_database AS database
+        CROSS JOIN LATERAL aclexplode(COALESCE(database.datacl, acldefault('d', database.datdba))) AS acl
+        LEFT JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
+        WHERE database.datname = current_database()
+    ), expected(grantee_name, privilege_type, is_grantable) AS (
+        SELECT *
+        FROM (VALUES
+            ('ascendany_database_owner', 'CONNECT', false),
+            ('ascendany_database_owner', 'CREATE', false),
+            ('ascendany_database_owner', 'TEMPORARY', false),
+            ('ascendanyd_login', 'CONNECT', false),
+            ('ascendany_migrator_login', 'CONNECT', false),
+            ('ascendany_backup_login', 'CONNECT', false)
+        ) AS source_acl(grantee_name, privilege_type, is_grantable)
+        WHERE verification_profile IN ('source_admin', 'source_snapshot')
+
+        UNION ALL
+
+        SELECT *
+        FROM (VALUES
+            ('ascendany_owner', 'CONNECT', false),
+            ('ascendany_owner', 'CREATE', false),
+            ('ascendany_owner', 'TEMPORARY', false),
+            ('ascendany_restore_login', 'CONNECT', false)
+        ) AS restore_acl(grantee_name, privilege_type, is_grantable)
+        WHERE verification_profile = 'restore'
+    ), difference AS (
+        (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)
+        UNION ALL
+        (SELECT * FROM expected EXCEPT ALL SELECT * FROM actual)
+    )
+    SELECT count(*) INTO violation_count FROM difference;
+    IF violation_count <> 0 THEN
+        RAISE EXCEPTION 'database ACL differs from the exact v2 contract';
     END IF;
 
     IF NOT EXISTS (

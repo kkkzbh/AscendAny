@@ -30,23 +30,24 @@ type postgresTx interface {
 type beginTransaction func(context.Context, pgx.TxOptions) (postgresTx, error)
 
 type PostgresRepository struct {
-	begin beginTransaction
+	begin             beginTransaction
+	writePrecondition VersionWritePrecondition
 }
 
-func NewPostgresRepository(pool PgxBeginner) (*PostgresRepository, error) {
-	if pool == nil {
-		return nil, configurationError(ErrorInvalidConfiguration, "construct configuration PostgreSQL repository", errors.New("database pool is required"))
+func NewPostgresRepository(pool PgxBeginner, writePrecondition VersionWritePrecondition) (*PostgresRepository, error) {
+	if pool == nil || writePrecondition == nil {
+		return nil, configurationError(ErrorInvalidConfiguration, "construct configuration PostgreSQL repository", errors.New("database pool and version write precondition are required"))
 	}
 	return &PostgresRepository{begin: func(ctx context.Context, options pgx.TxOptions) (postgresTx, error) {
 		return pool.BeginTx(ctx, options)
-	}}, nil
+	}, writePrecondition: writePrecondition}, nil
 }
 
-func newPostgresRepository(begin beginTransaction) (*PostgresRepository, error) {
-	if begin == nil {
-		return nil, configurationError(ErrorInvalidConfiguration, "construct configuration PostgreSQL repository", errors.New("transaction beginner is required"))
+func newPostgresRepository(begin beginTransaction, writePrecondition VersionWritePrecondition) (*PostgresRepository, error) {
+	if begin == nil || writePrecondition == nil {
+		return nil, configurationError(ErrorInvalidConfiguration, "construct configuration PostgreSQL repository", errors.New("transaction beginner and version write precondition are required"))
 	}
-	return &PostgresRepository{begin: begin}, nil
+	return &PostgresRepository{begin: begin, writePrecondition: writePrecondition}, nil
 }
 
 type storedItem struct {
@@ -201,6 +202,12 @@ func (repository *PostgresRepository) StoreVersion(ctx context.Context, request 
 	err := repository.transaction(ctx, "store configuration version", false, func(tx postgresTx) error {
 		actor, err := resolveAdmin(ctx, tx, request.Principal, true)
 		if err != nil {
+			return err
+		}
+		if err := repository.writePrecondition.ValidateVersionWrite(ctx, tx, request); err != nil {
+			if CodeOf(err) == "" {
+				return configurationError(ErrorStoredDataInvalid, "validate configuration version write precondition", err)
+			}
 			return err
 		}
 		stored, err := lockOrCreateItem(ctx, tx, request.Key, request.Kind)
@@ -434,7 +441,7 @@ WHERE version.configuration_item_id = $1
 }
 
 func appendVersionAudit(ctx context.Context, tx postgresTx, actor principalguard.Resolved, request CreateVersionCommand, documentSHA256, itemID string, number int64, occurredAt time.Time) error {
-	payload, err := json.Marshal(map[string]any{
+	payloadValue := map[string]any{
 		"configurationId": itemID,
 		"key":             request.Key,
 		"kind":            request.Kind,
@@ -443,7 +450,13 @@ func appendVersionAudit(ctx context.Context, tx postgresTx, actor principalguard
 		"documentSha256":  documentSHA256,
 		"headRevision":    request.ExpectedHeadRevision + 1,
 		"credentialRef":   request.CredentialRef,
-	})
+	}
+	if request.Kind == KindKnowledgeCatalog {
+		payloadValue["analyticsGenerationId"] = *request.ExpectedAnalyticsGenerationID
+		payloadValue["analyticsHeadRevision"] = *request.ExpectedAnalyticsHeadRevision
+		payloadValue["inputManifestSha256"] = *request.ExpectedInputManifestSHA256
+	}
+	payload, err := json.Marshal(payloadValue)
 	if err != nil {
 		return configurationError(ErrorStoredDataInvalid, "encode configuration audit event", err)
 	}

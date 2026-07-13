@@ -35,7 +35,9 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/lsp"
 	"github.com/kkkzbh/AscendAny/backend/internal/lspexecutor"
 	"github.com/kkkzbh/AscendAny/backend/internal/migrate"
+	"github.com/kkkzbh/AscendAny/backend/internal/modelartifact"
 	"github.com/kkkzbh/AscendAny/backend/internal/modelprobe"
+	"github.com/kkkzbh/AscendAny/backend/internal/modelrelease"
 	"github.com/kkkzbh/AscendAny/backend/internal/oj"
 	"github.com/kkkzbh/AscendAny/backend/internal/pintia"
 	"github.com/kkkzbh/AscendAny/backend/internal/publicdelivery"
@@ -43,7 +45,6 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/runtimeapp"
 	"github.com/kkkzbh/AscendAny/backend/internal/server"
 	"github.com/kkkzbh/AscendAny/backend/internal/studentanalytics"
-	"github.com/kkkzbh/AscendAny/backend/internal/traineragentserver"
 	"github.com/kkkzbh/AscendAny/backend/internal/version"
 )
 
@@ -54,8 +55,11 @@ func main() {
 func run(args []string) int {
 	bootstrapLogger, _ := logging.New(os.Stderr, "info")
 	if err := validateCommand(args); err != nil {
-		bootstrapLogger.Error("command rejected", "usage", "ascendanyd serve")
+		bootstrapLogger.Error("command rejected", "usage", "ascendanyd serve|activate-model")
 		return 2
+	}
+	if args[0] == "activate-model" {
+		return runModelActivation(os.LookupEnv, os.ReadFile, os.Stderr)
 	}
 
 	configuration, err := config.Load(os.LookupEnv, os.ReadFile)
@@ -78,6 +82,21 @@ func run(args []string) int {
 		return 1
 	}
 	slog.SetDefault(logger)
+	loadedRecommendationModel, err := modelartifact.Load(
+		configuration.Recommendation.ModelPath,
+		configuration.Recommendation.ModelSHA256,
+	)
+	if err != nil {
+		logger.Error("recommendation model artifact rejected", "error", err)
+		return 1
+	}
+	if err := recommendation.ValidateInferenceModel(
+		loadedRecommendationModel.Model,
+		configuration.Recommendation.ModelPurpose,
+	); err != nil {
+		logger.Error("recommendation model feature contract rejected", "error", err)
+		return 1
+	}
 
 	pool, err := database.Open(context.Background(), database.PoolOptions{
 		URL:                   configuration.Database.URL,
@@ -114,6 +133,11 @@ func run(args []string) int {
 		configuration.Database.ExpectedSchemaVersion,
 		configuration.Database.HealthTimeout,
 	)
+	startupReadiness := readiness.Check(context.Background())
+	if startupReadiness.Status != health.StatusReady {
+		logger.Error("database readiness rejected before model binding", "report", startupReadiness)
+		return 1
+	}
 	authRepository, err := auth.NewPostgresRepository(pool)
 	if err != nil {
 		logger.Error("authentication repository initialization failed", "code", auth.ErrorCodeOf(err))
@@ -129,6 +153,69 @@ func run(args []string) int {
 	))
 	if err != nil {
 		logger.Error("authentication service initialization failed", "code", auth.ErrorCodeOf(err))
+		return 1
+	}
+	var recommendationReader recommendation.RecommendationReader
+	recommendationReviewRepository, err := recommendation.NewReviewContextPostgresRepository(pool)
+	if err != nil {
+		logger.Error("recommendation review repository initialization failed", "code", recommendation.CodeOf(err))
+		return 1
+	}
+	recommendationAdminReader, err := recommendation.NewAdminReaderService(recommendationReviewRepository)
+	if err != nil {
+		logger.Error("recommendation admin reader service initialization failed", "code", recommendation.CodeOf(err))
+		return 1
+	}
+	if configuration.Write.Enabled {
+		modelReleaseRepository, repositoryErr := modelrelease.NewRepository(pool)
+		if repositoryErr != nil {
+			logger.Error("recommendation model release repository initialization failed", "error", repositoryErr)
+			return 1
+		}
+		applicationIdentity := version.Current()
+		bindingContext, cancelBinding := context.WithTimeout(
+			context.Background(),
+			configuration.Database.ConnectTimeout+configuration.Database.HealthTimeout,
+		)
+		modelBinding, bindingErr := modelReleaseRepository.RequireCurrent(
+			bindingContext,
+			loadedRecommendationModel,
+			modelrelease.ApplicationIdentity{
+				Version:   applicationIdentity.Version,
+				Commit:    applicationIdentity.Commit,
+				BuildTime: applicationIdentity.BuildTime,
+			},
+		)
+		cancelBinding()
+		if bindingErr != nil {
+			logger.Error("current recommendation model release verification failed", "error", bindingErr)
+			return 1
+		}
+		recommendationRepository, repositoryErr := recommendation.NewPostgresRepository(
+			pool,
+			loadedRecommendationModel.Model,
+			modelBinding,
+		)
+		if repositoryErr != nil {
+			logger.Error("recommendation repository initialization failed", "code", recommendation.CodeOf(repositoryErr))
+			return 1
+		}
+		recommendationReader, err = recommendation.NewReaderService(recommendationRepository)
+		if err != nil {
+			logger.Error("recommendation reader service initialization failed", "code", recommendation.CodeOf(err))
+			return 1
+		}
+	} else {
+		recommendationReader = recommendation.NewStagedReaderService()
+	}
+	recommendationReaderApplication, err := recommendation.NewReaderApplicationService(authService, recommendationReader)
+	if err != nil {
+		logger.Error("recommendation reader application initialization failed", "code", recommendation.CodeOf(err))
+		return 1
+	}
+	recommendationAdminReaderApplication, err := recommendation.NewAdminReaderApplicationService(authService, recommendationAdminReader)
+	if err != nil {
+		logger.Error("recommendation admin reader application initialization failed", "code", recommendation.CodeOf(err))
 		return 1
 	}
 	accountManager, err := auth.NewProductionAccountManager(authRepository)
@@ -260,12 +347,13 @@ func run(args []string) int {
 		logger.Error("administration application initialization failed", "code", administration.CodeOf(err))
 		return 1
 	}
-	configurationRepository, err := configurationdomain.NewPostgresRepository(pool)
+	configurationPublicationContract := recommendation.ConfigurationPublicationContract{}
+	configurationRepository, err := configurationdomain.NewPostgresRepository(pool, configurationPublicationContract)
 	if err != nil {
 		logger.Error("configuration repository initialization failed", "code", configurationdomain.CodeOf(err))
 		return 1
 	}
-	configurationService, err := configurationdomain.NewService(configurationRepository, recommendation.ConfigurationDocumentValidator{})
+	configurationService, err := configurationdomain.NewService(configurationRepository, configurationPublicationContract)
 	if err != nil {
 		logger.Error("configuration service initialization failed", "code", configurationdomain.CodeOf(err))
 		return 1
@@ -305,39 +393,11 @@ func run(args []string) int {
 		logger.Error("OJ service initialization failed", "code", oj.CodeOf(err))
 		return 1
 	}
-	recommendationRepository, err := recommendation.NewPostgresRepository(pool)
-	if err != nil {
-		logger.Error("recommendation repository initialization failed", "code", recommendation.CodeOf(err))
-		return 1
-	}
-	recommendationReaderService, err := recommendation.NewReaderService(recommendationRepository)
-	if err != nil {
-		logger.Error("recommendation reader service initialization failed", "code", recommendation.CodeOf(err))
-		return 1
-	}
-	recommendationReaderApplication, err := recommendation.NewReaderApplicationService(authService, recommendationReaderService)
-	if err != nil {
-		logger.Error("recommendation reader application initialization failed", "code", recommendation.CodeOf(err))
-		return 1
-	}
-	recommendationAdminReaderService, err := recommendation.NewAdminReaderService(recommendationRepository)
-	if err != nil {
-		logger.Error("recommendation admin reader service initialization failed", "code", recommendation.CodeOf(err))
-		return 1
-	}
-	recommendationAdminReaderApplication, err := recommendation.NewAdminReaderApplicationService(authService, recommendationAdminReaderService)
-	if err != nil {
-		logger.Error("recommendation admin reader application initialization failed", "code", recommendation.CodeOf(err))
-		return 1
-	}
 	var lspManager *lspexecutor.Manager
 	var lspPolicy lsp.Policy
 	var writeRuntime *runtimeapp.Components
 	var judgeRuntime *judgeexecutor.Runtime
 	var chatRuntime *chatagent.RuntimeComponents
-	var trainerAgentVerifier *traineragentserver.ScopedBearerVerifier
-	var trainerAgentTransport *traineragentserver.Service
-	var recommendationQueueApplication *recommendation.QueueApplicationService
 	var modelProbeApplication *modelprobe.Service
 	if configuration.Write.Enabled {
 		lspWorkerUID, lookupErr := resolveSystemUserUID(configuration.LSP.WorkerUser, user.Lookup)
@@ -389,56 +449,6 @@ func run(args []string) int {
 		writeRuntime, err = runtimeapp.New(pool, configuration, feedbackProvider, logger)
 		if err != nil {
 			logger.Error("write runtime initialization failed", "error", err)
-			return 1
-		}
-		recommendationQueueService, queueErr := recommendation.NewQueueService(
-			recommendationRepository,
-			writeRuntime.Artifacts,
-			recommendation.ServiceConfig{
-				MaximumInputBundleBytes: configuration.Recommendation.MaximumInputBundleBytes,
-			},
-		)
-		if queueErr != nil {
-			logger.Error("recommendation queue service initialization failed", "code", recommendation.CodeOf(queueErr))
-			return 1
-		}
-		recommendationQueueApplication, queueErr = recommendation.NewQueueApplicationService(authService, recommendationQueueService)
-		if queueErr != nil {
-			logger.Error("recommendation queue application initialization failed", "code", recommendation.CodeOf(queueErr))
-			return 1
-		}
-		trainerTokenResolver, resolverErr := traineragentserver.NewEnvironmentFileTokenResolver(os.LookupEnv, os.ReadFile)
-		if resolverErr != nil {
-			logger.Error("trainer-agent token resolver initialization failed", "error", resolverErr)
-			return 1
-		}
-		if _, resolveErr := trainerTokenResolver.Resolve(
-			context.Background(),
-			configuration.Recommendation.TrainerAgentID,
-		); resolveErr != nil {
-			logger.Error("trainer-agent token credential validation failed", "error", resolveErr)
-			return 1
-		}
-		trainerAgentVerifier, err = traineragentserver.NewScopedBearerVerifier(
-			configuration.Recommendation.TrainerAgentID,
-			trainerTokenResolver,
-		)
-		if err != nil {
-			logger.Error("trainer-agent bearer verifier initialization failed", "error", err)
-			return 1
-		}
-		trainerAgentTransport, err = traineragentserver.NewService(
-			recommendationRepository,
-			writeRuntime.Artifacts,
-			traineragentserver.ServiceConfig{
-				LeaseDuration:            configuration.Recommendation.TrainerLeaseDuration,
-				RetryDelay:               configuration.Recommendation.TrainerRetryDelay,
-				MaximumInputBundleBytes:  configuration.Recommendation.MaximumInputBundleBytes,
-				MaximumOutputBundleBytes: configuration.Recommendation.MaximumOutputBundleBytes,
-			},
-		)
-		if err != nil {
-			logger.Error("trainer-agent transport initialization failed", "error", err)
 			return 1
 		}
 		chatRuntime, err = chatagent.NewRuntime(
@@ -534,13 +544,10 @@ func run(args []string) int {
 		httpDependencies,
 		configuration.Write.Enabled,
 		writeHTTPRuntime{
-			components:          writeRuntime,
-			lspManager:          lspManager,
-			lspPolicy:           lspPolicy,
-			recommendationQueue: recommendationQueueApplication,
-			modelProbe:          modelProbeApplication,
-			trainerVerifier:     trainerAgentVerifier,
-			trainerAgent:        trainerAgentTransport,
+			components: writeRuntime,
+			lspManager: lspManager,
+			lspPolicy:  lspPolicy,
+			modelProbe: modelProbeApplication,
 		},
 	)
 	if err != nil {
@@ -607,46 +614,39 @@ func run(args []string) int {
 }
 
 type httpRuntimeDependencies struct {
-	readiness                    httpapi.ReadinessChecker
-	logger                       *slog.Logger
-	auth                         httpapi.AuthService
-	enrollment                   httpapi.EnrollmentService
-	accountManagement            httpapi.AccountManagementService
-	rateLimiter                  httpapi.RequestRateLimiter
-	requestIDRandom              io.Reader
-	artifacts                    httpapi.ArtifactPublisher
-	imports                      httpapi.ImportQueue
-	importReader                 httpapi.ImportReader
-	studentAnalytics             httpapi.StudentAnalyticsService
-	achievement                  httpapi.AchievementService
-	examCatalog                  httpapi.ExamCatalogService
-	examGeneration               httpapi.ExamGenerationService
-	administration               httpapi.AdministrationService
-	configuration                httpapi.ConfigurationService
-	feedback                     httpapi.FeedbackService
-	agentNotes                   httpapi.AgentNotesService
-	chatAgent                    httpapi.ChatAgentService
-	oj                           httpapi.OJService
-	ojPolicy                     oj.Policy
-	recommendationReader         httpapi.RecommendationReader
-	recommendationAdminReader    httpapi.RecommendationAdminReader
-	recommendationQueue          httpapi.RecommendationQueue
-	modelProbe                   httpapi.ModelProbeService
-	lsp                          httpapi.LSPService
-	lspPolicy                    lsp.Policy
-	trainerAgentTransportEnabled bool
-	trainerAgentVerifier         httpapi.TrainerAgentBearerVerifier
-	trainerAgent                 httpapi.TrainerAgentService
+	readiness                 httpapi.ReadinessChecker
+	logger                    *slog.Logger
+	auth                      httpapi.AuthService
+	enrollment                httpapi.EnrollmentService
+	accountManagement         httpapi.AccountManagementService
+	rateLimiter               httpapi.RequestRateLimiter
+	requestIDRandom           io.Reader
+	artifacts                 httpapi.ArtifactPublisher
+	imports                   httpapi.ImportQueue
+	importReader              httpapi.ImportReader
+	studentAnalytics          httpapi.StudentAnalyticsService
+	achievement               httpapi.AchievementService
+	examCatalog               httpapi.ExamCatalogService
+	examGeneration            httpapi.ExamGenerationService
+	administration            httpapi.AdministrationService
+	configuration             httpapi.ConfigurationService
+	feedback                  httpapi.FeedbackService
+	agentNotes                httpapi.AgentNotesService
+	chatAgent                 httpapi.ChatAgentService
+	oj                        httpapi.OJService
+	ojPolicy                  oj.Policy
+	recommendationReader      httpapi.RecommendationReader
+	recommendationAdminReader httpapi.RecommendationAdminReader
+	modelProbe                httpapi.ModelProbeService
+	lsp                       httpapi.LSPService
+	lspPolicy                 lsp.Policy
 }
 
 type writeHTTPRuntime struct {
-	components          *runtimeapp.Components
-	lspManager          *lspexecutor.Manager
-	lspPolicy           lsp.Policy
-	recommendationQueue *recommendation.QueueApplicationService
-	modelProbe          *modelprobe.Service
-	trainerVerifier     *traineragentserver.ScopedBearerVerifier
-	trainerAgent        *traineragentserver.Service
+	components *runtimeapp.Components
+	lspManager *lspexecutor.Manager
+	lspPolicy  lsp.Policy
+	modelProbe *modelprobe.Service
 }
 
 func bindWriteHTTPRuntimeDependencies(
@@ -662,64 +662,55 @@ func bindWriteHTTPRuntimeDependencies(
 	}
 	if writeRuntime.components == nil || writeRuntime.components.Artifacts == nil || writeRuntime.components.Imports == nil ||
 		writeRuntime.lspManager == nil || !lsp.ValidPolicy(writeRuntime.lspPolicy) ||
-		writeRuntime.recommendationQueue == nil || writeRuntime.modelProbe == nil ||
-		writeRuntime.trainerVerifier == nil || writeRuntime.trainerAgent == nil {
+		writeRuntime.modelProbe == nil {
 		return httpRuntimeDependencies{}, errors.New("enabled writes require the complete write runtime dependency set")
 	}
 	dependencies.artifacts = writeRuntime.components.Artifacts
 	dependencies.imports = writeRuntime.components.Imports
-	dependencies.recommendationQueue = writeRuntime.recommendationQueue
 	dependencies.modelProbe = writeRuntime.modelProbe
 	dependencies.lsp = writeRuntime.lspManager
 	dependencies.lspPolicy = writeRuntime.lspPolicy
-	dependencies.trainerAgentTransportEnabled = true
-	dependencies.trainerAgentVerifier = writeRuntime.trainerVerifier
-	dependencies.trainerAgent = writeRuntime.trainerAgent
 	return dependencies, nil
 }
 
 func buildHTTPHandlerOptions(configuration config.Config, dependencies httpRuntimeDependencies) httpapi.Options {
 	return httpapi.Options{
-		Readiness:                    dependencies.readiness,
-		Version:                      version.Current(),
-		Logger:                       dependencies.logger,
-		Auth:                         dependencies.auth,
-		Enrollment:                   dependencies.enrollment,
-		AccountManagement:            dependencies.accountManagement,
-		AllowedOrigins:               configuration.Auth.AllowedOrigins,
-		RateLimiter:                  dependencies.rateLimiter,
-		RequestIDRandom:              dependencies.requestIDRandom,
-		TrustedProxyCIDRs:            configuration.HTTP.TrustedProxyCIDRs,
-		ClientIPHeader:               configuration.HTTP.ClientIPHeader,
-		Artifacts:                    dependencies.artifacts,
-		Imports:                      dependencies.imports,
-		ImportReader:                 dependencies.importReader,
-		StudentAnalytics:             dependencies.studentAnalytics,
-		Achievement:                  dependencies.achievement,
-		ExamCatalog:                  dependencies.examCatalog,
-		ExamGeneration:               dependencies.examGeneration,
-		Administration:               dependencies.administration,
-		Configuration:                dependencies.configuration,
-		Feedback:                     dependencies.feedback,
-		AgentNotes:                   dependencies.agentNotes,
-		ChatAgent:                    dependencies.chatAgent,
-		OJ:                           dependencies.oj,
-		OJPolicy:                     dependencies.ojPolicy,
-		RecommendationReader:         dependencies.recommendationReader,
-		RecommendationAdminReader:    dependencies.recommendationAdminReader,
-		RecommendationQueue:          dependencies.recommendationQueue,
-		ModelProbe:                   dependencies.modelProbe,
-		LSP:                          dependencies.lsp,
-		LSPPolicy:                    dependencies.lspPolicy,
-		TrainerAgentTransportEnabled: dependencies.trainerAgentTransportEnabled,
-		TrainerAgentVerifier:         dependencies.trainerAgentVerifier,
-		TrainerAgent:                 dependencies.trainerAgent,
-		AuthBodyTimeout:              configuration.HTTP.AuthBodyTimeout,
-		UploadBodyTimeout:            configuration.HTTP.UploadBodyTimeout,
-		SSEMaxDuration:               configuration.HTTP.SSEMaxDuration,
-		SSEReauthInterval:            configuration.HTTP.SSEReauthInterval,
-		SSEWriteTimeout:              configuration.HTTP.SSEWriteTimeout,
-		MaxActiveSSE:                 configuration.HTTP.MaxActiveSSE,
+		Readiness:                 dependencies.readiness,
+		Version:                   version.Current(),
+		Logger:                    dependencies.logger,
+		Auth:                      dependencies.auth,
+		Enrollment:                dependencies.enrollment,
+		AccountManagement:         dependencies.accountManagement,
+		AllowedOrigins:            configuration.Auth.AllowedOrigins,
+		RateLimiter:               dependencies.rateLimiter,
+		RequestIDRandom:           dependencies.requestIDRandom,
+		TrustedProxyCIDRs:         configuration.HTTP.TrustedProxyCIDRs,
+		ClientIPHeader:            configuration.HTTP.ClientIPHeader,
+		Artifacts:                 dependencies.artifacts,
+		Imports:                   dependencies.imports,
+		ImportReader:              dependencies.importReader,
+		StudentAnalytics:          dependencies.studentAnalytics,
+		Achievement:               dependencies.achievement,
+		ExamCatalog:               dependencies.examCatalog,
+		ExamGeneration:            dependencies.examGeneration,
+		Administration:            dependencies.administration,
+		Configuration:             dependencies.configuration,
+		Feedback:                  dependencies.feedback,
+		AgentNotes:                dependencies.agentNotes,
+		ChatAgent:                 dependencies.chatAgent,
+		OJ:                        dependencies.oj,
+		OJPolicy:                  dependencies.ojPolicy,
+		RecommendationReader:      dependencies.recommendationReader,
+		RecommendationAdminReader: dependencies.recommendationAdminReader,
+		ModelProbe:                dependencies.modelProbe,
+		LSP:                       dependencies.lsp,
+		LSPPolicy:                 dependencies.lspPolicy,
+		AuthBodyTimeout:           configuration.HTTP.AuthBodyTimeout,
+		UploadBodyTimeout:         configuration.HTTP.UploadBodyTimeout,
+		SSEMaxDuration:            configuration.HTTP.SSEMaxDuration,
+		SSEReauthInterval:         configuration.HTTP.SSEReauthInterval,
+		SSEWriteTimeout:           configuration.HTTP.SSEWriteTimeout,
+		MaxActiveSSE:              configuration.HTTP.MaxActiveSSE,
 		Capabilities: httpapi.Capabilities{
 			PintiaSnapshotSchema: pintia.SchemaV2,
 			PintiaSchemaSHA256:   pintia.ExpectedSchemaSHA256,
@@ -742,8 +733,8 @@ func productionOJPolicy(configuration config.Config) oj.Policy {
 }
 
 func validateCommand(args []string) error {
-	if len(args) != 1 || args[0] != "serve" {
-		return errors.New("usage: ascendanyd serve")
+	if len(args) != 1 || args[0] != "serve" && args[0] != "activate-model" {
+		return errors.New("usage: ascendanyd serve|activate-model")
 	}
 	return nil
 }

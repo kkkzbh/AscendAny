@@ -290,7 +290,6 @@ func newAccountTestHandler(t *testing.T, writesEnabled bool, service AccountMana
 	if !writesEnabled {
 		options.Artifacts = nil
 		options.Imports = nil
-		options.RecommendationQueue = nil
 		options.ModelProbe = nil
 	}
 	handler, err := New(options)

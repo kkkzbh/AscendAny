@@ -7,10 +7,11 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   while IFS= read -r -d '' entry; do
     name="${entry%%=*}"
     case "$name" in
-      PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_VALIDATOR_CLEAN_ENV|ASCENDANY_VALIDATION_PHASE|ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS)
+      PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_VALIDATOR_CLEAN_ENV|ASCENDANY_VALIDATION_PHASE|ASCENDANY_DEPLOYMENT_TRANSITION|ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS|ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256|ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256|ASCENDANY_FORWARD_MODEL_HEAD_REVISION)
         ;;
       PGPASSFILE)
-        [[ "${ASCENDANY_VALIDATION_PHASE-}" == "staged" ]] || validator_environment_is_clean=0
+        [[ "${ASCENDANY_VALIDATION_PHASE-}" == "staged" ||
+           "${ASCENDANY_VALIDATION_PHASE-}" == "activation" ]] || validator_environment_is_clean=0
         ;;
       *)
         validator_environment_is_clean=0
@@ -21,7 +22,11 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
         "${PATH-}" != "/usr/bin:/bin" || "${LC_ALL-}" != "C" ||
         "$validator_environment_is_clean" != "1" ]]; then
     validation_phase_input="${ASCENDANY_VALIDATION_PHASE-}"
+    deployment_transition_input="${ASCENDANY_DEPLOYMENT_TRANSITION-}"
     feedback_bindings_input="${ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS-}"
+    forward_database_fingerprint_input="${ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256-}"
+    forward_business_fingerprint_input="${ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256-}"
+    forward_model_head_revision_input="${ASCENDANY_FORWARD_MODEL_HEAD_REVISION-}"
     staged_pgpass_input="${PGPASSFILE-}"
     clean_environment=(
       /usr/bin/env -i
@@ -29,9 +34,14 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       LC_ALL=C
       ASCENDANY_VALIDATOR_CLEAN_ENV=1
       "ASCENDANY_VALIDATION_PHASE=$validation_phase_input"
+      "ASCENDANY_DEPLOYMENT_TRANSITION=$deployment_transition_input"
       "ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS=$feedback_bindings_input"
+      "ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256=$forward_database_fingerprint_input"
+      "ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256=$forward_business_fingerprint_input"
+      "ASCENDANY_FORWARD_MODEL_HEAD_REVISION=$forward_model_head_revision_input"
     )
-    if [[ "$validation_phase_input" == "staged" && -n "$staged_pgpass_input" ]]; then
+    if [[ ( "$validation_phase_input" == "staged" || "$validation_phase_input" == "activation" ) &&
+          -n "$staged_pgpass_input" ]]; then
       clean_environment+=("PGPASSFILE=$staged_pgpass_input")
     fi
     exec "${clean_environment[@]}" /usr/bin/bash -p "$0" "$@"
@@ -44,7 +54,6 @@ release_root="/opt/ascendany/v2"
 artifact_root="/var/lib/ascendany/artifacts"
 backup_root="/var/backups/ascendany"
 restore_evidence="/var/lib/ascendany-acceptance/restore-verify.json"
-trainer_evidence="/var/lib/ascendany-acceptance/trainer-latest.json"
 expected_db_user="ascendanyd_login"
 runtime_pg_host="127.0.0.1"
 runtime_pg_port="6432"
@@ -63,9 +72,15 @@ pgbouncer_binary_sha256="42c722ab7352ccbb1eaba8dcc6d7fb9d28df11fbe1a73aa8b177c88
 pgbouncer_binary_size="467960"
 pgbouncer_credential_source="/etc/ascendany/credentials/pgbouncer_userlist.cred"
 pgbouncer_runtime_credential="/run/credentials/ascendany-pgbouncer.service/pgbouncer_userlist"
-managed_ports="5432 6432 8000 18000"
+retired_api_unit="ascendany-api.service"
+retired_api_port="8000"
+managed_ports="5432 6432 18000"
 required_ports=""
 validation_phase="${ASCENDANY_VALIDATION_PHASE-}"
+deployment_transition="${ASCENDANY_DEPLOYMENT_TRANSITION-}"
+expected_forward_database_fingerprint="${ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256-}"
+expected_forward_business_fingerprint="${ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256-}"
+expected_forward_model_head_revision="${ASCENDANY_FORWARD_MODEL_HEAD_REVISION-}"
 expected_write_mode=""
 ascendanyd_active="0"
 smoke_dropin="/etc/systemd/system/ascendanyd.service.d/40-read-only-smoke.conf"
@@ -73,7 +88,13 @@ expected_runtime_feedback_credential_bindings="${ASCENDANY_EXPECTED_RUNTIME_FEED
 temporary_pgpass=""
 release_manifest_commit=""
 release_manifest_version=""
+release_manifest_build_time=""
+release_manifest_purpose=""
+release_model_sha256=""
 release_payload_verified="0"
+observed_forward_database_fingerprint=""
+observed_forward_business_fingerprint=""
+observed_forward_model_head_revision=""
 
 declare -a runtime_feedback_bindings=()
 declare -a runtime_feedback_credential_ids=()
@@ -159,7 +180,7 @@ parse_runtime_feedback_bindings() {
       continue
     fi
     case "$credential_id" in
-      admin_password|db_password|runtime_db_password|backup_db_password|migrator_db_password|restore_db_password|jwt_signing_key|password_pepper|trainer_agent_rtx_01|trainer_agent_token)
+      admin_password|db_password|runtime_db_password|backup_db_password|migrator_db_password|restore_db_password|jwt_signing_key|password_pepper)
         fail "feedback credential binding reuses a core runtime credential ID: $credential_id"
         invalid=1
         continue
@@ -210,13 +231,43 @@ validate_input_contract() {
       expected_write_mode="disabled"
       ascendanyd_active="1"
       ;;
+    activation)
+      required_ports="5432 6432"
+      expected_write_mode="enabled"
+      ascendanyd_active="0"
+      ;;
     production)
       required_ports="5432 6432 18000"
       expected_write_mode="enabled"
       ascendanyd_active="1"
       ;;
     *)
-      fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, or production"
+      fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production"
+      ;;
+  esac
+  case "$deployment_transition" in
+    initial)
+      if [[ -n "$expected_forward_database_fingerprint" ||
+            -n "$expected_forward_business_fingerprint" ||
+            -n "$expected_forward_model_head_revision" ]]; then
+        fail "initial deployment forbids forward-state trust inputs"
+      fi
+      ;;
+    forward)
+      if [[ "$validation_phase" == staged ]]; then
+        if [[ -n "$expected_forward_database_fingerprint" ||
+              -n "$expected_forward_business_fingerprint" ||
+              -n "$expected_forward_model_head_revision" ]]; then
+          fail "forward staged capture forbids pre-existing forward-state trust inputs"
+        fi
+      elif [[ ! "$expected_forward_database_fingerprint" =~ ^[0-9a-f]{64}$ ||
+              ! "$expected_forward_business_fingerprint" =~ ^[0-9a-f]{64}$ ||
+              ! "$expected_forward_model_head_revision" =~ ^[1-9][0-9]*$ ]]; then
+        fail "forward smoke, activation, and production require canonical database, business, and model-head trust inputs"
+      fi
+      ;;
+    *)
+      fail "ASCENDANY_DEPLOYMENT_TRANSITION must be exactly initial or forward"
       ;;
   esac
   parse_runtime_feedback_bindings || true
@@ -224,11 +275,52 @@ validate_input_contract() {
 }
 
 smoke_dropin_required() {
-  [[ "$validation_phase" == "staged" || "$validation_phase" == "smoke" ]]
+  [[ "$validation_phase" == "staged" || "$validation_phase" == "smoke" ||
+     "$validation_phase" == "activation" ]]
 }
 
 production_phase() {
   [[ "$validation_phase" == "production" ]]
+}
+
+activation_phase() {
+  [[ "$validation_phase" == "activation" ]]
+}
+
+initial_transition() {
+  [[ "$deployment_transition" == initial ]]
+}
+
+forward_transition() {
+  [[ "$deployment_transition" == forward ]]
+}
+
+forward_preactivation_phase() {
+  forward_transition && [[ "$validation_phase" == staged || "$validation_phase" == smoke ]]
+}
+
+forward_retained_backup_phase() {
+  forward_transition && [[ "$validation_phase" == staged || "$validation_phase" == smoke ]]
+}
+
+decimal_increment() {
+  local value="$1" index digit carry=1 result=""
+  for ((index = ${#value} - 1; index >= 0; index--)); do
+    digit="${value:index:1}"
+    if (( carry == 1 )); then
+      if [[ "$digit" == 9 ]]; then
+        digit=0
+      else
+        digit="$((digit + 1))"
+        carry=0
+      fi
+    fi
+    result="$digit$result"
+  done
+  if (( carry == 1 )); then
+    result="1$result"
+  fi
+  printf '%s\n' "$result"
 }
 
 check_effective_value() {
@@ -451,7 +543,8 @@ check_backup_timer_effective_shape() {
 check_all_unit_effective_shapes() {
   local global_service_dropin="/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
   local ascendanyd_dropins="$global_service_dropin"
-  local ascendanyd_start ascendanyd_pre admin_start admin_pre admin_environment
+  local ascendanyd_start ascendanyd_pre model_activate_start model_activate_pre model_activate_environment
+  local admin_start admin_pre admin_environment
   local backup_start backup_pre ascendanyd_environment judge_environment backup_environment
   local judge_start lsp_start migrate_start migrate_pre restore_start restore_pre restore_environment environment
   if smoke_dropin_required; then
@@ -462,11 +555,14 @@ check_all_unit_effective_shapes() {
   fi
 
   ascendanyd_start='/opt/ascendany/v2/bin/ascendanyd serve'
-  ascendanyd_pre=$'/usr/bin/test -s %d/db_password\n/usr/bin/test -s %d/jwt_signing_key\n/usr/bin/test -s %d/password_pepper\n/usr/bin/test -s %d/trainer_agent_rtx_01'
-  ascendanyd_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password\nASCENDANY_JWT_SIGNING_KEY_FILE=%d/jwt_signing_key\nASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper\nASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031=%d/trainer_agent_rtx_01'
+  ascendanyd_pre=$'/usr/bin/test -s %d/db_password\n/usr/bin/test -s %d/jwt_signing_key\n/usr/bin/test -s %d/password_pepper\n/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}'
+  ascendanyd_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password\nASCENDANY_JWT_SIGNING_KEY_FILE=%d/jwt_signing_key\nASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper'
   for environment in "${runtime_feedback_environment[@]}"; do
     ascendanyd_environment+=$'\n'"$environment"
   done
+  model_activate_start='/opt/ascendany/v2/bin/ascendanyd activate-model'
+  model_activate_pre=$'/usr/bin/test -s %d/db_password\n/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}'
+  model_activate_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password'
   backup_start='/opt/ascendany/v2/bin/ascendany-backup create'
   backup_pre='/usr/bin/test -s %d/backup_db_password'
   backup_environment=$'ASCENDANY_DATABASE_PASSWORD_FILE=%d/backup_db_password\nASCENDANY_BACKUP_RUNTIME_ROOT=/run/ascendany-backup'
@@ -490,6 +586,14 @@ check_all_unit_effective_shapes() {
     "$ascendanyd_start" \
     "$ascendanyd_pre" \
     "$ascendanyd_environment"
+  check_unit_effective_shape \
+    ascendany-model-activate.service \
+    /etc/systemd/system/ascendany-model-activate.service \
+    /var/lib/ascendany \
+    "$global_service_dropin" \
+    "$model_activate_start" \
+    "$model_activate_pre" \
+    "$model_activate_environment"
   check_unit_effective_shape \
     ascendany-judge@validation.service \
     /etc/systemd/system/ascendany-judge@.service \
@@ -550,7 +654,22 @@ check_all_unit_effective_shapes() {
   check_effective_value ascendanyd.service StandardError journal
   check_effective_value ascendanyd.service MemoryPressureWatch yes
   check_effective_value ascendanyd.service MemoryPressureThresholdUSec 200ms
+  check_effective_value ascendany-model-activate.service Type oneshot
+  check_effective_value ascendany-model-activate.service NoNewPrivileges yes
+  check_effective_value ascendany-model-activate.service ProtectSystem strict
+  check_effective_value ascendany-model-activate.service ProtectHome yes
+  check_effective_value ascendany-model-activate.service ProtectProc invisible
+  check_effective_value ascendany-model-activate.service ProcSubset pid
+  check_effective_value ascendany-model-activate.service PrivateDevices yes
+  check_effective_value ascendany-model-activate.service DevicePolicy closed
+  check_effective_value ascendany-model-activate.service RestrictNamespaces yes
+  check_effective_value ascendany-model-activate.service MemoryDenyWriteExecute yes
+  check_effective_word_set ascendany-model-activate.service RestrictAddressFamilies AF_UNIX AF_INET AF_INET6
+  check_effective_word_set ascendany-model-activate.service ReadWritePaths /var/lib/ascendany
+  check_effective_word_set ascendany-model-activate.service InaccessiblePaths \
+    /opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany
   check_effective_value ascendanyd.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-model-activate.service TimeoutStopFailureMode abort
   check_effective_value ascendany-judge@validation.service TimeoutStopFailureMode abort
   check_effective_value ascendany-lsp@validation.service TimeoutStopFailureMode abort
   check_effective_value ascendany-backup.service TimeoutStopFailureMode abort
@@ -752,14 +871,32 @@ check_unit_optional_environment_files() {
 check_ascendanyd_config_contract() {
   local path="${1:-/etc/ascendany/v2/ascendanyd.env}"
   local smoke_path="${2:-/etc/ascendany/v2/ascendanyd-read-only-smoke.env}"
-  local -a write_lines=() listen_lines=() smoke_entries=()
+  local configured_model_sha256=""
+  local -a write_lines=() listen_lines=() model_path_lines=() model_sha_lines=() model_purpose_lines=() smoke_entries=()
   mapfile -t write_lines < <(grep -E '^ASCENDANY_WRITE_MODE=' "$path" 2>/dev/null || true)
   mapfile -t listen_lines < <(grep -E '^ASCENDANY_HTTP_LISTEN=' "$path" 2>/dev/null || true)
+  mapfile -t model_path_lines < <(grep -E '^ASCENDANY_RECOMMENDATION_MODEL_PATH=' "$path" 2>/dev/null || true)
+  mapfile -t model_sha_lines < <(grep -E '^ASCENDANY_RECOMMENDATION_MODEL_SHA256=' "$path" 2>/dev/null || true)
+  mapfile -t model_purpose_lines < <(grep -E '^ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=' "$path" 2>/dev/null || true)
   mapfile -t smoke_entries < <(sed '/^#/d; /^$/d' "$smoke_path" 2>/dev/null || true)
+  if (( ${#model_sha_lines[@]} == 1 )) &&
+     [[ "${model_sha_lines[0]}" =~ ^ASCENDANY_RECOMMENDATION_MODEL_SHA256=([0-9a-f]{64})$ ]]; then
+    configured_model_sha256="${BASH_REMATCH[1]}"
+  fi
   if (( ${#write_lines[@]} != 1 )) || [[ "${write_lines[0]:-}" != "ASCENDANY_WRITE_MODE=enabled" ]]; then
     fail "ascendanyd.env must contain one production write-mode value: enabled"
   elif (( ${#listen_lines[@]} != 1 )) || [[ "${listen_lines[0]:-}" != "ASCENDANY_HTTP_LISTEN=127.0.0.1:18000" ]]; then
     fail "ascendanyd.env must contain the fixed v2 loopback listener 127.0.0.1:18000"
+  elif (( ${#model_path_lines[@]} != 1 )) ||
+       [[ "${model_path_lines[0]:-}" != "ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json" ]]; then
+    fail "ascendanyd.env must bind the immutable release recommendation model path"
+  elif [[ -z "$configured_model_sha256" || -z "$release_model_sha256" ||
+          "$configured_model_sha256" != "$release_model_sha256" ]]; then
+    fail "ascendanyd.env recommendation model digest differs from the release manifest"
+  elif (( ${#model_purpose_lines[@]} != 1 )) ||
+       [[ "${model_purpose_lines[0]:-}" != "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production" ||
+          "$release_manifest_purpose" != production ]]; then
+    fail "ascendanyd.env and release manifest must authorize only a production recommendation model"
   elif (( ${#smoke_entries[@]} != 1 )) || [[ "${smoke_entries[0]:-}" != "ASCENDANY_WRITE_MODE=disabled" ]]; then
     fail "ascendanyd read-only smoke environment must contain only the disabled write mode"
   else
@@ -771,11 +908,11 @@ check_ascendanyd_phase_state() {
   local active_state enabled_state
   active_state="$(unit_property ascendanyd.service ActiveState || true)"
   enabled_state="$(systemctl is-enabled ascendanyd.service 2>/dev/null || true)"
-  if [[ "$validation_phase" == "staged" ]]; then
+  if [[ "$validation_phase" == "staged" || "$validation_phase" == "activation" ]]; then
     if [[ "$active_state" != "inactive" ]]; then
-      fail "staged phase requires ascendanyd.service to be inactive"
+      fail "$validation_phase phase requires ascendanyd.service to be inactive"
     else
-      pass "staged phase keeps ascendanyd.service inactive"
+      pass "$validation_phase phase keeps ascendanyd.service inactive"
     fi
   elif [[ "$active_state" != "active" ]]; then
     fail "$validation_phase phase requires ascendanyd.service to be active"
@@ -793,6 +930,28 @@ check_ascendanyd_phase_state() {
     fail "$validation_phase phase requires ascendanyd.service to remain disabled"
   else
     pass "$validation_phase phase keeps ascendanyd.service disabled"
+  fi
+}
+
+check_model_activation_unit_state() {
+  local unit="ascendany-model-activate.service"
+  local active_state enabled_state
+  active_state="$(unit_property "$unit" ActiveState || true)"
+  enabled_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+  if [[ "$active_state" != inactive || "$enabled_state" != static ]]; then
+    fail "$unit must remain inactive and static outside its explicit one-shot activation window"
+    return
+  fi
+  if activation_phase || production_phase; then
+    if [[ "$(unit_property "$unit" Result || true)" != success ||
+          "$(unit_property "$unit" ExecMainCode || true)" != exited ||
+          "$(unit_property "$unit" ExecMainStatus || true)" != 0 ]]; then
+      fail "$unit has no successful completed result for the release-bound model activation"
+      return
+    fi
+    pass "$unit has one successful explicit release-bound activation result"
+  else
+    pass "$unit is inactive and cannot be enabled for boot"
   fi
 }
 
@@ -1036,7 +1195,6 @@ check_credentials() {
     db_password
     jwt_signing_key
     password_pepper
-    trainer_agent_rtx_01
   )
   for credential_id in "${runtime_feedback_credential_ids[@]}"; do
     expected_ids+=("$credential_id")
@@ -1117,9 +1275,9 @@ check_admin_bootstrap_unit() {
   enabled_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
   if [[ "$active_state" != "inactive" || "$enabled_state" != "static" ]]; then
     fail "$unit must remain inactive and static outside its one-shot bootstrap window"
-  elif [[ "$validation_phase" != "staged" &&
-          ( "$(unit_property "$unit" Result || true)" != "success" ||
-            "$(unit_property "$unit" ExecMainStatus || true)" != "0" ) ]]; then
+  elif { production_phase || forward_transition; } &&
+       [[ "$(unit_property "$unit" Result || true)" != "success" ||
+          "$(unit_property "$unit" ExecMainStatus || true)" != "0" ]]; then
     fail "$unit has no successful one-shot result after administrator bootstrap"
   else
     pass "$unit is inactive and cannot be enabled for boot"
@@ -1146,7 +1304,7 @@ check_active_ascendanyd_environment() {
     name="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     case "$name" in
-      LANG|PATH|USER|LOGNAME|HOME|SHELL|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MEMORY_PRESSURE_WATCH|MEMORY_PRESSURE_WRITE|CREDENTIALS_DIRECTORY|RUNTIME_DIRECTORY|STATE_DIRECTORY|LOGS_DIRECTORY|ASCENDANY_DATABASE_PASSWORD_FILE|ASCENDANY_JWT_SIGNING_KEY_FILE|ASCENDANY_PASSWORD_PEPPER_FILE|ASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031|ASCENDANY_CREDENTIAL_FILE_REF_HEX_*)
+      LANG|PATH|USER|LOGNAME|HOME|SHELL|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MEMORY_PRESSURE_WATCH|MEMORY_PRESSURE_WRITE|CREDENTIALS_DIRECTORY|RUNTIME_DIRECTORY|STATE_DIRECTORY|LOGS_DIRECTORY|ASCENDANY_DATABASE_PASSWORD_FILE|ASCENDANY_JWT_SIGNING_KEY_FILE|ASCENDANY_PASSWORD_PEPPER_FILE|ASCENDANY_CREDENTIAL_FILE_REF_HEX_*)
         fail "ascendanyd.env attempts to own reserved environment name $name"
         invalid=1
         continue
@@ -1171,7 +1329,6 @@ check_active_ascendanyd_environment() {
   expected[ASCENDANY_DATABASE_PASSWORD_FILE]='/run/credentials/ascendanyd.service/db_password'
   expected[ASCENDANY_JWT_SIGNING_KEY_FILE]='/run/credentials/ascendanyd.service/jwt_signing_key'
   expected[ASCENDANY_PASSWORD_PEPPER_FILE]='/run/credentials/ascendanyd.service/password_pepper'
-  expected[ASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031]='/run/credentials/ascendanyd.service/trainer_agent_rtx_01'
   for entry in "${runtime_feedback_bindings[@]}"; do
     name="${entry%%=*}"
     value="${entry#*=}"
@@ -1311,11 +1468,11 @@ check_active_ascendanyd_health() {
       (.checks.database | type == "object" and keys == ["status"] and .status == "pass") and
       (.checks.migrations | type == "object" and
         keys == ["currentVersion", "expectedVersion", "status"] and
-        .status == "pass" and .currentVersion == 5 and .expectedVersion == 5)
+        .status == "pass" and .currentVersion == 6 and .expectedVersion == 6)
     ' <<<"$readiness" >/dev/null 2>&1; then
-    fail "active ascendanyd readiness violates the schema-v5 closed response contract"
+    fail "active ascendanyd readiness violates the schema-v6 closed response contract"
   else
-    pass "active ascendanyd database and migration readiness are healthy at schema v5"
+    pass "active ascendanyd database and migration readiness are healthy at schema v6"
   fi
 }
 
@@ -1370,23 +1527,12 @@ check_release_payload() {
     bin/ascendany-judge
     bin/ascendany-lsp
     bin/ascendany-migrate
+    bin/ascendany-model
     bin/ascendany-release-ops
-    bin/ascendany-trainer-agent
-    trainers/recommendation/ascendany_recommendation_trainer/__init__.py
-    trainers/recommendation/ascendany_recommendation_trainer/__main__.py
-    trainers/recommendation/ascendany_recommendation_trainer/attestation.py
-    trainers/recommendation/ascendany_recommendation_trainer/cli.py
-    trainers/recommendation/ascendany_recommendation_trainer/contract.py
-    trainers/recommendation/ascendany_recommendation_trainer/model.py
-    trainers/recommendation/ascendany_recommendation_trainer/train.py
-    trainers/recommendation/runtime-closure-cu130.json
-    trainers/recommendation/runtime-python-cu130.json
-    trainers/recommendation/runtime-requirements-cu130.lock
-    trainers/recommendation/runtime-wheels-cu130.json
+    models/recommendation-model.json
     README.md
     OJ_JUDGE_CONTRACT.md
     LSP_CONTROL_CONTRACT.md
-    TRAINER_AGENT_CONTRACT.md
     contracts/openapi/ascendany-v2.yaml
     contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
     db/roles/README.md
@@ -1403,13 +1549,11 @@ check_release_payload() {
     config/migrate.env
     config/pgbouncer-hba.conf
     config/pgbouncer.ini
-    config/postgresql-hba-bootstrap.conf
     config/postgresql-hba.conf
-    config/postgresql-ident-bootstrap.conf
     config/postgresql-ident.conf
     config/restore.env
-    config/trainer-agent.env
     systemd/ascendanyd.service
+    systemd/ascendany-model-activate.service
     systemd/ascendanyd.service.d/40-read-only-smoke.conf
     systemd/ascendany-admin-bootstrap.service
     systemd/ascendany-backup.service
@@ -1419,7 +1563,6 @@ check_release_payload() {
     systemd/ascendany-migrate.service
     systemd/ascendany-pgbouncer.service
     systemd/ascendany-restore-verify@.service
-    systemd/ascendany-trainer-agent.service
     systemd/ascendany-cloudflared.service
     polkit-1/rules.d/60-ascendany-judge.rules
     polkit-1/rules.d/61-ascendany-lsp.rules
@@ -1427,7 +1570,6 @@ check_release_payload() {
     tmpfiles.d/ascendany-v2.conf
     scripts/publish-restore-evidence.sh
     scripts/restore-verify-operator.sh
-    scripts/install-trainer-runtime.sh
     scripts/install-v2-release.sh
     scripts/acquire-pgbouncer-rpm.sh
     scripts/acquire-judge-image.sh
@@ -1436,14 +1578,12 @@ check_release_payload() {
     scripts/judge-image-contract.sh
     scripts/preload-judge-image.sh
     scripts/provision-postgres-pgbouncer.sh
-    scripts/trainer-host-capability-identity.sh
-    scripts/trainer-runtime-tree-identity.sh
     scripts/validate-cloudflared.sh
     scripts/validate-production.sh
-    scripts/validate-trainer-host.sh
   )
   local -a required_directories=(
     bin
+    models
     config
     contracts
     contracts/openapi
@@ -1457,9 +1597,6 @@ check_release_payload() {
     systemd/ascendanyd.service.d
     sysusers.d
     tmpfiles.d
-    trainers
-    trainers/recommendation
-    trainers/recommendation/ascendany_recommendation_trainer
   )
   local -a actual_files=()
   local -a declared_files=()
@@ -1488,8 +1625,9 @@ check_release_payload() {
   fi
   if ! jq -e '
       type == "object" and
-      (keys == ["build", "commit", "files", "schema", "sourceDateEpoch", "version"]) and
+      (keys == ["build", "commit", "files", "purpose", "schema", "sourceDateEpoch", "version"]) and
       .schema == "ascendany.release.v2" and
+      .purpose == "production" and
       (.commit | type == "string" and test("^[0-9a-f]{40}$")) and
       (.version | type == "string" and length <= 128 and test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)([.]((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$")) and
       (.sourceDateEpoch | type == "number" and floor == . and . >= 0) and
@@ -1502,7 +1640,7 @@ check_release_payload() {
         (.goExperiment | type == "string" and test("^(none|[0-9A-Za-z_,.-]+)$")) and
         .gofips140 == "off" and
         .cgoEnabled == false) and
-      (.files | type == "array" and length == 77) and
+      (.files | type == "array" and length == 59) and
       (all(.files[];
         type == "object" and
         (keys == ["mode", "path", "sha256", "size"]) and
@@ -1524,6 +1662,7 @@ check_release_payload() {
 
   release_manifest_commit="$(jq -r '.commit' "$manifest")"
   release_manifest_version="$(jq -r '.version' "$manifest")"
+  release_manifest_purpose="$(jq -r '.purpose' "$manifest")"
   manifest_go_version="$(jq -r '.build.goVersion' "$manifest")"
   manifest_goos="$(jq -r '.build.goos' "$manifest")"
   manifest_goarch="$(jq -r '.build.goarch' "$manifest")"
@@ -1532,6 +1671,7 @@ check_release_payload() {
   manifest_go_fips="$(jq -r '.build.gofips140' "$manifest")"
   manifest_cgo_enabled="$(jq -r '.build.cgoEnabled' "$manifest")"
   expected_build_time="$(date -u -d "@$(jq -r '.sourceDateEpoch' "$manifest")" +%FT%TZ 2>/dev/null || true)"
+  release_manifest_build_time="$expected_build_time"
   if [[ -z "$expected_build_time" ]]; then
     fail "release sourceDateEpoch cannot be rendered as UTC build time"
   fi
@@ -1567,9 +1707,8 @@ check_release_payload() {
       fail "release manifest omits required payload: $relative"
     elif [[ "$relative" == bin/* && ! -x "$release_root/$relative" ]]; then
       fail "release binary is not executable: $relative"
-    elif [[ "$relative" == trainers/recommendation/ascendany_recommendation_trainer/*.py &&
-            ! -r "$release_root/$relative" ]]; then
-      fail "isolated trainer package source is not readable: $relative"
+    elif [[ "$relative" == "models/recommendation-model.json" ]]; then
+      release_model_sha256="$(jq -r --arg path "$relative" '.files[] | select(.path == $path) | .sha256' "$manifest")"
     fi
   done
 
@@ -1665,6 +1804,7 @@ check_installed_release_inputs() {
   local -a immutable_relatives=(
     systemd/ascendany-cloudflared.service
     systemd/ascendanyd.service
+    systemd/ascendany-model-activate.service
     systemd/ascendany-admin-bootstrap.service
     systemd/ascendany-backup.service
     systemd/ascendany-backup.timer
@@ -1681,6 +1821,7 @@ check_installed_release_inputs() {
   local -a immutable_targets=(
     /etc/systemd/system/ascendany-cloudflared.service
     /etc/systemd/system/ascendanyd.service
+    /etc/systemd/system/ascendany-model-activate.service
     /etc/systemd/system/ascendany-admin-bootstrap.service
     /etc/systemd/system/ascendany-backup.service
     /etc/systemd/system/ascendany-backup.timer
@@ -1761,13 +1902,48 @@ probe_pgbouncer_hba_rejection() {
   fi
 }
 
+check_pgbouncer_service_ownership() {
+  local package_active package_enabled package_main_pid
+
+  package_enabled="$(systemctl is-enabled "$pgbouncer_package_unit" 2>/dev/null || true)"
+  package_active="$(systemctl is-active "$pgbouncer_package_unit" 2>/dev/null || true)"
+  package_main_pid="$(unit_property "$pgbouncer_package_unit" MainPID 2>/dev/null || true)"
+  if [[ "$package_enabled" != masked || "$package_active" != inactive || "$package_main_pid" != 0 ]]; then
+    fail "package-owned PgBouncer unit must be masked, inactive, and process-free"
+  else
+    pass "release-owned PgBouncer has exclusive service ownership"
+  fi
+}
+
+check_retired_runtime_boundary() {
+  local retired_enabled retired_active retired_main_pid retired_listeners
+
+  retired_enabled="$(systemctl is-enabled "$retired_api_unit" 2>/dev/null || true)"
+  retired_active="$(systemctl is-active "$retired_api_unit" 2>/dev/null || true)"
+  retired_main_pid="$(unit_property "$retired_api_unit" MainPID 2>/dev/null || true)"
+  if [[ "$retired_enabled" != masked || "$retired_active" != inactive || "$retired_main_pid" != 0 ]]; then
+    fail "retired API unit must be masked, inactive, and process-free"
+  else
+    pass "retired API unit is permanently unavailable"
+  fi
+
+  retired_listeners="$(ss -H -ltn "sport = :$retired_api_port" 2>/dev/null || true)"
+  if [[ -n "$retired_listeners" ]]; then
+    fail "retired API TCP port $retired_api_port must have no listener"
+  else
+    pass "retired API TCP port $retired_api_port is unused"
+  fi
+}
+
 check_pgbouncer_contract() {
   local failures_before="$failures" entries metadata installed_nevra binary_sha verify_output verify_status=0
   local active enabled fragment dropins reload dynamic user group main_pid executable
   local uid_line gid_line uid_real uid_effective uid_saved uid_fs
   local gid_real gid_effective gid_saved gid_fs field value runtime_metadata
-  local relative path retired_containers
+  local relative path conflicting_containers
   local -a argv=()
+
+  check_pgbouncer_service_ownership
 
   installed_nevra="$(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' pgbouncer 2>/dev/null || true)"
   metadata="$(stat -Lc '%u:%g:%a:%s:%h' "$pgbouncer_binary" 2>/dev/null || true)"
@@ -1784,19 +1960,12 @@ check_pgbouncer_contract() {
     pass "installed PgBouncer package matches the signed Fedora runtime lock"
   fi
 
-  if [[ "$(systemctl is-enabled "$pgbouncer_package_unit" 2>/dev/null || true)" != masked ||
-        "$(systemctl is-active "$pgbouncer_package_unit" 2>/dev/null || true)" != inactive ]]; then
-    fail "package-owned PgBouncer service is not masked and inactive"
+  conflicting_containers="$(podman ps -a --format '{{.Names}}' 2>/dev/null |
+    grep -E '^ascendany-pgbouncer($|-)' || true)"
+  if [[ -n "$conflicting_containers" ]]; then
+    fail "a container conflicts with the native PgBouncer ownership boundary"
   else
-    pass "package-owned PgBouncer service is masked and inactive"
-  fi
-
-  retired_containers="$(podman ps -a --format '{{.Names}}' 2>/dev/null |
-    grep -E '^ascendany-pgbouncer($|-rollback-)' || true)"
-  if [[ -n "$retired_containers" ]]; then
-    fail "retired PgBouncer container state remains after native replacement"
-  else
-    pass "retired PgBouncer container state is absent"
+    pass "the native PgBouncer ownership boundary has no container conflict"
   fi
 
   if [[ ! -d "$pgbouncer_config_root" || -L "$pgbouncer_config_root" ||
@@ -1919,29 +2088,20 @@ check_pgbouncer_contract() {
          verifier = "SCRAM-SHA-256\\$4096:" b64 "\\$" b64 ":" b64
        }
        NR == 1 {
-         if ($0 !~ ("^\"AscendAny\" \"" verifier "\"$")) exit 1
-         first = $0
-         sub(/^"AscendAny" "/, "", first)
-         next
-       }
-       NR == 2 {
          if ($0 !~ ("^\"ascendanyd_login\" \"" verifier "\"$")) exit 1
-         second = $0
-         sub(/^"ascendanyd_login" "/, "", second)
-         if (second == first) exit 1
          next
        }
        { exit 1 }
-       END { if (NR != 2) exit 1 }
+       END { if (NR != 1) exit 1 }
      ' "$pgbouncer_runtime_credential"; then
-    fail "decrypted PgBouncer userlist violates the two-record distinct SCRAM contract"
+    fail "decrypted PgBouncer userlist violates the one-record runtime SCRAM contract"
   else
-    pass "native PgBouncer runs with the exact encrypted two-role SCRAM capability"
+    pass "native PgBouncer runs with the exact encrypted runtime SCRAM capability"
   fi
 
   if (( failures == failures_before )); then
-    probe_pgbouncer_hba_rejection ascendanyd_login AscendAny
-    probe_pgbouncer_hba_rejection AscendAny ascendany_v2
+    probe_pgbouncer_hba_rejection ascendanyd_login postgres
+    probe_pgbouncer_hba_rejection postgres ascendany_v2
   fi
 }
 
@@ -1952,34 +2112,149 @@ postgres_admin_psql() {
       PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
       LC_ALL=C \
       /usr/bin/psql -X --no-psqlrc --no-password --set=ON_ERROR_STOP=1 \
-        --username=ascendany_cluster_admin "$@"
+        --username=postgres "$@"
+}
+
+database_fingerprint_sha256() {
+  local scope="$1"
+  case "$scope" in
+    full)
+      postgres_admin_psql --dbname=ascendany_v2 --tuples-only --no-align <<'SQL' |
+SELECT format(
+  'SELECT %L || ''|'' || COALESCE(jsonb_agg(to_jsonb(row_value) ORDER BY to_jsonb(row_value)::text)::text, ''[]'') FROM %I.%I AS row_value;',
+  'table:' || table_name, table_schema, table_name
+)
+FROM information_schema.tables
+WHERE table_schema = 'ascendany' AND table_type = 'BASE TABLE'
+ORDER BY table_name
+\gexec
+SELECT format(
+  'SELECT %L || ''|'' || jsonb_build_object(''lastValue'', last_value, ''isCalled'', is_called)::text FROM %I.%I;',
+  'sequence:' || relation.relname, namespace.nspname, relation.relname
+)
+FROM pg_class AS relation
+JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+WHERE namespace.nspname = 'ascendany' AND relation.relkind = 'S'
+ORDER BY relation.relname
+\gexec
+SQL
+        LC_ALL=C sort | sha256sum | awk '{print $1}'
+      ;;
+    business)
+      postgres_admin_psql --dbname=ascendany_v2 --tuples-only --no-align <<'SQL' |
+SELECT format(
+  'SELECT %L || ''|'' || COALESCE(jsonb_agg(to_jsonb(row_value) ORDER BY to_jsonb(row_value)::text)::text, ''[]'') FROM %I.%I AS row_value;',
+  'table:' || table_name, table_schema, table_name
+)
+FROM information_schema.tables
+WHERE table_schema = 'ascendany'
+  AND table_type = 'BASE TABLE'
+  AND table_name NOT IN (
+    'recommendation_model_activation_events',
+    'recommendation_model_head',
+    'recommendation_model_releases'
+  )
+ORDER BY table_name
+\gexec
+SELECT format(
+  'SELECT %L || ''|'' || jsonb_build_object(''lastValue'', last_value, ''isCalled'', is_called)::text FROM %I.%I;',
+  'sequence:' || relation.relname, namespace.nspname, relation.relname
+)
+FROM pg_class AS relation
+JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+WHERE namespace.nspname = 'ascendany'
+  AND relation.relkind = 'S'
+  AND relation.relname <> 'recommendation_model_release_ids_seq'
+ORDER BY relation.relname
+\gexec
+SQL
+        LC_ALL=C sort | sha256sum | awk '{print $1}'
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+
+check_forward_database_state() {
+  local full_fingerprint business_fingerprint
+  forward_transition || return 0
+  production_phase && return 0
+  if ! full_fingerprint="$(database_fingerprint_sha256 full)" ||
+     ! business_fingerprint="$(database_fingerprint_sha256 business)"; then
+    fail "forward database fingerprint query failed"
+    return
+  fi
+  if [[ ! "$full_fingerprint" =~ ^[0-9a-f]{64}$ ||
+        ! "$business_fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "forward database fingerprint query returned a noncanonical digest"
+    return
+  fi
+  observed_forward_database_fingerprint="$full_fingerprint"
+  observed_forward_business_fingerprint="$business_fingerprint"
+  if [[ "$validation_phase" == staged ]]; then
+    [[ "$observed_forward_model_head_revision" =~ ^[1-9][0-9]*$ ]] || {
+      fail "forward staged capture lacks a retained model-head revision"
+      return
+    }
+    pass "forward staged capture bound every AscendAny base table and sequence"
+  elif [[ "$validation_phase" == smoke ]]; then
+    if [[ "$full_fingerprint" != "$expected_forward_database_fingerprint" ||
+          "$business_fingerprint" != "$expected_forward_business_fingerprint" ]]; then
+      fail "forward read-only smoke changed an AscendAny base table or sequence"
+    else
+      pass "forward read-only smoke preserved every AscendAny base table and sequence exactly"
+    fi
+  elif activation_phase && [[ "$business_fingerprint" != "$expected_forward_business_fingerprint" ]]; then
+    fail "forward activation changed retained business or durable-job database state"
+  elif activation_phase && [[ "$full_fingerprint" == "$expected_forward_database_fingerprint" ]]; then
+    fail "forward activation did not advance immutable recommendation model state"
+  elif activation_phase; then
+    pass "forward activation changed only recommendation model state and preserved all retained business data"
+  else
+    fail "forward database fingerprint verification reached an unsupported phase"
+  fi
 }
 
 check_provisioning_terminal_state() {
-  local retained_tombstones retained_pool_paths
-  retained_tombstones="$(find /var/lib -mindepth 1 -maxdepth 1 \
-    \( -name 'ascendany-pgbouncer-provision.initializing-*' \
-       -o -name 'ascendany-pgbouncer-provision.committed-*' \
-       -o -name 'ascendany-pgbouncer-provision.recovered-*' \) \
-    -printf '%f\n' | LC_ALL=C sort)"
+  local receipt=/var/lib/ascendany-v2-provision/receipt entries expected actual
+  local retained_pool_paths system_identifier
   retained_pool_paths="$(find /opt/ascendany/infra -mindepth 1 -maxdepth 1 \
-    \( -name '.pgbouncer.stage.*' -o -name '.pgbouncer.rollback.*' \
-       -o -name 'pgbouncer.deleting-*' \) \
+    -name '.pgbouncer.stage.*' \
     -printf '%f\n' | LC_ALL=C sort)"
-  if [[ -e /var/lib/ascendany-pgbouncer-provision ||
-        -L /var/lib/ascendany-pgbouncer-provision ||
+  entries="$(find /var/lib/ascendany-v2-provision -mindepth 1 -maxdepth 1 -printf '%f|%y\n' 2>/dev/null | LC_ALL=C sort)"
+  if [[ ! -d /var/lib/ascendany-v2-provision ||
+        -L /var/lib/ascendany-v2-provision ||
+        "$(stat -Lc '%u:%g:%a' /var/lib/ascendany-v2-provision 2>/dev/null || true)" != 0:0:700 ||
+        "$entries" != 'receipt|f' ||
+        ! -f "$receipt" || -L "$receipt" ||
+        "$(stat -Lc '%u:%g:%a:%h' "$receipt" 2>/dev/null || true)" != 0:0:400:1 ||
         -e /run/ascendany-v2-provision ||
         -L /run/ascendany-v2-provision ||
-        -n "$retained_tombstones" ||
         -n "$retained_pool_paths" ]]; then
-    fail "PostgreSQL/PgBouncer provisioning did not reach its consumed terminal state"
+    fail "PostgreSQL/PgBouncer provisioning receipt or consumed-input boundary differs"
+    return
+  fi
+  system_identifier="$(postgres_admin_psql --dbname=postgres --tuples-only --no-align --command='SELECT system_identifier FROM pg_control_system()' 2>/dev/null || true)"
+  expected="$(printf '%s\n' \
+    'schema=ascendany.postgres-pgbouncer.provision.v2' \
+    'database=ascendany_v2' \
+    "postgresSystemIdentifier=$system_identifier" \
+    "roleBootstrapSHA256=$(sha256sum "$release_root/db/roles/001_v2_roles.sql" | awk '{print $1}')" \
+    "postgresHBASHA256=$(sha256sum "$release_root/config/postgresql-hba.conf" | awk '{print $1}')" \
+    "postgresIdentSHA256=$(sha256sum "$release_root/config/postgresql-ident.conf" | awk '{print $1}')" \
+    "pgbouncerConfigSHA256=$(sha256sum "$release_root/config/pgbouncer.ini" | awk '{print $1}')" \
+    "pgbouncerHBASHA256=$(sha256sum "$release_root/config/pgbouncer-hba.conf" | awk '{print $1}')")"
+  actual="$(<"$receipt")"
+  if [[ ! "$system_identifier" =~ ^[0-9]{10,20}$ || "$actual" != "$expected" ]]; then
+    fail "PostgreSQL/PgBouncer provisioning receipt differs from live/release provenance"
   else
-    pass "PostgreSQL/PgBouncer provisioning state and plaintext input root are fully consumed"
+    pass "PostgreSQL/PgBouncer provisioning receipt binds the live cluster and release inputs"
   fi
 }
 
 check_postgresql_access_contract() {
-  local inspect_json network_json network_contract result legacy_result relative source target expected_sha actual_sha
+  local inspect_json network_json network_contract result relative source target expected_sha actual_sha
   local expected_size metadata file_mtime hba_mtime='' ident_mtime=''
 
   if ! podman container exists ascendany-postgres >/dev/null 2>&1 ||
@@ -2043,7 +2318,7 @@ check_postgresql_access_contract() {
   if ! result="$(postgres_admin_psql --dbname=postgres --tuples-only --no-align --field-separator='|' \
     --set=hba_mtime="$hba_mtime" --set=ident_mtime="$ident_mtime" <<'SQL'
 SELECT
-  current_user = 'ascendany_cluster_admin',
+  current_user = 'postgres',
   current_setting('server_version_num')::int / 10000 = 17,
   current_setting('password_encryption') = 'scram-sha-256',
   current_setting('fsync') = 'on',
@@ -2057,42 +2332,19 @@ SELECT
   NOT EXISTS (SELECT 1 FROM pg_ident_file_mappings WHERE error IS NOT NULL),
   EXISTS (
     SELECT 1 FROM pg_authid AS auth
-    WHERE auth.oid = 10 AND auth.rolname = 'ascendany_cluster_admin'
+    WHERE auth.rolname = 'postgres'
       AND auth.rolcanlogin AND auth.rolsuper AND NOT auth.rolinherit
       AND NOT auth.rolcreatedb AND NOT auth.rolcreaterole
       AND NOT auth.rolreplication AND NOT auth.rolbypassrls
       AND auth.rolconnlimit = -1 AND auth.rolpassword IS NULL
       AND (SELECT config.rolconfig FROM pg_roles AS config WHERE config.oid = auth.oid) IS NULL
-      AND shobj_description(auth.oid, 'pg_authid') = 'ascendany.cluster.bootstrap.v2'
+      AND shobj_description(auth.oid, 'pg_authid') = 'ascendany.postgres.dba.v2'
   ),
-  EXISTS (
-    SELECT 1 FROM pg_authid AS auth
-    WHERE auth.oid <> 10 AND auth.rolname = 'AscendAny'
-      AND auth.rolcanlogin AND NOT auth.rolsuper AND auth.rolinherit
-      AND NOT auth.rolcreatedb AND NOT auth.rolcreaterole
-      AND NOT auth.rolreplication AND NOT auth.rolbypassrls
-      AND auth.rolconnlimit = -1
-      AND (SELECT config.rolconfig FROM pg_roles AS config WHERE config.oid = auth.oid) IS NULL
-      AND auth.rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$'
-      AND shobj_description(auth.oid, 'pg_authid') = 'ascendany.legacy.runtime.v2'
-  ),
-  NOT EXISTS (
-    SELECT 1 FROM pg_auth_members AS edge
-    WHERE edge.roleid IN (
-      SELECT oid FROM pg_roles WHERE rolname IN ('AscendAny', 'ascendany_cluster_admin')
-    ) OR edge.member IN (
-      SELECT oid FROM pg_roles WHERE rolname IN ('AscendAny', 'ascendany_cluster_admin')
-    )
-  ),
-  (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'AscendAny') = 'ascendany_cluster_admin',
-  (SELECT count(*) FROM pg_database
-   WHERE datname IN ('AscendAny', 'postgres', 'template0', 'template1')
-     AND datdba = 10) = 4,
   (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'ascendany_v2') = 'ascendany_database_owner',
   (SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname !~ '^pg_') =
-    'AscendAny,ascendany_backup,ascendany_backup_login,ascendany_cluster_admin,ascendany_database_owner,ascendany_migrator,ascendany_migrator_login,ascendany_owner,ascendany_restore_login,ascendany_runtime,ascendanyd_login',
+    'ascendany_backup,ascendany_backup_login,ascendany_database_owner,ascendany_migrator,ascendany_migrator_login,ascendany_owner,ascendany_restore_login,ascendany_runtime,ascendanyd_login,postgres',
   (SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database) =
-    'AscendAny,ascendany_v2,postgres,template0,template1',
+    'ascendany_v2,postgres,template0,template1',
   NOT EXISTS (SELECT 1 FROM pg_db_role_setting),
   NOT EXISTS (SELECT 1 FROM pg_replication_slots),
   (SELECT count(*) = 4 AND count(DISTINCT rolpassword) = 4
@@ -2105,39 +2357,309 @@ SELECT
 SQL
 )"; then
     fail "PostgreSQL peer-admin access or role/HBA catalog verification failed"
-  elif [[ "$result" != 't|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t' ]]; then
-    fail "PostgreSQL durability, loaded access-file receipt, bootstrap split, or ownership differs from the closed contract"
+  elif [[ "$result" != 't|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t|t' ]]; then
+    fail "PostgreSQL durability, loaded access-file receipt, DBA role or v2 ownership differs from the closed contract"
   else
-    pass "PostgreSQL durability, loaded access-file receipt, bootstrap split, and ownership match the closed contract"
+    pass "PostgreSQL durability, loaded access-file receipt, DBA role and v2 ownership match the closed contract"
   fi
-  if ! legacy_result="$(postgres_admin_psql --dbname=AscendAny --tuples-only --no-align --field-separator='|' <<'SQL'
-SELECT pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = 'ascendany.import_tasks'::regclass)) = 'AscendAny',
-       pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = 'ascendany.import_task_events'::regclass)) = 'AscendAny',
-       (SELECT string_agg(nspname, ',' ORDER BY nspname)
-        FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema') = 'ascendany,public',
-       NOT EXISTS (
-         SELECT 1 FROM pg_proc AS routine
-         JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
-         WHERE namespace.nspname !~ '^pg_' AND namespace.nspname <> 'information_schema'
-       );
+}
+
+check_backup_model_provenance() {
+  local backup_id="$1" manifest_path="$2" evidence_path="$3"
+  local model_path="$release_root/models/recommendation-model.json"
+  local actual_manifest_sha installed_model_sha installed_model_size installed_model_manifest_sha
+
+  actual_manifest_sha="$(sha256sum -- "$manifest_path" 2>/dev/null | awk '{print $1}')"
+  installed_model_sha="$(sha256sum -- "$model_path" 2>/dev/null | awk '{print $1}')"
+  installed_model_size="$(stat -Lc '%s' -- "$model_path" 2>/dev/null || true)"
+  if ! installed_model_manifest_sha="$(jq -jSc '{
+      schema: .schema,
+      modelId: .manifest.modelId,
+      purpose: .manifest.purpose,
+      trainedAt: .manifest.trainedAt,
+      algorithm: .manifest.algorithm,
+      inferenceContract: .manifest.inferenceContract,
+      trainingProvenanceSha256: .manifest.trainingProvenanceSha256,
+      featureSchemaSha256: .manifest.featureSchemaSha256,
+      knowledgeCatalogSha256: .manifest.knowledgeCatalogSha256,
+      parameterSha256: .manifest.parameterSha256,
+      goldenVectorsSha256: .manifest.goldenVectorsSha256,
+      actorFeatureIds: .manifest.actorFeatureIds,
+      problemFeatureIds: .manifest.problemFeatureIds,
+      knowledgePointIds: .manifest.knowledgePointIds
+    }' "$model_path" | sha256sum | awk '{print $1}')"; then
+    fail "installed recommendation model manifest cannot be canonicalized for backup validation"
+    return 1
+  fi
+  if [[ ! "$actual_manifest_sha" =~ ^[0-9a-f]{64}$ ||
+        "$installed_model_sha" != "$release_model_sha256" ||
+        ! "$installed_model_size" =~ ^[1-9][0-9]*$ ||
+        ! "$installed_model_manifest_sha" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "backup model validation lacks an intact current release/model trust anchor"
+    return 1
+  fi
+
+  if ! jq -e \
+      --arg backupId "$backup_id" \
+      --arg manifestSHA256 "$actual_manifest_sha" \
+      --arg releaseCommit "$release_manifest_commit" \
+      --arg releaseVersion "$release_manifest_version" \
+      --arg releaseBuildTime "$release_manifest_build_time" \
+      --arg releasePurpose "$release_manifest_purpose" \
+      --arg releaseModelSHA256 "$release_model_sha256" \
+      --arg installedModelManifestSHA256 "$installed_model_manifest_sha" \
+      --argjson installedModelSize "$installed_model_size" \
+      --slurpfile evidence "$evidence_path" \
+      --slurpfile model "$model_path" '
+        def sha256: type == "string" and test("^[0-9a-f]{64}$");
+        def utc_timestamp:
+          type == "string" and
+          test("^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$");
+        . as $bundle |
+        ($model | length == 1) and ($evidence | length == 1) and
+        (keys == ["artifacts", "backupId", "createdAt", "database", "schema"]) and
+        .schema == "ascendany.backup.bundle.v2" and
+        .backupId == $backupId and
+        (.createdAt | utc_timestamp) and
+        (.database | type == "object" and
+          keys == ["databaseName", "file", "migrations", "recommendationModel"]) and
+        .database.databaseName == "ascendany_v2" and
+        (.database.recommendationModel | type == "object" and
+          keys == [
+            "activatedAt", "algorithm", "applicationBuildTime", "applicationCommit",
+            "applicationVersion", "artifactMode", "artifactSha256", "artifactSizeBytes",
+            "featureSchemaSha256", "goldenVectorsSha256", "headRevision", "headUpdatedAt",
+            "inferenceContract", "knowledgeCatalogSha256", "manifest", "manifestSha256",
+            "modelId", "modelPurpose", "modelSchema", "parameterSha256", "releaseCreatedAt", "releaseId",
+            "trainedAt", "trainingProvenanceSha256"
+          ]) and
+        (.database.recommendationModel as $binding |
+          ($binding.releaseId | type == "number" and floor == . and . > 0) and
+          ($binding.headRevision | type == "number" and floor == . and . > 0) and
+          ($binding.modelId | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+          $binding.artifactSha256 == $releaseModelSHA256 and
+          $binding.artifactSizeBytes == $installedModelSize and
+          $binding.artifactMode == 420 and
+          $binding.modelSchema == $model[0].schema and
+          $binding.modelPurpose == $releasePurpose and $releasePurpose == "production" and
+          $binding.modelPurpose == $model[0].manifest.purpose and
+          $binding.algorithm == $model[0].manifest.algorithm and
+          $binding.inferenceContract == $model[0].manifest.inferenceContract and
+          $binding.trainedAt == $model[0].manifest.trainedAt and
+          ($binding.trainedAt | utc_timestamp) and
+          $binding.trainingProvenanceSha256 == $model[0].manifest.trainingProvenanceSha256 and
+          $binding.featureSchemaSha256 == $model[0].manifest.featureSchemaSha256 and
+          $binding.knowledgeCatalogSha256 == $model[0].manifest.knowledgeCatalogSha256 and
+          $binding.parameterSha256 == $model[0].manifest.parameterSha256 and
+          $binding.goldenVectorsSha256 == $model[0].manifest.goldenVectorsSha256 and
+          ($binding.trainingProvenanceSha256 | sha256) and
+          ($binding.featureSchemaSha256 | sha256) and
+          ($binding.knowledgeCatalogSha256 | sha256) and
+          ($binding.parameterSha256 | sha256) and
+          ($binding.goldenVectorsSha256 | sha256) and
+          ($binding.manifestSha256 | sha256) and
+          ($binding.releaseCreatedAt | utc_timestamp) and
+          ($binding.activatedAt | utc_timestamp) and
+          ($binding.headUpdatedAt | utc_timestamp) and
+          $binding.applicationVersion == $releaseVersion and
+          $binding.applicationCommit == $releaseCommit and
+          $binding.applicationBuildTime == $releaseBuildTime and
+          ($binding.manifest | type == "object" and keys == [
+            "actorFeatureIds", "algorithm", "featureSchemaSha256", "goldenVectorsSha256",
+            "inferenceContract", "knowledgeCatalogSha256", "knowledgePointIds", "modelId",
+            "parameterSha256", "problemFeatureIds", "purpose", "schema", "trainedAt",
+            "trainingProvenanceSha256"
+          ]) and
+          $binding.manifest == ($model[0] | {
+            schema: .schema,
+            modelId: .manifest.modelId,
+            purpose: .manifest.purpose,
+            trainedAt: .manifest.trainedAt,
+            algorithm: .manifest.algorithm,
+            inferenceContract: .manifest.inferenceContract,
+            trainingProvenanceSha256: .manifest.trainingProvenanceSha256,
+            featureSchemaSha256: .manifest.featureSchemaSha256,
+            knowledgeCatalogSha256: .manifest.knowledgeCatalogSha256,
+            parameterSha256: .manifest.parameterSha256,
+            goldenVectorsSha256: .manifest.goldenVectorsSha256,
+            actorFeatureIds: .manifest.actorFeatureIds,
+            problemFeatureIds: .manifest.problemFeatureIds,
+            knowledgePointIds: .manifest.knowledgePointIds
+          }) and
+          $binding.manifestSha256 == $installedModelManifestSHA256 and
+          ($evidence[0] as $proof |
+            ($proof | type == "object" and keys == [
+              "artifactCount", "backupId", "databaseName", "level", "manifestSHA256",
+              "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion",
+              "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId",
+              "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit",
+              "releaseVersion", "time"
+            ]) and
+            $proof.level == "INFO" and $proof.msg == "backup restore verified" and
+            $proof.backupId == $backupId and $proof.manifestSHA256 == $manifestSHA256 and
+            $proof.databaseName == "ascendany_v2_restore_verify" and
+            $proof.releaseCommit == $releaseCommit and $proof.releaseVersion == $releaseVersion and
+            $proof.artifactCount == $bundle.artifacts.count and
+            $proof.modelId == $binding.modelId and
+            $proof.modelArtifactSHA256 == $binding.artifactSha256 and
+            $proof.modelPurpose == $binding.modelPurpose and
+            $proof.modelHeadRevision == $binding.headRevision and
+            $proof.modelApplicationVersion == $binding.applicationVersion and
+            $proof.modelApplicationCommit == $binding.applicationCommit and
+            $proof.modelApplicationBuildTime == $binding.applicationBuildTime and
+            $proof.modelFeatureSchemaSHA256 == $binding.featureSchemaSha256 and
+            $proof.modelKnowledgeCatalogSHA256 == $binding.knowledgeCatalogSha256 and
+            $proof.modelManifestSHA256 == $binding.manifestSha256 and
+            ($proof.time | utc_timestamp)
+          )
+        )
+      ' "$manifest_path" >/dev/null 2>&1; then
+    fail "latest backup and restore evidence do not bind the complete current recommendation model provenance"
+    return 1
+  fi
+  pass "latest backup and restore evidence bind the complete current recommendation model provenance"
+}
+
+check_retained_backup_model_provenance() {
+  local backup_id="$1" manifest_path="$2" evidence_path="$3"
+  local actual_manifest_sha expected live
+  actual_manifest_sha="$(sha256sum -- "$manifest_path" 2>/dev/null | awk '{print $1}')"
+  if [[ ! "$actual_manifest_sha" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "retained backup manifest has no canonical SHA-256"
+    return 1
+  fi
+  if ! expected="$(jq -er \
+      --arg backupId "$backup_id" \
+      --arg manifestSHA256 "$actual_manifest_sha" \
+      --slurpfile evidence "$evidence_path" '
+        def sha256: type == "string" and test("^[0-9a-f]{64}$");
+        def utc_timestamp:
+          type == "string" and
+          test("^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$");
+        . as $bundle |
+        $bundle.database.recommendationModel as $model |
+        $evidence[0] as $proof |
+        select(
+          ($evidence | length == 1) and
+          ($bundle | type == "object" and keys == ["artifacts", "backupId", "createdAt", "database", "schema"]) and
+          $bundle.schema == "ascendany.backup.bundle.v2" and $bundle.backupId == $backupId and
+          ($bundle.createdAt | utc_timestamp) and
+          ($bundle.database | type == "object" and keys == ["databaseName", "file", "migrations", "recommendationModel"]) and
+          $bundle.database.databaseName == "ascendany_v2" and
+          ($bundle.database.migrations | type == "array" and length == 6 and .[-1].version == 6) and
+          ($model | type == "object" and keys == [
+            "activatedAt", "algorithm", "applicationBuildTime", "applicationCommit",
+            "applicationVersion", "artifactMode", "artifactSha256", "artifactSizeBytes",
+            "featureSchemaSha256", "goldenVectorsSha256", "headRevision", "headUpdatedAt",
+            "inferenceContract", "knowledgeCatalogSha256", "manifest", "manifestSha256",
+            "modelId", "modelPurpose", "modelSchema", "parameterSha256", "releaseCreatedAt", "releaseId",
+            "trainedAt", "trainingProvenanceSha256"
+          ]) and
+          ($model.releaseId | type == "number" and floor == . and . > 0) and
+          ($model.headRevision | type == "number" and floor == . and . > 0) and
+          ($model.modelId | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+          ($model.artifactSha256 | sha256) and
+          ($model.artifactSizeBytes | type == "number" and floor == . and . > 0 and . <= 16777216) and
+          $model.artifactMode == 420 and
+          $model.modelSchema == "ascendany.recommendation.inference-model.v1" and
+          $model.modelPurpose == "production" and
+          $model.algorithm == "knowledge_mirt_feature_v1" and
+          $model.inferenceContract == "ascendany.recommendation.inference.v1" and
+          ($model.trainingProvenanceSha256 | sha256) and
+          ($model.featureSchemaSha256 | sha256) and
+          ($model.knowledgeCatalogSha256 | sha256) and
+          ($model.parameterSha256 | sha256) and
+          ($model.goldenVectorsSha256 | sha256) and
+          ($model.manifestSha256 | sha256) and
+          ($model.applicationVersion | type == "string" and length > 0 and length <= 128) and
+          ($model.applicationCommit | type == "string" and test("^[0-9a-f]{40}$")) and
+          ($model.applicationBuildTime | utc_timestamp) and
+          ($model.trainedAt | utc_timestamp) and
+          ($model.releaseCreatedAt | utc_timestamp) and
+          ($model.activatedAt | utc_timestamp) and
+          ($model.headUpdatedAt | utc_timestamp) and
+          ($model.manifest | type == "object" and
+            .schema == $model.modelSchema and
+            .modelId == $model.modelId and
+            .purpose == $model.modelPurpose and
+            .trainedAt == $model.trainedAt and
+            .algorithm == $model.algorithm and
+            .inferenceContract == $model.inferenceContract and
+            .trainingProvenanceSha256 == $model.trainingProvenanceSha256 and
+            .featureSchemaSha256 == $model.featureSchemaSha256 and
+            .knowledgeCatalogSha256 == $model.knowledgeCatalogSha256 and
+            .parameterSha256 == $model.parameterSha256 and
+            .goldenVectorsSha256 == $model.goldenVectorsSha256) and
+          ($proof | type == "object" and keys == [
+            "artifactCount", "backupId", "databaseName", "level", "manifestSHA256",
+            "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion",
+            "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId",
+            "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit",
+            "releaseVersion", "time"
+          ]) and
+          $proof.level == "INFO" and $proof.msg == "backup restore verified" and
+          $proof.backupId == $backupId and $proof.manifestSHA256 == $manifestSHA256 and
+          $proof.databaseName == "ascendany_v2_restore_verify" and
+          $proof.releaseCommit == $model.applicationCommit and
+          $proof.releaseVersion == $model.applicationVersion and
+          $proof.modelId == $model.modelId and
+          $proof.modelPurpose == $model.modelPurpose and
+          $proof.modelArtifactSHA256 == $model.artifactSha256 and
+          $proof.modelHeadRevision == $model.headRevision and
+          $proof.modelApplicationVersion == $model.applicationVersion and
+          $proof.modelApplicationCommit == $model.applicationCommit and
+          $proof.modelApplicationBuildTime == $model.applicationBuildTime and
+          $proof.modelFeatureSchemaSHA256 == $model.featureSchemaSha256 and
+          $proof.modelKnowledgeCatalogSHA256 == $model.knowledgeCatalogSha256 and
+          $proof.modelManifestSHA256 == $model.manifestSha256 and
+          $proof.artifactCount == $bundle.artifacts.count and
+          ($proof.time | utc_timestamp)
+        ) |
+        [
+          $model.modelId, $model.artifactSha256, ($model.headRevision | tostring),
+          $model.applicationVersion, $model.applicationCommit, $model.applicationBuildTime,
+          $model.knowledgeCatalogSha256, $model.manifestSha256
+        ] | join("|")
+      ' "$manifest_path" 2>/dev/null)"; then
+    fail "retained backup and restore evidence violate the closed prior-production provenance contract"
+    return 1
+  fi
+  if ! live="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+SELECT model.model_id::text,
+       model.artifact_sha256,
+       head.head_revision,
+       event.application_version,
+       event.application_commit,
+       event.application_build_time,
+       model.knowledge_catalog_sha256,
+       model.manifest_sha256
+FROM ascendany.recommendation_model_head AS head
+JOIN ascendany.recommendation_model_releases AS model
+  ON model.recommendation_model_release_id = head.current_release_id
+JOIN ascendany.recommendation_model_activation_events AS event
+  ON event.head_revision = head.head_revision
+ AND event.recommendation_model_release_id = head.current_release_id
+ AND event.artifact_sha256 = model.artifact_sha256
+WHERE head.singleton
 SQL
-)"; then
-    fail "legacy task ownership verification failed"
-  elif [[ "$legacy_result" != 't|t|t|t' ]]; then
-    fail "legacy import task relations are outside the narrowed application owner boundary"
-  else
-    pass "legacy import task relations retain the narrowed application owner boundary"
+  )"; then
+    fail "retained backup provenance cannot read the live prior model head"
+    return 1
   fi
+  if [[ "$live" != "$expected" ]]; then
+    fail "retained backup and restore evidence differ from the live prior model head"
+    return 1
+  fi
+  pass "retained backup and restore evidence bind the live prior model head"
 }
 
 check_backup_schedule() {
   local timer="ascendany-backup.timer"
   local service="ascendany-backup.service"
-  local latest_backup latest_manifest evidence_backup evidence_manifest_sha evidence_time
-  local evidence_release_commit evidence_release_version
-  local actual_manifest_sha evidence_epoch now_epoch evidence_parent manifest_epoch
+  local latest_backup latest_manifest evidence_time
+  local evidence_epoch now_epoch evidence_parent manifest_epoch
   local next_elapse next_elapse_epoch service_started service_started_epoch service_exited service_exited_epoch
-  local scratch_database_count restore_state
+  local scratch_database_count restore_state provenance_valid=0
   local backup_binary="$release_root/bin/ascendany-backup"
   local restore_lock_directory="/run/ascendany-restore-operator"
 
@@ -2194,12 +2716,12 @@ check_backup_schedule() {
   elif ! runuser -u ascendany-restore -- test -r "$latest_manifest"; then
     fail "restore verifier identity cannot read the published backup bundle"
   elif ! jq -e --arg id "$latest_backup" '
-      .schema == "ascendany.backup.bundle.v1" and
+      .schema == "ascendany.backup.bundle.v2" and
       .backupId == $id and
       .database.databaseName == "ascendany_v2" and
-      (.database.migrations | length == 5 and .[-1].version == 5)
+      (.database.migrations | length == 6 and .[-1].version == 6)
     ' "$latest_manifest" >/dev/null 2>&1; then
-    fail "latest backup manifest is missing, malformed, or not schema v5: $latest_backup"
+    fail "latest backup manifest is missing, malformed, or not schema v6: $latest_backup"
   elif ! runuser -u ascendany-backup -- env -i \
       PATH=/usr/bin:/bin \
       ASCENDANY_BACKUP_ROOT="$backup_root" \
@@ -2212,7 +2734,7 @@ check_backup_schedule() {
       "$backup_binary" verify "$latest_backup" >/dev/null 2>&1; then
     fail "latest backup bundle failed live verification: $latest_backup"
   else
-    pass "latest schema-v5 backup passed live verification: $latest_backup"
+    pass "latest schema-v6 backup passed live verification: $latest_backup"
   fi
   if production_phase; then
     manifest_epoch="$(jq -er '.createdAt | fromdateiso8601' "$latest_manifest" 2>/dev/null || true)"
@@ -2239,40 +2761,22 @@ check_backup_schedule() {
     fail "restore verification evidence must be a canonical root:root 0600 file in a root:root 0700 directory"
     return
   fi
-  if ! jq -e '
-      type == "object" and
-      (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "msg", "releaseCommit", "releaseVersion", "time"]) and
-      .level == "INFO" and
-      .msg == "backup restore verified" and
-      .databaseName == "ascendany_v2_restore_verify" and
-      (.artifactCount | type == "number" and floor == . and . >= 0) and
-      (.releaseCommit | type == "string" and test("^[0-9a-f]{40}$")) and
-      (.releaseVersion | type == "string") and
-      (.time | type == "string")
-    ' "$restore_evidence" >/dev/null 2>&1 ||
-     ! evidence_backup="$(jq -er '.backupId | select(type == "string" and test("^backup-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"))' "$restore_evidence")" ||
-     ! evidence_manifest_sha="$(jq -er '.manifestSHA256 | select(type == "string" and test("^[0-9a-f]{64}$"))' "$restore_evidence")" ||
-     ! evidence_release_commit="$(jq -er '.releaseCommit' "$restore_evidence")" ||
-     ! evidence_release_version="$(jq -er '.releaseVersion' "$restore_evidence")" ||
-     ! evidence_time="$(jq -er '.time' "$restore_evidence")"; then
-    fail "restore verification evidence is malformed"
-    return
-  fi
-  latest_manifest="$backup_root/$evidence_backup/manifest.json"
-  actual_manifest_sha="$(sha256sum -- "$latest_manifest" 2>/dev/null | awk '{print $1}')"
-  evidence_epoch="$(date -u -d "$evidence_time" +%s 2>/dev/null || true)"
-  now_epoch="$(date -u +%s)"
-  if [[ "$evidence_release_commit" != "$release_manifest_commit" ||
-        "$evidence_release_version" != "$release_manifest_version" ]]; then
-    fail "restore verification evidence belongs to a different release"
-  elif [[ -z "$actual_manifest_sha" || "$actual_manifest_sha" != "$evidence_manifest_sha" ]]; then
-    fail "restore verification evidence does not bind an existing backup manifest"
-  elif ! jq -e '.database.migrations | length == 5 and .[-1].version == 5' "$latest_manifest" >/dev/null 2>&1; then
-    fail "restore verification evidence does not bind a schema-v5 backup"
-  elif [[ -z "$evidence_epoch" || "$evidence_epoch" -gt "$now_epoch" || $((now_epoch - evidence_epoch)) -gt 2678400 ]]; then
-    fail "restore verification evidence is invalid or older than 31 days"
+  if forward_preactivation_phase; then
+    check_retained_backup_model_provenance "$latest_backup" "$latest_manifest" "$restore_evidence" &&
+      provenance_valid=1
   else
-    pass "recent destructive restore verification evidence binds schema v5"
+    check_backup_model_provenance "$latest_backup" "$latest_manifest" "$restore_evidence" &&
+      provenance_valid=1
+  fi
+  if (( provenance_valid == 1 )); then
+    evidence_time="$(jq -er '.time' "$restore_evidence" 2>/dev/null || true)"
+    evidence_epoch="$(date -u -d "$evidence_time" +%s 2>/dev/null || true)"
+    now_epoch="$(date -u +%s)"
+    if [[ -z "$evidence_epoch" || "$evidence_epoch" -gt "$now_epoch" || $((now_epoch - evidence_epoch)) -gt 2678400 ]]; then
+      fail "restore verification evidence is invalid or older than 31 days"
+    else
+      pass "recent destructive restore verification evidence binds the latest schema-v6 backup"
+    fi
   fi
 
   restore_state="$(unit_property ascendany-restore-verify@validation.service ActiveState || true)"
@@ -2429,35 +2933,23 @@ FROM ascendany.auth_accounts AS account"
     fail "administrator bootstrap database evidence is noncanonical"
     return
   fi
-  case "$validation_phase" in
-    staged)
-      if [[ "$admin_count:$active_admin_count:$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "0:0:0:0:0" ]]; then
-        fail "staged database must contain no administrator or bootstrap audit before the one-shot bootstrap"
-      else
-        pass "staged database contains no administrator before bootstrap"
-      fi
-      ;;
-    smoke)
-      if [[ "$admin_count:$active_admin_count:$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "1:1:1:1:1" ]]; then
-        fail "smoke database must contain exactly one canonical active bootstrap administrator and audit"
-      else
-        pass "smoke database contains exactly one canonical active bootstrap administrator and audit"
-      fi
-      ;;
-    production)
-      if (( admin_count < 1 || active_admin_count < 1 )) ||
-         [[ "$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "1:1:1" ]]; then
-        fail "production database lacks the canonical active bootstrap administrator or exact bootstrap audit"
-      else
-        pass "production database retains the canonical active bootstrap administrator and exact audit"
-      fi
-      ;;
-  esac
+  if initial_transition && ! production_phase; then
+    if [[ "$admin_count:$active_admin_count:$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "0:0:0:0:0" ]]; then
+      fail "initial preactivation database must contain no administrator or bootstrap audit"
+    else
+      pass "initial preactivation database contains no administrator before bootstrap"
+    fi
+  elif (( admin_count < 1 || active_admin_count < 1 )) ||
+       [[ "$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "1:1:1" ]]; then
+    fail "$deployment_transition $validation_phase database lacks the canonical active bootstrap administrator or exact bootstrap audit"
+  else
+    pass "$deployment_transition $validation_phase database retains the canonical active bootstrap administrator and exact audit"
+  fi
 }
 
 check_database_role() {
   local result db_user superuser createdb createrole replication bypassrls owner_member
-  local runtime_v2_connect runtime_legacy_connect legacy_v2_connect
+  local runtime_v2_connect
   local credential_file roles_verifier
 
   if [[ "$release_payload_verified" != "1" ]]; then
@@ -2465,16 +2957,16 @@ check_database_role() {
     return
   fi
 
-  if [[ "$validation_phase" == "staged" ]]; then
+  if [[ "$validation_phase" == "staged" || "$validation_phase" == "activation" ]]; then
     if [[ -z "${PGPASSFILE:-}" || ! -f "$PGPASSFILE" || -L "$PGPASSFILE" ||
           "$PGPASSFILE" != "$(realpath -m -- "$PGPASSFILE" 2>/dev/null || true)" ||
           "$PGPASSFILE" != "$(realpath -e -- "$PGPASSFILE" 2>/dev/null || true)" ||
           "$(stat -Lc '%u:%g:%a:%h' "$PGPASSFILE" 2>/dev/null || true)" != "0:0:600:1" ]] ||
        ! check_root_owned_ancestry "$PGPASSFILE" 1; then
-      fail "staged phase requires an explicit canonical root:root 0600 single-link operator PGPASSFILE"
+      fail "$validation_phase phase requires an explicit canonical root:root 0600 single-link operator PGPASSFILE"
       return
     fi
-    pass "staged phase uses an explicit protected operator PGPASSFILE"
+    pass "$validation_phase phase uses an explicit protected operator PGPASSFILE"
   fi
 
   credential_file="/run/credentials/ascendanyd.service/db_password"
@@ -2515,9 +3007,7 @@ check_database_role() {
               rolreplication,
               rolbypassrls,
               pg_has_role(current_user, 'ascendany_owner', 'MEMBER'),
-              has_database_privilege(current_user, 'ascendany_v2', 'CONNECT'),
-              has_database_privilege(current_user, 'AscendAny', 'CONNECT'),
-              has_database_privilege('AscendAny', 'ascendany_v2', 'CONNECT')
+              has_database_privilege(current_user, 'ascendany_v2', 'CONNECT')
        FROM pg_roles
        WHERE rolname = current_user"
   )"; then
@@ -2525,17 +3015,17 @@ check_database_role() {
     return
   fi
   IFS='|' read -r db_user superuser createdb createrole replication bypassrls owner_member \
-    runtime_v2_connect runtime_legacy_connect legacy_v2_connect <<<"$result"
+    runtime_v2_connect <<<"$result"
   if [[ "$db_user" != "$expected_db_user" ]]; then
     fail "database authenticated as $db_user; expected $expected_db_user"
   elif [[ "$superuser" == "t" || "$createdb" == "t" || "$createrole" == "t" || "$replication" == "t" || "$bypassrls" == "t" ]]; then
     fail "runtime database role owns cluster-level privilege"
   elif [[ "$owner_member" == "t" ]]; then
     fail "runtime database role is a member of ascendany_owner"
-  elif [[ "$runtime_v2_connect:$runtime_legacy_connect:$legacy_v2_connect" != "t:f:f" ]]; then
-    fail "runtime and legacy database CONNECT capabilities are not isolated"
+  elif [[ "$runtime_v2_connect" != t ]]; then
+    fail "runtime database role cannot connect to ascendany_v2"
   else
-    pass "runtime database role is non-superuser, outside owner membership, and isolated from the legacy database"
+    pass "runtime database role is non-superuser, outside owner membership, and limited to ascendany_v2"
   fi
 
   roles_verifier="$release_root/db/roles/verify_v2_roles.sql"
@@ -2546,133 +3036,156 @@ check_database_role() {
   fi
 }
 
-check_trainer_acceptance_receipt() {
-  local evidence_parent run_id attempt_token agent_id request_sha input_sha output_sha model_id disposition
-  local runtime_construction runtime_provenance runtime_tree host_capability runtime_attestation
-  local result stored_input stored_request stored_result stored_model stored_output stored_status
-  local stored_runtime_construction stored_runtime_provenance stored_runtime_tree
-  local stored_host_capability stored_runtime_attestation model_runtime_construction
-  local model_runtime_provenance model_runtime_tree model_host_capability model_runtime_attestation
-  local expected_status artifact_path
-  evidence_parent="$(dirname -- "$trainer_evidence")"
-  if [[ "$trainer_evidence" != /* || "$trainer_evidence" != "$(realpath -m -- "$trainer_evidence")" ||
-        ! -f "$trainer_evidence" || -L "$trainer_evidence" ||
-        "$trainer_evidence" != "$(realpath -e -- "$trainer_evidence" 2>/dev/null || true)" ||
-        "$(stat -Lc '%u:%g:%a:%h' "$trainer_evidence" 2>/dev/null || true)" != "0:0:600:1" ||
-        ! -d "$evidence_parent" || -L "$evidence_parent" ||
-        "$(stat -Lc '%u:%g:%a' "$evidence_parent" 2>/dev/null || true)" != "0:0:700" ]] ||
-     ! check_root_owned_ancestry "$trainer_evidence" 1; then
-    fail "trainer acceptance evidence must be a canonical root:root 0600 file in a root:root 0700 directory"
+check_recommendation_model_binding() {
+  local model_path="$release_root/models/recommendation-model.json"
+  local model_binary="$release_root/bin/ascendany-model"
+  local model_id model_size result expected_next_revision=""
+  local stored_model_id stored_sha stored_size stored_mode stored_schema stored_purpose stored_algorithm stored_contract
+  local stored_catalog_sha stored_revision event_sha event_version event_commit event_build_time
+  local catalog_kind_count catalog_key_count catalog_key catalog_kind catalog_head_revision
+  local catalog_version_number catalog_schema catalog_document_sha catalog_credential_ref
+
+  if [[ ! "$release_model_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "release manifest has no canonical recommendation model digest"
     return
   fi
-  if ! "$release_root/bin/ascendany-trainer-agent" verify-acceptance <"$trainer_evidence" >/dev/null 2>&1; then
-    fail "trainer acceptance evidence is not exact canonical v3 JSON"
+  if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+      "$model_binary" verify --model "$model_path" --sha256 "$release_model_sha256" --expected-purpose production; then
+    fail "release recommendation model failed canonical semantic verification"
     return
   fi
-  if ! jq -e \
-      --arg commit "$release_manifest_commit" \
-      --arg version "$release_manifest_version" '
-        type == "object" and
-        (keys == ["agentId", "attemptToken", "claimAt", "disposition", "heartbeatAt", "hostCapabilitySha256", "inputManifestSHA256", "modelId", "origin", "outputBundleSHA256", "releaseCommit", "releaseVersion", "requestSHA256", "runId", "runtimeAttestationSha256", "runtimeConstructionSha256", "runtimeProvenanceSha256", "runtimeTreeSha256", "schema", "uploadAt"]) and
-        .schema == "ascendany.trainer.acceptance.v3" and
-        .releaseCommit == $commit and .releaseVersion == $version and
-        (.agentId | test("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")) and
-        (.runId | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
-        (.attemptToken | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
-        (.modelId | test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
-        (.requestSHA256 | test("^[0-9a-f]{64}$")) and
-        (.inputManifestSHA256 | test("^[0-9a-f]{64}$")) and
-        (.outputBundleSHA256 | test("^[0-9a-f]{64}$")) and
-        (.runtimeConstructionSha256 | test("^[0-9a-f]{64}$")) and
-        (.runtimeProvenanceSha256 | test("^[0-9a-f]{64}$")) and
-        (.runtimeTreeSha256 | test("^[0-9a-f]{64}$")) and
-        (.hostCapabilitySha256 | test("^[0-9a-f]{64}$")) and
-        (.runtimeAttestationSha256 | test("^[0-9a-f]{64}$")) and
-        .origin == "https://ascendany-trainer.kkkzbh.cn" and
-        (.disposition == "activated" or .disposition == "superseded") and
-        (all(.claimAt, .heartbeatAt, .uploadAt; type == "string"))
-      ' "$trainer_evidence" >/dev/null 2>&1; then
-    fail "trainer acceptance evidence violates the release-bound v2 receipt contract"
+  model_id="$(jq -er '.manifest.modelId | select(type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"))' "$model_path" 2>/dev/null || true)"
+  model_size="$(stat -Lc '%s' -- "$model_path" 2>/dev/null || true)"
+  if [[ -z "$model_id" || ! "$model_size" =~ ^[1-9][0-9]*$ || "$model_size" -gt 16777216 ]]; then
+    fail "release recommendation model identity or bounded size is invalid"
     return
   fi
-  run_id="$(jq -r '.runId' "$trainer_evidence")"
-  attempt_token="$(jq -r '.attemptToken' "$trainer_evidence")"
-  agent_id="$(jq -r '.agentId' "$trainer_evidence")"
-  request_sha="$(jq -r '.requestSHA256' "$trainer_evidence")"
-  input_sha="$(jq -r '.inputManifestSHA256' "$trainer_evidence")"
-  output_sha="$(jq -r '.outputBundleSHA256' "$trainer_evidence")"
-  model_id="$(jq -r '.modelId' "$trainer_evidence")"
-  disposition="$(jq -r '.disposition' "$trainer_evidence")"
-  runtime_construction="$(jq -r '.runtimeConstructionSha256' "$trainer_evidence")"
-  runtime_provenance="$(jq -r '.runtimeProvenanceSha256' "$trainer_evidence")"
-  runtime_tree="$(jq -r '.runtimeTreeSha256' "$trainer_evidence")"
-  host_capability="$(jq -r '.hostCapabilitySha256' "$trainer_evidence")"
-  runtime_attestation="$(jq -r '.runtimeAttestationSha256' "$trainer_evidence")"
-  if ! result="$(
-    run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 \
-      --set=run_id="$run_id" \
-      --set=attempt_token="$attempt_token" \
-      --set=agent_id="$agent_id" <<'SQL'
-SELECT run.input_manifest_sha256,
-       receipt.request_sha256,
-       receipt.result,
-       receipt.model_public_id::text,
-       receipt.runtime_construction_sha256,
-       receipt.runtime_provenance_sha256,
-       receipt.runtime_tree_sha256,
-       receipt.host_capability_sha256,
-       receipt.runtime_attestation_sha256,
-       model.model_manifest->>'runtimeConstructionSha256',
-       model.model_manifest->>'runtimeProvenanceSha256',
-       model.model_manifest->>'runtimeTreeSha256',
-       model.model_manifest->>'hostCapabilitySha256',
-       model.model_manifest->>'runtimeAttestationSha256',
-       artifact.sha256,
-       run.status
-FROM ascendany.recommendation_training_runs AS run
-JOIN ascendany.recommendation_trainer_attempt_receipts AS receipt
-  ON receipt.training_run_id = run.training_run_id
-JOIN ascendany.artifacts AS artifact
-  ON artifact.artifact_id = run.output_bundle_artifact_id
-JOIN ascendany.recommendation_models AS model
-  ON model.public_id = receipt.model_public_id
-WHERE run.public_id = :'run_id'::uuid
-  AND receipt.attempt_token = :'attempt_token'::uuid
-  AND receipt.agent_id = :'agent_id'
+  pass "release recommendation model is canonical and bound to its manifest SHA-256"
+
+  if initial_transition && [[ "$validation_phase" == staged ]]; then
+    if ! result="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+SELECT (SELECT count(*) FROM ascendany.recommendation_model_releases),
+       (SELECT count(*) FROM ascendany.recommendation_model_head),
+       (SELECT count(*) FROM ascendany.recommendation_model_activation_events);
+SQL
+    )"; then
+      fail "initial preactivation recommendation model database evidence query failed"
+      return
+    fi
+    if [[ "$result" != "0|0|0" ]]; then
+      fail "initial preactivation database contains recommendation model release, head, or activation state"
+      return
+    fi
+    pass "initial preactivation database contains no recommendation model release, head, or activation state"
+    return
+  fi
+  if ! result="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+SELECT model.model_id::text,
+       model.artifact_sha256,
+       model.artifact_size_bytes,
+       model.artifact_mode,
+       model.model_schema,
+       model.model_purpose,
+       model.algorithm,
+       model.inference_contract,
+       model.knowledge_catalog_sha256,
+       head.head_revision,
+       event.artifact_sha256,
+       event.application_version,
+       event.application_commit,
+       event.application_build_time,
+       (SELECT count(*) FROM ascendany.configuration_items WHERE configuration_kind = 'knowledge_catalog'),
+       (SELECT count(*) FROM ascendany.configuration_items WHERE configuration_key = 'recommendation.catalog.active'),
+       catalog_item.configuration_key,
+       catalog_item.configuration_kind,
+       catalog_item.head_revision,
+       catalog_version.version_number,
+       catalog_version.schema_id,
+       catalog_version.document_sha256,
+       COALESCE(catalog_version.credential_ref, '')
+FROM ascendany.recommendation_model_head AS head
+JOIN ascendany.recommendation_model_releases AS model
+  ON model.recommendation_model_release_id = head.current_release_id
+JOIN ascendany.recommendation_model_activation_events AS event
+  ON event.head_revision = head.head_revision
+ AND event.recommendation_model_release_id = head.current_release_id
+LEFT JOIN ascendany.configuration_items AS catalog_item
+  ON catalog_item.configuration_key = 'recommendation.catalog.active'
+LEFT JOIN ascendany.configuration_versions AS catalog_version
+  ON catalog_version.configuration_item_id = catalog_item.configuration_item_id
+ AND catalog_version.configuration_version_id = catalog_item.active_version_id
+WHERE head.singleton
 SQL
   )"; then
-    fail "durable trainer acceptance receipt query failed"
+    fail "durable recommendation model binding query failed; schema v6 model activation is required"
     return
   fi
-  IFS='|' read -r stored_input stored_request stored_result stored_model \
-    stored_runtime_construction stored_runtime_provenance stored_runtime_tree \
-    stored_host_capability stored_runtime_attestation model_runtime_construction \
-    model_runtime_provenance model_runtime_tree model_host_capability model_runtime_attestation \
-    stored_output stored_status <<<"$result"
-  expected_status=succeeded
-  if [[ "$disposition" == "superseded" ]]; then
-    expected_status=superseded
-  fi
-  artifact_path="$artifact_root/sha256/${output_sha:0:2}/$output_sha"
-  if [[ -z "$result" || "$stored_input" != "$input_sha" || "$stored_request" != "$request_sha" ||
-        "$stored_result" != "$disposition" || "$stored_model" != "$model_id" ||
-        "$stored_runtime_construction" != "$runtime_construction" ||
-        "$stored_runtime_provenance" != "$runtime_provenance" ||
-        "$stored_runtime_tree" != "$runtime_tree" ||
-        "$stored_host_capability" != "$host_capability" ||
-        "$stored_runtime_attestation" != "$runtime_attestation" ||
-        "$model_runtime_construction" != "$runtime_construction" ||
-        "$model_runtime_provenance" != "$runtime_provenance" ||
-        "$model_runtime_tree" != "$runtime_tree" ||
-        "$model_host_capability" != "$host_capability" ||
-        "$model_runtime_attestation" != "$runtime_attestation" ||
-        "$stored_output" != "$output_sha" || "$stored_status" != "$expected_status" ]]; then
-    fail "trainer acceptance evidence does not match one durable fenced terminal receipt"
-  elif [[ ! -f "$artifact_path" || -L "$artifact_path" ||
-          "$(sha256sum -- "$artifact_path" 2>/dev/null | awk '{print $1}')" != "$output_sha" ]]; then
-    fail "trainer acceptance output artifact is missing or differs from its durable digest"
+  IFS='|' read -r stored_model_id stored_sha stored_size stored_mode stored_schema stored_purpose stored_algorithm stored_contract \
+    stored_catalog_sha stored_revision event_sha event_version event_commit event_build_time \
+    catalog_kind_count catalog_key_count catalog_key catalog_kind catalog_head_revision \
+    catalog_version_number catalog_schema catalog_document_sha catalog_credential_ref <<<"$result"
+  if initial_transition && [[ "$validation_phase" == activation || "$validation_phase" == smoke ]] &&
+     [[ "$catalog_kind_count:$catalog_key_count" == "0:0" &&
+        -z "$catalog_key$catalog_kind$catalog_head_revision$catalog_version_number$catalog_schema$catalog_document_sha$catalog_credential_ref" ]]; then
+    pass "initial activation records the release model before the isolated knowledge-catalog initialization window"
   else
-    pass "trainer acceptance evidence matches the durable receipt, model, run, and output artifact"
+    if [[ "$catalog_kind_count:$catalog_key_count" != "1:1" ||
+          "$catalog_key" != "recommendation.catalog.active" || "$catalog_kind" != knowledge_catalog ||
+          ! "$catalog_head_revision" =~ ^[1-9][0-9]*$ ||
+          "$catalog_version_number" != "$catalog_head_revision" ||
+          "$catalog_schema" != "ascendany.knowledge_catalog.recommendation.v1" ||
+          -n "$catalog_credential_ref" || ! "$catalog_document_sha" =~ ^[0-9a-f]{64}$ ||
+          "$catalog_document_sha" != "$stored_catalog_sha" ]]; then
+      fail "active knowledge catalog identity, provenance, or digest differs from the active recommendation model"
+      return
+    fi
+    pass "one fixed active knowledge catalog binds the active recommendation model digest"
+  fi
+
+  if forward_preactivation_phase; then
+    if [[ ! "$stored_model_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ||
+          ! "$stored_sha" =~ ^[0-9a-f]{64}$ || ! "$stored_size" =~ ^[1-9][0-9]*$ ||
+          "$stored_mode" != 420 || "$stored_schema" != "ascendany.recommendation.inference-model.v1" ||
+          "$stored_purpose" != production || "$stored_algorithm" != "knowledge_mirt_feature_v1" ||
+          "$stored_contract" != "ascendany.recommendation.inference.v1" ||
+          ! "$stored_catalog_sha" =~ ^[0-9a-f]{64}$ || ! "$stored_revision" =~ ^[1-9][0-9]*$ ||
+          "$event_sha" != "$stored_sha" || ! "$event_commit" =~ ^[0-9a-f]{40}$ ||
+          -z "$event_version" || -z "$event_build_time" ]]; then
+      fail "forward preactivation database lacks one internally consistent retained model head and activation"
+      return
+    fi
+    if [[ "$event_version" == "$release_manifest_version" &&
+          "$event_commit" == "$release_manifest_commit" &&
+          "$event_build_time" == "$release_manifest_build_time" ]]; then
+      fail "forward preactivation database already contains the replacement application activation"
+      return
+    fi
+    observed_forward_model_head_revision="$stored_revision"
+    if [[ "$validation_phase" == smoke && "$stored_revision" != "$expected_forward_model_head_revision" ]]; then
+      fail "forward smoke changed the retained recommendation model head revision"
+      return
+    fi
+    pass "forward preactivation retains the prior internally consistent model head and activation"
+    return
+  fi
+
+  if forward_transition; then
+    expected_next_revision="$(decimal_increment "$expected_forward_model_head_revision")"
+  fi
+  if [[ "$stored_model_id" != "$model_id" || "$stored_sha" != "$release_model_sha256" ||
+        "$stored_size" != "$model_size" || "$stored_mode" != 420 ||
+        "$stored_schema" != "ascendany.recommendation.inference-model.v1" ||
+        "$stored_purpose" != production || "$stored_purpose" != "$release_manifest_purpose" ||
+        "$stored_algorithm" != "knowledge_mirt_feature_v1" ||
+        "$stored_contract" != "ascendany.recommendation.inference.v1" ||
+        ! "$stored_revision" =~ ^[1-9][0-9]*$ ||
+        "$event_sha" != "$stored_sha" || "$event_version" != "$release_manifest_version" ||
+        "$event_commit" != "$release_manifest_commit" || "$event_build_time" != "$release_manifest_build_time" ||
+        ( -n "$expected_next_revision" && "$stored_revision" != "$expected_next_revision" ) ]]; then
+    fail "active database recommendation model head differs from the immutable release model and activation event"
+  else
+    observed_forward_model_head_revision="$stored_revision"
+    pass "active database recommendation model head binds the immutable release model and activation event"
   fi
 }
 
@@ -2717,8 +3230,9 @@ check_loopback_ports() {
       fail "required loopback TCP port is not listening: $required"
     fi
   done
-  if [[ "$validation_phase" == "staged" && -n "${seen[18000]:-}" ]]; then
-    fail "staged phase requires v2 TCP port 18000 to be unused"
+  if [[ ( "$validation_phase" == "staged" || "$validation_phase" == "activation" ) &&
+        -n "${seen[18000]:-}" ]]; then
+    fail "$validation_phase phase requires v2 TCP port 18000 to be unused"
   fi
 }
 
@@ -2742,7 +3256,9 @@ main() {
   check_cloudflared_connector
 
   check_system_manager_environment
+  check_retired_runtime_boundary
   check_unit_identity ascendanyd.service ascendany ascendany ascendany-runtime ascendany-lsp-control
+  check_unit_identity ascendany-model-activate.service ascendany ascendany ascendany-runtime
   check_unit_identity ascendany-admin-bootstrap.service ascendany ascendany ascendany-runtime
   check_unit_identity ascendany-judge@validation.service ascendany-judge ascendany-judge ascendany-runtime
   check_unit_identity ascendany-lsp@validation.service ascendany-lsp ascendany-lsp ascendany-lsp-control
@@ -2752,6 +3268,7 @@ main() {
   check_all_unit_effective_shapes
 
   check_ascendanyd_phase_state
+  check_model_activation_unit_state
 
   check_worker_isolation ascendany-judge@validation.service
   check_worker_isolation ascendany-lsp@validation.service
@@ -2759,6 +3276,8 @@ main() {
   check_unit_environment_files ascendany-lsp@validation.service
   check_unit_credentials ascendany-backup.service backup_db_password
   check_unit_environment_files ascendany-backup.service /etc/ascendany/v2/backup.env
+  check_unit_credentials ascendany-model-activate.service db_password
+  check_unit_environment_files ascendany-model-activate.service /etc/ascendany/v2/ascendanyd.env
   check_admin_bootstrap_unit
   check_unit_optional_environment_files ascendany-admin-bootstrap.service /etc/ascendany/v2/ascendanyd.env
   check_unit_credentials ascendany-migrate.service migrator_db_password
@@ -2778,8 +3297,12 @@ main() {
   check_database_role
   check_postgresql_access_contract
   check_admin_bootstrap_database
+  check_recommendation_model_binding
+  check_forward_database_state
   if production_phase; then
-    check_trainer_acceptance_receipt
+    check_backup_schedule
+  elif forward_retained_backup_phase; then
+    check_inactive_backup_timer
     check_backup_schedule
   else
     check_inactive_backup_timer
@@ -2791,7 +3314,12 @@ main() {
     return 1
   fi
 
-  printf 'AscendAny %s validation passed.\n' "$validation_phase"
+  if forward_transition && [[ "$validation_phase" == staged ]]; then
+    printf 'ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256=%s\n' "$observed_forward_database_fingerprint"
+    printf 'ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256=%s\n' "$observed_forward_business_fingerprint"
+    printf 'ASCENDANY_FORWARD_MODEL_HEAD_REVISION=%s\n' "$observed_forward_model_head_revision"
+  fi
+  printf 'AscendAny %s %s validation passed.\n' "$deployment_transition" "$validation_phase"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

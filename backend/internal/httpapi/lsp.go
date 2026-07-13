@@ -39,9 +39,6 @@ func (client *lspWebSocketClient) WriteMessage(ctx context.Context, body []byte)
 }
 
 func (handler *Handler) createLSPSession(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if !requestBodyIsEmpty(request) || !handler.requireNoQuery(writer, request) {
 		if !requestBodyIsEmpty(request) {
 			handler.writeAPIError(writer, request, http.StatusBadRequest, "request_body_not_allowed", "Request body must be empty.")
@@ -67,9 +64,6 @@ func (handler *Handler) createLSPSession(writer http.ResponseWriter, request *ht
 }
 
 func (handler *Handler) closeLSPSession(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if !requestBodyIsEmpty(request) || !handler.requireNoQuery(writer, request) {
 		if !requestBodyIsEmpty(request) {
 			handler.writeAPIError(writer, request, http.StatusBadRequest, "request_body_not_allowed", "Request body must be empty.")
@@ -97,9 +91,6 @@ func (handler *Handler) closeLSPSession(writer http.ResponseWriter, request *htt
 }
 
 func (handler *Handler) attachLSPSession(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if !requestBodyIsEmpty(request) || !handler.requireNoQuery(writer, request) {
 		if !requestBodyIsEmpty(request) {
 			handler.writeAPIError(writer, request, http.StatusBadRequest, "request_body_not_allowed", "Request body must be empty.")

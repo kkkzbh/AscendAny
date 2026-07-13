@@ -580,13 +580,11 @@ td {
 }
 
 .recommendation-review,
-.recommendation-configuration,
-.recommendation-run {
+.recommendation-configuration {
   overflow: hidden;
 }
 
-.recommendation-provenance,
-.recommendation-run-detail {
+.recommendation-provenance {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
@@ -594,8 +592,7 @@ td {
   padding: 12px 14px;
 }
 
-.recommendation-provenance div,
-.recommendation-run-detail div {
+.recommendation-provenance div {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -603,15 +600,13 @@ td {
   padding: 8px 10px;
 }
 
-.recommendation-provenance dt,
-.recommendation-run-detail dt {
+.recommendation-provenance dt {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 650;
 }
 
-.recommendation-provenance dd,
-.recommendation-run-detail dd {
+.recommendation-provenance dd {
   margin: 3px 0 0;
   overflow-wrap: anywhere;
 }
@@ -623,7 +618,6 @@ td {
 
 .recommendation-candidates code,
 .recommendation-configuration code,
-.recommendation-run code,
 .recommendation-affected code {
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
@@ -659,12 +653,6 @@ td {
   color: var(--warning);
 }
 
-.recommendation-configuration-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-
 .recommendation-editor-body {
   display: grid;
   gap: 12px;
@@ -679,8 +667,7 @@ td {
   line-height: 1.5;
 }
 
-.recommendation-editor-actions,
-.recommendation-run-actions {
+.recommendation-editor-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -689,30 +676,8 @@ td {
   padding: 11px 14px;
 }
 
-.recommendation-configuration > .notice,
-.recommendation-run > .notice {
+.recommendation-configuration > .notice {
   margin: 0 14px 14px;
-}
-
-.recommendation-event-list {
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.recommendation-event-list li {
-  display: grid;
-  grid-template-columns: 64px 140px minmax(180px, 1fr) minmax(260px, 2fr);
-  gap: 10px;
-  border-top: 1px solid var(--line);
-  padding: 9px 14px;
-}
-
-.recommendation-event-list time {
-  color: var(--text-muted);
-  font-size: 12px;
 }
 
 .recommendation-affected ul {
@@ -721,21 +686,8 @@ td {
 }
 
 @media (max-width: 1100px) {
-  .recommendation-configuration-grid {
+  .recommendation-provenance {
     grid-template-columns: 1fr;
-  }
-
-  .recommendation-provenance,
-  .recommendation-run-detail {
-    grid-template-columns: 1fr;
-  }
-
-  .recommendation-event-list li {
-    grid-template-columns: 52px 110px minmax(0, 1fr);
-  }
-
-  .recommendation-event-list code {
-    grid-column: 1 / -1;
   }
 }
 

@@ -15,9 +15,6 @@ type accountSessionListResponse struct {
 }
 
 func (handler *Handler) updateAccountProfile(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if request.URL.RawQuery != "" || request.URL.ForceQuery {
 		handler.writeAPIError(writer, request, http.StatusBadRequest, "query_not_allowed", "Query parameters are not allowed.")
 		return
@@ -65,9 +62,6 @@ func (handler *Handler) listAccountSessions(writer http.ResponseWriter, request 
 }
 
 func (handler *Handler) revokeAccountSession(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if request.URL.RawQuery != "" || request.URL.ForceQuery {
 		handler.writeAPIError(writer, request, http.StatusBadRequest, "query_not_allowed", "Query parameters are not allowed.")
 		return

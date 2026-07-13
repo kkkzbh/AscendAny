@@ -56,6 +56,18 @@ type fakeRowTypeACLTransaction struct {
 	rolledBack     bool
 }
 
+type failingRecommendationModelQueryer struct {
+	err error
+}
+
+func (queryer failingRecommendationModelQueryer) QueryRow(
+	context.Context,
+	string,
+	...any,
+) pgx.Row {
+	return fakeRowTypeACLRow{err: queryer.err}
+}
+
 func (transaction *fakeRowTypeACLTransaction) Exec(
 	_ context.Context,
 	statement string,
@@ -116,6 +128,19 @@ func TestBeginRestoredDatabaseVerificationUsesLocalOwnerRole(t *testing.T) {
 	}
 	if connection.options.IsoLevel != pgx.RepeatableRead || connection.options.AccessMode != pgx.ReadOnly {
 		t.Fatalf("transaction options = %#v", connection.options)
+	}
+}
+
+func TestReadRecommendationModelDescriptorPreservesDatabaseFailure(t *testing.T) {
+	t.Parallel()
+	databaseFailure := errors.New("permission denied")
+	_, err := readRecommendationModelDescriptor(
+		context.Background(),
+		failingRecommendationModelQueryer{err: databaseFailure},
+	)
+	if !errors.Is(err, databaseFailure) ||
+		!strings.Contains(err.Error(), "read active recommendation model snapshot") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

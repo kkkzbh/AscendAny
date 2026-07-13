@@ -1,6 +1,9 @@
 package backup
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	DatabaseDumpFilename    = "database.dump"
@@ -36,9 +39,37 @@ type MigrationDescriptor struct {
 }
 
 type DatabaseSnapshotDescriptor struct {
-	DatabaseName string                `json:"databaseName"`
-	File         FileDescriptor        `json:"file"`
-	Migrations   []MigrationDescriptor `json:"migrations"`
+	DatabaseName        string                        `json:"databaseName"`
+	File                FileDescriptor                `json:"file"`
+	Migrations          []MigrationDescriptor         `json:"migrations"`
+	RecommendationModel RecommendationModelDescriptor `json:"recommendationModel"`
+}
+
+type RecommendationModelDescriptor struct {
+	ReleaseID                int64           `json:"releaseId"`
+	HeadRevision             int64           `json:"headRevision"`
+	ModelID                  string          `json:"modelId"`
+	ModelPurpose             string          `json:"modelPurpose"`
+	ArtifactSHA256           string          `json:"artifactSha256"`
+	ArtifactSizeBytes        int64           `json:"artifactSizeBytes"`
+	ArtifactMode             int64           `json:"artifactMode"`
+	ModelSchema              string          `json:"modelSchema"`
+	Algorithm                string          `json:"algorithm"`
+	InferenceContract        string          `json:"inferenceContract"`
+	TrainedAt                time.Time       `json:"trainedAt"`
+	TrainingProvenanceSHA256 string          `json:"trainingProvenanceSha256"`
+	FeatureSchemaSHA256      string          `json:"featureSchemaSha256"`
+	KnowledgeCatalogSHA256   string          `json:"knowledgeCatalogSha256"`
+	ParameterSHA256          string          `json:"parameterSha256"`
+	GoldenVectorsSHA256      string          `json:"goldenVectorsSha256"`
+	Manifest                 json.RawMessage `json:"manifest"`
+	ManifestSHA256           string          `json:"manifestSha256"`
+	ReleaseCreatedAt         time.Time       `json:"releaseCreatedAt"`
+	ApplicationVersion       string          `json:"applicationVersion"`
+	ApplicationCommit        string          `json:"applicationCommit"`
+	ApplicationBuildTime     string          `json:"applicationBuildTime"`
+	ActivatedAt              time.Time       `json:"activatedAt"`
+	HeadUpdatedAt            time.Time       `json:"headUpdatedAt"`
 }
 
 type Manifest struct {
@@ -64,15 +95,17 @@ type VerifyResult struct {
 }
 
 type RestoreResult struct {
-	BackupID       string
-	ManifestSHA256 string
-	ArtifactCount  int
-	DatabaseName   string
-	ArtifactRoot   string
+	BackupID            string
+	ManifestSHA256      string
+	ArtifactCount       int
+	DatabaseName        string
+	ArtifactRoot        string
+	RecommendationModel RecommendationModelDescriptor
 }
 
 type databaseSnapshot struct {
-	ID         string
-	Artifacts  []ArtifactDescriptor
-	Migrations []MigrationDescriptor
+	ID                  string
+	Artifacts           []ArtifactDescriptor
+	Migrations          []MigrationDescriptor
+	RecommendationModel RecommendationModelDescriptor
 }

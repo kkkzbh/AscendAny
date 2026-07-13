@@ -17,12 +17,13 @@ func TestEmbeddedMigrationsHaveFixedContiguousManifestAndHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embedded() error = %v", err)
 	}
-	if len(definitions) != 5 ||
+	if len(definitions) != 6 ||
 		definitions[0].Version != 1 || definitions[0].Name != "fresh_schema" ||
 		definitions[1].Version != 2 || definitions[1].Name != "product_domains" ||
-		definitions[2].Version != 3 || definitions[2].Name != "recommendation_trainer_transport" ||
+		definitions[2].Version != 3 || definitions[2].Name != "recommendation_catalog_contract" ||
 		definitions[3].Version != 4 || definitions[3].Name != "achievement_rules" ||
-		definitions[4].Version != 5 || definitions[4].Name != "auto_analysis_once" {
+		definitions[4].Version != 5 || definitions[4].Name != "auto_analysis_once" ||
+		definitions[5].Version != 6 || definitions[5].Name != "inference_model_runtime" {
 		t.Fatalf("definitions = %#v", definitions)
 	}
 	for index := range definitions {
@@ -30,8 +31,49 @@ func TestEmbeddedMigrationsHaveFixedContiguousManifestAndHashes(t *testing.T) {
 			t.Fatalf("definition %d hash = %q, manifest = %q", index, definitions[index].SHA256, embeddedManifest[index].SHA256)
 		}
 	}
-	if CurrentVersion() != 5 {
+	if CurrentVersion() != 6 {
 		t.Fatalf("CurrentVersion() = %d", CurrentVersion())
+	}
+}
+
+func TestInferenceModelRuntimeOwnsImmutableActivation(t *testing.T) {
+	t.Parallel()
+
+	definitions, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := definitions[5].SQL
+	for _, fragment := range []string{
+		"CREATE TABLE ascendany.recommendation_model_releases",
+		"SEQUENCE NAME ascendany.recommendation_model_release_ids_seq",
+		"CREATE TABLE ascendany.recommendation_model_activation_events",
+		"CREATE TABLE ascendany.recommendation_model_head",
+		"model_schema = 'ascendany.recommendation.inference-model.v1'",
+		"model_purpose IN ('production', 'acceptance_test')",
+		"inference_contract = 'ascendany.recommendation.inference.v1'",
+		"recommendation_model_releases_immutable_rows",
+		"recommendation_model_activation_events_immutable_rows",
+		"CREATE CONSTRAINT TRIGGER recommendation_model_head_activation_complete",
+		"GRANT UPDATE (\n    current_release_id,\n    head_revision,\n    updated_at",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("inference model runtime migration is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		"recommendation_training",
+		"recommendation_trainer",
+		"configuration_kind = 'training'",
+		"legacy recommendation",
+		"DROP TABLE",
+		"CREATE TABLE ascendany.student_recommendation_results",
+		"ON DELETE CASCADE",
+		"GRANT UPDATE ON TABLE",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("inference model runtime migration contains forbidden fragment %q", forbidden)
+		}
 	}
 }
 
@@ -141,7 +183,7 @@ func TestAchievementRulesOwnImmutableVersionedThresholds(t *testing.T) {
 	}
 }
 
-func TestRecommendationTrainerTransportOwnsTerminalReplayBoundary(t *testing.T) {
+func TestRecommendationCatalogMigrationOwnsDatabaseContract(t *testing.T) {
 	t.Parallel()
 
 	definitions, err := Embedded()
@@ -150,16 +192,23 @@ func TestRecommendationTrainerTransportOwnsTerminalReplayBoundary(t *testing.T) 
 	}
 	sql := definitions[2].SQL
 	for _, fragment := range []string{
-		"CREATE TABLE ascendany.recommendation_trainer_attempt_receipts",
-		"request_sha256 text NOT NULL",
-		"operation IN ('output', 'failure')",
-		"result IN ('activated', 'superseded', 'failed', 'requeued', 'output_rejected')",
-		"UNIQUE (\n        training_run_id,\n        attempt_token\n    )",
-		"recommendation_trainer_attempt_receipts_immutable_rows",
-		"GRANT INSERT ON TABLE ascendany.recommendation_trainer_attempt_receipts",
+		"configuration_versions_recommendation_catalog_contract",
+		"configuration_items_recommendation_catalog_identity",
+		"(configuration_kind = 'knowledge_catalog')",
+		"= (configuration_key = 'recommendation.catalog.active')",
+		"configuration_key = 'recommendation.catalog.active'",
+		"schema_id = 'ascendany.knowledge_catalog.recommendation.v1'",
+		"AND credential_ref IS NULL",
+		"CREATE INDEX recommendation_knowledge_catalog_digest_idx",
+		"WHERE configuration_kind = 'knowledge_catalog'",
 	} {
 		if !strings.Contains(sql, fragment) {
-			t.Errorf("trainer transport migration is missing %q", fragment)
+			t.Errorf("recommendation catalog migration is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{"training", "trainer", "CREATE TABLE", "DROP TABLE"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("recommendation catalog migration contains forbidden runtime %q", forbidden)
 		}
 	}
 }
@@ -282,11 +331,6 @@ func TestProductDomainsOwnRequiredV2Boundaries(t *testing.T) {
 		"agent_tool_calls",
 		"agent_notes",
 		"agent_note_revisions",
-		"recommendation_training_runs",
-		"recommendation_training_events",
-		"recommendation_models",
-		"student_recommendation_results",
-		"recommendation_head",
 		"oj_problems",
 		"oj_problem_versions",
 		"oj_submissions",
@@ -311,11 +355,7 @@ func TestProductDomainsOwnRequiredV2Boundaries(t *testing.T) {
 		"CREATE FUNCTION ascendany.enforce_analytics_generation_transition()",
 		"CREATE FUNCTION ascendany.enforce_analytics_head_advance()",
 		"CREATE FUNCTION ascendany.validate_agent_run_output()",
-		"CREATE FUNCTION ascendany.validate_recommendation_training_output()",
-		"CREATE FUNCTION ascendany.enforce_recommendation_head_advance()",
 		"analytics_generation_events_created_idx",
-		"recommendation_head_monotonic_advance",
-		"recommendation head must target the current analytics head",
 		"analytics_generations_initial_queue",
 		"import_jobs_initial_queue",
 		"logical_exams_initial_head",
@@ -328,7 +368,6 @@ func TestProductDomainsOwnRequiredV2Boundaries(t *testing.T) {
 		"oj_judge_results_job_fk",
 		"feedback_submissions_subject_created_idx",
 		"'configuration_versions',\n        'analytics_generation_events',",
-		"GRANT UPDATE (\n    current_model_id,",
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ascendany",
 	} {
 		if !strings.Contains(sql, fragment) {
@@ -339,6 +378,9 @@ func TestProductDomainsOwnRequiredV2Boundaries(t *testing.T) {
 		"CREATE VIEW",
 		"CREATE MATERIALIZED VIEW",
 		"legacy_",
+		"recommendation_training",
+		"recommendation_trainer",
+		"configuration_kind IN (\n            'prompt',\n            'model_connection',\n            'training'",
 		"ON DELETE CASCADE",
 		"GRANT UPDATE ON TABLE",
 	} {

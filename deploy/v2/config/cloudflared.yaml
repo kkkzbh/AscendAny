@@ -5,12 +5,4 @@ ingress:
     service: http://127.0.0.1:18000
   - hostname: ascendany-v2.kkkzbh.cn
     service: http://127.0.0.1:18000
-  - hostname: ascendany-trainer.kkkzbh.cn
-    path: ^/version$
-    service: http://127.0.0.1:18000
-  - hostname: ascendany-trainer.kkkzbh.cn
-    path: ^/api/v2/internal/recommendation/trainer-agent/claims(/.*)?$
-    service: http://127.0.0.1:18000
-  - hostname: ascendany-trainer.kkkzbh.cn
-    service: http_status:404
   - service: http_status:404

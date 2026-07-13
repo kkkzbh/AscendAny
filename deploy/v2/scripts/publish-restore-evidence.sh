@@ -12,6 +12,7 @@ readonly restore_parent="/var/lib/ascendany-restore"
 readonly evidence_directory="/var/lib/ascendany-acceptance"
 readonly evidence_path="${evidence_directory}/restore-verify.json"
 readonly release_manifest="/opt/ascendany/v2/release-manifest.json"
+readonly recommendation_model="/opt/ascendany/v2/models/recommendation-model.json"
 readonly backup_root="/var/backups/ascendany"
 readonly lock_directory="/run/ascendany-restore-operator"
 readonly operator_lock="${lock_directory}/operator.lock"
@@ -30,6 +31,7 @@ restore_uid="$(id -u "$restore_user")" || fail "restore service identity is unav
 [[ -d "$evidence_directory" && ! -L "$evidence_directory" &&
    "$(stat -Lc '%u:%g:%a' "$evidence_directory")" == "0:0:700" ]] || fail "restore evidence directory has unsafe metadata"
 [[ -f "$release_manifest" && ! -L "$release_manifest" ]] || fail "release manifest is unavailable"
+[[ -f "$recommendation_model" && ! -L "$recommendation_model" ]] || fail "recommendation model is unavailable"
 [[ -f "$backup_root/$backup_id/manifest.json" && ! -L "$backup_root/$backup_id/manifest.json" ]] || fail "restored backup manifest is unavailable"
 [[ -d "$lock_directory" && ! -L "$lock_directory" &&
    "$(stat -Lc '%U:%G:%a' "$lock_directory")" == "root:${restore_user}:750" &&
@@ -72,6 +74,29 @@ sync -f "$temporary"
 
 release_commit="$(jq -er '.commit | select(type == "string" and test("^[0-9a-f]{40}$"))' "$release_manifest")" || fail "release commit is invalid"
 release_version="$(jq -er '.version | select(type == "string" and length > 0 and length <= 128)' "$release_manifest")" || fail "release version is invalid"
+release_purpose="$(jq -er '.purpose | select(. == "production")' "$release_manifest")" || fail "release purpose is not production"
+release_build_time="$(date -u --date="@$(jq -er '.sourceDateEpoch | select(type == "number" and floor == . and . >= 0 and . <= 4102444800)' "$release_manifest")" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
+[[ -n "$release_build_time" ]] || fail "release build time is invalid"
+release_model_sha256="$(jq -er '.files[] | select(.path == "models/recommendation-model.json") | .sha256 | select(type == "string" and test("^[0-9a-f]{64}$"))' "$release_manifest")" ||
+  fail "release recommendation model digest is invalid"
+[[ "$(sha256sum -- "$recommendation_model" | awk '{print $1}')" == "$release_model_sha256" ]] ||
+  fail "installed recommendation model differs from the release manifest"
+installed_model_manifest_sha256="$(jq -jSc '{
+    schema: .schema,
+    modelId: .manifest.modelId,
+    purpose: .manifest.purpose,
+    trainedAt: .manifest.trainedAt,
+    algorithm: .manifest.algorithm,
+    inferenceContract: .manifest.inferenceContract,
+    trainingProvenanceSha256: .manifest.trainingProvenanceSha256,
+    featureSchemaSha256: .manifest.featureSchemaSha256,
+    knowledgeCatalogSha256: .manifest.knowledgeCatalogSha256,
+    parameterSha256: .manifest.parameterSha256,
+    goldenVectorsSha256: .manifest.goldenVectorsSha256,
+    actorFeatureIds: .manifest.actorFeatureIds,
+    problemFeatureIds: .manifest.problemFeatureIds,
+    knowledgePointIds: .manifest.knowledgePointIds
+  }' "$recommendation_model" | sha256sum | awk '{print $1}')" || fail "installed recommendation model manifest is invalid"
 manifest_sha="$(sha256sum -- "$backup_root/$backup_id/manifest.json" | awk '{print $1}')"
 artifact_count="$(jq -er '.artifacts.count | select(type == "number" and floor == . and . >= 0)' "$backup_root/$backup_id/manifest.json")" ||
   fail "restored backup artifact count is invalid"
@@ -80,14 +105,43 @@ jq -e \
   --arg manifestSHA256 "$manifest_sha" \
   --arg releaseCommit "$release_commit" \
   --arg releaseVersion "$release_version" \
+  --arg releasePurpose "$release_purpose" \
+  --arg releaseBuildTime "$release_build_time" \
+  --arg releaseModelSHA256 "$release_model_sha256" \
+  --arg installedModelManifestSHA256 "$installed_model_manifest_sha256" \
+  --slurpfile manifest "$backup_root/$backup_id/manifest.json" \
+  --slurpfile model "$recommendation_model" \
   --argjson artifactCount "$artifact_count" '
     type == "object" and
-    (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "msg", "releaseCommit", "releaseVersion", "time"]) and
+    (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"]) and
     .level == "INFO" and .msg == "backup restore verified" and
     .backupId == $backupId and .manifestSHA256 == $manifestSHA256 and
     .databaseName == "ascendany_v2_restore_verify" and
     .releaseCommit == $releaseCommit and .releaseVersion == $releaseVersion and
     .artifactCount == $artifactCount and
+    ($manifest | length == 1) and ($model | length == 1) and
+    $manifest[0].schema == "ascendany.backup.bundle.v2" and
+    .modelId == $manifest[0].database.recommendationModel.modelId and
+    .modelArtifactSHA256 == $manifest[0].database.recommendationModel.artifactSha256 and
+    .modelHeadRevision == $manifest[0].database.recommendationModel.headRevision and
+    .modelApplicationVersion == $manifest[0].database.recommendationModel.applicationVersion and
+    .modelApplicationCommit == $manifest[0].database.recommendationModel.applicationCommit and
+    .modelApplicationBuildTime == $manifest[0].database.recommendationModel.applicationBuildTime and
+    .modelFeatureSchemaSHA256 == $manifest[0].database.recommendationModel.featureSchemaSha256 and
+    .modelKnowledgeCatalogSHA256 == $manifest[0].database.recommendationModel.knowledgeCatalogSha256 and
+    .modelManifestSHA256 == $manifest[0].database.recommendationModel.manifestSha256 and
+    .modelPurpose == $manifest[0].database.recommendationModel.modelPurpose and
+    .modelId == $model[0].manifest.modelId and
+    .modelArtifactSHA256 == $releaseModelSHA256 and
+    .modelFeatureSchemaSHA256 == $model[0].manifest.featureSchemaSha256 and
+    .modelKnowledgeCatalogSHA256 == $model[0].manifest.knowledgeCatalogSha256 and
+    .modelManifestSHA256 == $installedModelManifestSHA256 and
+    .modelPurpose == $model[0].manifest.purpose and
+    .modelPurpose == $releasePurpose and
+    .modelApplicationVersion == $releaseVersion and
+    .modelApplicationCommit == $releaseCommit and
+    .modelApplicationBuildTime == $releaseBuildTime and
+    (.modelHeadRevision | type == "number" and floor == . and . > 0) and
     (.time | type == "string" and test("^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$"))
   ' "$temporary" >/dev/null || fail "captured restore evidence does not bind the installed release and backup"
 evidence_time="$(jq -er '.time' "$temporary")"

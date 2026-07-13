@@ -19,9 +19,9 @@ readonly -a UNIT_NAMES=(
   ascendany-judge@.service
   ascendany-lsp@.service
   ascendany-migrate.service
+  ascendany-model-activate.service
   ascendany-pgbouncer.service
   ascendany-restore-verify@.service
-  ascendany-trainer-agent.service
   ascendanyd.service
 )
 readonly -a RELEASE_EXECUTABLES=(
@@ -30,7 +30,7 @@ readonly -a RELEASE_EXECUTABLES=(
   /opt/ascendany/v2/bin/ascendany-judge
   /opt/ascendany/v2/bin/ascendany-lsp
   /opt/ascendany/v2/bin/ascendany-migrate
-  /opt/ascendany/v2/bin/ascendany-trainer-agent
+  /opt/ascendany/v2/bin/ascendany-model
   /opt/ascendany/v2/bin/ascendanyd
   /opt/ascendany/v2/scripts/publish-restore-evidence.sh
   /opt/ascendany/v2/scripts/restore-verify-operator.sh
@@ -62,7 +62,8 @@ diff -r -- "$DEPLOY_UNIT_SOURCE" "$UNIT_SOURCE" >/dev/null ||
   fail 'installed manifest-bound systemd tree differs from deployment sources'
 jq -e '
   .schema == "ascendany.release.v2" and
-  (.files | length == 77) and
+  .purpose == "production" and
+  (.files | length == 59) and
   any(.files[]; .path == "bin/ascendany-release-ops" and .mode == "0755")
 ' "$INSTALLED_RELEASE/release-manifest.json" >/dev/null ||
   fail 'installed release manifest does not carry the exact native-helper release contract'
@@ -111,8 +112,6 @@ install -d -m 0755 \
   "$FAKE_ROOT/var/lib/ascendany-lsp-root/var" \
   "$FAKE_ROOT/var/lib/ascendany-migrate" \
   "$FAKE_ROOT/var/lib/ascendany-restore" \
-  "$FAKE_ROOT/var/lib/ascendany-trainer/acceptance" \
-  "$FAKE_ROOT/var/lib/ascendany-trainer/work" \
   "$FAKE_ROOT/var/backups/ascendany" \
   "$FAKE_ROOT/tmp/ascendany-lsp-sessions"
 
@@ -138,7 +137,6 @@ ascendany-judge:x:1003:1003:AscendAny judge:/var/lib/ascendany-judge:/usr/sbin/n
 ascendany-lsp:x:1004:1004:AscendAny LSP:/var/empty:/usr/sbin/nologin
 ascendany-migrator:x:1005:1005:AscendAny migrator:/var/lib/ascendany-migrate:/usr/sbin/nologin
 ascendany-restore:x:1006:1006:AscendAny restore:/var/lib/ascendany-restore:/usr/sbin/nologin
-ascendany-trainer:x:1007:1007:AscendAny trainer:/var/lib/ascendany-trainer:/usr/sbin/nologin
 PASSWD
 cat >"$FAKE_ROOT/etc/group" <<'GROUP'
 root:x:0:
@@ -150,7 +148,6 @@ ascendany-judge:x:1004:
 ascendany-lsp:x:1005:
 ascendany-migrator:x:1006:
 ascendany-restore:x:1007:
-ascendany-trainer:x:1008:
 GROUP
 chmod 0644 "$FAKE_ROOT/etc/passwd" "$FAKE_ROOT/etc/group"
 
@@ -203,6 +200,7 @@ done
 for direct_postgres_unit in \
   ascendany-pgbouncer.service \
   ascendany-migrate.service \
+  ascendany-model-activate.service \
   ascendany-backup.service \
   'ascendany-restore-verify@.service'; do
   [[ "$(grep -Fxc -- 'IPAddressAllow=localhost' "$UNIT_SOURCE/$direct_postgres_unit")" == "1" &&
@@ -222,7 +220,7 @@ chmod 000 \
 chmod 1777 "$FAKE_ROOT/var/lib/ascendany-lsp-root/tmp"
 
 for environment_file in \
-  ascendanyd.env ascendanyd-read-only-smoke.env backup.env judge.env migrate.env restore.env trainer-agent.env; do
+  ascendanyd.env ascendanyd-read-only-smoke.env backup.env judge.env migrate.env restore.env; do
   : >"$FAKE_ROOT/etc/ascendany/v2/$environment_file"
   chmod 0644 "$FAKE_ROOT/etc/ascendany/v2/$environment_file"
 done

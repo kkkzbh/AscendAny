@@ -63,9 +63,10 @@ func TestCreatePublishesOneBoundAndVerifiableBundle(t *testing.T) {
 	zstd := requireZstd(t)
 	config, artifact := testCreateConfig(t, zstd)
 	snapshot := &fakeSnapshot{data: databaseSnapshot{
-		ID:         "00000003-0000001B-1",
-		Artifacts:  []ArtifactDescriptor{artifact},
-		Migrations: testMigrations(),
+		ID:                  "00000003-0000001B-1",
+		Artifacts:           []ArtifactDescriptor{artifact},
+		Migrations:          testMigrations(),
+		RecommendationModel: testRecommendationModelDescriptor(t),
 	}}
 	commands := &fakeCommands{dumpBytes: []byte("fake custom dump fixture")}
 	result, err := createWithDependencies(context.Background(), config, createDependencies{
@@ -142,7 +143,7 @@ func TestCreateFailureRemovesStagingAndNeverPublishes(t *testing.T) {
 	t.Parallel()
 	zstd := requireZstd(t)
 	config, artifact := testCreateConfig(t, zstd)
-	snapshot := &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations()}}
+	snapshot := &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}
 	_, err := createWithDependencies(context.Background(), config, createDependencies{
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
@@ -189,7 +190,7 @@ func TestCreateRemovesExactCrashStagingBeforeOpeningSnapshot(t *testing.T) {
 				t.Fatalf("stale staging still exists when snapshot opens: %v", err)
 			}
 			return &fakeSnapshot{data: databaseSnapshot{
-				ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(),
+				ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t),
 			}}, nil
 		},
 		commands: &fakeCommands{dumpBytes: []byte("dump")},
@@ -306,7 +307,7 @@ func TestVerifyRejectsPayloadTamperingBeforeArchiveDecode(t *testing.T) {
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
 		openSnapshot: func(context.Context, CreateConfig) (snapshotHandle, error) {
-			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations()}}, nil
+			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}, nil
 		},
 		commands: commands,
 	})
@@ -339,7 +340,7 @@ func TestVerifyRejectsPrivateModeAfterBundlePublication(t *testing.T) {
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
 		openSnapshot: func(context.Context, CreateConfig) (snapshotHandle, error) {
-			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations()}}, nil
+			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}, nil
 		},
 		commands: commands,
 	})
@@ -368,7 +369,7 @@ func TestCreateRejectsBackupRootWithoutReaderGroupTraversal(t *testing.T) {
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
 		openSnapshot: func(context.Context, CreateConfig) (snapshotHandle, error) {
-			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations()}}, nil
+			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}, nil
 		},
 		commands: &fakeCommands{dumpBytes: []byte("dump")},
 	})

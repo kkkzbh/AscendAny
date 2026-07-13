@@ -28,7 +28,7 @@ set -Eeuo pipefail
 export LC_ALL=C
 
 usage() {
-  printf 'usage: %s --version SEMVER --commit 40_HEX --source-date-epoch SECONDS --go-path /canonical/go --go-version GOVERSION --goos linux --goarch amd64 --goamd64 v1 --output /absolute/path\n' "$0" >&2
+  printf 'usage: %s --version SEMVER --commit 40_HEX --source-date-epoch SECONDS --go-path /canonical/go --go-version GOVERSION --goos linux --goarch amd64 --goamd64 v1 --release-purpose production|acceptance_test --recommendation-model /protected/absolute/canonical.json --recommendation-model-sha256 64_HEX --output /absolute/path\n' "$0" >&2
 }
 
 validate_protected_directory_ancestry() {
@@ -79,6 +79,9 @@ go_version=""
 goos=""
 goarch=""
 goamd64=""
+release_purpose=""
+recommendation_model=""
+recommendation_model_sha256=""
 output=""
 release_home="${HOME:-}"
 
@@ -114,6 +117,37 @@ validate_go_binary() {
     exit 2
   fi
   validate_protected_file_ancestry 'Go tool path' "$go_binary"
+}
+
+validate_recommendation_model_source() {
+  local metadata owner mode_text mode size links actual_sha
+
+  if [[ ! "$recommendation_model" =~ ^/[0-9A-Za-z_./:+-]+$ ||
+        ! -f "$recommendation_model" || -L "$recommendation_model" ]]; then
+    printf 'recommendation model must name an explicit absolute regular file\n' >&2
+    exit 2
+  fi
+  if [[ "$recommendation_model" != "$(/usr/bin/realpath -e -- "$recommendation_model")" ]]; then
+    printf 'recommendation model path must be canonical and have no symlink ancestry\n' >&2
+    exit 2
+  fi
+  metadata="$(/usr/bin/stat -Lc '%u:%a:%s:%h' -- "$recommendation_model")"
+  IFS=: read -r owner mode_text size links <<<"$metadata"
+  mode="$((8#$mode_text))"
+  if [[ "$owner" != 0 && "$owner" != "$EUID" ]] || (( (mode & 8#022) != 0 )); then
+    printf 'recommendation model must be root/release-user owned and immutable to group/other\n' >&2
+    exit 2
+  fi
+  if [[ "$links" != 1 || ! "$size" =~ ^[1-9][0-9]*$ || "$size" -gt 16777216 ]]; then
+    printf 'recommendation model must be one single-link file between 1 and 16777216 bytes\n' >&2
+    exit 2
+  fi
+  validate_protected_file_ancestry 'recommendation model path' "$recommendation_model"
+  actual_sha="$(/usr/bin/sha256sum -- "$recommendation_model" | /usr/bin/awk '{print $1}')"
+  if [[ "$actual_sha" != "$recommendation_model_sha256" ]]; then
+    printf 'recommendation model digest differs from --recommendation-model-sha256\n' >&2
+    exit 2
+  fi
 }
 
 run_repository_git() {
@@ -335,6 +369,21 @@ while (( $# > 0 )); do
       goamd64="$2"
       shift 2
       ;;
+    --release-purpose)
+      (( $# >= 2 )) || { usage; exit 2; }
+      release_purpose="$2"
+      shift 2
+      ;;
+    --recommendation-model)
+      (( $# >= 2 )) || { usage; exit 2; }
+      recommendation_model="$2"
+      shift 2
+      ;;
+    --recommendation-model-sha256)
+      (( $# >= 2 )) || { usage; exit 2; }
+      recommendation_model_sha256="$2"
+      shift 2
+      ;;
     --output)
       (( $# >= 2 )) || { usage; exit 2; }
       output="$2"
@@ -351,7 +400,7 @@ PATH=/usr/bin:/bin
 export PATH
 hash -r
 
-for command in awk chmod cmp date diff env find git grep install jq mktemp mv realpath rm sha256sum sort stat sync; do
+for command in awk chmod cmp date diff env find git grep install jq mktemp mv realpath rm sed sha256sum sort stat sync; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'required command is missing: %s\n' "$command" >&2
     exit 1
@@ -393,6 +442,15 @@ if [[ "$goos" != "linux" || "$goarch" != "amd64" || "$goamd64" != "v1" ]]; then
   printf 'the v2 production release target must be explicit linux/amd64 at GOAMD64=v1\n' >&2
   exit 2
 fi
+if [[ "$release_purpose" != "production" && "$release_purpose" != "acceptance_test" ]]; then
+  printf 'release purpose must be exactly production or acceptance_test\n' >&2
+  exit 2
+fi
+if [[ ! "$recommendation_model_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'recommendation model SHA-256 must be exactly 64 lowercase hexadecimal characters\n' >&2
+  exit 2
+fi
+validate_recommendation_model_source
 if [[ "$output" != /* || "$output" != "$(realpath -m -- "$output")" ]]; then
   printf 'output must be a clean absolute path\n' >&2
   exit 2
@@ -476,6 +534,15 @@ cleanup() {
 trap cleanup EXIT
 
 install -d -m 0700 "$source_root" "$staging"
+readonly recommendation_model_source_identity="$(/usr/bin/stat -Lc '%d:%i:%u:%a:%s:%h' -- "$recommendation_model")"
+captured_recommendation_model="$workspace/recommendation-model.json"
+/usr/bin/install -m 0600 -- "$recommendation_model" "$captured_recommendation_model"
+if [[ "$(/usr/bin/stat -Lc '%d:%i:%u:%a:%s:%h' -- "$recommendation_model")" != "$recommendation_model_source_identity" ||
+      "$(/usr/bin/sha256sum -- "$recommendation_model" | /usr/bin/awk '{print $1}')" != "$recommendation_model_sha256" ||
+      "$(/usr/bin/sha256sum -- "$captured_recommendation_model" | /usr/bin/awk '{print $1}')" != "$recommendation_model_sha256" ]]; then
+  printf 'recommendation model changed while it was captured\n' >&2
+  exit 1
+fi
 env -i \
   PATH="$PATH" \
   LC_ALL=C \
@@ -573,8 +640,8 @@ readonly -a binaries=(
   ascendany-judge
   ascendany-lsp
   ascendany-migrate
+  ascendany-model
   ascendany-release-ops
-  ascendany-trainer-agent
 )
 
 declare -a payload_paths=()
@@ -582,21 +649,10 @@ for binary in "${binaries[@]}"; do
   payload_paths+=("bin/$binary")
 done
 payload_paths+=(
-  trainers/recommendation/ascendany_recommendation_trainer/__init__.py
-  trainers/recommendation/ascendany_recommendation_trainer/__main__.py
-  trainers/recommendation/ascendany_recommendation_trainer/attestation.py
-  trainers/recommendation/ascendany_recommendation_trainer/cli.py
-  trainers/recommendation/ascendany_recommendation_trainer/contract.py
-  trainers/recommendation/ascendany_recommendation_trainer/model.py
-  trainers/recommendation/ascendany_recommendation_trainer/train.py
-  trainers/recommendation/runtime-closure-cu130.json
-  trainers/recommendation/runtime-python-cu130.json
-  trainers/recommendation/runtime-requirements-cu130.lock
-  trainers/recommendation/runtime-wheels-cu130.json
+  models/recommendation-model.json
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
-  TRAINER_AGENT_CONTRACT.md
   contracts/openapi/ascendany-v2.yaml
   contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
   db/roles/README.md
@@ -613,13 +669,11 @@ payload_paths+=(
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
-  config/postgresql-hba-bootstrap.conf
   config/postgresql-hba.conf
-  config/postgresql-ident-bootstrap.conf
   config/postgresql-ident.conf
   config/restore.env
-  config/trainer-agent.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-activate.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -630,14 +684,12 @@ payload_paths+=(
   systemd/ascendany-migrate.service
   systemd/ascendany-pgbouncer.service
   systemd/ascendany-restore-verify@.service
-  systemd/ascendany-trainer-agent.service
   polkit-1/rules.d/60-ascendany-judge.rules
   polkit-1/rules.d/61-ascendany-lsp.rules
   sysusers.d/ascendany-v2.conf
   tmpfiles.d/ascendany-v2.conf
   scripts/publish-restore-evidence.sh
   scripts/restore-verify-operator.sh
-  scripts/install-trainer-runtime.sh
   scripts/install-v2-release.sh
   scripts/acquire-judge-image.sh
   scripts/attest-judge-image.sh
@@ -646,23 +698,18 @@ payload_paths+=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
-  scripts/trainer-host-capability-identity.sh
-  scripts/trainer-runtime-tree-identity.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
-  scripts/validate-trainer-host.sh
 )
 readonly -a payload_paths
-if [[ "${#payload_paths[@]}" != "77" ]]; then
-  printf 'release payload path contract must contain exactly 77 entries\n' >&2
+if [[ "${#payload_paths[@]}" != "59" ]]; then
+  printf 'release payload path contract must contain exactly 59 entries\n' >&2
   exit 1
 fi
 
 readonly -a payload_directories=(
   bin
-  trainers
-  trainers/recommendation
-  trainers/recommendation/ascendany_recommendation_trainer
+  models
   contracts
   contracts/openapi
   contracts/pintia
@@ -679,21 +726,9 @@ readonly -a payload_directories=(
 )
 
 readonly -a copy_sources=(
-  trainers/recommendation/src/ascendany_recommendation_trainer/__init__.py
-  trainers/recommendation/src/ascendany_recommendation_trainer/__main__.py
-  trainers/recommendation/src/ascendany_recommendation_trainer/attestation.py
-  trainers/recommendation/src/ascendany_recommendation_trainer/cli.py
-  trainers/recommendation/src/ascendany_recommendation_trainer/contract.py
-  trainers/recommendation/src/ascendany_recommendation_trainer/model.py
-  trainers/recommendation/src/ascendany_recommendation_trainer/train.py
-  trainers/recommendation/runtime-closure-cu130.json
-  trainers/recommendation/runtime-python-cu130.json
-  trainers/recommendation/runtime-requirements-cu130.lock
-  trainers/recommendation/runtime-wheels-cu130.json
   deploy/v2/README.md
   deploy/v2/OJ_JUDGE_CONTRACT.md
   deploy/v2/LSP_CONTROL_CONTRACT.md
-  deploy/v2/TRAINER_AGENT_CONTRACT.md
   contracts/openapi/ascendany-v2.yaml
   contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
   db/roles/README.md
@@ -710,13 +745,11 @@ readonly -a copy_sources=(
   deploy/v2/config/migrate.env.example
   deploy/v2/config/pgbouncer-hba.conf
   deploy/v2/config/pgbouncer.ini
-  deploy/v2/config/postgresql-hba-bootstrap.conf
   deploy/v2/config/postgresql-hba.conf
-  deploy/v2/config/postgresql-ident-bootstrap.conf
   deploy/v2/config/postgresql-ident.conf
   deploy/v2/config/restore.env.example
-  deploy/v2/config/trainer-agent.env.example
   deploy/v2/systemd/ascendanyd.service
+  deploy/v2/systemd/ascendany-model-activate.service
   deploy/v2/systemd/ascendanyd.service.d/40-read-only-smoke.conf
   deploy/v2/systemd/ascendany-admin-bootstrap.service
   deploy/v2/systemd/ascendany-backup.service
@@ -727,14 +760,12 @@ readonly -a copy_sources=(
   deploy/v2/systemd/ascendany-migrate.service
   deploy/v2/systemd/ascendany-pgbouncer.service
   deploy/v2/systemd/ascendany-restore-verify@.service
-  deploy/v2/systemd/ascendany-trainer-agent.service
   deploy/v2/polkit-1/rules.d/60-ascendany-judge.rules
   deploy/v2/polkit-1/rules.d/61-ascendany-lsp.rules
   deploy/v2/sysusers.d/ascendany-v2.conf
   deploy/v2/tmpfiles.d/ascendany-v2.conf
   deploy/v2/scripts/publish-restore-evidence.sh
   deploy/v2/scripts/restore-verify-operator.sh
-  deploy/v2/scripts/install-trainer-runtime.sh
   deploy/v2/scripts/install-v2-release.sh
   deploy/v2/scripts/acquire-judge-image.sh
   deploy/v2/scripts/attest-judge-image.sh
@@ -743,28 +774,13 @@ readonly -a copy_sources=(
   deploy/v2/scripts/acquire-pgbouncer-rpm.sh
   deploy/v2/scripts/attest-pgbouncer-rpm.sh
   deploy/v2/scripts/provision-postgres-pgbouncer.sh
-  deploy/v2/scripts/trainer-host-capability-identity.sh
-  deploy/v2/scripts/trainer-runtime-tree-identity.sh
   deploy/v2/scripts/validate-cloudflared.sh
   deploy/v2/scripts/validate-production.sh
-  deploy/v2/scripts/validate-trainer-host.sh
 )
 readonly -a copy_targets=(
-  trainers/recommendation/ascendany_recommendation_trainer/__init__.py
-  trainers/recommendation/ascendany_recommendation_trainer/__main__.py
-  trainers/recommendation/ascendany_recommendation_trainer/attestation.py
-  trainers/recommendation/ascendany_recommendation_trainer/cli.py
-  trainers/recommendation/ascendany_recommendation_trainer/contract.py
-  trainers/recommendation/ascendany_recommendation_trainer/model.py
-  trainers/recommendation/ascendany_recommendation_trainer/train.py
-  trainers/recommendation/runtime-closure-cu130.json
-  trainers/recommendation/runtime-python-cu130.json
-  trainers/recommendation/runtime-requirements-cu130.lock
-  trainers/recommendation/runtime-wheels-cu130.json
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
-  TRAINER_AGENT_CONTRACT.md
   contracts/openapi/ascendany-v2.yaml
   contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
   db/roles/README.md
@@ -781,13 +797,11 @@ readonly -a copy_targets=(
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
-  config/postgresql-hba-bootstrap.conf
   config/postgresql-hba.conf
-  config/postgresql-ident-bootstrap.conf
   config/postgresql-ident.conf
   config/restore.env
-  config/trainer-agent.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-activate.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -798,14 +812,12 @@ readonly -a copy_targets=(
   systemd/ascendany-migrate.service
   systemd/ascendany-pgbouncer.service
   systemd/ascendany-restore-verify@.service
-  systemd/ascendany-trainer-agent.service
   polkit-1/rules.d/60-ascendany-judge.rules
   polkit-1/rules.d/61-ascendany-lsp.rules
   sysusers.d/ascendany-v2.conf
   tmpfiles.d/ascendany-v2.conf
   scripts/publish-restore-evidence.sh
   scripts/restore-verify-operator.sh
-  scripts/install-trainer-runtime.sh
   scripts/install-v2-release.sh
   scripts/acquire-judge-image.sh
   scripts/attest-judge-image.sh
@@ -814,11 +826,8 @@ readonly -a copy_targets=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
-  scripts/trainer-host-capability-identity.sh
-  scripts/trainer-runtime-tree-identity.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
-  scripts/validate-trainer-host.sh
 )
 if [[ "${#copy_sources[@]}" != "${#copy_targets[@]}" ]]; then
   printf 'release copy source and target contracts differ in length\n' >&2
@@ -827,7 +836,7 @@ fi
 
 install -d -m 0755 \
   "$staging/bin" \
-  "$staging/trainers/recommendation/ascendany_recommendation_trainer" \
+  "$staging/models" \
   "$staging/contracts/openapi" \
   "$staging/contracts/pintia" \
   "$staging/db/roles" \
@@ -881,6 +890,17 @@ readonly linker_flags="-s -w -buildid= -X ${version_package}.Version=${version} 
   done
 )
 
+/usr/bin/install -m 0644 -- \
+  "$captured_recommendation_model" \
+  "$staging/models/recommendation-model.json"
+/usr/bin/env -i \
+  PATH=/usr/bin:/bin \
+  LC_ALL=C \
+  "$staging/bin/ascendany-model" verify \
+    --model "$staging/models/recommendation-model.json" \
+    --sha256 "$recommendation_model_sha256" \
+    --expected-purpose "$release_purpose"
+
 for index in "${!copy_sources[@]}"; do
   mode=0644
   if [[ "${copy_targets[$index]}" == scripts/* ]]; then
@@ -891,13 +911,27 @@ for index in "${!copy_sources[@]}"; do
     "$staging/${copy_targets[$index]}"
 done
 unset index mode
+if [[ "$(/usr/bin/grep -Fxc 'ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__' "$staging/config/ascendanyd.env")" != 1 ]]; then
+  printf 'ascendanyd configuration must contain one recommendation model digest marker\n' >&2
+  exit 1
+fi
+/usr/bin/sed -i \
+  "s/^ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__$/ASCENDANY_RECOMMENDATION_MODEL_SHA256=$recommendation_model_sha256/" \
+  "$staging/config/ascendanyd.env"
+if [[ "$(/usr/bin/grep -Fxc 'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__' "$staging/config/ascendanyd.env")" != 1 ]]; then
+  printf 'ascendanyd configuration must contain one recommendation model purpose marker\n' >&2
+  exit 1
+fi
+/usr/bin/sed -i \
+  "s/^ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__$/ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=$release_purpose/" \
+  "$staging/config/ascendanyd.env"
 
 expected_payload_paths="$workspace/expected-payload-paths"
 actual_payload_paths="$workspace/actual-payload-paths"
 printf '%s\n' "${payload_paths[@]}" | sort >"$expected_payload_paths"
 find "$staging" -mindepth 1 ! -type d -printf '%P\n' | sort >"$actual_payload_paths"
 if ! diff -u "$expected_payload_paths" "$actual_payload_paths"; then
-  printf 'staged release payload differs from the exact 77-path contract\n' >&2
+  printf 'staged release payload differs from the exact 59-path contract\n' >&2
   exit 1
 fi
 for relative in "${payload_paths[@]}"; do
@@ -946,6 +980,7 @@ manifest_json="$(jq -cnS \
   --arg schema 'ascendany.release.v2' \
   --arg version "$version" \
   --arg commit "$commit" \
+  --arg purpose "$release_purpose" \
   --arg goVersion "$go_version" \
   --arg goos "$goos" \
   --arg goarch "$goarch" \
@@ -957,6 +992,7 @@ manifest_json="$(jq -cnS \
     schema: $schema,
     version: $version,
     commit: $commit,
+    purpose: $purpose,
     sourceDateEpoch: $sourceDateEpoch,
     build: {
       goVersion: $goVersion,

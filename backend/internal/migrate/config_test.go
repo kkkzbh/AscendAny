@@ -180,7 +180,7 @@ func validMigrationEnvironment() map[string]string {
 		"ASCENDANY_DATABASE_PASSWORD_FILE":   testPasswordPath,
 		"ASCENDANY_DATABASE_ROLE":            databaseRole,
 		"ASCENDANY_DATABASE_SCHEMA":          databaseSchema,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "5",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "6",
 		"ASCENDANY_MIGRATION_HISTORY_TABLE":  historyTable,
 		"ASCENDANY_MIGRATION_LOCK_TIMEOUT":   "30s",
 		"ASCENDANY_DATABASE_CONNECT_TIMEOUT": "4s",

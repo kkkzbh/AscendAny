@@ -31,10 +31,11 @@ type HistoryEntry struct {
 
 var embeddedManifest = []HistoryEntry{
 	{Version: 1, Name: "fresh_schema", SHA256: "0cffdb00acefd37c049a654bad76d8fac79727ed7c54cc3fa9234d54964ce0cf"},
-	{Version: 2, Name: "product_domains", SHA256: "df282551fe80898ef5a68d2a9a0883b76a6eea010750719321fe03f654afa27d"},
-	{Version: 3, Name: "recommendation_trainer_transport", SHA256: "e6b9bd2a7a91fc53e45abd3b94a6bcf1b891f3746855f8ff26a77d69f58fb634"},
-	{Version: 4, Name: "achievement_rules", SHA256: "857be71025a503b26aadfcb4c437917b24e0bb68c75c789a52f977957d4695fb"},
+	{Version: 2, Name: "product_domains", SHA256: "1762304608ed3f93d62c01ad494a2b6110b07737cc652f38a2581392985fdd36"},
+	{Version: 3, Name: "recommendation_catalog_contract", SHA256: "6fa4a81fbe3440fc4b149a5b77d6c3860031e285bafef50b5a881e8783f36267"},
+	{Version: 4, Name: "achievement_rules", SHA256: "3242ddfbdee0911d961ebe0f46237f6e2b8a6e7c5e09cf1d94f6ae98c4caaccb"},
 	{Version: 5, Name: "auto_analysis_once", SHA256: "40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17"},
+	{Version: 6, Name: "inference_model_runtime", SHA256: "330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea"},
 }
 
 func CurrentVersion() int64 {

@@ -11,8 +11,8 @@ import {
 } from "../domain/types";
 import { MAX_TOTAL_NODES, MAX_TOTAL_STRING_BYTES } from "../domain/limits";
 
-const DATABASE_NAME = "ascendany-pintia-exporter-v2";
-const DATABASE_VERSION = EXPORT_TASK_FORMAT_VERSION;
+const DATABASE_NAME = `ascendany-pintia-exporter-v2-task-v${EXPORT_TASK_FORMAT_VERSION}`;
+const DATABASE_VERSION = 1;
 const TASK_STORE = "tasks";
 const COORDINATION_STORE = "coordination";
 
@@ -68,17 +68,25 @@ export interface ExportCoordinatorStore {
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener("upgradeneeded", () => {
+    request.addEventListener("upgradeneeded", (event) => {
       const database = request.result;
-      for (const store of [TASK_STORE, COORDINATION_STORE]) {
-        if (database.objectStoreNames.contains(store)) {
-          database.deleteObjectStore(store);
-        }
+      if (event.oldVersion !== 0 || event.newVersion !== DATABASE_VERSION || database.objectStoreNames.length !== 0) {
+        request.transaction?.abort();
+        return;
       }
       database.createObjectStore(TASK_STORE, { keyPath: "problemSetId" });
       database.createObjectStore(COORDINATION_STORE, { keyPath: "id" });
     });
-    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("success", () => {
+      const database = request.result;
+      const stores = Array.from(database.objectStoreNames).sort();
+      if (stores.length !== 2 || stores[0] !== COORDINATION_STORE || stores[1] !== TASK_STORE) {
+        database.close();
+        reject(new Error("Checkpoint database does not satisfy the exact v2 store contract."));
+        return;
+      }
+      resolve(database);
+    }, { once: true });
     request.addEventListener("error", () => reject(request.error ?? new Error("Failed to open checkpoint database.")), {
       once: true,
     });

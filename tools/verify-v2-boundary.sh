@@ -91,7 +91,6 @@ production_roots=(
   tools
   contracts
   deploy/v2
-  trainers
 )
 for root in "${production_roots[@]}"; do
   if [[ ! -d "$root" || -L "$root" ||
@@ -130,20 +129,10 @@ for root in "${legacy_roots[@]}"; do
   done
 done
 
-python_files=()
 for candidate in "${source_inventory[@]}"; do
   source_path_exists "$candidate" || continue
   [[ "$candidate" == *.py ]] || continue
-  python_files+=("$candidate")
-done
-if [[ "${#python_files[@]}" -eq 0 ]]; then
-  fail 'isolated recommendation trainer Python sources are missing'
-fi
-for file in "${python_files[@]}"; do
-  case "$file" in
-    trainers/recommendation/*) ;;
-    *) fail "Python source exists outside the isolated trainer: $file" ;;
-  esac
+  fail "Python source exists in the inference-only application repository: $candidate"
 done
 
 for candidate in "${source_inventory[@]}"; do
@@ -196,14 +185,77 @@ require_no_rg_match \
   -n 'uvicorn|apps/api|preprocess/' deploy/v2/systemd
 
 require_no_rg_match \
+  'retired runtime shell closure scan' \
+  'a production shell path references a Python, trainer, API-v1, or retired application runtime' \
+  -i -n \
+  --glob '*.sh' \
+  --glob '!tools/tests/**' \
+  --glob '!tools/verify-v2-boundary.sh' \
+  --glob '!deploy/v2/scripts/validate-production.sh' \
+  '(python([0-9.]*)?([[:space:]/]|$)|uvicorn|apps[./]api|/api/v1|ascendany-trainer)' \
+  deploy/v2/scripts tools
+
+# The production validator owns absence checks for the retired generation. It
+# may name the retired paths and units as data, but it must never be able to
+# launch them. Every other production shell path remains under the broader
+# zero-reference rule above.
+require_no_rg_match \
+  'retired runtime validator execution scan' \
+  'the production validator contains an execution path for a retired Python or trainer runtime' \
+  -i -n \
+  --glob 'validate-production.sh' \
+  '(^|[;&|][[:space:]]*)(exec[[:space:]]+)?([^;&|[:space:]]*/)?(python([0-9.]*)?|uvicorn|ascendany-trainer-agent)([[:space:];&|]|$)|(bash|sh|env|xargs|systemd-run)[[:space:]][^;&|]*(python([0-9.]*)?|uvicorn|apps[./]api|/api/v1|ascendany-trainer)|(systemctl[[:space:]]+(start|restart|try-restart|reload|reload-or-restart|enable|reenable|unmask)[^;&|]*(ascendany-api|ascendany-trainer))' \
+  deploy/v2/scripts
+
+require_no_rg_match \
+  'retired API service ownership scan' \
+  'a production shell path outside the production validator references the retired API service' \
+  -i -n \
+  --glob '*.sh' \
+  --glob '!tools/tests/**' \
+  --glob '!tools/verify-v2-boundary.sh' \
+  --glob '!deploy/v2/scripts/validate-production.sh' \
+  'ascendany-api' \
+  deploy/v2/scripts tools
+
+require_no_rg_match \
+  'retired recommendation database and API scan' \
+  'a production source retains a recommendation training database or API execution path' \
+  -i -n \
+  --glob '!**/*_test.go' \
+  --glob '!**/*.test.ts' \
+  --glob '!**/*.test.tsx' \
+  --glob '!**/public/**' \
+  --glob '!tools/tests/**' \
+  '(recommendation_(training|trainer)|recommendation/(training-runs|trainer-agent)|KindTraining|configuration_kind[^\n]*training|training[^\n]*configuration_kind)' \
+  backend db contracts/openapi packages/sdk/src apps deploy/v2
+
+require_no_rg_match \
+  'retired database route shell scan' \
+  'a production shell path references a retired database role, database, or pool route' \
+  -n \
+  --glob '*.sh' \
+  --glob '!tools/tests/**' \
+  --glob '!tools/verify-v2-boundary.sh' \
+  '("AscendAny"|dbname=AscendAny([[:space:]]|$)|--dbname=AscendAny|--username=AscendAny|ascendany[.]legacy)' \
+  deploy/v2/scripts tools
+
+for obsolete in \
+  deploy/v2/config/postgresql-hba-bootstrap.conf \
+  deploy/v2/config/postgresql-ident-bootstrap.conf; do
+  if source_path_exists "$obsolete"; then
+    fail "obsolete PostgreSQL transition configuration remains: $obsolete"
+  fi
+done
+
+require_no_rg_match \
   'Python container runtime scan' \
-  'a container runtime outside the isolated trainer uses Python' \
+  'a production container runtime uses Python' \
   -n \
   --glob '**/Containerfile' \
   --glob '**/Containerfile.*' \
   --glob '**/Dockerfile' \
   --glob '**/Dockerfile.*' \
-  --glob '!trainers/recommendation/**' \
   '^[[:space:]]*FROM[[:space:]]+[^[:space:]]*python([:@]|$)' \
   .
 
@@ -262,7 +314,6 @@ approved_go_exec_sites=(
   backend/internal/judgerunner/podman.go
   backend/internal/lspexecutor/systemd.go
   backend/internal/lsprunner/runner.go
-  backend/internal/trainerprocess/subprocess_trainer.go
 )
 capture_rg_file_list actual_go_exec_sites 'Go host-process execution scan' \
   -l 'exec[.]Command(Context)?[(]' backend \
@@ -289,11 +340,5 @@ require_no_rg_match \
   --glob '!**/node_modules/**' \
   "(node:child_process|from [\"']child_process[\"']|require[(][\"']child_process[\"'][)]|Deno[.]Command|Bun[.]spawn)" \
   apps packages tools/pintia-exporter-extension
-
-require_no_rg_match \
-  'isolated trainer child-process execution scan' \
-  'the isolated Python trainer can spawn a child process' \
-  -n '(import subprocess|from subprocess|os[.]system|os[.]popen|Popen[(])' \
-  trainers/recommendation/src
 
 printf 'AscendAny v2 source boundary verified.\n'

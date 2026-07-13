@@ -5,6 +5,8 @@ Wants=network-online.target
 After=network-online.target
 RequiresMountsFor=/var/lib/ascendany/artifacts
 AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendanyd
+AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-model
+AssertPathExists=/opt/ascendany/v2/models/recommendation-model.json
 AssertPathExists=/etc/ascendany/v2/ascendanyd.env
 
 [Service]
@@ -22,17 +24,15 @@ UMask=0077
 LoadCredentialEncrypted=db_password:/etc/ascendany/credentials/runtime_db_password.cred
 LoadCredentialEncrypted=jwt_signing_key:/etc/ascendany/credentials/jwt_signing_key.cred
 LoadCredentialEncrypted=password_pepper:/etc/ascendany/credentials/password_pepper.cred
-LoadCredentialEncrypted=trainer_agent_rtx_01:/etc/ascendany/credentials/trainer_agent_rtx_01.cred
 EnvironmentFile=/etc/ascendany/v2/ascendanyd.env
 Environment=SHELL=/usr/sbin/nologin
 Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password
 Environment=ASCENDANY_JWT_SIGNING_KEY_FILE=%d/jwt_signing_key
 Environment=ASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper
-Environment=ASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031=%d/trainer_agent_rtx_01
 ExecStartPre=/usr/bin/test -s %d/db_password
 ExecStartPre=/usr/bin/test -s %d/jwt_signing_key
 ExecStartPre=/usr/bin/test -s %d/password_pepper
-ExecStartPre=/usr/bin/test -s %d/trainer_agent_rtx_01
+ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}
 ExecStart=/opt/ascendany/v2/bin/ascendanyd serve
 Restart=on-failure
 RestartSec=3s

@@ -1,12 +1,21 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/kkkzbh/AscendAny/backend/internal/canonicaljson"
+	"github.com/kkkzbh/AscendAny/backend/internal/databasecontract"
+	"github.com/kkkzbh/AscendAny/backend/internal/inferencemodel"
 )
 
 type liveDatabaseSnapshot struct {
@@ -123,9 +132,9 @@ func openDatabaseSnapshot(ctx context.Context, config CreateConfig) (*liveDataba
 		snapshot.Close(context.Background())
 		return nil, errors.New("export PostgreSQL backup snapshot")
 	}
-	if err := requireExactDumpOmittedRowTypeACLs(ctx, transaction); err != nil {
+	if err := databasecontract.Verify(ctx, transaction, databasecontract.SourceSnapshot); err != nil {
 		snapshot.Close(context.Background())
-		return nil, fmt.Errorf("source row-type ACL contract rejected: %w", err)
+		return nil, fmt.Errorf("source database contract rejected: %w", err)
 	}
 	artifacts, err := readArtifactDescriptors(ctx, transaction)
 	if err != nil {
@@ -139,7 +148,178 @@ func openDatabaseSnapshot(ctx context.Context, config CreateConfig) (*liveDataba
 	}
 	snapshot.data.Artifacts = artifacts
 	snapshot.data.Migrations = migrations
+	model, err := readRecommendationModelDescriptor(ctx, transaction)
+	if err != nil {
+		snapshot.Close(context.Background())
+		return nil, err
+	}
+	snapshot.data.RecommendationModel = model
 	return snapshot, nil
+}
+
+type modelManifestDescriptorWire struct {
+	Schema                   string   `json:"schema"`
+	ModelID                  string   `json:"modelId"`
+	Purpose                  string   `json:"purpose"`
+	TrainedAt                string   `json:"trainedAt"`
+	Algorithm                string   `json:"algorithm"`
+	InferenceContract        string   `json:"inferenceContract"`
+	TrainingProvenanceSHA256 string   `json:"trainingProvenanceSha256"`
+	FeatureSchemaSHA256      string   `json:"featureSchemaSha256"`
+	KnowledgeCatalogSHA256   string   `json:"knowledgeCatalogSha256"`
+	ParameterSHA256          string   `json:"parameterSha256"`
+	GoldenVectorsSHA256      string   `json:"goldenVectorsSha256"`
+	ActorFeatureIDs          []string `json:"actorFeatureIds"`
+	ProblemFeatureIDs        []string `json:"problemFeatureIds"`
+	KnowledgePointIDs        []string `json:"knowledgePointIds"`
+}
+
+var backupModelIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func readRecommendationModelDescriptor(ctx context.Context, queryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) (RecommendationModelDescriptor, error) {
+	var value RecommendationModelDescriptor
+	var manifestText string
+	var headCount, releaseCount, activationCount int64
+	err := queryer.QueryRow(ctx, `
+SELECT release.recommendation_model_release_id,
+       head.head_revision,
+       release.model_id::text,
+       release.model_purpose,
+       release.artifact_sha256,
+       release.artifact_size_bytes,
+       release.artifact_mode,
+       release.model_schema,
+       release.algorithm,
+       release.inference_contract,
+       release.trained_at,
+       release.training_provenance_sha256,
+       release.feature_schema_sha256,
+       release.knowledge_catalog_sha256,
+       release.parameter_sha256,
+       release.golden_vectors_sha256,
+       release.manifest::text,
+       release.manifest_sha256,
+       release.created_at,
+       activation.application_version,
+       activation.application_commit,
+       activation.application_build_time,
+       activation.activated_at,
+       head.updated_at,
+       (SELECT count(*) FROM ascendany.recommendation_model_head),
+       (SELECT count(*) FROM ascendany.recommendation_model_releases AS candidate
+        WHERE candidate.recommendation_model_release_id = head.current_release_id),
+       (SELECT count(*) FROM ascendany.recommendation_model_activation_events AS candidate
+        WHERE candidate.head_revision = head.head_revision
+          AND candidate.recommendation_model_release_id = head.current_release_id
+          AND candidate.artifact_sha256 = release.artifact_sha256)
+FROM ascendany.recommendation_model_head AS head
+JOIN ascendany.recommendation_model_releases AS release
+  ON release.recommendation_model_release_id = head.current_release_id
+JOIN ascendany.recommendation_model_activation_events AS activation
+  ON activation.head_revision = head.head_revision
+ AND activation.recommendation_model_release_id = head.current_release_id
+ AND activation.artifact_sha256 = release.artifact_sha256
+WHERE head.singleton`).Scan(
+		&value.ReleaseID, &value.HeadRevision, &value.ModelID, &value.ModelPurpose, &value.ArtifactSHA256,
+		&value.ArtifactSizeBytes, &value.ArtifactMode, &value.ModelSchema, &value.Algorithm,
+		&value.InferenceContract, &value.TrainedAt, &value.TrainingProvenanceSHA256,
+		&value.FeatureSchemaSHA256, &value.KnowledgeCatalogSHA256, &value.ParameterSHA256,
+		&value.GoldenVectorsSHA256, &manifestText, &value.ManifestSHA256, &value.ReleaseCreatedAt,
+		&value.ApplicationVersion, &value.ApplicationCommit, &value.ApplicationBuildTime,
+		&value.ActivatedAt, &value.HeadUpdatedAt, &headCount, &releaseCount, &activationCount,
+	)
+	if err != nil {
+		return RecommendationModelDescriptor{}, fmt.Errorf("read active recommendation model snapshot: %w", err)
+	}
+	if headCount != 1 || releaseCount != 1 || activationCount != 1 {
+		return RecommendationModelDescriptor{}, errors.New("active recommendation model ownership is ambiguous")
+	}
+	normalizeRecommendationModelTimestamps(&value)
+	canonical, digest, err := canonicaljson.Object(json.RawMessage(manifestText), 1<<20)
+	if err != nil || digest != value.ManifestSHA256 {
+		return RecommendationModelDescriptor{}, errors.New("active recommendation model manifest is invalid")
+	}
+	value.Manifest = canonical
+	if err := validateRecommendationModelDescriptor(value); err != nil {
+		return RecommendationModelDescriptor{}, fmt.Errorf("active recommendation model snapshot rejected: %w", err)
+	}
+	return value, nil
+}
+
+func normalizeRecommendationModelTimestamps(value *RecommendationModelDescriptor) {
+	value.TrainedAt = value.TrainedAt.UTC()
+	value.ReleaseCreatedAt = value.ReleaseCreatedAt.UTC()
+	value.ActivatedAt = value.ActivatedAt.UTC()
+	value.HeadUpdatedAt = value.HeadUpdatedAt.UTC()
+}
+
+func validateRecommendationModelDescriptor(value RecommendationModelDescriptor) error {
+	if value.ReleaseID <= 0 || value.HeadRevision <= 0 || !backupModelIDPattern.MatchString(value.ModelID) ||
+		!sha256Pattern.MatchString(value.ArtifactSHA256) || value.ArtifactSizeBytes < 1 || value.ArtifactSizeBytes > inferencemodel.MaximumArtifactBytes ||
+		value.ArtifactMode != 0o644 || value.ModelSchema != inferencemodel.Schema || value.Algorithm != inferencemodel.Algorithm ||
+		value.InferenceContract != inferencemodel.InferenceContract {
+		return errors.New("model release identity is invalid")
+	}
+	if _, err := inferencemodel.ParsePurpose(value.ModelPurpose); err != nil {
+		return errors.New("model purpose is invalid")
+	}
+	for _, digest := range []string{
+		value.TrainingProvenanceSHA256, value.FeatureSchemaSHA256, value.KnowledgeCatalogSHA256,
+		value.ParameterSHA256, value.GoldenVectorsSHA256, value.ManifestSHA256,
+	} {
+		if !sha256Pattern.MatchString(digest) {
+			return errors.New("model provenance digest is invalid")
+		}
+	}
+	for _, timestamp := range []time.Time{value.TrainedAt, value.ReleaseCreatedAt, value.ActivatedAt, value.HeadUpdatedAt} {
+		if timestamp.IsZero() || timestamp.Location() != time.UTC {
+			return errors.New("model provenance timestamp is invalid")
+		}
+	}
+	for _, identity := range []string{value.ApplicationVersion, value.ApplicationCommit, value.ApplicationBuildTime} {
+		if identity == "" || strings.TrimSpace(identity) != identity || len(identity) > 128 {
+			return errors.New("model application identity is invalid")
+		}
+	}
+	canonical, digest, err := canonicaljson.Object(value.Manifest, 1<<20)
+	if err != nil || digest != value.ManifestSHA256 {
+		return errors.New("model manifest digest is invalid")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
+	decoder.DisallowUnknownFields()
+	var manifest modelManifestDescriptorWire
+	if err := decoder.Decode(&manifest); err != nil {
+		return errors.New("model manifest shape is invalid")
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return errors.New("model manifest trailer is invalid")
+	}
+	if manifest.Schema != value.ModelSchema || manifest.ModelID != value.ModelID || manifest.Purpose != value.ModelPurpose ||
+		manifest.TrainedAt != value.TrainedAt.Format(time.RFC3339Nano) || manifest.Algorithm != value.Algorithm ||
+		manifest.InferenceContract != value.InferenceContract ||
+		manifest.TrainingProvenanceSHA256 != value.TrainingProvenanceSHA256 ||
+		manifest.FeatureSchemaSHA256 != value.FeatureSchemaSHA256 ||
+		manifest.KnowledgeCatalogSHA256 != value.KnowledgeCatalogSHA256 ||
+		manifest.ParameterSHA256 != value.ParameterSHA256 || manifest.GoldenVectorsSHA256 != value.GoldenVectorsSHA256 ||
+		len(manifest.ActorFeatureIDs) == 0 || len(manifest.ProblemFeatureIDs) == 0 || len(manifest.KnowledgePointIDs) == 0 {
+		return errors.New("model manifest differs from release columns")
+	}
+	return nil
+}
+
+func equalRecommendationModel(left, right RecommendationModelDescriptor) bool {
+	leftManifest, leftDigest, leftErr := canonicaljson.Object(left.Manifest, 1<<20)
+	rightManifest, rightDigest, rightErr := canonicaljson.Object(right.Manifest, 1<<20)
+	if leftErr != nil || rightErr != nil || leftDigest != rightDigest || !bytes.Equal(leftManifest, rightManifest) {
+		return false
+	}
+	left.Manifest = leftManifest
+	right.Manifest = rightManifest
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
 }
 
 func requireExactDumpOmittedRowTypeACLs(ctx context.Context, queryer interface {
@@ -359,6 +539,9 @@ func verifyRestoredDatabase(ctx context.Context, connection restoredDatabaseConn
 		return err
 	}
 	defer transaction.Rollback(context.Background())
+	if err := databasecontract.Verify(ctx, transaction, databasecontract.Restore); err != nil {
+		return fmt.Errorf("restored database contract rejected: %w", err)
+	}
 	migrations, err := readMigrationDescriptors(ctx, transaction)
 	if err != nil {
 		return err
@@ -372,6 +555,13 @@ func verifyRestoredDatabase(ctx context.Context, connection restoredDatabaseConn
 	}
 	if !equalArtifacts(artifacts, manifest.Artifacts.Entries) {
 		return errors.New("restored artifact table does not match the backup manifest")
+	}
+	model, err := readRecommendationModelDescriptor(ctx, transaction)
+	if err != nil {
+		return err
+	}
+	if !equalRecommendationModel(model, manifest.Database.RecommendationModel) {
+		return errors.New("restored recommendation model provenance does not match the backup manifest")
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return errors.New("commit post-restore verification transaction")

@@ -80,8 +80,8 @@ func TestServiceValidatesPageAndDetailShapes(t *testing.T) {
 		detail: Detail{
 			ExamSummary: summary,
 			Problems: []Problem{{
-				ID:                         "problem-set-problem-1",
-				ProblemID:                  "problem-1",
+				ID:                         "problem-set:problem-1",
+				ProblemID:                  "problem:1",
 				Label:                      stringPointer("7-1"),
 				Title:                      "A+B",
 				MaxScore:                   stringPointer("20.0"),
@@ -113,6 +113,15 @@ func TestServiceValidatesPageAndDetailShapes(t *testing.T) {
 	repository.detail.Problems = nil
 	if _, _, err := service.Get(context.Background(), DetailQuery{Principal: testPrincipal(), ExamID: testExamID}); CodeOf(err) != ErrorStoredDataInvalid {
 		t.Fatalf("invalid detail error=%v", err)
+	}
+	invalidSummary := summary
+	invalidSummary.ProblemSetID = "problem/set"
+	if err := validateSummary(invalidSummary); err == nil {
+		t.Fatal("invalid Pintia problem set ID passed the public contract")
+	}
+	invalidProblem := Problem{ID: "problem/set", ProblemID: "problem:1", Title: "A+B"}
+	if err := validateProblem(invalidProblem); err == nil {
+		t.Fatal("invalid Pintia problem identity passed the public contract")
 	}
 }
 
@@ -165,9 +174,9 @@ func validSummary() ExamSummary {
 		ID:               testExamID,
 		SnapshotID:       testSnapshotID,
 		Platform:         "pintia",
-		ProblemSetID:     "2039341868571590656",
+		ProblemSetID:     "set:2039341868571590656",
 		Title:            "集训",
-		SourceURL:        "https://pintia.cn/problem-sets/2039341868571590656",
+		SourceURL:        "https://pintia.cn/problem-sets/set:2039341868571590656",
 		TotalScore:       stringPointer("300.0"),
 		ProblemCount:     1,
 		ParticipantCount: 35,

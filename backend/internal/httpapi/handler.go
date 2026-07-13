@@ -27,7 +27,6 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/oj"
 	"github.com/kkkzbh/AscendAny/backend/internal/pintia"
 	"github.com/kkkzbh/AscendAny/backend/internal/studentanalytics"
-	"github.com/kkkzbh/AscendAny/backend/internal/traineragentprotocol"
 	"github.com/kkkzbh/AscendAny/backend/internal/version"
 )
 
@@ -134,19 +133,6 @@ type OJService interface {
 	ReadJudgeEvents(context.Context, string, string, int64, int) (oj.JudgeEventBatch, bool, error)
 }
 
-type TrainerAgentBearerVerifier interface {
-	Verify(context.Context, string) (string, error)
-}
-
-type TrainerAgentService interface {
-	MaximumClaimResponseBytes() int64
-	MaximumOutputRequestBytes() int64
-	Claim(context.Context, string, traineragentprotocol.ClaimRequestV1) (*traineragentprotocol.ClaimResponseV1, error)
-	Heartbeat(context.Context, string, string, traineragentprotocol.HeartbeatRequestV1) (traineragentprotocol.HeartbeatResponseV1, error)
-	Publish(context.Context, string, string, string, traineragentprotocol.OutputRequestV1) (traineragentprotocol.OutputResponseV1, error)
-	ReportFailure(context.Context, string, string, string, traineragentprotocol.FailureRequestV1) (traineragentprotocol.FailureResponseV1, error)
-}
-
 type Capabilities struct {
 	PintiaSnapshotSchema string `json:"pintiaSnapshotSchema"`
 	PintiaSchemaSHA256   string `json:"pintiaSchemaSha256"`
@@ -159,93 +145,81 @@ type Capabilities struct {
 }
 
 type Options struct {
-	Readiness                    ReadinessChecker
-	Version                      version.Info
-	Logger                       *slog.Logger
-	Auth                         AuthService
-	Enrollment                   EnrollmentService
-	AccountManagement            AccountManagementService
-	AllowedOrigins               []string
-	RateLimiter                  RequestRateLimiter
-	RequestIDRandom              io.Reader
-	TrustedProxyCIDRs            []netip.Prefix
-	ClientIPHeader               string
-	Artifacts                    ArtifactPublisher
-	Imports                      ImportQueue
-	ImportReader                 ImportReader
-	StudentAnalytics             StudentAnalyticsService
-	Achievement                  AchievementService
-	ExamCatalog                  ExamCatalogService
-	ExamGeneration               ExamGenerationService
-	Administration               AdministrationService
-	Configuration                ConfigurationService
-	Feedback                     FeedbackService
-	AgentNotes                   AgentNotesService
-	ChatAgent                    ChatAgentService
-	OJ                           OJService
-	OJPolicy                     oj.Policy
-	RecommendationReader         RecommendationReader
-	RecommendationAdminReader    RecommendationAdminReader
-	RecommendationQueue          RecommendationQueue
-	ModelProbe                   ModelProbeService
-	LSP                          LSPService
-	LSPPolicy                    lsp.Policy
-	TrainerAgentTransportEnabled bool
-	TrainerAgentVerifier         TrainerAgentBearerVerifier
-	TrainerAgent                 TrainerAgentService
-	Capabilities                 Capabilities
-	AuthBodyTimeout              time.Duration
-	UploadBodyTimeout            time.Duration
-	SSEMaxDuration               time.Duration
-	SSEReauthInterval            time.Duration
-	SSEWriteTimeout              time.Duration
-	MaxActiveSSE                 int
+	Readiness                 ReadinessChecker
+	Version                   version.Info
+	Logger                    *slog.Logger
+	Auth                      AuthService
+	Enrollment                EnrollmentService
+	AccountManagement         AccountManagementService
+	AllowedOrigins            []string
+	RateLimiter               RequestRateLimiter
+	RequestIDRandom           io.Reader
+	TrustedProxyCIDRs         []netip.Prefix
+	ClientIPHeader            string
+	Artifacts                 ArtifactPublisher
+	Imports                   ImportQueue
+	ImportReader              ImportReader
+	StudentAnalytics          StudentAnalyticsService
+	Achievement               AchievementService
+	ExamCatalog               ExamCatalogService
+	ExamGeneration            ExamGenerationService
+	Administration            AdministrationService
+	Configuration             ConfigurationService
+	Feedback                  FeedbackService
+	AgentNotes                AgentNotesService
+	ChatAgent                 ChatAgentService
+	OJ                        OJService
+	OJPolicy                  oj.Policy
+	RecommendationReader      RecommendationReader
+	RecommendationAdminReader RecommendationAdminReader
+	ModelProbe                ModelProbeService
+	LSP                       LSPService
+	LSPPolicy                 lsp.Policy
+	Capabilities              Capabilities
+	AuthBodyTimeout           time.Duration
+	UploadBodyTimeout         time.Duration
+	SSEMaxDuration            time.Duration
+	SSEReauthInterval         time.Duration
+	SSEWriteTimeout           time.Duration
+	MaxActiveSSE              int
 }
 
 type Handler struct {
-	readiness                             ReadinessChecker
-	version                               version.Info
-	logger                                *slog.Logger
-	auth                                  AuthService
-	enrollment                            EnrollmentService
-	accountManagement                     AccountManagementService
-	allowedOrigins                        map[string]struct{}
-	rateLimiter                           RequestRateLimiter
-	requestIDs                            *requestIDGenerator
-	routePolicies                         map[string]routePolicy
-	clientAddress                         clientAddressResolver
-	artifacts                             ArtifactPublisher
-	imports                               ImportQueue
-	importReader                          ImportReader
-	studentAnalytics                      StudentAnalyticsService
-	achievement                           AchievementService
-	examCatalog                           ExamCatalogService
-	examGeneration                        ExamGenerationService
-	administration                        AdministrationService
-	configuration                         ConfigurationService
-	feedback                              FeedbackService
-	agentNotes                            AgentNotesService
-	chatAgent                             ChatAgentService
-	oj                                    OJService
-	ojPolicy                              oj.Policy
-	recommendationReader                  RecommendationReader
-	recommendationAdminReader             RecommendationAdminReader
-	recommendationQueue                   RecommendationQueue
-	modelProbe                            ModelProbeService
-	lspService                            LSPService
-	lspPolicy                             lsp.Policy
-	trainerAgentTransportEnabled          bool
-	trainerAgentVerifier                  TrainerAgentBearerVerifier
-	trainerAgent                          TrainerAgentService
-	trainerAgentMaximumClaimResponseBytes int64
-	trainerAgentMaximumOutputRequestBytes int64
-	capabilities                          Capabilities
-	authBodyTimeout                       time.Duration
-	uploadBodyTimeout                     time.Duration
-	sseMaxDuration                        time.Duration
-	sseReauthInterval                     time.Duration
-	sseWriteTimeout                       time.Duration
-	sseSlots                              chan struct{}
+	readiness                 ReadinessChecker
+	version                   version.Info
+	logger                    *slog.Logger
+	auth                      AuthService
+	enrollment                EnrollmentService
+	accountManagement         AccountManagementService
+	allowedOrigins            map[string]struct{}
+	rateLimiter               RequestRateLimiter
+	requestIDs                *requestIDGenerator
+	routes                    *routeRegistry
+	clientAddress             clientAddressResolver
+	artifacts                 ArtifactPublisher
+	imports                   ImportQueue
+	importReader              ImportReader
+	studentAnalytics          StudentAnalyticsService
+	achievement               AchievementService
+	examCatalog               ExamCatalogService
+	examGeneration            ExamGenerationService
+	administration            AdministrationService
+	configuration             ConfigurationService
+	feedback                  FeedbackService
+	agentNotes                AgentNotesService
+	chatAgent                 ChatAgentService
+	oj                        OJService
+	ojPolicy                  oj.Policy
+	recommendationReader      RecommendationReader
+	recommendationAdminReader RecommendationAdminReader
+	modelProbe                ModelProbeService
+	lspService                LSPService
+	lspPolicy                 lsp.Policy
+	capabilities              Capabilities
+	sseMaxDuration            time.Duration
+	sseReauthInterval         time.Duration
+	sseWriteTimeout           time.Duration
+	sseSlots                  chan struct{}
 }
 
 type requestIDContextKey struct{}
@@ -310,145 +284,56 @@ func New(options Options) (http.Handler, error) {
 		return nil, fmt.Errorf("HTTP API SSE write timeout is invalid")
 	}
 	if options.Capabilities.WritesEnabled {
-		if options.Artifacts == nil || options.Imports == nil || options.RecommendationQueue == nil || options.ModelProbe == nil {
-			return nil, fmt.Errorf("enabled writes require artifact, import queue, recommendation queue, and model probe dependencies")
+		if options.Artifacts == nil || options.Imports == nil || options.ModelProbe == nil {
+			return nil, fmt.Errorf("enabled writes require artifact, import queue, and model probe dependencies")
 		}
-	} else if options.Artifacts != nil || options.Imports != nil || options.RecommendationQueue != nil || options.ModelProbe != nil {
-		return nil, fmt.Errorf("disabled writes cannot receive artifact, import queue, recommendation queue, or model probe dependencies")
-	}
-	var trainerAgentMaximumClaimResponseBytes int64
-	var trainerAgentMaximumOutputRequestBytes int64
-	if options.TrainerAgentTransportEnabled {
-		if !options.Capabilities.WritesEnabled || options.TrainerAgentVerifier == nil || options.TrainerAgent == nil {
-			return nil, fmt.Errorf("enabled trainer-agent transport requires writes, scoped bearer verification, and the trainer-agent application service")
-		}
-		trainerAgentMaximumClaimResponseBytes = options.TrainerAgent.MaximumClaimResponseBytes()
-		trainerAgentMaximumOutputRequestBytes = options.TrainerAgent.MaximumOutputRequestBytes()
-		if trainerAgentMaximumClaimResponseBytes <= 0 || trainerAgentMaximumClaimResponseBytes > maximumTrainerAgentClaimResponseBytes ||
-			trainerAgentMaximumOutputRequestBytes <= 0 || trainerAgentMaximumOutputRequestBytes > maximumTrainerAgentOutputRequestBytes {
-			return nil, fmt.Errorf("trainer-agent transport bounds exceed the internal protocol limits")
-		}
-	} else if options.TrainerAgentVerifier != nil || options.TrainerAgent != nil {
-		return nil, fmt.Errorf("disabled trainer-agent transport cannot receive trainer-agent dependencies")
+	} else if options.Artifacts != nil || options.Imports != nil || options.ModelProbe != nil {
+		return nil, fmt.Errorf("disabled writes cannot receive artifact, import queue, or model probe dependencies")
 	}
 	handler := &Handler{
-		readiness:                             options.Readiness,
-		version:                               options.Version,
-		logger:                                options.Logger,
-		auth:                                  options.Auth,
-		enrollment:                            options.Enrollment,
-		accountManagement:                     options.AccountManagement,
-		allowedOrigins:                        allowedOrigins,
-		rateLimiter:                           options.RateLimiter,
-		requestIDs:                            requestIDs,
-		routePolicies:                         apiRoutePolicies(options.AuthBodyTimeout, options.UploadBodyTimeout),
-		clientAddress:                         clientAddress,
-		artifacts:                             options.Artifacts,
-		imports:                               options.Imports,
-		importReader:                          options.ImportReader,
-		studentAnalytics:                      options.StudentAnalytics,
-		achievement:                           options.Achievement,
-		examCatalog:                           options.ExamCatalog,
-		examGeneration:                        options.ExamGeneration,
-		administration:                        options.Administration,
-		configuration:                         options.Configuration,
-		feedback:                              options.Feedback,
-		agentNotes:                            options.AgentNotes,
-		chatAgent:                             options.ChatAgent,
-		oj:                                    options.OJ,
-		ojPolicy:                              options.OJPolicy,
-		recommendationReader:                  options.RecommendationReader,
-		recommendationAdminReader:             options.RecommendationAdminReader,
-		recommendationQueue:                   options.RecommendationQueue,
-		modelProbe:                            options.ModelProbe,
-		lspService:                            options.LSP,
-		lspPolicy:                             options.LSPPolicy,
-		trainerAgentTransportEnabled:          options.TrainerAgentTransportEnabled,
-		trainerAgentVerifier:                  options.TrainerAgentVerifier,
-		trainerAgent:                          options.TrainerAgent,
-		trainerAgentMaximumClaimResponseBytes: trainerAgentMaximumClaimResponseBytes,
-		trainerAgentMaximumOutputRequestBytes: trainerAgentMaximumOutputRequestBytes,
-		capabilities:                          options.Capabilities,
-		authBodyTimeout:                       options.AuthBodyTimeout,
-		uploadBodyTimeout:                     options.UploadBodyTimeout,
-		sseMaxDuration:                        options.SSEMaxDuration,
-		sseReauthInterval:                     options.SSEReauthInterval,
-		sseWriteTimeout:                       options.SSEWriteTimeout,
-		sseSlots:                              make(chan struct{}, options.MaxActiveSSE),
+		readiness:                 options.Readiness,
+		version:                   options.Version,
+		logger:                    options.Logger,
+		auth:                      options.Auth,
+		enrollment:                options.Enrollment,
+		accountManagement:         options.AccountManagement,
+		allowedOrigins:            allowedOrigins,
+		rateLimiter:               options.RateLimiter,
+		requestIDs:                requestIDs,
+		clientAddress:             clientAddress,
+		artifacts:                 options.Artifacts,
+		imports:                   options.Imports,
+		importReader:              options.ImportReader,
+		studentAnalytics:          options.StudentAnalytics,
+		achievement:               options.Achievement,
+		examCatalog:               options.ExamCatalog,
+		examGeneration:            options.ExamGeneration,
+		administration:            options.Administration,
+		configuration:             options.Configuration,
+		feedback:                  options.Feedback,
+		agentNotes:                options.AgentNotes,
+		chatAgent:                 options.ChatAgent,
+		oj:                        options.OJ,
+		ojPolicy:                  options.OJPolicy,
+		recommendationReader:      options.RecommendationReader,
+		recommendationAdminReader: options.RecommendationAdminReader,
+		modelProbe:                options.ModelProbe,
+		lspService:                options.LSP,
+		lspPolicy:                 options.LSPPolicy,
+		capabilities:              options.Capabilities,
+		sseMaxDuration:            options.SSEMaxDuration,
+		sseReauthInterval:         options.SSEReauthInterval,
+		sseWriteTimeout:           options.SSEWriteTimeout,
+		sseSlots:                  make(chan struct{}, options.MaxActiveSSE),
 	}
 
+	routes, err := newRouteRegistry(apiRouteContracts(handler, options.AuthBodyTimeout, options.UploadBodyTimeout))
+	if err != nil {
+		return nil, err
+	}
+	handler.routes = routes
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /livez", handler.livez)
-	mux.HandleFunc("GET /readyz", handler.readyz)
-	mux.HandleFunc("GET /version", handler.buildVersion)
-	mux.HandleFunc("GET /api/v2/capabilities", handler.getCapabilities)
-	mux.HandleFunc("POST /api/v2/auth/login", handler.login)
-	mux.HandleFunc("POST /api/v2/auth/refresh", handler.refresh)
-	mux.HandleFunc("POST /api/v2/auth/logout", handler.logout)
-	mux.HandleFunc("GET /api/v2/auth/me", handler.me)
-	mux.HandleFunc("POST /api/v2/auth/enrollment-claims/consume", handler.claimEnrollment)
-	mux.HandleFunc("PATCH /api/v2/account/profile", handler.updateAccountProfile)
-	mux.HandleFunc("GET /api/v2/account/sessions", handler.listAccountSessions)
-	mux.HandleFunc("DELETE /api/v2/account/sessions/{sessionId}", handler.revokeAccountSession)
-	mux.HandleFunc("POST /api/v2/admin/enrollment-claims", handler.issueEnrollment)
-	mux.HandleFunc("DELETE /api/v2/admin/enrollment-claims/{grantId}", handler.revokeEnrollment)
-	mux.HandleFunc("GET /api/v2/students/me/analytics", handler.getSelfStudentAnalytics)
-	mux.HandleFunc("GET /api/v2/students/me/achievements", handler.getSelfAchievements)
-	mux.HandleFunc("GET /api/v2/students/me/recommendation", handler.getSelfRecommendation)
-	mux.HandleFunc("GET /api/v2/students/leaderboard", handler.getStudentLeaderboard)
-	mux.HandleFunc("GET /api/v2/students/me/notes", handler.listAgentNotes)
-	mux.HandleFunc("POST /api/v2/students/me/notes", handler.createAgentNote)
-	mux.HandleFunc("GET /api/v2/students/me/notes/{noteId}", handler.getAgentNote)
-	mux.HandleFunc("PUT /api/v2/students/me/notes/{noteId}/document", handler.replaceAgentNote)
-	mux.HandleFunc("POST /api/v2/students/me/notes/{noteId}/archive", handler.archiveAgentNote)
-	mux.HandleFunc("POST /api/v2/students/me/notes/{noteId}/restore", handler.restoreAgentNote)
-	mux.HandleFunc("GET /api/v2/students/me/chat/threads", handler.listChatThreads)
-	mux.HandleFunc("POST /api/v2/students/me/chat/threads", handler.createChatThread)
-	mux.HandleFunc("GET /api/v2/students/me/chat/threads/{threadId}/messages", handler.listChatMessages)
-	mux.HandleFunc("POST /api/v2/students/me/chat/threads/{threadId}/runs", handler.enqueueAgentRun)
-	mux.HandleFunc("POST /api/v2/students/me/auto-analysis", handler.enqueueAutoAnalysis)
-	mux.HandleFunc("GET /api/v2/students/me/agent-runs/{runId}", handler.getAgentRun)
-	mux.HandleFunc("GET /api/v2/students/me/agent-runs/{runId}/events", handler.streamAgentRunEvents)
-	mux.HandleFunc("GET /api/v2/oj/problems", handler.listOJProblems)
-	mux.HandleFunc("GET /api/v2/oj/problems/{problemId}", handler.getOJProblem)
-	mux.HandleFunc("POST /api/v2/admin/oj/problems/versions", handler.createOJProblemVersion)
-	mux.HandleFunc("POST /api/v2/oj/submissions", handler.createOJSubmission)
-	mux.HandleFunc("GET /api/v2/oj/submissions/{submissionId}", handler.getOJSubmission)
-	mux.HandleFunc("GET /api/v2/oj/submissions/{submissionId}/events", handler.streamOJJudgeEvents)
-	mux.HandleFunc("POST /api/v2/lsp/sessions", handler.createLSPSession)
-	mux.HandleFunc("DELETE /api/v2/lsp/sessions/{sessionId}", handler.closeLSPSession)
-	mux.HandleFunc("GET /api/v2/lsp/sessions/{sessionId}/websocket", handler.attachLSPSession)
-	mux.HandleFunc("GET /api/v2/exams", handler.listExams)
-	mux.HandleFunc("GET /api/v2/exams/{examId}", handler.getExam)
-	mux.HandleFunc("GET /api/v2/exams/{examId}/analysis-generation", handler.getCurrentExamGeneration)
-	mux.HandleFunc("GET /api/v2/exams/{examId}/analysis-generations/{generationId}/events", handler.streamExamGenerationEvents)
-	mux.HandleFunc("GET /api/v2/admin/accounts", handler.listManagedAccounts)
-	mux.HandleFunc("PATCH /api/v2/admin/accounts/{accountId}/state", handler.setManagedAccountState)
-	mux.HandleFunc("GET /api/v2/admin/students", handler.listManagedStudents)
-	mux.HandleFunc("GET /api/v2/admin/audit-events", handler.listAuditEvents)
-	mux.HandleFunc("GET /api/v2/admin/configurations", handler.listConfigurations)
-	mux.HandleFunc("POST /api/v2/admin/configurations/versions", handler.createConfigurationVersion)
-	mux.HandleFunc("GET /api/v2/admin/recommendation/review-context", handler.getRecommendationReviewContext)
-	mux.HandleFunc("GET /api/v2/admin/recommendation/training-runs/{runId}", handler.getRecommendationTrainingRun)
-	mux.HandleFunc("GET /api/v2/admin/recommendation/training-runs/{runId}/events", handler.listRecommendationTrainingEvents)
-	if handler.capabilities.WritesEnabled {
-		mux.HandleFunc("POST /api/v2/admin/recommendation/training-runs", handler.queueRecommendationTraining)
-		mux.HandleFunc("POST /api/v2/admin/model-connections/{key}/test", handler.testModelConnection)
-	}
-	mux.HandleFunc("GET /api/v2/admin/configurations/{key}", handler.getConfiguration)
-	mux.HandleFunc("GET /api/v2/admin/configurations/{key}/versions", handler.listConfigurationVersions)
-	mux.HandleFunc("POST /api/v2/feedback", handler.submitFeedback)
-	mux.HandleFunc("GET /api/v2/imports", handler.listImportJobs)
-	mux.HandleFunc("POST /api/v2/imports/pintia", handler.createPintiaImport)
-	mux.HandleFunc("GET /api/v2/imports/{jobId}", handler.getImportJob)
-	mux.HandleFunc("GET /api/v2/imports/{jobId}/events", handler.streamImportEvents)
-	if handler.trainerAgentTransportEnabled {
-		mux.HandleFunc("POST "+traineragentprotocol.HTTPBasePathV1+"/claims", handler.claimRecommendationTraining)
-		mux.HandleFunc("POST "+traineragentprotocol.HTTPBasePathV1+"/claims/{runId}/heartbeats", handler.heartbeatRecommendationTraining)
-		mux.HandleFunc("POST "+traineragentprotocol.HTTPBasePathV1+"/claims/{runId}/output", handler.publishRecommendationTrainingOutput)
-		mux.HandleFunc("POST "+traineragentprotocol.HTTPBasePathV1+"/claims/{runId}/failures", handler.reportRecommendationTrainingFailure)
-	}
-	mux.HandleFunc("/api/v2/", handler.apiNotFound)
+	routes.register(mux)
 
 	return handler.withRequestID(handler.requestLogger(handler.writeCapabilityBoundary(handler.browserBoundary(mux)))), nil
 }

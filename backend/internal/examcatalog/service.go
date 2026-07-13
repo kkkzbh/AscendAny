@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
+	"github.com/kkkzbh/AscendAny/backend/internal/pintia"
 )
 
 var (
@@ -149,7 +150,7 @@ func validatePage(page Page, limit int) error {
 
 func validateSummary(summary ExamSummary) error {
 	if !canonicalUUIDv4Pattern.MatchString(summary.ID) || !canonicalUUIDv4Pattern.MatchString(summary.SnapshotID) ||
-		summary.Platform != "pintia" || strings.TrimSpace(summary.ProblemSetID) == "" ||
+		summary.Platform != "pintia" || !pintia.ValidID(summary.ProblemSetID) ||
 		strings.TrimSpace(summary.Title) == "" || !strings.HasPrefix(summary.SourceURL, "https://pintia.cn/") ||
 		summary.ProblemCount < 1 || summary.ParticipantCount < 0 || summary.RankingCount < 0 || summary.SubmissionCount < 0 ||
 		summary.RankingCount > summary.ParticipantCount || summary.SnapshotSequence < 1 || summary.HeadRevision < 1 ||
@@ -169,7 +170,7 @@ func validateSummary(summary ExamSummary) error {
 }
 
 func validateProblem(problem Problem) error {
-	if strings.TrimSpace(problem.ID) == "" || strings.TrimSpace(problem.ProblemID) == "" || strings.TrimSpace(problem.Title) == "" ||
+	if !pintia.ValidID(problem.ID) || !pintia.ValidID(problem.ProblemID) || strings.TrimSpace(problem.Title) == "" ||
 		problem.SubmissionCount < 0 || problem.SubmittingParticipantCount < 0 || problem.PassedParticipantCount < 0 ||
 		problem.SubmittingParticipantCount > problem.SubmissionCount || problem.PassedParticipantCount > problem.SubmittingParticipantCount {
 		return errors.New("exam problem violates the public contract")

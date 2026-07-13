@@ -46,7 +46,7 @@ func (handler *Handler) listChatThreads(writer http.ResponseWriter, request *htt
 }
 
 func (handler *Handler) createChatThread(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	access, ok := bearerToken(request)
@@ -95,7 +95,7 @@ func (handler *Handler) listChatMessages(writer http.ResponseWriter, request *ht
 }
 
 func (handler *Handler) enqueueAgentRun(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	threadID := request.PathValue("threadId")
@@ -134,7 +134,7 @@ func (handler *Handler) enqueueAgentRun(writer http.ResponseWriter, request *htt
 }
 
 func (handler *Handler) enqueueAutoAnalysis(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	access, ok := bearerToken(request)

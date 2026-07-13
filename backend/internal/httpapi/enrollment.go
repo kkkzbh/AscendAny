@@ -22,7 +22,7 @@ type enrollmentClaimRequest struct {
 }
 
 func (handler *Handler) issueEnrollment(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	accessToken, ok := bearerToken(request)
@@ -49,7 +49,7 @@ func (handler *Handler) issueEnrollment(writer http.ResponseWriter, request *htt
 }
 
 func (handler *Handler) revokeEnrollment(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	accessToken, ok := bearerToken(request)
@@ -67,7 +67,7 @@ func (handler *Handler) revokeEnrollment(writer http.ResponseWriter, request *ht
 }
 
 func (handler *Handler) claimEnrollment(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	var payload enrollmentClaimRequest

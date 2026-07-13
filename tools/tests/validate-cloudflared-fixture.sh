@@ -42,7 +42,7 @@ fi
 if grep -F 'DO_NOT_TRACE_THIS_VALUE' "$WORK_ROOT/clean-env.out" "$WORK_ROOT/clean-env.err" >/dev/null; then
   fail 'validator leaked an inherited value through tracing'
 fi
-grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, or production' \
+grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production' \
   "$WORK_ROOT/clean-env.err" >/dev/null
 
 (
@@ -93,10 +93,7 @@ cloudflared tunnel --config "$CONFIG" ingress validate >/dev/null
 for probe in \
   'https://ascendany.kkkzbh.cn/version|Matched rule #0' \
   'https://ascendany-v2.kkkzbh.cn/version|Matched rule #1' \
-  'https://ascendany-trainer.kkkzbh.cn/version|Matched rule #2' \
-  'https://ascendany-trainer.kkkzbh.cn/api/v2/internal/recommendation/trainer-agent/claims/test|Matched rule #3' \
-  'https://ascendany-trainer.kkkzbh.cn/unowned|Matched rule #4' \
-  'https://unowned.example.invalid/path|Matched rule #5'; do
+  'https://unowned.example.invalid/path|Matched rule #2'; do
   url="${probe%%|*}"
   expected="${probe#*|}"
   cloudflared tunnel --config "$CONFIG" ingress rule "$url" >"$WORK_ROOT/rule.out"

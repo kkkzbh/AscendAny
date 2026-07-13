@@ -3,18 +3,19 @@
 BEGIN;
 
 -- The bootstrap has two valid entry states: a fresh template0 database, or
--- the exact embedded schema-v5 history. The second state makes ACL repair
--- idempotent without turning this file into a legacy-schema normalizer.
+-- the exact embedded schema-v6 history. The second state makes ACL repair
+-- idempotent while preserving one closed v2 schema identity.
 DO $database_boundary$
 DECLARE
     target_schema oid;
     actual_history text[];
     expected_history constant text[] := ARRAY[
         '1:fresh_schema:0cffdb00acefd37c049a654bad76d8fac79727ed7c54cc3fa9234d54964ce0cf',
-        '2:product_domains:df282551fe80898ef5a68d2a9a0883b76a6eea010750719321fe03f654afa27d',
-        '3:recommendation_trainer_transport:e6b9bd2a7a91fc53e45abd3b94a6bcf1b891f3746855f8ff26a77d69f58fb634',
-        '4:achievement_rules:857be71025a503b26aadfcb4c437917b24e0bb68c75c789a52f977957d4695fb',
-        '5:auto_analysis_once:40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17'
+        '2:product_domains:1762304608ed3f93d62c01ad494a2b6110b07737cc652f38a2581392985fdd36',
+        '3:recommendation_catalog_contract:6fa4a81fbe3440fc4b149a5b77d6c3860031e285bafef50b5a881e8783f36267',
+        '4:achievement_rules:3242ddfbdee0911d961ebe0f46237f6e2b8a6e7c5e09cf1d94f6ae98c4caaccb',
+        '5:auto_analysis_once:40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17',
+        '6:inference_model_runtime:330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea'
     ];
 BEGIN
     IF current_database() <> 'ascendany_v2' THEN
@@ -46,7 +47,7 @@ BEGIN
     INTO actual_history;
 
     IF actual_history IS DISTINCT FROM expected_history THEN
-        RAISE EXCEPTION 'non-empty ascendany schema does not match the embedded schema-v5 history';
+        RAISE EXCEPTION 'non-empty ascendany schema does not match the embedded schema-v6 history';
     END IF;
 END
 $database_boundary$;
@@ -323,11 +324,9 @@ DECLARE
         'agent_tool_calls',
         'agent_notes',
         'agent_note_revisions',
-        'recommendation_training_runs',
-        'recommendation_training_events',
-        'recommendation_models',
-        'student_recommendation_results',
-        'recommendation_trainer_attempt_receipts',
+        'recommendation_model_releases',
+        'recommendation_model_activation_events',
+        'recommendation_model_head',
         'oj_problems',
         'oj_problem_versions',
         'oj_submissions',
@@ -432,24 +431,9 @@ DECLARE
         'agent_notes.current_revision_id',
         'agent_notes.head_revision',
         'agent_notes.updated_at',
-        'recommendation_training_runs.output_bundle_artifact_id',
-        'recommendation_training_runs.status',
-        'recommendation_training_runs.attempt_count',
-        'recommendation_training_runs.attempt_token',
-        'recommendation_training_runs.lease_owner',
-        'recommendation_training_runs.lease_expires_at',
-        'recommendation_training_runs.next_attempt_at',
-        'recommendation_training_runs.error_code',
-        'recommendation_training_runs.error_detail',
-        'recommendation_training_runs.started_at',
-        'recommendation_training_runs.finished_at',
-        'recommendation_training_runs.updated_at',
-        'recommendation_head.current_model_id',
-        'recommendation_head.source_analytics_generation_id',
-        'recommendation_head.source_analytics_head_revision',
-        'recommendation_head.current_model_outcome',
-        'recommendation_head.head_revision',
-        'recommendation_head.updated_at',
+        'recommendation_model_head.current_release_id',
+        'recommendation_model_head.head_revision',
+        'recommendation_model_head.updated_at',
         'oj_problems.current_version_id',
         'oj_problems.head_revision',
         'oj_problems.updated_at',

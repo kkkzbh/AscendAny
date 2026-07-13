@@ -13,11 +13,12 @@ make_fixture() {
     "$fixture_root/apps" \
     "$fixture_root/packages/sdk/src" \
     "$fixture_root/tools/pintia-exporter-extension/src" \
-    "$fixture_root/contracts" \
+    "$fixture_root/contracts/openapi" \
+    "$fixture_root/db" \
     "$fixture_root/deploy/v2/systemd" \
-    "$fixture_root/trainers/recommendation/src"
+    "$fixture_root/deploy/v2/scripts" \
+    "$fixture_root/deploy/v2/config"
   cp -- "$verifier" "$fixture_root/tools/verify-v2-boundary.sh"
-  printf 'VALUE = 1\n' >"$fixture_root/trainers/recommendation/src/trainer.py"
   git -C "$fixture_root" init -q
 }
 
@@ -86,6 +87,14 @@ expect_failure \
   'production source path has a symbolic-link component: apps/linked_runtime.py' \
   bash "$linked_python/tools/verify-v2-boundary.sh"
 
+python_source="$fixture_parent/python-source"
+make_fixture "$python_source"
+printf 'VALUE = 1\n' >"$python_source/apps/runtime.py"
+expect_failure \
+  python-source \
+  'Python source exists in the inference-only application repository: apps/runtime.py' \
+  bash "$python_source/tools/verify-v2-boundary.sh"
+
 linked_ancestor="$fixture_parent/linked-ancestor"
 make_fixture "$linked_ancestor"
 mkdir "$linked_ancestor/apps/web"
@@ -133,8 +142,105 @@ mkdir -p "$python_container/ops/oj"
 printf 'FROM docker.io/library/python:3.12-slim\n' >"$python_container/ops/oj/Containerfile"
 expect_failure \
   python-container-runtime \
-  'a container runtime outside the isolated trainer uses Python' \
+  'a production container runtime uses Python' \
   bash "$python_container/tools/verify-v2-boundary.sh"
+
+retired_shell_runtime="$fixture_parent/retired-shell-runtime"
+make_fixture "$retired_shell_runtime"
+printf '%s\n' '#!/usr/bin/env bash' 'exec python3 -m uvicorn apps.api.main:app' \
+  >"$retired_shell_runtime/deploy/v2/scripts/runtime.sh"
+expect_failure \
+  retired-shell-runtime \
+  'a production shell path references a Python, trainer, API-v1, or retired application runtime' \
+  bash "$retired_shell_runtime/tools/verify-v2-boundary.sh"
+
+retired_validator_absence="$fixture_parent/retired-validator-absence"
+make_fixture "$retired_validator_absence"
+cat >"$retired_validator_absence/deploy/v2/scripts/validate-production.sh" <<'VALIDATOR'
+#!/usr/bin/env bash
+retired_trainer_unit='ascendany-trainer-agent.service'
+retired_runtime_root='/opt/ascendany-trainer-runtime'
+retired_python_root='/opt/ascendany/.venv'
+test ! -e "$retired_runtime_root"
+test ! -e "$retired_python_root"
+systemctl is-active "$retired_trainer_unit" >/dev/null 2>&1 || true
+VALIDATOR
+bash "$retired_validator_absence/tools/verify-v2-boundary.sh" >/dev/null
+printf 'PASS fixture retired-validator-absence-reference\n'
+
+retired_validator_exec="$fixture_parent/retired-validator-exec"
+make_fixture "$retired_validator_exec"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'exec /opt/ascendany-trainer-runtime/current/python/bin/python3 /tmp/retired.py' \
+  >"$retired_validator_exec/deploy/v2/scripts/validate-production.sh"
+expect_failure \
+  retired-validator-exec \
+  'the production validator contains an execution path for a retired Python or trainer runtime' \
+  bash "$retired_validator_exec/tools/verify-v2-boundary.sh"
+
+retired_validator_unit_start="$fixture_parent/retired-validator-unit-start"
+make_fixture "$retired_validator_unit_start"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'systemctl start ascendany-trainer-agent.service' \
+  >"$retired_validator_unit_start/deploy/v2/scripts/validate-production.sh"
+expect_failure \
+  retired-validator-unit-start \
+  'the production validator contains an execution path for a retired Python or trainer runtime' \
+  bash "$retired_validator_unit_start/tools/verify-v2-boundary.sh"
+
+retired_absence_outside_validator="$fixture_parent/retired-absence-outside-validator"
+make_fixture "$retired_absence_outside_validator"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'test ! -e /opt/ascendany-trainer-runtime' \
+  >"$retired_absence_outside_validator/deploy/v2/scripts/retired-absence.sh"
+expect_failure \
+  retired-absence-outside-validator \
+  'a production shell path references a Python, trainer, API-v1, or retired application runtime' \
+  bash "$retired_absence_outside_validator/tools/verify-v2-boundary.sh"
+
+retired_api_service="$fixture_parent/retired-api-service"
+make_fixture "$retired_api_service"
+printf '%s\n' '#!/usr/bin/env bash' 'systemctl start ascendany-api.service' \
+  >"$retired_api_service/deploy/v2/scripts/runtime.sh"
+expect_failure \
+  retired-api-service-ownership \
+  'a production shell path outside the production validator references the retired API service' \
+  bash "$retired_api_service/tools/verify-v2-boundary.sh"
+
+retired_api_validator="$fixture_parent/retired-api-validator"
+make_fixture "$retired_api_validator"
+printf '%s\n' '#!/usr/bin/env bash' 'retired_api_unit=ascendany-api.service' \
+  >"$retired_api_validator/deploy/v2/scripts/validate-production.sh"
+bash "$retired_api_validator/tools/verify-v2-boundary.sh" >/dev/null
+printf 'PASS fixture retired-api-validator-ownership\n'
+
+retired_recommendation_database="$fixture_parent/retired-recommendation-database"
+make_fixture "$retired_recommendation_database"
+mkdir -p "$retired_recommendation_database/backend/internal/migrate/migrations"
+printf '%s\n' 'CREATE TABLE recommendation_training_runs (id bigint);' \
+  >"$retired_recommendation_database/backend/internal/migrate/migrations/0002.sql"
+expect_failure \
+  retired-recommendation-database \
+  'a production source retains a recommendation training database or API execution path' \
+  bash "$retired_recommendation_database/tools/verify-v2-boundary.sh"
+
+retired_database_route="$fixture_parent/retired-database-route"
+make_fixture "$retired_database_route"
+printf '%s\n' '#!/usr/bin/env bash' 'psql --username=AscendAny --dbname=AscendAny' \
+  >"$retired_database_route/tools/retired-database.sh"
+expect_failure \
+  retired-database-route \
+  'a production shell path references a retired database role, database, or pool route' \
+  bash "$retired_database_route/tools/verify-v2-boundary.sh"
+
+obsolete_postgres_transition="$fixture_parent/obsolete-postgres-transition"
+make_fixture "$obsolete_postgres_transition"
+printf '%s\n' 'obsolete bootstrap route' \
+  >"$obsolete_postgres_transition/deploy/v2/config/postgresql-hba-bootstrap.conf"
+expect_failure \
+  obsolete-postgres-transition \
+  'obsolete PostgreSQL transition configuration remains: deploy/v2/config/postgresql-hba-bootstrap.conf' \
+  bash "$obsolete_postgres_transition/tools/verify-v2-boundary.sh"
 
 shell_test_literal="$fixture_parent/shell-test-literal"
 make_fixture "$shell_test_literal"

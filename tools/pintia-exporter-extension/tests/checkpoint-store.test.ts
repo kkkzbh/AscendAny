@@ -9,29 +9,6 @@ import {
 } from "../src/domain/types";
 import { IndexedDbExportCoordinatorStore } from "../src/platform/checkpoint-store";
 
-const DATABASE_NAME = "ascendany-pintia-exporter-v2";
-const TASK_STORE = "tasks";
-const COORDINATION_STORE = "coordination";
-
-function openDatabase(version: number, upgrade?: (database: IDBDatabase) => void): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, version);
-    request.addEventListener("upgradeneeded", () => upgrade?.(request.result));
-    request.addEventListener("success", () => resolve(request.result), { once: true });
-    request.addEventListener("error", () => reject(request.error), { once: true });
-  });
-}
-
-function put(database: IDBDatabase, storeName: string, value: unknown): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(storeName, "readwrite");
-    transaction.objectStore(storeName).put(value);
-    transaction.addEventListener("complete", () => resolve(), { once: true });
-    transaction.addEventListener("error", () => reject(transaction.error), { once: true });
-    transaction.addEventListener("abort", () => reject(transaction.error), { once: true });
-  });
-}
-
 function validTask(problemSetId: string, generation = "generation-a"): ExportTask {
   return {
     schema: SNAPSHOT_SCHEMA,
@@ -86,17 +63,9 @@ beforeEach(() => {
 });
 
 describe("durable export coordination journal", () => {
-  it("atomically replaces every v3 store at the task-format v4 boundary", async () => {
-    const legacy = await openDatabase(3, (database) => {
-      database.createObjectStore(TASK_STORE, { keyPath: "problemSetId" });
-      database.createObjectStore(COORDINATION_STORE, { keyPath: "id" });
-    });
-    await put(legacy, TASK_STORE, { problemSetId: "legacy" });
-    await put(legacy, COORDINATION_STORE, { id: "global", state: "active" });
-    legacy.close();
-
+  it("starts with an empty current-format checkpoint namespace", async () => {
     const store = new IndexedDbExportCoordinatorStore();
-    await expect(store.loadTask("legacy")).resolves.toBeNull();
+    await expect(store.loadTask("fresh")).resolves.toBeNull();
     await expect(store.loadJournal()).resolves.toBeNull();
   });
 

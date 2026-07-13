@@ -30,6 +30,10 @@ func (acceptingRecommendationDocumentValidator) ValidateRecommendationDocument(K
 	return nil
 }
 
+func (acceptingRecommendationDocumentValidator) ValidateVersionWrite(context.Context, VersionWriteTransaction, CreateVersionCommand) error {
+	return nil
+}
+
 type rejectingRecommendationDocumentValidator struct{}
 
 func (rejectingRecommendationDocumentValidator) ValidateRecommendationDocument(Kind, string, json.RawMessage) error {
@@ -43,8 +47,10 @@ func TestCreateVersionRejectsInvalidRecommendationDocumentBeforeStore(t *testing
 		t.Fatal(err)
 	}
 	_, err = service.CreateVersion(context.Background(), CreateVersionCommand{
-		Principal: testAdminPrincipal(), Key: "recommendation.training.default", Kind: KindTraining,
-		SchemaID: "ascendany.training.recommendation.v2", Document: json.RawMessage(`{}`),
+		Principal: testAdminPrincipal(), Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
+		ExpectedAnalyticsGenerationID: stringPointer("1"), ExpectedAnalyticsHeadRevision: int64Pointer(1),
+		ExpectedInputManifestSHA256: stringPointer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		SchemaID:                    "ascendany.knowledge_catalog.recommendation.v1", Document: json.RawMessage(`{}`),
 	})
 	if CodeOf(err) != ErrorDocumentInvalid || stub.createDigest != "" {
 		t.Fatalf("error=%v code=%q storedDigest=%q", err, CodeOf(err), stub.createDigest)
@@ -155,6 +161,8 @@ func TestServiceRejectsStudentAndInvalidMetadata(t *testing.T) {
 		{Principal: admin, Key: "Bad", Kind: KindPrompt, SchemaID: "ascendany.prompt.v1", Document: json.RawMessage(`{}`)},
 		{Principal: admin, Key: "prompt.main", Kind: KindPrompt, SchemaID: "ascendany.training.v1", Document: json.RawMessage(`{}`)},
 		{Principal: admin, Key: "prompt.main", Kind: KindPrompt, SchemaID: "ascendany.prompt.v1", Document: json.RawMessage(`{}`), CredentialRef: stringPointer("secret.name")},
+		{Principal: admin, Key: "recommendation.catalog.second", Kind: KindKnowledgeCatalog, SchemaID: "ascendany.knowledge_catalog.recommendation.v1", Document: json.RawMessage(`{}`)},
+		{Principal: admin, Key: KnowledgeCatalogKey, Kind: KindPrompt, SchemaID: "ascendany.prompt.v1", Document: json.RawMessage(`{}`)},
 	}
 	for _, command := range commands {
 		if _, err := service.CreateVersion(context.Background(), command); CodeOf(err) != ErrorInvalidQuery {
@@ -163,12 +171,76 @@ func TestServiceRejectsStudentAndInvalidMetadata(t *testing.T) {
 	}
 }
 
+func TestCreateVersionRequiresAnalyticsReviewProvenanceOnlyForKnowledgeCatalog(t *testing.T) {
+	service, err := NewService(&repositoryStub{}, acceptingRecommendationDocumentValidator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := testAdminPrincipal()
+	manifest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	validCatalog := CreateVersionCommand{
+		Principal: admin, Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
+		ExpectedAnalyticsGenerationID: stringPointer("9223372036854775807"), ExpectedAnalyticsHeadRevision: int64Pointer(1),
+		ExpectedInputManifestSHA256: &manifest, SchemaID: "ascendany.knowledge_catalog.recommendation.v1", Document: json.RawMessage(`{}`),
+	}
+	for _, mutate := range []func(*CreateVersionCommand){
+		func(value *CreateVersionCommand) { value.ExpectedAnalyticsGenerationID = nil },
+		func(value *CreateVersionCommand) { value.ExpectedAnalyticsGenerationID = stringPointer("01") },
+		func(value *CreateVersionCommand) {
+			value.ExpectedAnalyticsGenerationID = stringPointer("9223372036854775808")
+		},
+		func(value *CreateVersionCommand) { value.ExpectedAnalyticsHeadRevision = nil },
+		func(value *CreateVersionCommand) { value.ExpectedAnalyticsHeadRevision = int64Pointer(0) },
+		func(value *CreateVersionCommand) { value.ExpectedInputManifestSHA256 = nil },
+		func(value *CreateVersionCommand) {
+			value.ExpectedInputManifestSHA256 = stringPointer("A" + manifest[1:])
+		},
+	} {
+		command := validCatalog
+		mutate(&command)
+		if _, err := service.CreateVersion(context.Background(), command); CodeOf(err) != ErrorInvalidQuery {
+			t.Fatalf("catalog provenance command=%#v error=%v", command, err)
+		}
+	}
+	generation := "1"
+	head := int64(1)
+	generic := CreateVersionCommand{
+		Principal: admin, Key: "prompt.main", Kind: KindPrompt, SchemaID: "ascendany.prompt.v1", Document: json.RawMessage(`{}`),
+		ExpectedAnalyticsGenerationID: &generation, ExpectedAnalyticsHeadRevision: &head, ExpectedInputManifestSHA256: &manifest,
+	}
+	if _, err := service.CreateVersion(context.Background(), generic); CodeOf(err) != ErrorInvalidQuery {
+		t.Fatalf("generic provenance error=%v", err)
+	}
+}
+
 func TestKnowledgeCatalogKindOwnsItsSchemaNamespace(t *testing.T) {
 	t.Parallel()
 	if !ValidKind(KindKnowledgeCatalog) ||
+		KnowledgeCatalogKey != "recommendation.catalog.active" ||
+		!validKnowledgeCatalogIdentity(KnowledgeCatalogKey, KindKnowledgeCatalog) ||
+		validKnowledgeCatalogIdentity(KnowledgeCatalogKey, KindPrompt) ||
+		validKnowledgeCatalogIdentity("recommendation.catalog.second", KindKnowledgeCatalog) ||
 		!validSchemaForKind("ascendany.knowledge_catalog.recommendation.v1", KindKnowledgeCatalog) ||
 		validSchemaForKind("ascendany.training.recommendation.v2", KindKnowledgeCatalog) {
 		t.Fatal("knowledge_catalog kind or schema ownership is invalid")
+	}
+}
+
+func TestStoredConfigurationRequiresBidirectionalCatalogIdentity(t *testing.T) {
+	t.Parallel()
+	createdAt := time.Date(2026, 7, 11, 6, 0, 0, 0, time.UTC)
+	for _, item := range []Item{
+		{ID: "11111111-1111-4111-8111-111111111111", Key: KnowledgeCatalogKey, Kind: KindPrompt, CreatedAt: createdAt, UpdatedAt: createdAt},
+		{ID: "22222222-2222-4222-8222-222222222222", Key: "recommendation.catalog.second", Kind: KindKnowledgeCatalog, CreatedAt: createdAt, UpdatedAt: createdAt},
+	} {
+		if err := validateItem(item); err == nil {
+			t.Fatalf("stored item %#v passed catalog identity validation", item)
+		}
+	}
+	if err := validateVersionPage(VersionPage{
+		Key: KnowledgeCatalogKey, Kind: KindPrompt, HeadRevision: 1, Items: []Version{},
+	}, VersionsQuery{Key: KnowledgeCatalogKey, Limit: 1}); err == nil {
+		t.Fatal("stored version page passed catalog identity validation")
 	}
 }
 
@@ -196,10 +268,10 @@ func TestConstructorsRejectNilDependencies(t *testing.T) {
 	if _, err := NewService(nil, nil); CodeOf(err) != ErrorInvalidConfiguration {
 		t.Fatalf("NewService(nil) error=%v", err)
 	}
-	if _, err := NewPostgresRepository(nil); CodeOf(err) != ErrorInvalidConfiguration {
+	if _, err := NewPostgresRepository(nil, nil); CodeOf(err) != ErrorInvalidConfiguration {
 		t.Fatalf("NewPostgresRepository(nil) error=%v", err)
 	}
-	if _, err := newPostgresRepository(nil); CodeOf(err) != ErrorInvalidConfiguration {
+	if _, err := newPostgresRepository(nil, nil); CodeOf(err) != ErrorInvalidConfiguration {
 		t.Fatalf("newPostgresRepository(nil) error=%v", err)
 	}
 }
@@ -214,3 +286,4 @@ func testAdminPrincipal() auth.AccessPrincipal {
 }
 
 func stringPointer(value string) *string { return &value }
+func int64Pointer(value int64) *int64    { return &value }

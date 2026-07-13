@@ -15,9 +15,6 @@ type loginRequest struct {
 }
 
 func (handler *Handler) login(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	var payload loginRequest
 	if err := decodeStrictJSON(writer, request, &payload); err != nil {
 		handler.handleRequestContractError(writer, request, err)
@@ -40,9 +37,6 @@ func (handler *Handler) login(writer http.ResponseWriter, request *http.Request)
 }
 
 func (handler *Handler) refresh(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if !requestBodyIsEmpty(request) {
 		handler.writeAPIError(writer, request, http.StatusBadRequest, "request_body_not_allowed", "Request body must be empty.")
 		return
@@ -73,9 +67,6 @@ func (handler *Handler) refresh(writer http.ResponseWriter, request *http.Reques
 }
 
 func (handler *Handler) logout(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if !requestBodyIsEmpty(request) {
 		handler.writeAPIError(writer, request, http.StatusBadRequest, "request_body_not_allowed", "Request body must be empty.")
 		return
@@ -110,14 +101,6 @@ func (handler *Handler) logout(writer http.ResponseWriter, request *http.Request
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.WriteHeader(http.StatusNoContent)
-}
-
-func (handler *Handler) requireWritesEnabled(writer http.ResponseWriter, request *http.Request) bool {
-	if handler.capabilities.WritesEnabled {
-		return true
-	}
-	handler.writeAPIError(writer, request, http.StatusServiceUnavailable, "writes_disabled", "Write operations are disabled.")
-	return false
 }
 
 func (handler *Handler) me(writer http.ResponseWriter, request *http.Request) {

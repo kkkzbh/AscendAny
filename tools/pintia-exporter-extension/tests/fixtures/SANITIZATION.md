@@ -31,18 +31,33 @@ from the public Pintia response fixture
 [`problem-set-exams.json`](https://github.com/jinzcdev/vscode-pintia/blob/bcac68bd7fb184e5a66ef7b8b27afd6647f0eb4d/resources/pta_template/problem-set-exams.json).
 All values in the committed copy are replacements.
 
-Pintia's current primary bundle was captured on 2026-07-11. Chunk
-`855.8ebba330ac59c40f8ac4.chunk.js` (SHA-256
-`91d61034e2457f8b4da8c3ee55610cd0fd01399807f3336d8bc66211fa1e8068`)
-defines `GetProblemSet` as `GET /api/problem-sets/{problem_set_id}`. Chunk
-`12969` defines `GetCommonRankings` as
-`GET /api/problem-sets/{problem_set_id}/common-rankings`, and its ranking-page
-consumer reads the normalized `commonRankings`, `userById`, and
-`studentUserById` fields. The same captured bundle defines
-`ListUserGroupsForProblemSet` as
-`GET /api/problem-sets/{problem_set_id}/user-groups`; consumers map
-`userGroupById[id].name`. The exporter resolves these named functions rather
-than embedding observed module ids.
+Pintia's current authenticated problem-set, ranking, and submission routes were
+inspected on 2026-07-13. The observed production chunks and their complete
+downloaded-byte SHA-256 values were:
+
+- `44531.6abdd6502d21fffe8937.chunk.js`:
+  `b870d9d9c98724e3944922aa62d72cd506d8d61a5064e20b6ebcf1452a00cd42`;
+- `12969.c1107950827e4c95c7a0.chunk.js`:
+  `73892d671277723922785272fd801ba71d62b3a334d44c2ada90eba698a94ee1`;
+- `68813.308c42038f53672bfdf3.chunk.js`:
+  `1ae14eacabc1251440f961f928e5077fd4a9e4b919517d939cae66b86cd248b0`.
+
+Those chunks define the six read operations used by the exporter:
+
+- `GetProblemSet`: `GET /api/problem-sets/{problem_set_id}`;
+- `ListProblemSetProblems`:
+  `GET /api/problem-sets/{problem_set_id}/problems`;
+- `ListUserGroupsForProblemSet`:
+  `GET /api/problem-sets/{problem_set_id}/user-groups`;
+- `GetCommonRankings`:
+  `GET /api/problem-sets/{problem_set_id}/common-rankings`;
+- `ListSubmissions`: `GET /api/problem-sets/{problem_set_id}/submissions`;
+- `GetSubmission`: `GET /api/submissions/{submission_id}`.
+
+The ranking-page consumer still reads normalized `commonRankings`, `userById`,
+and `studentUserById` fields, while user-group consumers map
+`userGroupById[id].name`. The exporter resolves the named Webpack exports and
+does not embed observed module ids or minified export names.
 
 ## Synthetic operation fixtures
 

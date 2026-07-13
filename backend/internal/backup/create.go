@@ -110,6 +110,9 @@ func createWithDependencies(ctx context.Context, config CreateConfig, dependenci
 	if err := validateMigrations(snapshotData.Migrations); err != nil {
 		return CreateResult{}, fmt.Errorf("migration snapshot rejected: %w", err)
 	}
+	if err := validateRecommendationModelDescriptor(snapshotData.RecommendationModel); err != nil {
+		return CreateResult{}, fmt.Errorf("recommendation model snapshot rejected: %w", err)
+	}
 
 	pgpassPath := filepath.Join(config.RuntimeRoot, backupPGPassFilename)
 	if err := writePGPass(runtimeRoot, backupPGPassFilename, config.DatabaseURL, config.DatabasePassword); err != nil {
@@ -181,7 +184,8 @@ func createWithDependencies(ctx context.Context, config CreateConfig, dependenci
 				SHA256:    dumpSHA,
 				SizeBytes: dumpSize,
 			},
-			Migrations: append([]MigrationDescriptor(nil), snapshotData.Migrations...),
+			Migrations:          append([]MigrationDescriptor(nil), snapshotData.Migrations...),
+			RecommendationModel: snapshotData.RecommendationModel,
 		},
 		Artifacts: ArtifactSnapshotDescriptor{
 			File:       archiveDescriptor,

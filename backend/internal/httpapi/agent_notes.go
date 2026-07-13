@@ -66,7 +66,7 @@ func (handler *Handler) getAgentNote(writer http.ResponseWriter, request *http.R
 }
 
 func (handler *Handler) createAgentNote(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	access, ok := bearerToken(request)
@@ -100,7 +100,7 @@ func (handler *Handler) createAgentNote(writer http.ResponseWriter, request *htt
 }
 
 func (handler *Handler) replaceAgentNote(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	noteID := request.PathValue("noteId")
@@ -142,7 +142,7 @@ func (handler *Handler) restoreAgentNote(writer http.ResponseWriter, request *ht
 }
 
 func (handler *Handler) changeAgentNoteState(writer http.ResponseWriter, request *http.Request, archive bool) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	noteID := request.PathValue("noteId")

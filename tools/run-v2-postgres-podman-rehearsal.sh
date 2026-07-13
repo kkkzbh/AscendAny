@@ -15,7 +15,10 @@ readonly FEDORA_PACKAGE_LOCK="${REPOSITORY_ROOT}/deploy/v2/config/fedora-runtime
 readonly RELEASE_PGBOUNCER_CONFIG="${REPOSITORY_ROOT}/deploy/v2/config/pgbouncer.ini"
 readonly RELEASE_PGBOUNCER_HBA="${REPOSITORY_ROOT}/deploy/v2/config/pgbouncer-hba.conf"
 readonly PGBOUNCER_BINARY="/usr/bin/pgbouncer"
-readonly EXPECTED_MANIFEST_TESTS="23"
+readonly RECOMMENDATION_CATALOG_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json"
+readonly RECOMMENDATION_CATALOG_SHA256="a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
+readonly RECOMMENDATION_MODEL_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json"
+readonly RECOMMENDATION_MODEL_SHA256="5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
 readonly LABEL_KEY="io.ascendany.v2-postgres-rehearsal"
 
 usage() {
@@ -100,6 +103,16 @@ if ((EUID == 0)); then
 fi
 if [[ "${SNAPSHOT_PATH}" != /* || ! -f "${SNAPSHOT_PATH}" ]]; then
   fail "--snapshot must identify an absolute regular file: ${SNAPSHOT_PATH}"
+fi
+if [[ ! -f "${RECOMMENDATION_CATALOG_PATH}" || -L "${RECOMMENDATION_CATALOG_PATH}" ||
+  "$(realpath -e -- "${RECOMMENDATION_CATALOG_PATH}")" != "${RECOMMENDATION_CATALOG_PATH}" ||
+  "$(sha256sum -- "${RECOMMENDATION_CATALOG_PATH}" | awk '{print $1}')" != "${RECOMMENDATION_CATALOG_SHA256}" ]]; then
+  fail 'the committed synthetic knowledge catalog differs from its pinned SHA-256'
+fi
+if [[ ! -f "${RECOMMENDATION_MODEL_PATH}" || -L "${RECOMMENDATION_MODEL_PATH}" ||
+  "$(realpath -e -- "${RECOMMENDATION_MODEL_PATH}")" != "${RECOMMENDATION_MODEL_PATH}" ||
+  "$(sha256sum -- "${RECOMMENDATION_MODEL_PATH}" | awk '{print $1}')" != "${RECOMMENDATION_MODEL_SHA256}" ]]; then
+  fail 'the committed synthetic inference model differs from its pinned SHA-256'
 fi
 
 DIRECT_PORT="$(validate_port --direct-port "${DIRECT_PORT}")"
@@ -374,7 +387,6 @@ readonly LABEL_VALUE="${TOKEN}"
 readonly POSTGRES_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 readonly PGBOUNCER_ADMIN_USER="pgbouncer_rehearsal"
 readonly PGBOUNCER_ADMIN_PASSWORD="$(openssl rand -hex 24)"
-readonly LEGACY_PASSWORD="$(openssl rand -hex 24)"
 readonly RUNTIME_PASSWORD="$(openssl rand -hex 24)"
 readonly BACKUP_PASSWORD="$(openssl rand -hex 24)"
 # Two migration integration tests construct this isolated credential internally.
@@ -461,14 +473,9 @@ PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql \
   -X --no-password --set=ON_ERROR_STOP=1 \
   --host=127.0.0.1 --port="${DIRECT_PORT}" --username=postgres --dbname=postgres \
   --set=pgbouncer_admin_password="${PGBOUNCER_ADMIN_PASSWORD}" \
-  --set=legacy_password="${LEGACY_PASSWORD}" \
   --set=runtime_password="${RUNTIME_PASSWORD}" >/dev/null <<'SQL'
 CREATE ROLE pgbouncer_rehearsal LOGIN PASSWORD :'pgbouncer_admin_password';
-CREATE ROLE "AscendAny" LOGIN PASSWORD :'legacy_password';
 CREATE ROLE ascendanyd_login LOGIN PASSWORD :'runtime_password';
-CREATE DATABASE "AscendAny" WITH TEMPLATE template0 OWNER "AscendAny";
-REVOKE CONNECT ON DATABASE "AscendAny" FROM PUBLIC;
-GRANT CONNECT ON DATABASE "AscendAny" TO "AscendAny";
 SQL
 
 PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql \
@@ -477,15 +484,14 @@ PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql \
   >"${PGBOUNCER_USERLIST_FILE}" <<'SQL'
 SELECT format('"%s" "%s"', rolname, rolpassword)
 FROM pg_authid
-WHERE rolname IN ('pgbouncer_rehearsal', 'AscendAny', 'ascendanyd_login')
+WHERE rolname IN ('pgbouncer_rehearsal', 'ascendanyd_login')
   AND rolpassword LIKE 'SCRAM-SHA-256$%'
 ORDER BY rolname COLLATE "C";
 SQL
-[[ "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 3 &&
-  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 3 ]] ||
-  fail 'native PgBouncer rehearsal did not capture exactly three SCRAM verifiers'
+[[ "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 2 &&
+  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 2 ]] ||
+  fail 'native PgBouncer rehearsal did not capture exactly two SCRAM verifiers'
 if grep -Fq -- "${PGBOUNCER_ADMIN_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
-  grep -Fq -- "${LEGACY_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
   grep -Fq -- "${RUNTIME_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}"; then
   fail 'native PgBouncer userlist contains plaintext credential material'
 fi
@@ -585,8 +591,8 @@ probe_hba_rejection() {
     fail "PgBouncer HBA returned a noncanonical rejection for ${user} on ${database}"
   fi
 }
-probe_hba_rejection ascendanyd_login AscendAny "${RUNTIME_PASSWORD}"
-probe_hba_rejection AscendAny ascendany_v2 "${LEGACY_PASSWORD}"
+probe_hba_rejection ascendanyd_login postgres "${RUNTIME_PASSWORD}"
+probe_hba_rejection "${PGBOUNCER_ADMIN_USER}" ascendany_v2 "${PGBOUNCER_ADMIN_PASSWORD}"
 
 if ! env \
   ASCENDANY_CI_POSTGRES_HOST=127.0.0.1 \
@@ -604,6 +610,9 @@ if ! env \
   ASCENDANY_CI_MIGRATOR_PASSWORD="${MIGRATOR_PASSWORD}" \
   ASCENDANY_CI_BACKUP_PASSWORD="${BACKUP_PASSWORD}" \
   ASCENDANY_CI_REAL_PINTIA_SNAPSHOT_PATH="${SNAPSHOT_PATH}" \
+  ASCENDANY_CI_RECOMMENDATION_CATALOG_PATH="${RECOMMENDATION_CATALOG_PATH}" \
+  ASCENDANY_CI_RECOMMENDATION_MODEL_PATH="${RECOMMENDATION_MODEL_PATH}" \
+  ASCENDANY_CI_RECOMMENDATION_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
   "${INTEGRATION_RUNNER}" 2>&1 | tee "${RUN_LOG}"; then
   printf 'PostgreSQL integration rehearsal failed; container diagnostics follow\n' >&2
   podman logs "${POSTGRES_CONTAINER_NAME}" >&2
@@ -611,24 +620,27 @@ if ! env \
   exit 1
 fi
 
-readonly LEGACY_POOL_IDENTITY="$(PGPASSWORD="${LEGACY_PASSWORD}" psql \
+readonly RUNTIME_POOL_IDENTITY="$(PGPASSWORD="${RUNTIME_PASSWORD}" psql \
   -X --no-password --tuples-only --no-align \
   --host=127.0.0.1 --port="${PGBOUNCER_PORT}" \
-  --username=AscendAny --dbname=AscendAny --command='SELECT current_user')"
-[[ "${LEGACY_POOL_IDENTITY}" == AscendAny ]] ||
-  fail 'native PgBouncer rehearsal did not preserve the allowed legacy pool route'
+  --username=ascendanyd_login --dbname=ascendany_v2 --command='SELECT current_user')"
+[[ "${RUNTIME_POOL_IDENTITY}" == ascendanyd_login ]] ||
+  fail 'native PgBouncer rehearsal did not preserve the v2 runtime route'
 [[ "$(stat -Lc '%u:%a' -- "${PGBOUNCER_USERLIST_FILE}")" == "${EUID}:400" &&
-  "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 3 &&
-  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 3 ]] ||
+  "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 2 &&
+  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 2 ]] ||
   fail 'integration runner did not atomically publish the exact SCRAM userlist'
 
-if ! rg --fixed-strings --quiet \
-  "All ${EXPECTED_MANIFEST_TESTS} env-gated PostgreSQL integration tests executed without skips." \
-  "${RUN_LOG}"; then
-  printf 'integration runner did not report the complete %s-test manifest\n' \
-    "${EXPECTED_MANIFEST_TESTS}" >&2
+mapfile -t MANIFEST_TEST_COUNTS < <(
+  sed -nE \
+    's/^All ([1-9][0-9]*) env-gated PostgreSQL integration tests executed without skips[.]$/\1/p' \
+    "${RUN_LOG}"
+)
+if [[ "${#MANIFEST_TEST_COUNTS[@]}" != 1 ]]; then
+  printf 'integration runner did not report exactly one audited manifest count\n' >&2
   exit 1
 fi
+readonly MANIFEST_TEST_COUNT="${MANIFEST_TEST_COUNTS[0]}"
 readonly FINAL_SNAPSHOT_SUMMARY="$(rg '^  REAL_SNAPSHOT_DATABASE_SUMMARY ' "${RUN_LOG}" | tail -n 1)"
 if [[ -z "${FINAL_SNAPSHOT_SUMMARY}" ]]; then
   printf 'integration runner did not emit a real snapshot database summary\n' >&2
@@ -636,8 +648,8 @@ if [[ -z "${FINAL_SNAPSHOT_SUMMARY}" ]]; then
 fi
 
 printf 'REHEARSAL_RESULT manifest_tests=%s passed=%s skipped=0 preexisting_containers=%s preexisting_pods=%s\n' \
-  "${EXPECTED_MANIFEST_TESTS}" \
-  "${EXPECTED_MANIFEST_TESTS}" \
+  "${MANIFEST_TEST_COUNT}" \
+  "${MANIFEST_TEST_COUNT}" \
   "${PREEXISTING_CONTAINER_COUNT}" \
   "${PREEXISTING_POD_COUNT}"
 printf '%s\n' "${FINAL_SNAPSHOT_SUMMARY}"

@@ -1,0 +1,1 @@
+{"datasetSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","featureSchema":"ascendany.recommendation.feature-schema.v1","producer":{"name":"ascendany-contract-fixture-generator","version":"1"},"schema":"ascendany.recommendation.training-input-provenance.v1","statement":"Synthetic test-only provenance. It does not attest to a trained production model."}

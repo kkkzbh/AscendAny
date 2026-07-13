@@ -10,7 +10,7 @@ BEGIN
         SELECT 1
         FROM ascendany.schema_migrations_v2
         WHERE version = 3
-          AND name = 'recommendation_trainer_transport'
+          AND name = 'recommendation_catalog_contract'
     ) THEN
         RAISE EXCEPTION 'achievement rules migration requires schema version 3';
     END IF;

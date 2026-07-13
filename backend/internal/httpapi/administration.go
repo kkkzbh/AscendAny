@@ -86,9 +86,6 @@ func (handler *Handler) listAdministrationPage(
 }
 
 func (handler *Handler) setManagedAccountState(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) {
-		return
-	}
 	if request.URL.RawQuery != "" || request.URL.ForceQuery {
 		handler.writeAPIError(writer, request, http.StatusBadRequest, "query_not_allowed", "Query parameters are not allowed.")
 		return

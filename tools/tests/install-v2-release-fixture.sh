@@ -7,6 +7,8 @@ readonly REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && p
 readonly INSTALLER_SOURCE="$REPOSITORY_ROOT/deploy/v2/scripts/install-v2-release.sh"
 readonly WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ascendany-install-v2-release-fixture.XXXXXX")"
 readonly RELEASE_OPS_BINARY="$WORK_ROOT/ascendany-release-ops"
+readonly MODEL_BINARY="$WORK_ROOT/ascendany-model"
+readonly SYSTEMCTL_BINARY="$WORK_ROOT/systemctl"
 
 readonly -a PAYLOAD_PATHS=(
   bin/ascendanyd
@@ -15,23 +17,12 @@ readonly -a PAYLOAD_PATHS=(
   bin/ascendany-judge
   bin/ascendany-lsp
   bin/ascendany-migrate
+  bin/ascendany-model
   bin/ascendany-release-ops
-  bin/ascendany-trainer-agent
-  trainers/recommendation/ascendany_recommendation_trainer/__init__.py
-  trainers/recommendation/ascendany_recommendation_trainer/__main__.py
-  trainers/recommendation/ascendany_recommendation_trainer/attestation.py
-  trainers/recommendation/ascendany_recommendation_trainer/cli.py
-  trainers/recommendation/ascendany_recommendation_trainer/contract.py
-  trainers/recommendation/ascendany_recommendation_trainer/model.py
-  trainers/recommendation/ascendany_recommendation_trainer/train.py
-  trainers/recommendation/runtime-closure-cu130.json
-  trainers/recommendation/runtime-python-cu130.json
-  trainers/recommendation/runtime-requirements-cu130.lock
-  trainers/recommendation/runtime-wheels-cu130.json
+  models/recommendation-model.json
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
-  TRAINER_AGENT_CONTRACT.md
   contracts/openapi/ascendany-v2.yaml
   contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
   db/roles/README.md
@@ -48,13 +39,11 @@ readonly -a PAYLOAD_PATHS=(
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
-  config/postgresql-hba-bootstrap.conf
   config/postgresql-hba.conf
-  config/postgresql-ident-bootstrap.conf
   config/postgresql-ident.conf
   config/restore.env
-  config/trainer-agent.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-activate.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -65,14 +54,12 @@ readonly -a PAYLOAD_PATHS=(
   systemd/ascendany-migrate.service
   systemd/ascendany-pgbouncer.service
   systemd/ascendany-restore-verify@.service
-  systemd/ascendany-trainer-agent.service
   polkit-1/rules.d/60-ascendany-judge.rules
   polkit-1/rules.d/61-ascendany-lsp.rules
   sysusers.d/ascendany-v2.conf
   tmpfiles.d/ascendany-v2.conf
   scripts/publish-restore-evidence.sh
   scripts/restore-verify-operator.sh
-  scripts/install-trainer-runtime.sh
   scripts/install-v2-release.sh
   scripts/acquire-judge-image.sh
   scripts/attest-judge-image.sh
@@ -81,14 +68,15 @@ readonly -a PAYLOAD_PATHS=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
-  scripts/trainer-host-capability-identity.sh
-  scripts/trainer-runtime-tree-identity.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
-  scripts/validate-trainer-host.sh
 )
 
 cleanup() {
+  if [[ "${ASCENDANY_FIXTURE_KEEP_WORK_ROOT:-0}" == 1 ]]; then
+    printf 'fixture work root retained: %s\n' "$WORK_ROOT" >&2
+    return
+  fi
   rm -rf -- "$WORK_ROOT"
 }
 trap cleanup EXIT
@@ -135,6 +123,43 @@ done
     /usr/bin/go build -buildvcs=false -trimpath -o "$RELEASE_OPS_BINARY" ./cmd/ascendany-release-ops
 )
 chmod 0755 "$RELEASE_OPS_BINARY"
+cat >"$MODEL_BINARY" <<'MODEL_VERIFIER'
+#!/usr/bin/bash -p
+set -Eeuo pipefail
+[[ "$#" == 7 && "$1" == verify && "$2" == --model && "$4" == --sha256 && "$6" == --expected-purpose ]]
+[[ "$(/usr/bin/sha256sum -- "$3" | /usr/bin/awk '{print $1}')" == "$5" ]]
+[[ "$(/usr/bin/jq -er '.manifest.purpose' "$3")" == "$7" ]]
+MODEL_VERIFIER
+chmod 0755 "$MODEL_BINARY"
+cat >"$SYSTEMCTL_BINARY" <<'SYSTEMCTL_STUB'
+#!/usr/bin/bash -p
+set -Eeuo pipefail
+case "$1" in
+  show)
+    unit="${!#}"
+    include_main_pid=0
+    for argument in "$@"; do
+      [[ "$argument" != '--property=MainPID' ]] || include_main_pid=1
+    done
+    if [[ -f /fixture/active-systemd-unit && "$(</fixture/active-systemd-unit)" == "$unit" ]]; then
+      printf '%s\n' 'LoadState=loaded' 'ActiveState=active' 'SubState=running'
+      (( include_main_pid == 0 )) || printf '%s\n' 'MainPID=4242'
+    else
+      printf '%s\n' 'LoadState=loaded' 'ActiveState=inactive' 'SubState=dead'
+      (( include_main_pid == 0 )) || printf '%s\n' 'MainPID=0'
+    fi
+    ;;
+  list-units)
+    if [[ -f /fixture/active-systemd-unit && "$(</fixture/active-systemd-unit)" == *@*.service ]]; then
+      printf '%s loaded active running fixture\n' "$(</fixture/active-systemd-unit)"
+    fi
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+SYSTEMCTL_STUB
+chmod 0755 "$SYSTEMCTL_BINARY"
 
 declare -a BWRAP_RUNTIME=(
   --unshare-user
@@ -160,6 +185,8 @@ readonly -a BWRAP_RUNTIME
 create_release() {
   local source_root="$1"
   local large_payload="${2:-0}"
+  local release_purpose="${3:-production}"
+  local release_version="${4:-1.2.3}"
   local relative parent mode path sha size files='[]'
 
   install -d -m 0755 -- "$source_root"
@@ -176,13 +203,21 @@ create_release() {
       install -m 0755 -- "$INSTALLER_SOURCE" "$path"
     elif [[ "$relative" == 'bin/ascendany-release-ops' ]]; then
       install -m 0755 -- "$RELEASE_OPS_BINARY" "$path"
+    elif [[ "$relative" == 'bin/ascendany-model' ]]; then
+      install -m 0755 -- "$MODEL_BINARY" "$path"
+    elif [[ "$relative" == 'models/recommendation-model.json' ]]; then
+      jq -jcnS --arg purpose "$release_purpose" '{manifest: {purpose: $purpose}}' >"$path"
+      chmod "$mode" -- "$path"
+    elif [[ "$relative" == 'config/ascendanyd.env' ]]; then
+      printf 'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=%s\n' "$release_purpose" >"$path"
+      chmod "$mode" -- "$path"
     elif [[ "$relative" == systemd/* ]]; then
       install -m 0644 -- "$REPOSITORY_ROOT/deploy/v2/$relative" "$path"
     elif [[ "$large_payload" == 1 && "$relative" == 'bin/ascendanyd' ]]; then
       dd if=/dev/zero of="$path" bs=1M count=64 status=none
       chmod "$mode" -- "$path"
     else
-      printf 'fixture payload: %s\n' "$relative" >"$path"
+      printf 'fixture payload: %s release=%s\n' "$relative" "$release_version" >"$path"
       chmod "$mode" -- "$path"
     fi
   done
@@ -201,11 +236,14 @@ create_release() {
     )"
   done
   jq -jcnS \
-    --argjson files "$files" '
+    --argjson files "$files" \
+    --arg purpose "$release_purpose" \
+    --arg version "$release_version" '
       {
         schema: "ascendany.release.v2",
-        version: "1.2.3",
+        version: $version,
         commit: "0123456789abcdef0123456789abcdef01234567",
+        purpose: $purpose,
         sourceDateEpoch: 1700000000,
         build: {
           goVersion: "go1.26.0",
@@ -228,7 +266,7 @@ new_case() {
   local case_root="$WORK_ROOT/$name"
   install -d -m 0700 -- "$case_root"
   install -d -m 0755 -- "$case_root/opt"
-  create_release "$case_root/source" "${2:-0}"
+  create_release "$case_root/source" "${2:-0}" "${3:-production}" "${4:-1.2.3}"
   sha256sum "$case_root/source/release-manifest.json" | awk '{print $1}' \
     >"$case_root/expected-manifest.sha256"
   chmod 0600 "$case_root/expected-manifest.sha256"
@@ -242,21 +280,47 @@ refresh_manifest_anchor() {
   chmod 0600 "$case_root/expected-manifest.sha256"
 }
 
+prepare_replacement_source() {
+  local case_root="$1"
+  local version="$2"
+  local large_payload="${3:-0}"
+  local purpose="${4:-production}"
+
+  rm -rf -- "$case_root/source"
+  create_release "$case_root/source" "$large_payload" "$purpose" "$version"
+  refresh_manifest_anchor "$case_root"
+}
+
 run_installer() {
   local case_root="$1"
   local manifest_sha256
+  local -a purpose_arguments=() replacement_arguments=()
   shift
   manifest_sha256="$(<"$case_root/expected-manifest.sha256")"
+  if [[ -n "${FIXTURE_EXPECTED_PURPOSE:-}" ]]; then
+    purpose_arguments=(--expected-purpose "$FIXTURE_EXPECTED_PURPOSE")
+  fi
+  if [[ -n "${FIXTURE_INSTALLED_MANIFEST_SHA256:-}" || -n "${FIXTURE_INSTALLED_IDENTITY:-}" ]]; then
+    [[ -n "${FIXTURE_INSTALLED_MANIFEST_SHA256:-}" && -n "${FIXTURE_INSTALLED_IDENTITY:-}" ]] ||
+      fail 'fixture replacement requires both installed manifest SHA-256 and identity'
+    replacement_arguments=(
+      --replace-installed-manifest-sha256 "$FIXTURE_INSTALLED_MANIFEST_SHA256"
+      --replace-installed-identity "$FIXTURE_INSTALLED_IDENTITY"
+    )
+  fi
   bwrap "${BWRAP_RUNTIME[@]}" \
     --bind "$case_root" /fixture \
     --bind "$case_root/opt" /opt \
+    --ro-bind "$SYSTEMCTL_BINARY" /usr/bin/systemctl \
     --dir /trusted \
     --ro-bind "$INSTALLER_SOURCE" /trusted/install-v2-release.sh \
     --chdir / \
     "$@" \
     /trusted/install-v2-release.sh \
       --source /fixture/source \
-      --manifest-sha256 "$manifest_sha256"
+      --manifest-sha256 "$manifest_sha256" \
+      "${replacement_arguments[@]}" \
+      "${purpose_arguments[@]}"
 }
 
 run_shell() {
@@ -266,6 +330,7 @@ run_shell() {
   bwrap "${BWRAP_RUNTIME[@]}" \
     --bind "$case_root" /fixture \
     --bind "$case_root/opt" /opt \
+    --ro-bind "$SYSTEMCTL_BINARY" /usr/bin/systemctl \
     --dir /trusted \
     --ro-bind "$INSTALLER_SOURCE" /trusted/install-v2-release.sh \
     --chdir / \
@@ -306,9 +371,185 @@ run_shell "$happy_case" '
   if find /opt/ascendany/v2 -type f \( ! -uid 0 -o ! -gid 0 -o -links +1 \) -print -quit | grep -q .; then exit 1; fi
 ' >/dev/null
 
+acceptance_default_case="$(new_case acceptance-default-rejected 0 acceptance_test)"
+expect_failure "$acceptance_default_case/install.log" run_installer "$acceptance_default_case" /usr/bin/env
+require_log "$acceptance_default_case/install.log" 'release purpose acceptance_test differs from expected production'
+[[ ! -e "$acceptance_default_case/opt/ascendany/v2" ]] || fail 'default production installer published an acceptance release'
+
+acceptance_explicit_case="$(new_case acceptance-explicit 0 acceptance_test)"
+FIXTURE_EXPECTED_PURPOSE=acceptance_test \
+  run_installer "$acceptance_explicit_case" /usr/bin/env >/dev/null
+[[ "$(jq -r '.purpose' "$acceptance_explicit_case/opt/ascendany/v2/release-manifest.json")" == acceptance_test ]] ||
+  fail 'explicit acceptance capability did not publish the acceptance release'
+
 expect_failure "$happy_case/duplicate.log" run_installer "$happy_case" /usr/bin/env
 require_log "$happy_case/duplicate.log" 'canonical release target already exists'
 diff -r -- "$happy_case/source" "$happy_case/opt/ascendany/v2" >/dev/null || fail 'duplicate install changed the existing canonical release'
+
+forward_case="$(new_case forward-replacement 0 production 1.2.3)"
+run_installer "$forward_case" /usr/bin/env >/dev/null
+forward_installed_manifest_sha256="$(<"$forward_case/expected-manifest.sha256")"
+forward_installed_identity="$(stat -Lc '%d:%i' -- "$forward_case/opt/ascendany/v2")"
+forward_installed_inode="${forward_installed_identity#*:}"
+prepare_replacement_source "$forward_case" 1.2.4
+FIXTURE_INSTALLED_MANIFEST_SHA256="$forward_installed_manifest_sha256" \
+FIXTURE_INSTALLED_IDENTITY="$forward_installed_identity" \
+FIXTURE_EXPECTED_PURPOSE=production \
+  run_installer "$forward_case" /usr/bin/env >"$forward_case/replace.out" 2>"$forward_case/replace.err"
+[[ "$(<"$forward_case/replace.out")" == '/opt/ascendany/v2' ]] || fail 'forward replacement did not report the canonical target'
+[[ ! -s "$forward_case/replace.err" ]] || fail 'successful forward replacement emitted diagnostics'
+[[ "$(jq -r '.version' "$forward_case/opt/ascendany/v2/release-manifest.json")" == 1.2.4 ]] ||
+  fail 'forward replacement did not publish the advancing release'
+diff -r -- "$forward_case/source" "$forward_case/opt/ascendany/v2" >/dev/null ||
+  fail 'forward replacement target differs from the new source release'
+if find "$forward_case/opt/ascendany" -mindepth 1 -maxdepth 1 \
+    \( -name '.v2.installing.*' -o -name '.v2.removing.*' \) -print -quit | grep -q .; then
+  fail 'successful forward replacement retained a private cleanup entry'
+fi
+if find "$forward_case/opt/ascendany" -mindepth 1 -maxdepth 1 -inum "$forward_installed_inode" -print -quit | grep -q .; then
+  fail 'successful forward replacement retained the installed release identity'
+fi
+
+active_unit_case="$(new_case active-systemd-consumer 0 production 1.2.3)"
+run_installer "$active_unit_case" /usr/bin/env >/dev/null
+active_unit_manifest_sha256="$(<"$active_unit_case/expected-manifest.sha256")"
+active_unit_identity="$(stat -Lc '%d:%i' -- "$active_unit_case/opt/ascendany/v2")"
+prepare_replacement_source "$active_unit_case" 1.2.4
+printf '%s\n' 'ascendanyd.service' >"$active_unit_case/active-systemd-unit"
+FIXTURE_INSTALLED_MANIFEST_SHA256="$active_unit_manifest_sha256" \
+FIXTURE_INSTALLED_IDENTITY="$active_unit_identity" \
+  expect_failure "$active_unit_case/replace.log" run_installer "$active_unit_case" /usr/bin/env
+require_log "$active_unit_case/replace.log" \
+  'release consumer systemd unit is not quiesced before replacement preflight: ascendanyd.service'
+[[ "$(stat -Lc '%d:%i' -- "$active_unit_case/opt/ascendany/v2")" == "$active_unit_identity" ]] ||
+  fail 'active systemd consumer rejection changed the installed release'
+if find "$active_unit_case/opt/ascendany" -mindepth 1 -maxdepth 1 -name '.v2.*' -print -quit | grep -q .; then
+  fail 'active systemd consumer rejection created a private release entry'
+fi
+printf '%s\n' 'ascendany-judge@fixture.service' >"$active_unit_case/active-systemd-unit"
+FIXTURE_INSTALLED_MANIFEST_SHA256="$active_unit_manifest_sha256" \
+FIXTURE_INSTALLED_IDENTITY="$active_unit_identity" \
+  expect_failure "$active_unit_case/instance.log" run_installer "$active_unit_case" /usr/bin/env
+require_log "$active_unit_case/instance.log" \
+  'release consumer systemd instance is not quiesced before replacement preflight: ascendany-judge@fixture.service'
+if find "$active_unit_case/opt/ascendany" -mindepth 1 -maxdepth 1 -name '.v2.*' -print -quit | grep -q .; then
+  fail 'active systemd instance rejection created a private release entry'
+fi
+
+live_process_case="$(new_case live-release-process 0 production 1.2.3)"
+run_installer "$live_process_case" /usr/bin/env >/dev/null
+cp -- "$live_process_case/expected-manifest.sha256" "$live_process_case/installed-manifest.sha256"
+stat -Lc '%d:%i' -- "$live_process_case/opt/ascendany/v2" >"$live_process_case/installed-identity"
+live_process_old_inode="$(<"$live_process_case/installed-identity")"
+live_process_old_inode="${live_process_old_inode#*:}"
+prepare_replacement_source "$live_process_case" 1.2.4
+run_shell "$live_process_case" '
+  set -Eeuo pipefail
+  exec {consumer_fd}</opt/ascendany/v2/README.md
+  /usr/bin/sleep 30 &
+  consumer_pid=$!
+  set +e
+  /trusted/install-v2-release.sh \
+    --source /fixture/source \
+    --manifest-sha256 "$(</fixture/expected-manifest.sha256)" \
+    --replace-installed-manifest-sha256 "$(</fixture/installed-manifest.sha256)" \
+    --replace-installed-identity "$(</fixture/installed-identity)" \
+    >/fixture/live-replace.out 2>/fixture/live-replace.err
+  live_status=$?
+  set -e
+  [[ "$live_status" != 0 ]]
+  grep -F "release-owned process is not quiesced before replacement preflight" \
+    /fixture/live-replace.err >/dev/null
+  shopt -s nullglob
+  private_entries=(/opt/ascendany/.v2.installing.* /opt/ascendany/.v2.removing.*)
+  shopt -u nullglob
+  (( ${#private_entries[@]} == 0 ))
+  exec {consumer_fd}<&-
+  /usr/bin/kill "$consumer_pid"
+  wait "$consumer_pid" 2>/dev/null || true
+  /trusted/install-v2-release.sh \
+    --source /fixture/source \
+    --manifest-sha256 "$(</fixture/expected-manifest.sha256)" \
+    --replace-installed-manifest-sha256 "$(</fixture/installed-manifest.sha256)" \
+    --replace-installed-identity "$(</fixture/installed-identity)" \
+    >/fixture/quiesced-replace.out 2>/fixture/quiesced-replace.err
+' >/dev/null
+require_log "$live_process_case/live-replace.err" \
+  'release-owned process is not quiesced before replacement preflight'
+[[ "$(<"$live_process_case/quiesced-replace.out")" == '/opt/ascendany/v2' ]] ||
+  fail 'quiesced replacement did not report the canonical target'
+[[ ! -s "$live_process_case/quiesced-replace.err" ]] ||
+  fail 'quiesced replacement emitted diagnostics'
+[[ "$(jq -r '.version' "$live_process_case/opt/ascendany/v2/release-manifest.json")" == 1.2.4 ]] ||
+  fail 'replacement did not close successfully after the live release consumer exited'
+if find "$live_process_case/opt/ascendany" -mindepth 1 -maxdepth 1 \
+    \( -name '.v2.installing.*' -o -name '.v2.removing.*' -o -inum "$live_process_old_inode" \) \
+    -print -quit | grep -q .; then
+  fail 'quiesced replacement retained the old release or a private release entry'
+fi
+
+prerelease_forward_case="$(new_case prerelease-forward 0 production 1.2.4-rc.2)"
+run_installer "$prerelease_forward_case" /usr/bin/env >/dev/null
+prerelease_installed_manifest_sha256="$(<"$prerelease_forward_case/expected-manifest.sha256")"
+prerelease_installed_identity="$(stat -Lc '%d:%i' -- "$prerelease_forward_case/opt/ascendany/v2")"
+prepare_replacement_source "$prerelease_forward_case" 1.2.4
+FIXTURE_INSTALLED_MANIFEST_SHA256="$prerelease_installed_manifest_sha256" \
+FIXTURE_INSTALLED_IDENTITY="$prerelease_installed_identity" \
+  run_installer "$prerelease_forward_case" /usr/bin/env >/dev/null
+[[ "$(jq -r '.version' "$prerelease_forward_case/opt/ascendany/v2/release-manifest.json")" == 1.2.4 ]] ||
+  fail 'SemVer prerelease-to-release advancement was rejected'
+
+installed_anchor_case="$(new_case installed-manifest-anchor 0 production 1.2.3)"
+run_installer "$installed_anchor_case" /usr/bin/env >/dev/null
+installed_anchor_identity="$(stat -Lc '%d:%i' -- "$installed_anchor_case/opt/ascendany/v2")"
+installed_anchor_original_sha256="$(<"$installed_anchor_case/expected-manifest.sha256")"
+prepare_replacement_source "$installed_anchor_case" 1.2.4
+FIXTURE_INSTALLED_MANIFEST_SHA256="$(printf '%064d' 0)" \
+FIXTURE_INSTALLED_IDENTITY="$installed_anchor_identity" \
+  expect_failure "$installed_anchor_case/replace.log" run_installer "$installed_anchor_case" /usr/bin/env
+require_log "$installed_anchor_case/replace.log" 'installed release manifest digest differs from the explicit trust input'
+[[ "$(sha256sum "$installed_anchor_case/opt/ascendany/v2/release-manifest.json" | awk '{print $1}')" == "$installed_anchor_original_sha256" ]] ||
+  fail 'wrong installed manifest trust input changed the canonical release'
+if find "$installed_anchor_case/opt/ascendany" -mindepth 1 -maxdepth 1 -name '.v2.installing.*' -print -quit | grep -q .; then
+  fail 'wrong installed manifest trust input created a staging tree'
+fi
+
+installed_identity_case="$(new_case installed-identity 0 production 1.2.3)"
+run_installer "$installed_identity_case" /usr/bin/env >/dev/null
+installed_identity_manifest_sha256="$(<"$installed_identity_case/expected-manifest.sha256")"
+installed_identity_original="$(stat -Lc '%d:%i' -- "$installed_identity_case/opt/ascendany/v2")"
+prepare_replacement_source "$installed_identity_case" 1.2.4
+FIXTURE_INSTALLED_MANIFEST_SHA256="$installed_identity_manifest_sha256" \
+FIXTURE_INSTALLED_IDENTITY='0:1' \
+  expect_failure "$installed_identity_case/replace.log" run_installer "$installed_identity_case" /usr/bin/env
+require_log "$installed_identity_case/replace.log" 'installed release identity differs from the explicit trust input'
+[[ "$(stat -Lc '%d:%i' -- "$installed_identity_case/opt/ascendany/v2")" == "$installed_identity_original" ]] ||
+  fail 'wrong installed identity changed the canonical release'
+
+installed_drift_case="$(new_case installed-tree-drift 0 production 1.2.3)"
+run_installer "$installed_drift_case" /usr/bin/env >/dev/null
+installed_drift_manifest_sha256="$(<"$installed_drift_case/expected-manifest.sha256")"
+installed_drift_identity="$(stat -Lc '%d:%i' -- "$installed_drift_case/opt/ascendany/v2")"
+printf 'installed tree drift\n' >"$installed_drift_case/opt/ascendany/v2/README.md"
+prepare_replacement_source "$installed_drift_case" 1.2.4
+FIXTURE_INSTALLED_MANIFEST_SHA256="$installed_drift_manifest_sha256" \
+FIXTURE_INSTALLED_IDENTITY="$installed_drift_identity" \
+  expect_failure "$installed_drift_case/replace.log" run_installer "$installed_drift_case" /usr/bin/env
+require_log "$installed_drift_case/replace.log" 'installed release payload integrity drifted: README.md'
+[[ "$(<"$installed_drift_case/opt/ascendany/v2/README.md")" == 'installed tree drift' ]] ||
+  fail 'installed-tree drift rejection changed the installed release'
+
+nonforward_case="$(new_case nonforward-version 0 production 1.2.3)"
+run_installer "$nonforward_case" /usr/bin/env >/dev/null
+nonforward_manifest_sha256="$(<"$nonforward_case/expected-manifest.sha256")"
+nonforward_identity="$(stat -Lc '%d:%i' -- "$nonforward_case/opt/ascendany/v2")"
+prepare_replacement_source "$nonforward_case" 1.2.3+rebuild.1
+FIXTURE_INSTALLED_MANIFEST_SHA256="$nonforward_manifest_sha256" \
+FIXTURE_INSTALLED_IDENTITY="$nonforward_identity" \
+  expect_failure "$nonforward_case/replace.log" run_installer "$nonforward_case" /usr/bin/env
+require_log "$nonforward_case/replace.log" 'replacement release version 1.2.3+rebuild.1 does not advance installed version 1.2.3'
+[[ "$(jq -r '.version' "$nonforward_case/opt/ascendany/v2/release-manifest.json")" == 1.2.3 ]] ||
+  fail 'non-forward version rejection changed the installed release'
 
 bytes_case="$(new_case bytes-drift)"
 printf 'tampered bytes\n' >"$bytes_case/source/README.md"
@@ -317,7 +558,13 @@ require_log "$bytes_case/install.log" 'release source payload integrity differs 
 require_log "$bytes_case/install.log" 'release installation state: pre-commit-staging-retained'
 [[ ! -e "$bytes_case/opt/ascendany/v2" ]] || fail 'byte-drift case published a target'
 expect_failure "$bytes_case/retry.log" run_installer "$bytes_case" /usr/bin/env
-require_log "$bytes_case/retry.log" 'pre-existing incomplete release staging requires explicit operator resolution:'
+require_log "$bytes_case/retry.log" 'pre-existing incomplete release private entries require explicit operator resolution:'
+
+removal_tombstone_case="$(new_case removal-tombstone)"
+install -d -m 0755 -- "$removal_tombstone_case/opt/ascendany/.v2.removing.A1b2C3d4E5"
+expect_failure "$removal_tombstone_case/install.log" run_installer "$removal_tombstone_case" /usr/bin/env
+require_log "$removal_tombstone_case/install.log" 'pre-existing incomplete release private entries require explicit operator resolution: .v2.removing.A1b2C3d4E5'
+[[ ! -e "$removal_tombstone_case/opt/ascendany/v2" ]] || fail 'pre-existing removal tombstone published a target'
 
 mode_case="$(new_case mode-drift)"
 chmod 0664 "$mode_case/source/config/analytics.json"
@@ -502,6 +749,102 @@ require_log "$target_race_case/raced-installer.err" 'canonical release target ap
 [[ "$(<"$target_race_case/opt/ascendany/v2/marker")" == 'racing target' ]] || fail 'target race replaced the attacker-created target'
 [[ ! -e "$target_race_case/opt/ascendany/v2/release-manifest.json" ]] || fail 'target race nested release content into the existing target'
 
+replacement_identity_race_case="$(new_case replacement-identity-race 0 production 1.2.3)"
+run_installer "$replacement_identity_race_case" /usr/bin/env >/dev/null
+cp -- "$replacement_identity_race_case/expected-manifest.sha256" \
+  "$replacement_identity_race_case/installed-manifest.sha256"
+stat -Lc '%d:%i' -- "$replacement_identity_race_case/opt/ascendany/v2" \
+  >"$replacement_identity_race_case/installed-identity"
+prepare_replacement_source "$replacement_identity_race_case" 1.2.4 1
+run_shell "$replacement_identity_race_case" '
+  set -Eeuo pipefail
+  (
+    deadline=$((SECONDS + 10))
+    while (( SECONDS < deadline )); do
+      candidate=(/opt/ascendany/.v2.installing.*)
+      if [[ -d "${candidate[0]}" ]]; then
+        mv /opt/ascendany/v2 /opt/ascendany/displaced-installed
+        mkdir -m 0755 /opt/ascendany/v2
+        printf "racing replacement target\n" >/opt/ascendany/v2/marker
+        exit 0
+      fi
+    done
+    exit 91
+  ) &
+  attacker=$!
+  set +e
+  /trusted/install-v2-release.sh \
+    --source /fixture/source \
+    --manifest-sha256 "$(</fixture/expected-manifest.sha256)" \
+    --replace-installed-manifest-sha256 "$(</fixture/installed-manifest.sha256)" \
+    --replace-installed-identity "$(</fixture/installed-identity)" \
+    >/fixture/raced-installer.out 2>/fixture/raced-installer.err
+  installer_status=$?
+  set -e
+  wait "$attacker"
+  [[ "$installer_status" != 0 ]]
+  [[ "$(cat /opt/ascendany/v2/marker)" == "racing replacement target" ]]
+  [[ "$(jq -r .version /opt/ascendany/displaced-installed/release-manifest.json)" == 1.2.3 ]]
+  candidate=(/opt/ascendany/.v2.installing.*)
+  [[ -d "${candidate[0]}" ]]
+' >/dev/null
+require_log "$replacement_identity_race_case/raced-installer.err" 'installed release identity changed before atomic replacement'
+[[ "$(<"$replacement_identity_race_case/opt/ascendany/v2/marker")" == 'racing replacement target' ]] ||
+  fail 'replacement identity race changed the racing canonical target'
+[[ "$(jq -r '.version' "$replacement_identity_race_case/opt/ascendany/displaced-installed/release-manifest.json")" == 1.2.3 ]] ||
+  fail 'replacement identity race changed the displaced trusted release'
+
+post_exchange_race_case="$(new_case post-exchange-retired-race 1 production 1.2.3)"
+run_installer "$post_exchange_race_case" /usr/bin/env >/dev/null
+cp -- "$post_exchange_race_case/expected-manifest.sha256" \
+  "$post_exchange_race_case/installed-manifest.sha256"
+stat -Lc '%d:%i' -- "$post_exchange_race_case/opt/ascendany/v2" \
+  >"$post_exchange_race_case/installed-identity"
+prepare_replacement_source "$post_exchange_race_case" 1.2.4
+run_shell "$post_exchange_race_case" '
+  set -Eeuo pipefail
+  (
+    deadline=$((SECONDS + 10))
+    while (( SECONDS < deadline )); do
+      if [[ -f /opt/ascendany/v2/release-manifest.json ]] &&
+         [[ "$(jq -r .version /opt/ascendany/v2/release-manifest.json 2>/dev/null || true)" == 1.2.4 ]]; then
+        candidate=(/opt/ascendany/.v2.installing.*)
+        if [[ -d "${candidate[0]}" ]]; then
+          /usr/bin/sleep 0.1
+          [[ -d "${candidate[0]}" ]] || continue
+          mv -- "${candidate[0]}" /opt/ascendany/displaced-retired
+          mkdir -m 0755 -- "${candidate[0]}"
+          printf "racing retired stage\n" >"${candidate[0]}/marker"
+          exit 0
+        fi
+      fi
+    done
+    exit 91
+  ) &
+  attacker=$!
+  set +e
+  /trusted/install-v2-release.sh \
+    --source /fixture/source \
+    --manifest-sha256 "$(</fixture/expected-manifest.sha256)" \
+    --replace-installed-manifest-sha256 "$(</fixture/installed-manifest.sha256)" \
+    --replace-installed-identity "$(</fixture/installed-identity)" \
+    >/fixture/raced-installer.out 2>/fixture/raced-installer.err
+  installer_status=$?
+  set -e
+  wait "$attacker"
+  [[ "$installer_status" != 0 ]]
+  [[ "$(jq -r .version /opt/ascendany/v2/release-manifest.json)" == 1.2.4 ]]
+  [[ "$(jq -r .version /opt/ascendany/displaced-retired/release-manifest.json)" == 1.2.3 ]]
+  find /opt/ascendany -mindepth 2 -maxdepth 2 \
+    \( -path "/opt/ascendany/.v2.installing.*/marker" -o -path "/opt/ascendany/.v2.removing.*/marker" \) \
+    -exec grep -Fqx "racing retired stage" {} \; -print -quit | grep -q .
+' >/dev/null
+require_log "$post_exchange_race_case/raced-installer.err" 'release installation state: committed-unverified target=/opt/ascendany/v2'
+[[ "$(jq -r '.version' "$post_exchange_race_case/opt/ascendany/v2/release-manifest.json")" == 1.2.4 ]] ||
+  fail 'post-exchange race reversed the replacement release'
+[[ "$(jq -r '.version' "$post_exchange_race_case/opt/ascendany/displaced-retired/release-manifest.json")" == 1.2.3 ]] ||
+  fail 'post-exchange race deleted the displaced trusted release'
+
 parent_race_case="$(new_case parent-race 1)"
 run_shell "$parent_race_case" '
   set -Eeuo pipefail
@@ -592,8 +935,9 @@ run_shell "$post_commit_case" '
 require_log "$post_commit_case/committed-installer.err" 'release installation state: committed-unverified target=/opt/ascendany/v2'
 require_log "$post_commit_case/committed-installer.err" 'promoted release payload integrity drifted: README.md'
 
-if find "$happy_case/opt" "$concurrent_case/opt" -path '*/.v2.installing.*' -print -quit | grep -q .; then
-  fail 'successful installation left a private staging directory'
+if find "$happy_case/opt" "$concurrent_case/opt" "$forward_case/opt" \
+    \( -path '*/.v2.installing.*' -o -path '*/.v2.removing.*' \) -print -quit | grep -q .; then
+  fail 'successful installation left a private release entry'
 fi
 
 printf '%s\n' 'release installer hostile fixture passed'

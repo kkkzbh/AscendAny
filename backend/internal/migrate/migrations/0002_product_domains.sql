@@ -344,39 +344,6 @@ $function$;
 
 REVOKE ALL ON FUNCTION ascendany.enforce_analytics_head_advance() FROM PUBLIC;
 
-CREATE FUNCTION ascendany.enforce_recommendation_head_advance()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $function$
-DECLARE
-    analytics_generation_id bigint;
-    analytics_head_revision bigint;
-BEGIN
-    IF NEW.head_revision <> OLD.head_revision + 1 THEN
-        RAISE EXCEPTION 'recommendation head revision must advance by exactly one'
-            USING ERRCODE = '40001';
-    END IF;
-    IF OLD.current_model_id IS NOT NULL
-       AND NEW.source_analytics_head_revision <= OLD.source_analytics_head_revision THEN
-        RAISE EXCEPTION 'recommendation analytics revision must advance monotonically'
-            USING ERRCODE = '40001';
-    END IF;
-    SELECT current_generation_id, head_revision
-    INTO analytics_generation_id, analytics_head_revision
-    FROM ascendany.analytics_head
-    WHERE singleton
-    FOR SHARE;
-    IF analytics_generation_id IS NULL
-       OR NEW.source_analytics_generation_id IS DISTINCT FROM analytics_generation_id
-       OR NEW.source_analytics_head_revision IS DISTINCT FROM analytics_head_revision THEN
-        RAISE EXCEPTION 'recommendation head must target the current analytics head'
-            USING ERRCODE = '40001';
-    END IF;
-    RETURN NEW;
-END
-$function$;
-
-REVOKE ALL ON FUNCTION ascendany.enforce_recommendation_head_advance() FROM PUBLIC;
 
 CREATE TABLE ascendany.configuration_items (
     configuration_item_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -397,7 +364,6 @@ CREATE TABLE ascendany.configuration_items (
         configuration_kind IN (
             'prompt',
             'model_connection',
-            'training',
             'knowledge_catalog',
             'feedback_policy',
             'feedback_delivery'
@@ -1131,383 +1097,6 @@ AFTER INSERT ON ascendany.chat_messages
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION ascendany.validate_agent_run_output();
 
-CREATE TABLE ascendany.recommendation_training_runs (
-    training_run_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    public_id uuid NOT NULL UNIQUE,
-    source_analytics_generation_id bigint NOT NULL,
-    source_analytics_head_revision bigint NOT NULL,
-    input_bundle_artifact_id bigint NOT NULL,
-    output_bundle_artifact_id bigint,
-    training_configuration_version_id bigint NOT NULL,
-    training_configuration_kind text GENERATED ALWAYS AS ('training'::text) STORED,
-    knowledge_catalog_version_id bigint NOT NULL,
-    knowledge_catalog_kind text GENERATED ALWAYS AS ('knowledge_catalog'::text) STORED,
-    bundle_protocol text NOT NULL,
-    input_manifest jsonb NOT NULL,
-    input_manifest_sha256 text NOT NULL,
-    status text NOT NULL,
-    attempt_count integer NOT NULL DEFAULT 0,
-    attempt_token uuid,
-    lease_owner text,
-    lease_expires_at timestamptz,
-    next_attempt_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    error_code text,
-    error_detail text,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    started_at timestamptz,
-    finished_at timestamptz,
-    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    CONSTRAINT recommendation_training_runs_public_id_nonzero CHECK (
-        public_id <> '00000000-0000-0000-0000-000000000000'::uuid
-    ),
-    CONSTRAINT recommendation_training_runs_generation_fk FOREIGN KEY (
-        source_analytics_generation_id
-    ) REFERENCES ascendany.analytics_generations (
-        analytics_generation_id
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_training_runs_input_artifact_fk FOREIGN KEY (
-        input_bundle_artifact_id
-    ) REFERENCES ascendany.artifacts (
-        artifact_id
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_training_runs_output_artifact_fk FOREIGN KEY (
-        output_bundle_artifact_id
-    ) REFERENCES ascendany.artifacts (
-        artifact_id
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_training_runs_configuration_fk FOREIGN KEY (
-        training_configuration_version_id,
-        training_configuration_kind
-    ) REFERENCES ascendany.configuration_versions (
-        configuration_version_id,
-        configuration_kind
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_training_runs_catalog_fk FOREIGN KEY (
-        knowledge_catalog_version_id,
-        knowledge_catalog_kind
-    ) REFERENCES ascendany.configuration_versions (
-        configuration_version_id,
-        configuration_kind
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_training_runs_source_revision_positive CHECK (
-        source_analytics_head_revision > 0
-    ),
-    CONSTRAINT recommendation_training_runs_bundle_protocol_v2 CHECK (
-        bundle_protocol = 'ascendany.recommendation.training-bundle.v2'
-    ),
-    CONSTRAINT recommendation_training_runs_manifest_object CHECK (
-        jsonb_typeof(input_manifest) = 'object'
-    ),
-    CONSTRAINT recommendation_training_runs_manifest_hash CHECK (
-        input_manifest_sha256 ~ '^[0-9a-f]{64}$'
-    ),
-    CONSTRAINT recommendation_training_runs_status_valid CHECK (
-        status IN ('queued', 'running', 'succeeded', 'superseded', 'failed')
-    ),
-    CONSTRAINT recommendation_training_runs_attempt_nonnegative CHECK (attempt_count >= 0),
-    CONSTRAINT recommendation_training_runs_execution_state_consistent CHECK (
-        (
-            status = 'queued'
-            AND attempt_token IS NULL
-            AND lease_owner IS NULL
-            AND lease_expires_at IS NULL
-            AND finished_at IS NULL
-        )
-        OR (
-            status = 'running'
-            AND attempt_count > 0
-            AND attempt_token IS NOT NULL
-            AND attempt_token <> '00000000-0000-0000-0000-000000000000'::uuid
-            AND lease_owner IS NOT NULL
-            AND btrim(lease_owner) <> ''
-            AND lease_expires_at IS NOT NULL
-            AND started_at IS NOT NULL
-            AND finished_at IS NULL
-        )
-        OR (
-            status IN ('succeeded', 'superseded', 'failed')
-            AND attempt_count > 0
-            AND attempt_token IS NULL
-            AND lease_owner IS NULL
-            AND lease_expires_at IS NULL
-            AND started_at IS NOT NULL
-            AND finished_at IS NOT NULL
-        )
-    ),
-    CONSTRAINT recommendation_training_runs_output_consistent CHECK (
-        (
-            status IN ('succeeded', 'superseded')
-            AND output_bundle_artifact_id IS NOT NULL
-        )
-        OR (
-            status IN ('queued', 'running', 'failed')
-            AND output_bundle_artifact_id IS NULL
-        )
-    ),
-    CONSTRAINT recommendation_training_runs_error_consistent CHECK (
-        (
-            status = 'failed'
-            AND error_code IS NOT NULL
-            AND btrim(error_code) <> ''
-            AND error_detail IS NOT NULL
-            AND btrim(error_detail) <> ''
-        )
-        OR (
-            status <> 'failed'
-            AND error_code IS NULL
-            AND error_detail IS NULL
-        )
-    ),
-    CONSTRAINT recommendation_training_runs_time_order CHECK (updated_at >= created_at),
-    CONSTRAINT recommendation_training_runs_input_unique UNIQUE (
-        source_analytics_generation_id,
-        input_manifest_sha256,
-        training_configuration_version_id,
-        knowledge_catalog_version_id
-    ),
-    CONSTRAINT recommendation_training_runs_provenance_unique UNIQUE (
-        training_run_id,
-        source_analytics_generation_id,
-        source_analytics_head_revision,
-        output_bundle_artifact_id,
-        status
-    )
-);
-
-CREATE INDEX recommendation_training_runs_queued_claim_idx
-ON ascendany.recommendation_training_runs (next_attempt_at, training_run_id)
-WHERE status = 'queued';
-
-CREATE INDEX recommendation_training_runs_expired_lease_idx
-ON ascendany.recommendation_training_runs (lease_expires_at, training_run_id)
-WHERE status = 'running';
-
-CREATE INDEX recommendation_training_runs_source_revision_idx
-ON ascendany.recommendation_training_runs (
-    source_analytics_head_revision DESC,
-    training_run_id DESC
-);
-
-CREATE TABLE ascendany.recommendation_training_events (
-    training_run_id bigint NOT NULL,
-    event_sequence bigint NOT NULL,
-    event_type text NOT NULL,
-    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    PRIMARY KEY (training_run_id, event_sequence),
-    CONSTRAINT recommendation_training_events_run_fk FOREIGN KEY (training_run_id)
-        REFERENCES ascendany.recommendation_training_runs (training_run_id) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_training_events_sequence_positive CHECK (event_sequence > 0),
-    CONSTRAINT recommendation_training_events_type_format CHECK (
-        event_type ~ '^[a-z][a-z0-9_.-]{0,63}$'
-    ),
-    CONSTRAINT recommendation_training_events_payload_object CHECK (
-        jsonb_typeof(payload) = 'object'
-    )
-);
-
-CREATE INDEX recommendation_training_events_created_idx
-ON ascendany.recommendation_training_events (
-    training_run_id,
-    created_at,
-    event_sequence
-);
-
-CREATE TABLE ascendany.recommendation_models (
-    recommendation_model_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    public_id uuid NOT NULL UNIQUE,
-    training_run_id bigint NOT NULL UNIQUE,
-    source_analytics_generation_id bigint NOT NULL,
-    source_analytics_head_revision bigint NOT NULL,
-    output_bundle_artifact_id bigint NOT NULL,
-    training_outcome text NOT NULL,
-    model_schema text NOT NULL,
-    model_manifest jsonb NOT NULL,
-    model_manifest_sha256 text NOT NULL,
-    metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    CONSTRAINT recommendation_models_public_id_nonzero CHECK (
-        public_id <> '00000000-0000-0000-0000-000000000000'::uuid
-    ),
-    CONSTRAINT recommendation_models_training_provenance_fk FOREIGN KEY (
-        training_run_id,
-        source_analytics_generation_id,
-        source_analytics_head_revision,
-        output_bundle_artifact_id,
-        training_outcome
-    ) REFERENCES ascendany.recommendation_training_runs (
-        training_run_id,
-        source_analytics_generation_id,
-        source_analytics_head_revision,
-        output_bundle_artifact_id,
-        status
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_models_generation_fk FOREIGN KEY (
-        source_analytics_generation_id
-    ) REFERENCES ascendany.analytics_generations (
-        analytics_generation_id
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_models_output_artifact_fk FOREIGN KEY (
-        output_bundle_artifact_id
-    ) REFERENCES ascendany.artifacts (
-        artifact_id
-    ) ON DELETE RESTRICT,
-    CONSTRAINT recommendation_models_source_revision_positive CHECK (
-        source_analytics_head_revision > 0
-    ),
-    CONSTRAINT recommendation_models_outcome_valid CHECK (
-        training_outcome IN ('succeeded', 'superseded')
-    ),
-    CONSTRAINT recommendation_models_schema_v2 CHECK (
-        model_schema = 'ascendany.recommendation.model.v2'
-    ),
-    CONSTRAINT recommendation_models_manifest_object CHECK (
-        jsonb_typeof(model_manifest) = 'object'
-    ),
-    CONSTRAINT recommendation_models_manifest_hash CHECK (
-        model_manifest_sha256 ~ '^[0-9a-f]{64}$'
-    ),
-    CONSTRAINT recommendation_models_metrics_object CHECK (jsonb_typeof(metrics) = 'object'),
-    CONSTRAINT recommendation_models_activation_provenance_unique UNIQUE (
-        recommendation_model_id,
-        source_analytics_generation_id,
-        source_analytics_head_revision,
-        training_outcome
-    )
-);
-
-CREATE INDEX recommendation_models_source_revision_idx
-ON ascendany.recommendation_models (
-    source_analytics_head_revision DESC,
-    recommendation_model_id DESC
-);
-
-CREATE FUNCTION ascendany.validate_recommendation_training_output()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $function$
-DECLARE
-    target_training_run_id bigint;
-    run_status text;
-    model_count bigint;
-BEGIN
-    target_training_run_id := NEW.training_run_id;
-
-    SELECT run.status, count(model.recommendation_model_id)
-    INTO run_status, model_count
-    FROM ascendany.recommendation_training_runs AS run
-    LEFT JOIN ascendany.recommendation_models AS model
-      ON model.training_run_id = run.training_run_id
-    WHERE run.training_run_id = target_training_run_id
-    GROUP BY run.status;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'recommendation training run % is missing', target_training_run_id
-            USING ERRCODE = '23514';
-    END IF;
-    IF run_status IN ('succeeded', 'superseded') THEN
-        IF model_count <> 1 THEN
-            RAISE EXCEPTION 'terminal recommendation training run % must own exactly one model', target_training_run_id
-                USING ERRCODE = '23514';
-        END IF;
-    ELSIF model_count <> 0 THEN
-        RAISE EXCEPTION 'non-output recommendation training run % cannot own a model', target_training_run_id
-            USING ERRCODE = '23514';
-    END IF;
-    RETURN NULL;
-END
-$function$;
-
-REVOKE ALL ON FUNCTION ascendany.validate_recommendation_training_output() FROM PUBLIC;
-
-CREATE CONSTRAINT TRIGGER recommendation_training_runs_output_complete
-AFTER INSERT OR UPDATE ON ascendany.recommendation_training_runs
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION ascendany.validate_recommendation_training_output();
-
-CREATE CONSTRAINT TRIGGER recommendation_models_output_complete
-AFTER INSERT ON ascendany.recommendation_models
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION ascendany.validate_recommendation_training_output();
-
-CREATE TABLE ascendany.student_recommendation_results (
-    recommendation_model_id bigint NOT NULL,
-    actor_id bigint NOT NULL,
-    result_schema text NOT NULL,
-    result jsonb NOT NULL,
-    result_sha256 text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    PRIMARY KEY (recommendation_model_id, actor_id),
-    CONSTRAINT student_recommendation_results_model_fk FOREIGN KEY (
-        recommendation_model_id
-    ) REFERENCES ascendany.recommendation_models (
-        recommendation_model_id
-    ) ON DELETE RESTRICT,
-    CONSTRAINT student_recommendation_results_actor_fk FOREIGN KEY (actor_id)
-        REFERENCES ascendany.pintia_actors (actor_id) ON DELETE RESTRICT,
-    CONSTRAINT student_recommendation_results_schema_v2 CHECK (
-        result_schema = 'ascendany.recommendation.result.v2'
-    ),
-    CONSTRAINT student_recommendation_results_object CHECK (jsonb_typeof(result) = 'object'),
-    CONSTRAINT student_recommendation_results_hash CHECK (
-        result_sha256 ~ '^[0-9a-f]{64}$'
-    )
-);
-
-CREATE INDEX student_recommendation_results_actor_model_idx
-ON ascendany.student_recommendation_results (
-    actor_id,
-    recommendation_model_id DESC
-);
-
-CREATE TABLE ascendany.recommendation_head (
-    singleton boolean PRIMARY KEY DEFAULT true,
-    current_model_id bigint,
-    source_analytics_generation_id bigint,
-    source_analytics_head_revision bigint,
-    current_model_outcome text,
-    head_revision bigint NOT NULL DEFAULT 0,
-    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    CONSTRAINT recommendation_head_singleton CHECK (singleton),
-    CONSTRAINT recommendation_head_model_fk FOREIGN KEY (
-        current_model_id,
-        source_analytics_generation_id,
-        source_analytics_head_revision,
-        current_model_outcome
-    ) REFERENCES ascendany.recommendation_models (
-        recommendation_model_id,
-        source_analytics_generation_id,
-        source_analytics_head_revision,
-        training_outcome
-    ) MATCH FULL ON DELETE RESTRICT,
-    CONSTRAINT recommendation_head_revision_nonnegative CHECK (head_revision >= 0),
-    CONSTRAINT recommendation_head_consistent CHECK (
-        (
-            current_model_id IS NULL
-            AND source_analytics_generation_id IS NULL
-            AND source_analytics_head_revision IS NULL
-            AND current_model_outcome IS NULL
-            AND head_revision = 0
-        )
-        OR (
-            current_model_id IS NOT NULL
-            AND source_analytics_generation_id IS NOT NULL
-            AND source_analytics_head_revision > 0
-            AND current_model_outcome = 'succeeded'
-            AND head_revision > 0
-        )
-    )
-);
-
-INSERT INTO ascendany.recommendation_head (
-    singleton,
-    current_model_id,
-    source_analytics_generation_id,
-    source_analytics_head_revision,
-    current_model_outcome,
-    head_revision
-) VALUES (true, NULL, NULL, NULL, NULL, 0);
-
 CREATE TABLE ascendany.oj_problems (
     oj_problem_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id uuid NOT NULL UNIQUE,
@@ -2210,10 +1799,6 @@ CREATE TRIGGER agent_runs_initial_queue
 BEFORE INSERT ON ascendany.agent_runs
 FOR EACH ROW EXECUTE FUNCTION ascendany.enforce_initial_queued_job();
 
-CREATE TRIGGER recommendation_training_runs_initial_queue
-BEFORE INSERT ON ascendany.recommendation_training_runs
-FOR EACH ROW EXECUTE FUNCTION ascendany.enforce_initial_queued_job();
-
 CREATE TRIGGER oj_judge_jobs_initial_queue
 BEFORE INSERT ON ascendany.oj_judge_jobs
 FOR EACH ROW EXECUTE FUNCTION ascendany.enforce_initial_queued_job();
@@ -2246,16 +1831,8 @@ CREATE TRIGGER oj_problems_head_revision_step
 BEFORE UPDATE ON ascendany.oj_problems
 FOR EACH ROW EXECUTE FUNCTION ascendany.require_single_head_revision_step();
 
-CREATE TRIGGER recommendation_head_monotonic_advance
-BEFORE UPDATE ON ascendany.recommendation_head
-FOR EACH ROW EXECUTE FUNCTION ascendany.enforce_recommendation_head_advance();
-
 CREATE TRIGGER agent_runs_fenced_transition
 BEFORE UPDATE ON ascendany.agent_runs
-FOR EACH ROW EXECUTE FUNCTION ascendany.enforce_fenced_job_transition();
-
-CREATE TRIGGER recommendation_training_runs_fenced_transition
-BEFORE UPDATE ON ascendany.recommendation_training_runs
 FOR EACH ROW EXECUTE FUNCTION ascendany.enforce_fenced_job_transition();
 
 CREATE TRIGGER oj_judge_jobs_fenced_transition
@@ -2276,14 +1853,6 @@ FOR EACH ROW EXECUTE FUNCTION ascendany.enforce_analytics_generation_transition(
 
 CREATE TRIGGER agent_runs_terminal_immutable
 BEFORE UPDATE ON ascendany.agent_runs
-FOR EACH ROW EXECUTE FUNCTION ascendany.reject_terminal_job_mutation(
-    'succeeded',
-    'failed',
-    'superseded'
-);
-
-CREATE TRIGGER recommendation_training_runs_terminal_immutable
-BEFORE UPDATE ON ascendany.recommendation_training_runs
 FOR EACH ROW EXECUTE FUNCTION ascendany.reject_terminal_job_mutation(
     'succeeded',
     'failed',
@@ -2330,9 +1899,6 @@ DECLARE
         'agent_run_events',
         'agent_tool_calls',
         'agent_note_revisions',
-        'recommendation_training_events',
-        'recommendation_models',
-        'student_recommendation_results',
         'oj_problem_versions',
         'oj_submissions',
         'oj_judge_job_events',
@@ -2368,11 +1934,6 @@ REVOKE ALL PRIVILEGES ON TABLE
     ascendany.agent_tool_calls,
     ascendany.agent_notes,
     ascendany.agent_note_revisions,
-    ascendany.recommendation_training_runs,
-    ascendany.recommendation_training_events,
-    ascendany.recommendation_models,
-    ascendany.student_recommendation_results,
-    ascendany.recommendation_head,
     ascendany.oj_problems,
     ascendany.oj_problem_versions,
     ascendany.oj_submissions,
@@ -2396,11 +1957,6 @@ GRANT SELECT ON TABLE
     ascendany.agent_tool_calls,
     ascendany.agent_notes,
     ascendany.agent_note_revisions,
-    ascendany.recommendation_training_runs,
-    ascendany.recommendation_training_events,
-    ascendany.recommendation_models,
-    ascendany.student_recommendation_results,
-    ascendany.recommendation_head,
     ascendany.oj_problems,
     ascendany.oj_problem_versions,
     ascendany.oj_submissions,
@@ -2424,10 +1980,6 @@ GRANT INSERT ON TABLE
     ascendany.agent_tool_calls,
     ascendany.agent_notes,
     ascendany.agent_note_revisions,
-    ascendany.recommendation_training_runs,
-    ascendany.recommendation_training_events,
-    ascendany.recommendation_models,
-    ascendany.student_recommendation_results,
     ascendany.oj_problems,
     ascendany.oj_problem_versions,
     ascendany.oj_submissions,
@@ -2471,30 +2023,6 @@ GRANT UPDATE (
     head_revision,
     updated_at
 ) ON TABLE ascendany.agent_notes TO ascendany_runtime;
-
-GRANT UPDATE (
-    output_bundle_artifact_id,
-    status,
-    attempt_count,
-    attempt_token,
-    lease_owner,
-    lease_expires_at,
-    next_attempt_at,
-    error_code,
-    error_detail,
-    started_at,
-    finished_at,
-    updated_at
-) ON TABLE ascendany.recommendation_training_runs TO ascendany_runtime;
-
-GRANT UPDATE (
-    current_model_id,
-    source_analytics_generation_id,
-    source_analytics_head_revision,
-    current_model_outcome,
-    head_revision,
-    updated_at
-) ON TABLE ascendany.recommendation_head TO ascendany_runtime;
 
 GRANT UPDATE (
     current_version_id,

@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import type { SelfAchievements, SelfRecommendation } from "@ascendany/sdk";
+import type { RecommendationModelProvenance, SelfAchievements, SelfRecommendation } from "@ascendany/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AchievementPanel } from "../src/components/AchievementPanel";
 import { RecommendationPanel } from "../src/components/RecommendationPanel";
@@ -19,43 +19,33 @@ const achievements = {
     { code: "dialogue", title: "勤学善问", description: "完成对话。", progressKey: "ai_dialogue_count", tier: 0, progress: 0, bronzeTarget: 1, silverTarget: 10, goldTarget: 30, sortOrder: 2 },
   ],
 } satisfies SelfAchievements;
-const recommendation = { state: "unavailable", unavailableReason: "no_active_model", currentAnalyticsHeadRevision: 0, recommendationHeadRevision: 0 } satisfies SelfRecommendation;
+const model = {
+  modelId: "123e4567-e89b-42d3-a456-426614174000",
+  purpose: "acceptance_test",
+  artifactSha256: "a".repeat(64), artifactSizeBytes: 4096, artifactMode: 420,
+  modelSchema: "ascendany.recommendation.inference-model.v1",
+  algorithm: "knowledge_mirt_feature_v1", inferenceContract: "ascendany.recommendation.inference.v1",
+  trainedAt: "2026-07-11T08:00:00Z", trainingProvenanceSha256: "b".repeat(64),
+  featureSchemaSha256: "c".repeat(64), knowledgeCatalogSha256: "d".repeat(64),
+  parameterSha256: "e".repeat(64), goldenVectorsSha256: "f".repeat(64),
+  modelHeadRevision: 5, applicationVersion: "0.2.0", applicationCommit: "1".repeat(40),
+  applicationBuildTime: "2026-07-11T08:05:00Z",
+} satisfies RecommendationModelProvenance;
+const recommendation = { state: "unavailable", unavailableReason: "analytics_unavailable", currentAnalyticsHeadRevision: 0, modelHeadRevision: 5, model } satisfies SelfRecommendation;
 const readyRecommendation = {
   state: "fresh",
   currentAnalyticsGenerationId: "28",
   currentAnalyticsHeadRevision: 12,
-  recommendationHeadRevision: 5,
-  model: {
-    modelId: "123e4567-e89b-42d3-a456-426614174000",
-    trainingRunId: "223e4567-e89b-42d3-a456-426614174000",
-    analyticsGenerationId: "28",
-    analyticsHeadRevision: 12,
-    inputManifestSha256: "a".repeat(64),
-    trainingConfigurationVersionId: "31",
-    trainingConfigurationKey: "recommendation.training.default",
-    trainingConfigurationVersion: 3,
-    trainingConfigurationSchema: "ascendany.training.recommendation.v2",
-    trainingConfigurationSha256: "b".repeat(64),
-    knowledgeCatalogVersionId: "41",
-    knowledgeCatalogKey: "recommendation.knowledge.default",
-    knowledgeCatalogVersion: 2,
-    knowledgeCatalogSchema: "ascendany.knowledge_catalog.recommendation.v1",
-    knowledgeCatalogSha256: "f".repeat(64),
-    outputArtifactSha256: "c".repeat(64),
-    modelSchema: "ascendany.recommendation.model.v2",
-    modelManifest: {},
-    modelManifestSha256: "d".repeat(64),
-    metrics: {},
-    createdAt: "2026-07-11T08:00:00Z",
-  },
+  modelHeadRevision: 5,
+  model,
   result: {
-    schema: "ascendany.recommendation.result.v2",
-    sha256: "e".repeat(64),
+    schema: "ascendany.recommendation.inference-result.v1",
+    sha256: "9".repeat(64),
     status: "ready",
     sourceRating: 1810,
-    evidence: { trainInteractionCount: 8, validationInteractionCount: 2, distinctProblemCount: 6, passedProblemCount: 3 },
+    evidence: { observationCount: 10, distinctProblemCount: 6, passedProblemCount: 3 },
     knowledgeMastery: [
-      { knowledgePointId: "arrays", label: "数组", description: "数组基础与索引。", prerequisiteIds: [], mastery: 0.42, trainInteractionCount: 4 },
+      { knowledgePointId: "arrays", label: "数组", description: "数组基础与索引。", prerequisiteIds: [], mastery: 0.42, observationCount: 4 },
     ],
     learningPath: [
       {
@@ -100,15 +90,17 @@ describe("desktop student insight panels", () => {
   it("shows the complete rule set before analytics generation and the unavailable recommendation state", async () => {
     const { container } = render(<><AchievementPanel /><RecommendationPanel /></>);
     await screen.findByText("等待首轮分析");
-    await screen.findByText("学习建议待生成");
+    await screen.findByText("学习建议暂不可用");
 
     const content = container.textContent ?? "";
     expect(content).toContain("初次登场");
     expect(content).toContain("勤学善问");
     expect(content).toContain("规则集v1");
-    expect(content).toContain("管理员尚未发布推荐模型");
+    expect(content).toContain("系统尚未发布分析结果");
     expect(content).toContain("分析 head r0");
-    expect(content).toContain("推荐 head r0");
+    expect(content).toContain("模型 head r5");
+    expect(content).toContain(model.modelId);
+    expect(content).toContain(model.artifactSha256);
     expect(mocks.loadSelfAchievements).toHaveBeenCalledWith({ marker: "desktop-session" });
     expect(mocks.loadSelfRecommendation).toHaveBeenCalledWith({ marker: "desktop-session" });
   });
@@ -122,6 +114,8 @@ describe("desktop student insight panels", () => {
 
       expect(container.textContent).toContain("数组练习");
       expect(container.textContent).toContain("预计通过 67%");
+      expect(container.textContent).toContain("ascendany.recommendation.inference-result.v1");
+      expect(container.textContent).toContain("9".repeat(64));
       const links = screen.getAllByRole("link", { name: "打开题目集 1001" });
       expect(links).toHaveLength(2);
       expect(links.map((link) => link.getAttribute("href"))).toEqual([

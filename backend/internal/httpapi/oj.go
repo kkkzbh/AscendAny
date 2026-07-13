@@ -127,7 +127,7 @@ func (handler *Handler) getOJProblem(writer http.ResponseWriter, request *http.R
 }
 
 func (handler *Handler) createOJProblemVersion(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	access, ok := bearerToken(request)
@@ -179,7 +179,7 @@ func (handler *Handler) createOJProblemVersion(writer http.ResponseWriter, reque
 }
 
 func (handler *Handler) createOJSubmission(writer http.ResponseWriter, request *http.Request) {
-	if !handler.requireWritesEnabled(writer, request) || !handler.requireNoQuery(writer, request) {
+	if !handler.requireNoQuery(writer, request) {
 		return
 	}
 	access, ok := bearerToken(request)

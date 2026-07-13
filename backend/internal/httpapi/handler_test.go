@@ -146,31 +146,10 @@ func (unusedRecommendationReader) ReadCurrent(context.Context, string) (recommen
 	panic("unexpected recommendation read")
 }
 
-type unusedRecommendationQueue struct{}
-
-func (unusedRecommendationQueue) QueueTraining(context.Context, string, string, int64, int64) (recommendation.QueueResult, error) {
-	panic("unexpected recommendation training queue")
-}
-
 type unusedRecommendationAdminReader struct{}
 
 func (unusedRecommendationAdminReader) ReadReviewContext(context.Context, string) (recommendation.ReviewContext, error) {
 	panic("unexpected recommendation review context read")
-}
-
-func (unusedRecommendationAdminReader) ReadTrainingRun(context.Context, string, string) (recommendation.TrainingRunDetail, bool, error) {
-	panic("unexpected recommendation training run read")
-}
-
-func (unusedRecommendationAdminReader) ReadTrainingEvents(context.Context, string, string, int64, int) (recommendation.TrainingEventPage, bool, error) {
-	panic("unexpected recommendation training event read")
-}
-
-func testRecommendationQueue(writesEnabled bool) RecommendationQueue {
-	if !writesEnabled {
-		return nil
-	}
-	return unusedRecommendationQueue{}
 }
 
 type unusedModelProbeService struct{}
@@ -516,7 +495,6 @@ func testHandlerOptions(report health.Report) Options {
 		OJPolicy:                  oj.DefaultPolicy(),
 		RecommendationReader:      unusedRecommendationReader{},
 		RecommendationAdminReader: unusedRecommendationAdminReader{},
-		RecommendationQueue:       unusedRecommendationQueue{},
 		ModelProbe:                unusedModelProbeService{},
 		Capabilities:              testCapabilities(true),
 		AuthBodyTimeout:           time.Second,

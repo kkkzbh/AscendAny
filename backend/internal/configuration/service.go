@@ -100,7 +100,7 @@ func (service *Service) CreateVersion(ctx context.Context, command CreateVersion
 	if err := rejectCredentialFields(command.Kind, canonical); err != nil {
 		return CreateVersionResult{}, configurationError(ErrorInvalidQuery, "validate configuration secret boundary", err)
 	}
-	if command.Kind == KindTraining || command.Kind == KindKnowledgeCatalog {
+	if command.Kind == KindKnowledgeCatalog {
 		if err := service.documentValidator.ValidateRecommendationDocument(command.Kind, command.SchemaID, canonical); err != nil {
 			return CreateVersionResult{}, configurationError(ErrorDocumentInvalid, "validate recommendation configuration document", err)
 		}
@@ -157,10 +157,35 @@ func validateVersionsQuery(ctx context.Context, query VersionsQuery) error {
 
 func validateCreateCommand(ctx context.Context, command CreateVersionCommand) error {
 	if ctx == nil || !configurationKey.MatchString(command.Key) || !validKind(command.Kind) || command.ExpectedHeadRevision < 0 ||
-		!validSchemaForKind(command.SchemaID, command.Kind) || !validCredentialRef(command.Kind, command.CredentialRef) {
+		!validSchemaForKind(command.SchemaID, command.Kind) || !validCredentialRef(command.Kind, command.CredentialRef) ||
+		!validKnowledgeCatalogIdentity(command.Key, command.Kind) || !validAnalyticsReviewExpectation(command) {
 		return configurationError(ErrorInvalidQuery, "validate create configuration version command", errors.New("configuration metadata violates the write contract"))
 	}
 	return validateAdminPrincipal(command.Principal)
+}
+
+func validAnalyticsReviewExpectation(command CreateVersionCommand) bool {
+	valuesPresent := command.ExpectedAnalyticsGenerationID != nil ||
+		command.ExpectedAnalyticsHeadRevision != nil || command.ExpectedInputManifestSHA256 != nil
+	if command.Kind != KindKnowledgeCatalog {
+		return !valuesPresent
+	}
+	if command.ExpectedAnalyticsGenerationID == nil || command.ExpectedAnalyticsHeadRevision == nil ||
+		command.ExpectedInputManifestSHA256 == nil || *command.ExpectedAnalyticsHeadRevision < 1 ||
+		!sha256Pattern.MatchString(*command.ExpectedInputManifestSHA256) {
+		return false
+	}
+	raw := *command.ExpectedAnalyticsGenerationID
+	if raw == "" || raw[0] == '0' || len(raw) > 19 {
+		return false
+	}
+	for _, character := range raw {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	return err == nil && value > 0
 }
 
 func validateAdminPrincipal(principal auth.AccessPrincipal) error {
@@ -176,7 +201,7 @@ func validateAdminPrincipal(principal auth.AccessPrincipal) error {
 
 func validKind(kind Kind) bool {
 	switch kind {
-	case KindPrompt, KindModelConnection, KindTraining, KindKnowledgeCatalog, KindFeedbackPolicy, KindFeedbackDelivery:
+	case KindPrompt, KindModelConnection, KindKnowledgeCatalog, KindFeedbackPolicy, KindFeedbackDelivery:
 		return true
 	default:
 		return false
@@ -186,6 +211,10 @@ func validKind(kind Kind) bool {
 func ValidKind(kind Kind) bool { return validKind(kind) }
 
 func ValidKey(key string) bool { return configurationKey.MatchString(key) }
+
+func validKnowledgeCatalogIdentity(key string, kind Kind) bool {
+	return (kind == KindKnowledgeCatalog) == (key == KnowledgeCatalogKey)
+}
 
 func validSchemaForKind(schemaID string, kind Kind) bool {
 	if !schemaIDPattern.MatchString(schemaID) {
@@ -262,6 +291,7 @@ func validateItemPage(page ItemPage, limit int) error {
 
 func validateItem(item Item) error {
 	if !canonicalUUIDv4.MatchString(item.ID) || !configurationKey.MatchString(item.Key) || !validKind(item.Kind) ||
+		!validKnowledgeCatalogIdentity(item.Key, item.Kind) ||
 		item.HeadRevision < 0 || !validUTCTime(item.CreatedAt) || !validUTCTime(item.UpdatedAt) || item.UpdatedAt.Before(item.CreatedAt) {
 		return errors.New("configuration item violates the public contract")
 	}
@@ -282,7 +312,7 @@ func validateItem(item Item) error {
 
 func validateVersionPage(page VersionPage, query VersionsQuery) error {
 	if page.Key != query.Key || !configurationKey.MatchString(page.Key) || !validKind(page.Kind) || page.HeadRevision < 1 ||
-		page.Items == nil || len(page.Items) > query.Limit {
+		!validKnowledgeCatalogIdentity(page.Key, page.Kind) || page.Items == nil || len(page.Items) > query.Limit {
 		return errors.New("version page metadata is invalid")
 	}
 	var previous int64

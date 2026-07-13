@@ -365,7 +365,6 @@ func disabledLSPTestOptions() Options {
 	options := testHandlerOptions(health.Report{Status: health.StatusReady})
 	options.Artifacts = nil
 	options.Imports = nil
-	options.RecommendationQueue = nil
 	options.ModelProbe = nil
 	options.Capabilities = testCapabilities(false)
 	return options

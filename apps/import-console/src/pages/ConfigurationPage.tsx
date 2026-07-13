@@ -8,42 +8,36 @@ import {
   type ConfigurationItem,
   type ConfigurationKind,
   type ConfigurationVersion,
+  type CreateGenericConfigurationVersionRequest,
   type ModelConnectionProbeResult,
 } from "../api/configuration";
 import { EmptyState, Field, PageHeader } from "../components/ui";
 
-const kinds: ConfigurationKind[] = [
+type EditableConfigurationKind = CreateGenericConfigurationVersionRequest["kind"];
+
+const kinds: EditableConfigurationKind[] = [
   "prompt",
   "model_connection",
-  "training",
-  "knowledge_catalog",
   "feedback_policy",
   "feedback_delivery",
 ];
+const KNOWLEDGE_CATALOG_KEY = "recommendation.catalog.active";
 
 const kindLabels: Record<ConfigurationKind, string> = {
   prompt: "Prompt",
   model_connection: "模型连接",
-  training: "训练",
   knowledge_catalog: "知识目录",
   feedback_policy: "反馈策略",
   feedback_delivery: "反馈投递",
 };
 
-function defaultSchemaId(kind: ConfigurationKind): string {
-  switch (kind) {
-    case "training":
-      return "ascendany.training.recommendation.v2";
-    case "knowledge_catalog":
-      return "ascendany.knowledge_catalog.recommendation.v1";
-    default:
-      return `ascendany.${kind}.v1`;
-  }
+function defaultSchemaId(kind: EditableConfigurationKind): string {
+  return `ascendany.${kind}.v1`;
 }
 
 interface EditorState {
   key: string;
-  kind: ConfigurationKind;
+  kind: EditableConfigurationKind;
   expectedHeadRevision: number;
   schemaId: string;
   document: string;
@@ -51,6 +45,9 @@ interface EditorState {
 }
 
 function editorFromItem(item: ConfigurationItem | null): EditorState {
+  if (item?.kind === "knowledge_catalog") {
+    throw new Error("Knowledge catalog 由推荐知识目录页面维护。");
+  }
   const active = item?.activeVersion ?? null;
   return {
     key: item?.key ?? "",
@@ -72,7 +69,7 @@ function shortHash(value: string): string {
 }
 
 export function ConfigurationPage() {
-  const [kindFilter, setKindFilter] = useState<ConfigurationKind | "">("");
+  const [kindFilter, setKindFilter] = useState<EditableConfigurationKind | "">("");
   const [items, setItems] = useState<ConfigurationItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<ConfigurationItem | null>(null);
@@ -92,7 +89,8 @@ export function ConfigurationPage() {
     setError(null);
     try {
       const page = await getConfigurations(30, kindFilter || undefined, afterKey);
-      setItems((current) => afterKey ? [...current, ...page.items] : page.items);
+      const editableItems = page.items.filter((item) => item.kind !== "knowledge_catalog");
+      setItems((current) => afterKey ? [...current, ...editableItems] : editableItems);
       setNextCursor(page.nextCursor);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "配置列表加载失败");
@@ -144,8 +142,8 @@ export function ConfigurationPage() {
     setError(null);
     setNotice(null);
     try {
-      if (editor.kind === "training" || editor.kind === "knowledge_catalog") {
-        throw new Error("推荐 training 与 knowledge catalog 只能在推荐训练页面发布。");
+      if (editor.key === KNOWLEDGE_CATALOG_KEY) {
+        throw new Error("recommendation.catalog.active 仅由推荐知识目录页面维护。");
       }
       const parsed: unknown = JSON.parse(editor.document);
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -228,7 +226,7 @@ export function ConfigurationPage() {
             <select
               aria-label="配置类型筛选"
               value={kindFilter}
-              onChange={(event) => setKindFilter(event.target.value as ConfigurationKind | "")}
+              onChange={(event) => setKindFilter(event.target.value as EditableConfigurationKind | "")}
             >
               <option value="">全部类型</option>
               {kinds.map((kind) => <option key={kind} value={kind}>{kindLabels[kind]}</option>)}
@@ -262,7 +260,7 @@ export function ConfigurationPage() {
               </Field>
               <Field label="Kind">
                 <select value={editor.kind} disabled={selected !== null} onChange={(event) => {
-                  const kind = event.target.value as ConfigurationKind;
+                  const kind = event.target.value as EditableConfigurationKind;
                   setEditor((current) => ({ ...current, kind, schemaId: defaultSchemaId(kind) }));
                 }}>
                   {kinds.map((kind) => <option key={kind} value={kind}>{kindLabels[kind]}</option>)}

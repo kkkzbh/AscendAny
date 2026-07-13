@@ -168,6 +168,29 @@ func TestConfigurationVersionCreateDistinguishesCreationAndReplay(t *testing.T) 
 	}
 }
 
+func TestRecommendationCatalogCreateCarriesReviewProvenance(t *testing.T) {
+	t.Parallel()
+	called := false
+	service := configurationServiceStub{create: func(_ context.Context, access string, input configuration.CreateVersionInput) (configuration.CreateVersionResult, error) {
+		called = true
+		if access != "admin-token" || input.Kind != configuration.KindKnowledgeCatalog ||
+			input.ExpectedAnalyticsGenerationID == nil || *input.ExpectedAnalyticsGenerationID != "9" ||
+			input.ExpectedAnalyticsHeadRevision == nil || *input.ExpectedAnalyticsHeadRevision != 4 ||
+			input.ExpectedInputManifestSHA256 == nil || *input.ExpectedInputManifestSHA256 != strings.Repeat("b", 64) {
+			t.Fatalf("catalog input=%#v", input)
+		}
+		return configuration.CreateVersionResult{}, nil
+	}}
+	handler := newConfigurationTestHandler(t, service, true)
+	body := `{"key":"recommendation.catalog.active","kind":"knowledge_catalog","expectedHeadRevision":0,"expectedAnalyticsGenerationId":"9","expectedAnalyticsHeadRevision":4,"expectedInputManifestSha256":"` + strings.Repeat("b", 64) + `","schemaId":"ascendany.knowledge_catalog.recommendation.v1","document":{},"credentialRef":null}`
+	request := configurationRequest(http.MethodPost, "/api/v2/admin/configurations/versions", body)
+	response := newTestResponseRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !called {
+		t.Fatalf("status=%d called=%t body=%s", response.Code, called, response.Body.String())
+	}
+}
+
 func TestConfigurationErrorsUseOpaqueHTTPMapping(t *testing.T) {
 	t.Parallel()
 	secret := "database-password"
@@ -210,6 +233,44 @@ func TestConfigurationSemanticDocumentErrorUses422(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), `"code":"configuration_document_invalid"`) || strings.Contains(response.Body.String(), secret) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRecommendationPublicationFailuresExposeSafeCoverageAndReviewDetails(t *testing.T) {
+	t.Parallel()
+	problemKey := "pintia:problem:1:7:" + strings.Repeat("c", 64)
+	for _, test := range []struct {
+		code       configuration.ErrorCode
+		issue      *configuration.PublicationIssue
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			code:       configuration.ErrorDocumentInvalid,
+			issue:      &configuration.PublicationIssue{IssueCode: "knowledge_catalog_coverage_mismatch", ProblemKeys: []string{problemKey}, MissingProblemKeys: []string{problemKey}},
+			wantStatus: http.StatusUnprocessableEntity, wantCode: "recommendation_preflight_failed",
+		},
+		{
+			code: configuration.ErrorReviewConflict,
+			issue: &configuration.PublicationIssue{
+				IssueCode: "recommendation_review_changed", ExpectedAnalyticsGenerationID: "8", CurrentAnalyticsGenerationID: "9",
+				ExpectedAnalyticsHeadRevision: 3, CurrentAnalyticsHeadRevision: 4,
+				ExpectedInputManifestSHA256: strings.Repeat("a", 64), CurrentInputManifestSHA256: strings.Repeat("b", 64),
+			},
+			wantStatus: http.StatusConflict, wantCode: "recommendation_review_conflict",
+		},
+	} {
+		service := configurationServiceStub{create: func(context.Context, string, configuration.CreateVersionInput) (configuration.CreateVersionResult, error) {
+			return configuration.CreateVersionResult{}, &configuration.Error{Code: test.code, Op: "publish", Cause: test.issue}
+		}}
+		handler := newConfigurationTestHandler(t, service, true)
+		request := configurationRequest(http.MethodPost, "/api/v2/admin/configurations/versions", `{"key":"prompt.main","kind":"prompt","expectedHeadRevision":0,"schemaId":"ascendany.prompt.v1","document":{},"credentialRef":null}`)
+		response := newTestResponseRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.wantStatus || !strings.Contains(response.Body.String(), `"code":"`+test.wantCode+`"`) ||
+			!strings.Contains(response.Body.String(), `"issueCode":"`+test.issue.IssueCode+`"`) {
+			t.Fatalf("code=%s status=%d body=%s", test.code, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -269,7 +330,6 @@ func newConfigurationTestHandler(t *testing.T, service ConfigurationService, wri
 	if !writes {
 		options.Artifacts = nil
 		options.Imports = nil
-		options.RecommendationQueue = nil
 		options.ModelProbe = nil
 	}
 	handler, err := New(options)

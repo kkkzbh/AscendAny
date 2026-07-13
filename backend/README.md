@@ -14,7 +14,7 @@ The process fails at startup unless all required values are explicitly configure
 export ASCENDANY_DATABASE_URL='postgresql://ascendanyd_login@127.0.0.1:6432/ascendany_v2?sslmode=require'
 export ASCENDANY_DATABASE_POOL_MODE='transaction'
 export ASCENDANY_DATABASE_PASSWORD_FILE='/run/credentials/ascendany/db_password'
-export ASCENDANY_DATABASE_SCHEMA_VERSION='5'
+export ASCENDANY_DATABASE_SCHEMA_VERSION='6'
 export ASCENDANY_JWT_SIGNING_KEY_FILE='/run/credentials/ascendany/jwt_signing_key'
 export ASCENDANY_PASSWORD_PEPPER_FILE='/run/credentials/ascendany/password_pepper'
 export ASCENDANY_AUTH_ISSUER='ascendany'
@@ -57,6 +57,9 @@ export ASCENDANY_ANALYTICS_CONFIG='/etc/ascendany/v2/analytics.json'
 export ASCENDANY_ANALYTICS_WORKER_OWNER='km6-analytics'
 export ASCENDANY_ANALYTICS_LEASE_DURATION='5m'
 export ASCENDANY_ANALYTICS_POLL_INTERVAL='1s'
+export ASCENDANY_RECOMMENDATION_MODEL_PATH='/absolute/path/to/recommendation-model.json'
+export ASCENDANY_RECOMMENDATION_MODEL_SHA256='64_lowercase_hex'
+export ASCENDANY_RECOMMENDATION_MODEL_PURPOSE='production'
 export ASCENDANY_FEEDBACK_RATE_WINDOW='1h'
 export ASCENDANY_FEEDBACK_RATE_MAXIMUM='5'
 export ASCENDANY_FEEDBACK_DELIVERY_CONFIGURATION_KEY='feedback.delivery.default'
@@ -72,7 +75,15 @@ enables the complete writer runtime. Deployment rehearsal uses the reviewed
 systemd smoke drop-in to load a final one-line environment file containing
 `ASCENDANY_WRITE_MODE=disabled`; that mode leaves read APIs available, rejects
 every mutation, and does not construct
-background writers, LSP/OJ managers, or trainer transport.
+background writers or LSP/OJ managers. The verified recommendation model remains
+loaded so read-only recommendation behavior and release identity are unchanged.
+
+The recommendation model path must be absolute and canonical. The file must be
+a single-link regular file with mode `0644`, at most 16 MiB, and match the
+configured lowercase SHA-256. Startup verifies the closed inference artifact,
+its internal parameter and golden-vector digests, the fixed online feature
+schema, and all golden-vector results before binding its immutable model release
+to PostgreSQL. Production contains no model-training process or Python runtime.
 
 The database URL targets PgBouncer and must not contain a password. The database credential file must contain at least 16 bytes. The JWT signing key and password pepper must be separate credential files of at least 32 bytes. Credential files may not contain surrounding whitespace. Feedback webhook and model-provider bearer credentials also come from credential files: the environment contains only the path, and its variable name binds one `credentialRef` to one canonical HTTPS authority. Use `credential.FileEnvironmentVariable(reference, authority)` to derive that name. Browser origins use an exact comma-separated allowlist: canonical HTTPS, canonical loopback HTTP for development, `ascendany-app://bundle`, and `capacitor://localhost`; wildcards and padded entries are rejected. The access lifetime must be shorter than the refresh lifetime. The global HTTP read ceiling must exceed both route body deadlines; the SSE write timeout must not exceed its periodic reauthorization interval. The pool uses pgx `QueryExecModeExec` with statement and description caches disabled, so it does not rely on session-scoped prepared statements in PgBouncer transaction-pooling mode.
 

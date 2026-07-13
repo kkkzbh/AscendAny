@@ -1,5 +1,5 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import type { SelfAchievements, SelfRecommendation } from "@ascendany/sdk";
+import type { RecommendationModelProvenance, SelfAchievements, SelfRecommendation } from "@ascendany/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AchievementPanel } from "./AchievementPanel";
 import { RecommendationPanel } from "./RecommendationPanel";
@@ -28,43 +28,42 @@ const achievements = {
   ],
 } satisfies SelfAchievements;
 
+const model = {
+  modelId: "123e4567-e89b-42d3-a456-426614174000",
+  purpose: "acceptance_test",
+  artifactSha256: "a".repeat(64),
+  artifactSizeBytes: 4096,
+  artifactMode: 420,
+  modelSchema: "ascendany.recommendation.inference-model.v1",
+  algorithm: "knowledge_mirt_feature_v1",
+  inferenceContract: "ascendany.recommendation.inference.v1",
+  trainedAt: "2026-07-11T08:00:00Z",
+  trainingProvenanceSha256: "b".repeat(64),
+  featureSchemaSha256: "c".repeat(64),
+  knowledgeCatalogSha256: "d".repeat(64),
+  parameterSha256: "e".repeat(64),
+  goldenVectorsSha256: "f".repeat(64),
+  modelHeadRevision: 5,
+  applicationVersion: "0.2.0",
+  applicationCommit: "1".repeat(40),
+  applicationBuildTime: "2026-07-11T08:05:00Z",
+} satisfies RecommendationModelProvenance;
+
 const recommendation = {
   state: "fresh",
   currentAnalyticsGenerationId: "28",
   currentAnalyticsHeadRevision: 12,
-  recommendationHeadRevision: 5,
-  model: {
-    modelId: "123e4567-e89b-42d3-a456-426614174000",
-    trainingRunId: "223e4567-e89b-42d3-a456-426614174000",
-    analyticsGenerationId: "28",
-    analyticsHeadRevision: 12,
-    inputManifestSha256: "a".repeat(64),
-    trainingConfigurationVersionId: "31",
-    trainingConfigurationKey: "recommendation.training.default",
-    trainingConfigurationVersion: 3,
-    trainingConfigurationSchema: "ascendany.training.recommendation.v2",
-    trainingConfigurationSha256: "b".repeat(64),
-    knowledgeCatalogVersionId: "41",
-    knowledgeCatalogKey: "recommendation.knowledge.default",
-    knowledgeCatalogVersion: 2,
-    knowledgeCatalogSchema: "ascendany.knowledge_catalog.recommendation.v1",
-    knowledgeCatalogSha256: "f".repeat(64),
-    outputArtifactSha256: "c".repeat(64),
-    modelSchema: "ascendany.recommendation.model.v2",
-    modelManifest: {},
-    modelManifestSha256: "d".repeat(64),
-    metrics: {},
-    createdAt: "2026-07-11T08:00:00Z",
-  },
+  modelHeadRevision: 5,
+  model,
   result: {
-    schema: "ascendany.recommendation.result.v2",
-    sha256: "e".repeat(64),
+    schema: "ascendany.recommendation.inference-result.v1",
+    sha256: "9".repeat(64),
     status: "ready",
     sourceRating: 1810,
-    evidence: { trainInteractionCount: 8, validationInteractionCount: 2, distinctProblemCount: 6, passedProblemCount: 3 },
+    evidence: { observationCount: 10, distinctProblemCount: 6, passedProblemCount: 3 },
     knowledgeMastery: [
-      { knowledgePointId: "arrays", label: "数组", description: "数组基础与索引。", prerequisiteIds: [], mastery: 0.42, trainInteractionCount: 4 },
-      { knowledgePointId: "graphs", label: "图论", description: "图遍历。", prerequisiteIds: ["arrays"], mastery: 0.31, trainInteractionCount: 4 },
+      { knowledgePointId: "arrays", label: "数组", description: "数组基础与索引。", prerequisiteIds: [], mastery: 0.42, observationCount: 6 },
+      { knowledgePointId: "graphs", label: "图论", description: "图遍历。", prerequisiteIds: ["arrays"], mastery: 0.31, observationCount: 4 },
     ],
     learningPath: [
       { order: 1, knowledgePointId: "arrays", label: "数组", description: "数组基础与索引。", prerequisiteIds: [], mastery: 0.42, targetMastery: 0.8, reasonCode: "prerequisite", recommendedProblems: [{ problemKey: "pintia:501:fact", sourceProblemKey: "pintia:501", platform: "pintia", problemId: "501", title: "数组练习", sourceProblemSets: [{ problemSetId: "1001", sourceUrl: "https://pintia.cn/problem-sets/1001" }, { problemSetId: "1001", sourceUrl: "https://pintia.cn/problem-sets/1001/problems/type/7" }], predictedSuccessProbability: 0.67, recommendationScore: 0.2, rankingEvidence: { knowledgeGap: 0.38, successDistance: 0.03, stepKnowledgeWeight: 1 } }] },
@@ -118,8 +117,13 @@ describe("web student insight panels", () => {
     expect(graphSetLink.getAttribute("href")).toBe("https://pintia.cn/problem-sets/1002");
     expect(graphSetLink.getAttribute("href")).not.toContain("/problems/502");
     expect(consoleError).not.toHaveBeenCalled();
-    expect(content).toContain("recommendation.training.default v3");
-    expect(content).toContain("recommendation.knowledge.default v2");
+    expect(content).toContain(model.modelId);
+    expect(content).toContain(model.artifactSha256);
+    expect(content).toContain("ascendany.recommendation.inference-model.v1");
+    expect(content).toContain("knowledge_mirt_feature_v1");
+    expect(content).toContain("ascendany.recommendation.inference-result.v1");
+    expect(content).toContain("9".repeat(64));
+    expect(content).toContain("0.2.0");
     expect(mocks.loadSelfAchievements).toHaveBeenCalledWith({ marker: "web-session" });
     expect(mocks.loadSelfRecommendation).toHaveBeenCalledWith({ marker: "web-session" });
   });

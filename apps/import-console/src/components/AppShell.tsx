@@ -5,7 +5,7 @@ import { AccountsPage } from "../pages/AccountsPage";
 import { AuditPage } from "../pages/AuditPage";
 import { ImportPage } from "../pages/ImportPage";
 import { ConfigurationPage } from "../pages/ConfigurationPage";
-import { RecommendationTrainingPage } from "../pages/RecommendationTrainingPage";
+import { RecommendationKnowledgeCatalogPage } from "../pages/RecommendationKnowledgeCatalogPage";
 import { StudentsPage } from "../pages/StudentsPage";
 import { HelpDrawer } from "./HelpDrawer";
 
@@ -36,10 +36,10 @@ export function AppShell({ account, authError, onLogout }: Props) {
             运行配置
           </NavLink>
           <NavLink
-            to="/recommendation"
+            to="/recommendation-catalog"
             className={({ isActive }) => `admin-nav-item${isActive ? " is-active" : ""}`}
           >
-            推荐训练
+            推荐知识目录
           </NavLink>
           <NavLink
             to="/accounts"
@@ -80,7 +80,7 @@ export function AppShell({ account, authError, onLogout }: Props) {
             <Route path="/" element={<Navigate to="/import" replace />} />
             <Route path="/import" element={<ImportPage />} />
             <Route path="/configuration" element={<ConfigurationPage />} />
-            <Route path="/recommendation" element={<RecommendationTrainingPage />} />
+            <Route path="/recommendation-catalog" element={<RecommendationKnowledgeCatalogPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/students" element={<StudentsPage />} />
             <Route path="/audit" element={<AuditPage />} />

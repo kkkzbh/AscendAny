@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ascendany.dev/contracts/recommendation/ascendany.recommendation.inference-model.v1.schema.json",
+  "title": "AscendAny recommendation inference model v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "manifest", "parameters", "goldenVectors"],
+  "properties": {
+    "schema": {"const": "ascendany.recommendation.inference-model.v1"},
+    "manifest": {"$ref": "#/$defs/manifest"},
+    "parameters": {"$ref": "#/$defs/parameters"},
+    "goldenVectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/goldenVector"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "identityArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identity"}
+    },
+    "knowledgePointIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+    },
+    "knowledgePointIdentityArray": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/knowledgePointIdentity"}
+    },
+    "learnedParameter": {
+      "type": "number",
+      "minimum": -100,
+      "maximum": 100
+    },
+    "positiveScale": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 100
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "modelId",
+        "purpose",
+        "trainedAt",
+        "algorithm",
+        "inferenceContract",
+        "trainingProvenanceSha256",
+        "featureSchemaSha256",
+        "knowledgeCatalogSha256",
+        "parameterSha256",
+        "goldenVectorsSha256",
+        "actorFeatureIds",
+        "problemFeatureIds",
+        "knowledgePointIds"
+      ],
+      "properties": {
+        "modelId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "purpose": {"enum": ["production", "acceptance_test"]},
+        "trainedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{0,5}[1-9])?Z$"
+        },
+        "algorithm": {"const": "knowledge_mirt_feature_v1"},
+        "inferenceContract": {"const": "ascendany.recommendation.inference.v1"},
+        "trainingProvenanceSha256": {"$ref": "#/$defs/sha256"},
+        "featureSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "knowledgeCatalogSha256": {"$ref": "#/$defs/sha256"},
+        "parameterSha256": {"$ref": "#/$defs/sha256"},
+        "goldenVectorsSha256": {"$ref": "#/$defs/sha256"},
+        "actorFeatureIds": {"$ref": "#/$defs/identityArray"},
+        "problemFeatureIds": {"$ref": "#/$defs/identityArray"},
+        "knowledgePointIds": {"$ref": "#/$defs/knowledgePointIdentityArray"}
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["means", "scales"],
+      "properties": {
+        "means": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/learnedParameter"}
+        },
+        "scales": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/positiveScale"}
+        }
+      }
+    },
+    "knowledgeParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledgePointId", "actorFeatureWeights", "bias"],
+      "properties": {
+        "knowledgePointId": {"$ref": "#/$defs/knowledgePointIdentity"},
+        "actorFeatureWeights": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/learnedParameter"}
+        },
+        "bias": {"$ref": "#/$defs/learnedParameter"}
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actorNormalization",
+        "problemNormalization",
+        "knowledgeParameters",
+        "problemFeatureWeights",
+        "difficultyBias",
+        "discrimination"
+      ],
+      "properties": {
+        "actorNormalization": {"$ref": "#/$defs/normalization"},
+        "problemNormalization": {"$ref": "#/$defs/normalization"},
+        "knowledgeParameters": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {"$ref": "#/$defs/knowledgeParameters"}
+        },
+        "problemFeatureWeights": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/learnedParameter"}
+        },
+        "difficultyBias": {"$ref": "#/$defs/learnedParameter"},
+        "discrimination": {"$ref": "#/$defs/positiveScale"}
+      }
+    },
+    "featureValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["featureId", "value"],
+      "properties": {
+        "featureId": {"$ref": "#/$defs/identity"},
+        "value": {"type": "number"}
+      }
+    },
+    "knowledgeWeight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledgePointId", "weight"],
+      "properties": {
+        "knowledgePointId": {"$ref": "#/$defs/knowledgePointIdentity"},
+        "weight": {"$ref": "#/$defs/probability"}
+      }
+    },
+    "goldenInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "featureSchemaSha256",
+        "knowledgeCatalogSha256",
+        "actorFeatures",
+        "problemFeatures",
+        "knowledgeWeights"
+      ],
+      "properties": {
+        "featureSchemaSha256": {"$ref": "#/$defs/sha256"},
+        "knowledgeCatalogSha256": {"$ref": "#/$defs/sha256"},
+        "actorFeatures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/featureValue"}
+        },
+        "problemFeatures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/featureValue"}
+        },
+        "knowledgeWeights": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {"$ref": "#/$defs/knowledgeWeight"}
+        }
+      }
+    },
+    "knowledgeMastery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledgePointId", "probability"],
+      "properties": {
+        "knowledgePointId": {"$ref": "#/$defs/knowledgePointIdentity"},
+        "probability": {"$ref": "#/$defs/probability"}
+      }
+    },
+    "goldenExpected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probability", "knowledgeMastery"],
+      "properties": {
+        "probability": {"$ref": "#/$defs/probability"},
+        "knowledgeMastery": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {"$ref": "#/$defs/knowledgeMastery"}
+        }
+      }
+    },
+    "goldenVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "input", "expected"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identity"},
+        "input": {"$ref": "#/$defs/goldenInput"},
+        "expected": {"$ref": "#/$defs/goldenExpected"}
+      }
+    }
+  }
+}

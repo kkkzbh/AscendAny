@@ -46,10 +46,19 @@ func TestApplicationServiceOwnsVerifiedPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	generationID := "7"
+	analyticsHeadRevision := int64(3)
+	manifestSHA256 := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	_, err = application.CreateVersion(context.Background(), "access", CreateVersionInput{
-		Key: "prompt.main", Kind: KindPrompt, SchemaID: "ascendany.prompt.v1", Document: json.RawMessage(`{}`),
+		Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
+		ExpectedAnalyticsGenerationID: &generationID, ExpectedAnalyticsHeadRevision: &analyticsHeadRevision,
+		ExpectedInputManifestSHA256: &manifestSHA256,
+		SchemaID:                    "ascendany.knowledge_catalog.recommendation.v1", Document: json.RawMessage(`{}`),
 	})
-	if err != nil || configuration.createCommand.Principal != principal || configuration.createCommand.Key != "prompt.main" {
+	if err != nil || configuration.createCommand.Principal != principal || configuration.createCommand.Key != KnowledgeCatalogKey ||
+		configuration.createCommand.ExpectedAnalyticsGenerationID == nil || *configuration.createCommand.ExpectedAnalyticsGenerationID != generationID ||
+		configuration.createCommand.ExpectedAnalyticsHeadRevision == nil || *configuration.createCommand.ExpectedAnalyticsHeadRevision != analyticsHeadRevision ||
+		configuration.createCommand.ExpectedInputManifestSHA256 == nil || *configuration.createCommand.ExpectedInputManifestSHA256 != manifestSHA256 {
 		t.Fatalf("command=%#v error=%v", configuration.createCommand, err)
 	}
 }

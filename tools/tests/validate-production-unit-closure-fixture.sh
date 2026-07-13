@@ -51,7 +51,7 @@ if grep -F 'DO_NOT_TRACE_THIS_VALUE' "$fixture_root/clean-env.out" "$fixture_roo
   printf 'validator leaked a whitelisted input through inherited tracing\n' >&2
   exit 1
 fi
-if grep -E '^(release_root|artifact_root|backup_root|restore_evidence|trainer_evidence|expected_db_user)=.*\$\{|^ *export PG(HOST|PORT|DATABASE|USER|CONNECT_TIMEOUT)=|PG(HOST|PORT|DATABASE|USER|CONNECT_TIMEOUT)="?\$\{' "$validator" >/dev/null; then
+if grep -E '^(release_root|artifact_root|backup_root|restore_evidence|expected_db_user)=.*\$\{|^ *export PG(HOST|PORT|DATABASE|USER|CONNECT_TIMEOUT)=|PG(HOST|PORT|DATABASE|USER|CONNECT_TIMEOUT)="?\$\{' "$validator" >/dev/null; then
   printf 'validator still accepts a caller-controlled runtime path or PostgreSQL identity\n' >&2
   exit 1
 fi
@@ -61,14 +61,14 @@ if ASCENDANY_VALIDATION_PHASE=invalid \
   printf 'invalid ASCENDANY_VALIDATION_PHASE unexpectedly passed\n' >&2
   exit 1
 fi
-grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, or production' \
+grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production' \
   "$fixture_root/phase.err" >/dev/null
 if ASCENDANY_VALIDATION_PHASE='' \
     "$validator" >"$fixture_root/phase-empty.out" 2>"$fixture_root/phase-empty.err"; then
   printf 'empty ASCENDANY_VALIDATION_PHASE unexpectedly passed\n' >&2
   exit 1
 fi
-grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, or production' \
+grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production' \
   "$fixture_root/phase-empty.err" >/dev/null
 if grep -F 'ASCENDANY_CLOUDFLARE_ACCOUNT_ID' "$validator" >/dev/null ||
    grep -F 'ASCENDANY_CLOUDFLARE_TUNNEL_ID' "$validator" >/dev/null; then
@@ -86,6 +86,27 @@ for endpoint in livez readyz; do
     "curl --disable --fail --silent --show-error --max-time 5 --noproxy '*' --proto '=http' http://127.0.0.1:18000/$endpoint" \
     "$validator" >/dev/null
 done
+for model_binding_fragment in \
+  'FROM ascendany.recommendation_model_head AS head' \
+  'JOIN ascendany.recommendation_model_releases AS model' \
+  'JOIN ascendany.recommendation_model_activation_events AS event' \
+  'model.model_purpose' \
+  'event.application_version' \
+  'event.application_commit' \
+  'event.application_build_time'; do
+  grep -F -- "$model_binding_fragment" "$validator" >/dev/null
+done
+for preactivation_fragment in \
+  'initial preactivation database contains no recommendation model release, head, or activation state' \
+  '(SELECT count(*) FROM ascendany.recommendation_model_releases)' \
+  '(SELECT count(*) FROM ascendany.recommendation_model_head)' \
+  '(SELECT count(*) FROM ascendany.recommendation_model_activation_events)'; do
+  grep -F -- "$preactivation_fragment" "$validator" >/dev/null
+done
+if grep -F 'model.application_' "$validator" >/dev/null; then
+  printf 'production model binding reads application identity from the model release instead of its activation event\n' >&2
+  exit 1
+fi
 for directive in \
   'StandardOutput=journal' \
   'StandardError=journal' \
@@ -101,6 +122,7 @@ done
   pass() { :; }
   fail() { failures=$((failures + 1)); }
   validation_phase=production
+  deployment_transition=initial
   expected_write_mode=enabled
   ascendanyd_active=1
 
@@ -124,9 +146,9 @@ done
       */livez) printf '%s\n' '{"status":"alive"}' ;;
       */readyz)
         if [[ "$health_fixture_mode" == "valid" ]]; then
-          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":5,"expectedVersion":5}}}'
+          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":6,"expectedVersion":6}}}'
         else
-          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":4,"expectedVersion":5}}}'
+          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":5,"expectedVersion":6}}}'
         fi
         ;;
       *) return 1 ;;
@@ -274,6 +296,11 @@ done
   memory_pressure_threshold_drift=0
   fixture_ascendanyd_active_state=active
   fixture_ascendanyd_enabled_state=enabled
+  fixture_model_activation_active_state=inactive
+  fixture_model_activation_enabled_state=static
+  fixture_model_activation_result=success
+  fixture_model_activation_main_code=exited
+  fixture_model_activation_main_status=0
   fixture_timer_active_state=inactive
   fixture_timer_enabled_state=disabled
   render_fixture_unit() {
@@ -287,11 +314,10 @@ done
           'Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password' \
           'Environment=ASCENDANY_JWT_SIGNING_KEY_FILE=%d/jwt_signing_key' \
           'Environment=ASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper' \
-          'Environment=ASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031=%d/trainer_agent_rtx_01' \
           'ExecStartPre=/usr/bin/test -s %d/db_password' \
           'ExecStartPre=/usr/bin/test -s %d/jwt_signing_key' \
           'ExecStartPre=/usr/bin/test -s %d/password_pepper' \
-          'ExecStartPre=/usr/bin/test -s %d/trainer_agent_rtx_01' \
+          'ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}' \
           'ExecStart=/opt/ascendany/v2/bin/ascendanyd serve' \
           'StandardOutput=journal' \
           'StandardError=journal' \
@@ -304,6 +330,16 @@ done
             'EnvironmentFile=/etc/ascendany/v2/ascendanyd.env' \
             'EnvironmentFile=/etc/ascendany/v2/ascendanyd-read-only-smoke.env'
         fi
+        ;;
+      ascendany-model-activate.service)
+        printf '%s\n' \
+          '[Service]' \
+          'EnvironmentFile=/etc/ascendany/v2/ascendanyd.env' \
+          'Environment=SHELL=/usr/sbin/nologin' \
+          'Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password' \
+          'ExecStartPre=/usr/bin/test -s %d/db_password' \
+          'ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}' \
+          'ExecStart=/opt/ascendany/v2/bin/ascendanyd activate-model'
         ;;
       ascendany-judge@validation.service)
         printf '%s\n' \
@@ -384,6 +420,7 @@ done
       is-enabled)
         case "$2" in
           ascendanyd.service) printf '%s\n' "$fixture_ascendanyd_enabled_state" ;;
+          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_enabled_state" ;;
           ascendany-backup.timer) printf '%s\n' "$fixture_timer_enabled_state" ;;
           *) return 1 ;;
         esac
@@ -396,7 +433,7 @@ done
     case "$property" in
       FragmentPath)
         case "$unit" in
-          ascendanyd.service|ascendany-admin-bootstrap.service|ascendany-backup.service|ascendany-backup.timer|ascendany-migrate.service)
+          ascendanyd.service|ascendany-model-activate.service|ascendany-admin-bootstrap.service|ascendany-backup.service|ascendany-backup.timer|ascendany-migrate.service)
             printf '/etc/systemd/system/%s\n' "$unit"
             ;;
           ascendany-judge@validation.service) printf '/etc/systemd/system/ascendany-judge@.service\n' ;;
@@ -416,6 +453,7 @@ done
       ActiveState)
         case "$unit" in
           ascendanyd.service) printf '%s\n' "$fixture_ascendanyd_active_state" ;;
+          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_active_state" ;;
           ascendany-backup.timer) printf '%s\n' "$fixture_timer_active_state" ;;
           *) return 1 ;;
         esac
@@ -430,7 +468,7 @@ done
         ;;
       WorkingDirectory)
         case "$unit" in
-          ascendanyd.service) printf '/var/lib/ascendany\n' ;;
+          ascendanyd.service|ascendany-model-activate.service) printf '/var/lib/ascendany\n' ;;
           ascendany-judge@validation.service) printf '/var/lib/ascendany-judge\n' ;;
           ascendany-lsp@validation.service) printf '/tmp\n' ;;
           ascendany-admin-bootstrap.service) printf '/var/lib/ascendany\n' ;;
@@ -459,6 +497,54 @@ done
       MemoryPressureThresholdUSec)
         [[ "$unit" == "ascendanyd.service" ]] || return 1
         if [[ "$memory_pressure_threshold_drift" == "1" ]]; then printf '1s\n'; else printf '200ms\n'; fi
+        ;;
+      Result)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf '%s\n' "$fixture_model_activation_result"
+        ;;
+      ExecMainCode)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf '%s\n' "$fixture_model_activation_main_code"
+        ;;
+      ExecMainStatus)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf '%s\n' "$fixture_model_activation_main_status"
+        ;;
+      Type)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf 'oneshot\n'
+        ;;
+      NoNewPrivileges|ProtectHome|PrivateDevices|RestrictNamespaces|MemoryDenyWriteExecute)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf 'yes\n'
+        ;;
+      ProtectSystem)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf 'strict\n'
+        ;;
+      ProtectProc)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf 'invisible\n'
+        ;;
+      ProcSubset)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf 'pid\n'
+        ;;
+      DevicePolicy)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf 'closed\n'
+        ;;
+      RestrictAddressFamilies)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf '%s\n' 'AF_UNIX AF_INET AF_INET6'
+        ;;
+      ReadWritePaths)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf '/var/lib/ascendany\n'
+        ;;
+      InaccessiblePaths)
+        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany'
         ;;
       Unit)
         [[ "$unit" == "ascendany-backup.timer" ]] || return 1
@@ -495,10 +581,15 @@ done
   runtime_feedback_bindings=()
   runtime_feedback_credential_ids=()
   runtime_feedback_environment=()
+  release_model_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  release_manifest_purpose=production
 
   printf '%s\n' \
     '# reviewed fixture config' \
     'ASCENDANY_HTTP_LISTEN=127.0.0.1:18000' \
+    'ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json' \
+    'ASCENDANY_RECOMMENDATION_MODEL_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production' \
     'ASCENDANY_WRITE_MODE=enabled' \
     >"$fixture_root/ascendanyd.env"
   printf '%s\n' \
@@ -518,6 +609,24 @@ done
   [[ "$failures" == "1" ]]
   sed -i 's/ASCENDANY_WRITE_MODE=disabled/ASCENDANY_WRITE_MODE=enabled/' \
     "$fixture_root/ascendanyd.env"
+  sed -i 's/ASCENDANY_RECOMMENDATION_MODEL_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ASCENDANY_RECOMMENDATION_MODEL_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/' \
+    "$fixture_root/ascendanyd.env"
+  failures=0
+  check_ascendanyd_config_contract \
+    "$fixture_root/ascendanyd.env" \
+    "$fixture_root/ascendanyd-read-only-smoke.env"
+  [[ "$failures" == "1" ]]
+  sed -i 's/ASCENDANY_RECOMMENDATION_MODEL_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ASCENDANY_RECOMMENDATION_MODEL_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' \
+    "$fixture_root/ascendanyd.env"
+  sed -i 's/ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production/ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=acceptance_test/' \
+    "$fixture_root/ascendanyd.env"
+  failures=0
+  check_ascendanyd_config_contract \
+    "$fixture_root/ascendanyd.env" \
+    "$fixture_root/ascendanyd-read-only-smoke.env"
+  [[ "$failures" == "1" ]]
+  sed -i 's/ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=acceptance_test/ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production/' \
+    "$fixture_root/ascendanyd.env"
   write_process_environment() {
     local extra="${1:-}"
     printf '%s\0' \
@@ -528,11 +637,13 @@ done
       'HOME=/var/lib/ascendany' \
       'SHELL=/usr/sbin/nologin' \
       'ASCENDANY_HTTP_LISTEN=127.0.0.1:18000' \
+      'ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json' \
+      'ASCENDANY_RECOMMENDATION_MODEL_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+      'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production' \
       "ASCENDANY_WRITE_MODE=$expected_write_mode" \
       'ASCENDANY_DATABASE_PASSWORD_FILE=/run/credentials/ascendanyd.service/db_password' \
       'ASCENDANY_JWT_SIGNING_KEY_FILE=/run/credentials/ascendanyd.service/jwt_signing_key' \
       'ASCENDANY_PASSWORD_PEPPER_FILE=/run/credentials/ascendanyd.service/password_pepper' \
-      'ASCENDANY_TRAINER_AGENT_TOKEN_FILE_AGENT_HEX_7274782D3031=/run/credentials/ascendanyd.service/trainer_agent_rtx_01' \
       'INVOCATION_ID=0123456789abcdef0123456789abcdef' \
       'JOURNAL_STREAM=8:9' \
       'SYSTEMD_EXEC_PID=4242' \
@@ -637,6 +748,20 @@ done
   check_ascendanyd_phase_state
   [[ "$failures" == "1" ]]
 
+  validation_phase=activation
+  failures=0
+  check_model_activation_unit_state
+  [[ "$failures" == "0" ]]
+  fixture_model_activation_main_status=1
+  check_model_activation_unit_state
+  [[ "$failures" == "1" ]]
+  fixture_model_activation_main_status=0
+  fixture_model_activation_enabled_state=enabled
+  failures=0
+  check_model_activation_unit_state
+  [[ "$failures" == "1" ]]
+  fixture_model_activation_enabled_state=static
+
   failures=0
   fixture_timer_active_state=inactive
   fixture_timer_enabled_state=disabled
@@ -667,7 +792,7 @@ done
   run_runtime_psql() {
     [[ " $* " == *' -c '* ]] || return 1
     : >"$fixture_root/runtime-role-query"
-    printf '%s\n' 'ascendanyd_login|f|f|f|f|f|f|t|f|f'
+    printf '%s\n' 'ascendanyd_login|f|f|f|f|f|f|t'
   }
   postgres_admin_psql() {
     [[ " $* " == *' --dbname=ascendany_v2 '* ]] || return 1
@@ -682,7 +807,7 @@ done
 
   run_runtime_psql() {
     if [[ " $* " == *' -c '* ]]; then
-      printf '%s\n' 'ascendanyd_login|f|f|f|f|f|f|t|t|f'
+      printf '%s\n' 'ascendanyd_login|f|f|f|f|f|t|t'
       return
     fi
     return 0
@@ -696,7 +821,7 @@ done
   }
   for admin_phase_case in \
     'staged:0|0|0|0|0' \
-    'smoke:1|1|1|1|1' \
+    'smoke:0|0|0|0|0' \
     'production:2|2|1|1|1'; do
     validation_phase="${admin_phase_case%%:*}"
     admin_bootstrap_result="${admin_phase_case#*:}"
@@ -705,7 +830,7 @@ done
     [[ "$failures" == "0" ]]
   done
   validation_phase=smoke
-  admin_bootstrap_result='2|2|1|1|1'
+  admin_bootstrap_result='1|1|1|1|1'
   failures=0
   check_admin_bootstrap_database
   [[ "$failures" == "1" ]]
@@ -844,17 +969,14 @@ done
   pgbouncer_binary_sha256="$(sha256sum "$pgbouncer_binary" | command awk '{print $1}')"
   mkdir -p "$pgbouncer_config_root"
   printf '%s\n' \
-    '"AscendAny" "SCRAM-SHA-256$4096:c2FsdDE=$c3RvcmVkMQ==:c2VydmVyMQ=="' \
     '"ascendanyd_login" "SCRAM-SHA-256$4096:c2FsdDI=$c3RvcmVkMg==:c2VydmVyMg=="' \
     >"$pgbouncer_runtime_credential"
   printf '%s\n' \
-    'host "AscendAny" "AscendAny" 127.0.0.1/32 scram-sha-256' \
     'host ascendany_v2 ascendanyd_login 127.0.0.1/32 scram-sha-256' \
     'host all all 0.0.0.0/0 reject' \
     >"$pgbouncer_config_root/pgbouncer-hba.conf"
   printf '%s\n' \
     '[databases]' \
-    'AscendAny = host=127.0.0.1 port=5432 dbname=AscendAny' \
     'ascendany_v2 = host=127.0.0.1 port=5432 dbname=ascendany_v2' \
     '' \
     '[pgbouncer]' \
@@ -895,7 +1017,7 @@ done
 
   pgbouncer_metadata_drift=0
   pgbouncer_package_drift=0
-  pgbouncer_retired_container_drift=0
+  pgbouncer_container_conflict=0
   pgbouncer_unit_state_drift=0
   pgbouncer_fragment_drift=0
   pgbouncer_dropin_drift=0
@@ -946,8 +1068,8 @@ done
   }
   podman() {
     [[ "$1" == ps && "$2" == -a ]] || return 1
-    if [[ "$pgbouncer_retired_container_drift" == 1 ]]; then
-      printf '%s\n' 'ascendany-pgbouncer-rollback-fixture'
+    if [[ "$pgbouncer_container_conflict" == 1 ]]; then
+      printf '%s\n' 'ascendany-pgbouncer-conflict-fixture'
     fi
   }
   render_pgbouncer_unit() {
@@ -970,6 +1092,10 @@ done
   }
   unit_property() {
     local unit="$1" property="$2"
+    if [[ "$unit" == pgbouncer.service && "$property" == MainPID ]]; then
+      printf '%s\n' 0
+      return
+    fi
     [[ "$unit" == ascendany-pgbouncer.service ]] || return 1
     case "$property" in
       FragmentPath)
@@ -1046,7 +1172,7 @@ done
 
   cp "$pgbouncer_runtime_credential" "$fixture_root/userlist.valid"
   chmod 0640 "$pgbouncer_runtime_credential"
-  printf '%s\n' '"AscendAny" "plaintext"' '"ascendanyd_login" "plaintext"' \
+  printf '%s\n' '"ascendanyd_login" "plaintext"' \
     >"$pgbouncer_runtime_credential"
   failures=0
   check_pgbouncer_contract
@@ -1060,11 +1186,11 @@ done
   [[ "$failures" == "1" ]]
   pgbouncer_package_drift=0
 
-  pgbouncer_retired_container_drift=1
+  pgbouncer_container_conflict=1
   failures=0
   check_pgbouncer_contract
   [[ "$failures" == "1" ]]
-  pgbouncer_retired_container_drift=0
+  pgbouncer_container_conflict=0
 
   pgbouncer_metadata_drift=1
   failures=0
@@ -1153,6 +1279,7 @@ done
   cat >"$fixture_root/expected-installed-release-copy-contract" <<'CONTRACT'
 systemd/ascendany-cloudflared.service|/etc/systemd/system/ascendany-cloudflared.service|1
 systemd/ascendanyd.service|/etc/systemd/system/ascendanyd.service|1
+systemd/ascendany-model-activate.service|/etc/systemd/system/ascendany-model-activate.service|1
 systemd/ascendany-admin-bootstrap.service|/etc/systemd/system/ascendany-admin-bootstrap.service|1
 systemd/ascendany-backup.service|/etc/systemd/system/ascendany-backup.service|1
 systemd/ascendany-backup.timer|/etc/systemd/system/ascendany-backup.timer|1

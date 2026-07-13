@@ -798,7 +798,6 @@ func newOJTestHandler(t *testing.T, service OJService, writes bool) http.Handler
 	if !writes {
 		options.Artifacts = nil
 		options.Imports = nil
-		options.RecommendationQueue = nil
 	}
 	handler, err := New(options)
 	if err != nil {

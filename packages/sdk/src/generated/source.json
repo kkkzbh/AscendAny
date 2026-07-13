@@ -1010,7 +1010,7 @@
       "post": {
         "operationId": "createConfigurationVersion",
         "summary": "Create and activate one immutable configuration version.",
-        "description": "Requires an active admin access token and enabled writes. The supplied expectedHeadRevision is a compare-and-swap boundary. The document root must be an object, is canonicalized before hashing, and may contain at most 262144 UTF-8 bytes before canonicalization. model_connection and feedback_delivery credentials are referenced only through credentialRef; credential-bearing document fields are rejected. Recommendation training and knowledge-catalog documents pass their exact server semantic validator before storage. A replay of the active immutable document returns idempotent=true without creating a version.",
+        "description": "Requires an active admin access token and enabled writes. The supplied expectedHeadRevision is a compare-and-swap boundary. The document root must be an object, is canonicalized before hashing, and may contain at most 262144 UTF-8 bytes before canonicalization. model_connection and feedback_delivery credentials are referenced only through credentialRef; credential-bearing document fields are rejected. Recommendation knowledge-catalog requests carry the exact analytics generation, head revision, and input-manifest SHA-256 returned by review-context. The server locks that analytics head, rebuilds authoritative problem facts, requires exact assignment coverage, and activates the configuration in the same transaction. A replay of the active immutable document returns idempotent=true without creating a version only while that review provenance remains current.",
         "security": [
           {
             "bearerAuth": []
@@ -1092,7 +1092,7 @@
       "post": {
         "operationId": "testModelConnection",
         "summary": "Test one active immutable model connection.",
-        "description": "Requires an active admin access token and enabled writes. The request has no body or query parameters. The server loads the active immutable model_connection version, resolves its credential server-side, and performs one bounded provider request through the same HTTPS transport and protocol validator used by online inference. The response contains configuration provenance, provider authority, model name, and latency; credentials and provider response bodies are never returned. This route is absent when writes are disabled.",
+        "description": "Requires an active admin access token and enabled writes. The request has no body or query parameters. The server loads the active immutable model_connection version, resolves its credential server-side, and performs one bounded provider request through the same HTTPS transport and protocol validator used by online inference. The response contains configuration provenance, provider authority, model name, and latency; credentials and provider response bodies are never returned. The route returns 503 writes_disabled before resolving credentials when writes are disabled.",
         "security": [
           {
             "bearerAuth": []
@@ -1148,83 +1148,6 @@
         }
       }
     },
-    "/api/v2/admin/recommendation/training-runs": {
-      "post": {
-        "operationId": "queueRecommendationTrainingRun",
-        "summary": "Queue one immutable recommendation training run.",
-        "description": "Requires an active admin access token and enabled writes. The server revalidates the complete signed principal while atomically snapshotting the current succeeded analytics head, the active immutable training configuration selected by its canonical key, and the exact knowledge catalog version referenced by that configuration. Replays of the same immutable provenance return the existing run. This route is absent when writes are disabled.",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/QueueRecommendationTrainingRunRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The existing immutable training run was returned idempotently.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QueueRecommendationTrainingRunResult"
-                }
-              }
-            }
-          },
-          "202": {
-            "description": "A new immutable training run was queued.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QueueRecommendationTrainingRunResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "415": {
-            "$ref": "#/components/responses/UnsupportedMediaType"
-          },
-          "422": {
-            "$ref": "#/components/responses/UnprocessableEntity"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalServerError"
-          }
-        }
-      }
-    },
     "/api/v2/admin/recommendation/review-context": {
       "get": {
         "operationId": "getRecommendationReviewContext",
@@ -1266,136 +1189,9 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalServerError"
-          }
-        }
-      }
-    },
-    "/api/v2/admin/recommendation/training-runs/{runId}": {
-      "parameters": [
-        {
-          "name": "runId",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/CanonicalUUIDv4"
-          }
-        }
-      ],
-      "get": {
-        "operationId": "getRecommendationTrainingRun",
-        "summary": "Read one durable recommendation training run.",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The immutable run, current state, and safe terminal failure detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RecommendationTrainingRunDetail"
-                }
-              }
-            }
           },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalServerError"
-          }
-        }
-      }
-    },
-    "/api/v2/admin/recommendation/training-runs/{runId}/events": {
-      "parameters": [
-        {
-          "name": "runId",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/CanonicalUUIDv4"
-          }
-        },
-        {
-          "name": "afterSequence",
-          "in": "query",
-          "required": false,
-          "schema": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0,
-            "default": 0
-          }
-        },
-        {
-          "name": "limit",
-          "in": "query",
-          "required": false,
-          "schema": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100,
-            "default": 50
-          }
-        }
-      ],
-      "get": {
-        "operationId": "listRecommendationTrainingRunEvents",
-        "summary": "Read a durable ordered page of training run events.",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Strictly ordered durable events after the requested sequence.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RecommendationTrainingEventPage"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalServerError"
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -3110,7 +2906,7 @@
       "get": {
         "operationId": "getSelfRecommendation",
         "summary": "Read the authenticated student's current recommendation.",
-        "description": "Requires an active student access token and an empty body and query. The server revalidates the complete signed principal and student actor binding in the same repeatable-read snapshot used to read both heads, model provenance, and the typed result-v2 learning path. unavailable is a successful product state. fresh means both analytics generation and head revision exactly match the active model source; all other valid active-model reads are stale.",
+        "description": "Requires an active student access token and an empty body and query. The server revalidates the complete signed principal and student actor binding in the same repeatable-read snapshot used to read the analytics head, active model provenance, and typed inference learning path. unavailable is a successful product state with a closed reason code.",
         "security": [
           {
             "bearerAuth": []
@@ -3144,6 +2940,9 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalServerError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -5940,7 +5739,6 @@
         "enum": [
           "prompt",
           "model_connection",
-          "training",
           "knowledge_catalog",
           "feedback_policy",
           "feedback_delivery"
@@ -6132,9 +5930,6 @@
           },
           {
             "$ref": "#/components/schemas/CreateRecommendationKnowledgeCatalogVersionRequest"
-          },
-          {
-            "$ref": "#/components/schemas/CreateRecommendationTrainingConfigurationVersionRequest"
           }
         ]
       },
@@ -6151,7 +5946,17 @@
         ],
         "properties": {
           "key": {
-            "$ref": "#/components/schemas/ConfigurationKey"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConfigurationKey"
+              },
+              {
+                "not": {
+                  "const": "recommendation.catalog.active"
+                }
+              }
+            ],
+            "description": "recommendation.catalog.active is reserved exclusively for knowledge_catalog."
           },
           "kind": {
             "type": "string",
@@ -6194,13 +5999,16 @@
           "key",
           "kind",
           "expectedHeadRevision",
+          "expectedAnalyticsGenerationId",
+          "expectedAnalyticsHeadRevision",
+          "expectedInputManifestSha256",
           "schemaId",
           "document",
           "credentialRef"
         ],
         "properties": {
           "key": {
-            "$ref": "#/components/schemas/ConfigurationKey"
+            "const": "recommendation.catalog.active"
           },
           "kind": {
             "const": "knowledge_catalog"
@@ -6210,45 +6018,23 @@
             "format": "int64",
             "minimum": 0
           },
+          "expectedAnalyticsGenerationId": {
+            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
+          },
+          "expectedAnalyticsHeadRevision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "expectedInputManifestSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
           "schemaId": {
             "const": "ascendany.knowledge_catalog.recommendation.v1"
           },
           "document": {
             "$ref": "#/components/schemas/RecommendationKnowledgeCatalogV1"
-          },
-          "credentialRef": {
-            "type": "null"
-          }
-        }
-      },
-      "CreateRecommendationTrainingConfigurationVersionRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "key",
-          "kind",
-          "expectedHeadRevision",
-          "schemaId",
-          "document",
-          "credentialRef"
-        ],
-        "properties": {
-          "key": {
-            "$ref": "#/components/schemas/ConfigurationKey"
-          },
-          "kind": {
-            "const": "training"
-          },
-          "expectedHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "schemaId": {
-            "const": "ascendany.training.recommendation.v2"
-          },
-          "document": {
-            "$ref": "#/components/schemas/RecommendationTrainingConfigurationV2"
           },
           "credentialRef": {
             "type": "null"
@@ -6400,10 +6186,7 @@
             "const": "pintia"
           },
           "problemId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-            "description": "Trimmed Pintia source identity containing at most 256 UTF-8 bytes and no colon or NUL."
+            "$ref": "#/components/schemas/PintiaId"
           },
           "problemFactSha256": {
             "type": "string",
@@ -6430,220 +6213,11 @@
             "$ref": "#/components/schemas/ConfigurationKey"
           },
           "weight": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "maximum": 1
-          }
-        }
-      },
-      "RecommendationTrainingConfigurationV2": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "algorithm",
-          "knowledgeCatalogVersionId",
-          "accelerator",
-          "seed",
-          "epochs",
-          "patience",
-          "batchSize",
-          "learningRate",
-          "weightDecay",
-          "minTrainInteractions",
-          "minActorInteractions",
-          "minProblemInteractions",
-          "validation",
-          "pathPolicy",
-          "rankingWeights"
-        ],
-        "properties": {
-          "algorithm": {
-            "const": "knowledge_mirt_v1"
-          },
-          "knowledgeCatalogVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "accelerator": {
-            "const": "cuda"
-          },
-          "seed": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0,
-            "maximum": 2147483647
-          },
-          "epochs": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 10000
-          },
-          "patience": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 10000
-          },
-          "batchSize": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 200000
-          },
-          "learningRate": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "maximum": 1
-          },
-          "weightDecay": {
-            "type": "number",
-            "minimum": 0,
-            "exclusiveMaximum": 1
-          },
-          "minTrainInteractions": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 2,
-            "maximum": 200000
-          },
-          "minActorInteractions": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 2,
-            "maximum": 200000
-          },
-          "minProblemInteractions": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 200000
-          },
-          "validation": {
-            "$ref": "#/components/schemas/RecommendationTrainingValidationV2"
-          },
-          "pathPolicy": {
-            "$ref": "#/components/schemas/RecommendationTrainingPathPolicyV2"
-          },
-          "rankingWeights": {
-            "$ref": "#/components/schemas/RecommendationTrainingRankingWeightsV2"
-          }
-        }
-      },
-      "RecommendationTrainingValidationV2": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "minActors",
-          "minInteractions",
-          "minRelativeLogLossImprovement"
-        ],
-        "properties": {
-          "minActors": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 20000
-          },
-          "minInteractions": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 200000
-          },
-          "minRelativeLogLossImprovement": {
-            "type": "number",
-            "minimum": 0,
-            "exclusiveMaximum": 1
-          }
-        }
-      },
-      "RecommendationTrainingPathPolicyV2": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "targetMastery",
-          "maxKnowledgeTargets",
-          "minSteps",
-          "maxSteps",
-          "problemsPerStep",
-          "targetSuccessProbability"
-        ],
-        "properties": {
-          "targetMastery": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "exclusiveMaximum": 1
-          },
-          "maxKnowledgeTargets": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 1024
-          },
-          "minSteps": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 2,
-            "maximum": 8
-          },
-          "maxSteps": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 2,
-            "maximum": 8
-          },
-          "problemsPerStep": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1,
-            "maximum": 20
-          },
-          "targetSuccessProbability": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "exclusiveMaximum": 1
-          }
-        }
-      },
-      "RecommendationTrainingRankingWeightsV2": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "knowledgeGap",
-          "successDistance"
-        ],
-        "properties": {
-          "knowledgeGap": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "maximum": 100
-          },
-          "successDistance": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "maximum": 100
-          }
-        }
-      },
-      "QueueRecommendationTrainingRunRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "trainingConfigurationKey",
-          "expectedAnalyticsGenerationId",
-          "expectedAnalyticsHeadRevision"
-        ],
-        "properties": {
-          "trainingConfigurationKey": {
-            "$ref": "#/components/schemas/ConfigurationKey"
-          },
-          "expectedAnalyticsGenerationId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "expectedAnalyticsHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^(?:1|0\\.[0-9]*[1-9])$",
+            "description": "Canonical positive decimal rational in (0,1], without exponent, redundant leading zeroes, or trailing fractional zeroes."
           }
         }
       },
@@ -6706,9 +6280,7 @@
             "const": "pintia"
           },
           "problemId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
+            "$ref": "#/components/schemas/PintiaId"
           },
           "problemFactSha256": {
             "type": "string",
@@ -6726,646 +6298,6 @@
             "items": {
               "$ref": "#/components/schemas/RecommendationSourceProblemSetV2"
             }
-          }
-        }
-      },
-      "QueueRecommendationTrainingRunResult": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "created",
-          "trainingRun"
-        ],
-        "properties": {
-          "created": {
-            "type": "boolean"
-          },
-          "trainingRun": {
-            "$ref": "#/components/schemas/RecommendationTrainingRun"
-          }
-        }
-      },
-      "RecommendationTrainingRun": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "sourceAnalyticsGenerationId",
-          "sourceAnalyticsHeadRevision",
-          "trainingConfigurationVersionId",
-          "knowledgeCatalogVersionId",
-          "trainingConfigurationKey",
-          "bundleProtocol",
-          "inputManifestSha256",
-          "inputArtifactSha256",
-          "inputArtifactSizeBytes",
-          "status",
-          "attemptCount",
-          "createdAt",
-          "startedAt",
-          "finishedAt"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/CanonicalUUIDv4"
-          },
-          "sourceAnalyticsGenerationId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "sourceAnalyticsHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "trainingConfigurationVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "knowledgeCatalogVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "trainingConfigurationKey": {
-            "$ref": "#/components/schemas/ConfigurationKey"
-          },
-          "bundleProtocol": {
-            "const": "ascendany.recommendation.training-bundle.v2"
-          },
-          "inputManifestSha256": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "inputArtifactSha256": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "inputArtifactSizeBytes": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "queued",
-              "running",
-              "succeeded",
-              "superseded",
-              "failed"
-            ]
-          },
-          "attemptCount": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "startedAt": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "finishedAt": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        }
-      },
-      "RecommendationTrainingRunDetail": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "sourceAnalyticsGenerationId",
-          "sourceAnalyticsHeadRevision",
-          "trainingConfigurationVersionId",
-          "knowledgeCatalogVersionId",
-          "trainingConfigurationKey",
-          "bundleProtocol",
-          "inputManifestSha256",
-          "inputArtifactSha256",
-          "inputArtifactSizeBytes",
-          "status",
-          "attemptCount",
-          "createdAt",
-          "startedAt",
-          "finishedAt",
-          "failure"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/CanonicalUUIDv4"
-          },
-          "sourceAnalyticsGenerationId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "sourceAnalyticsHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "trainingConfigurationVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "knowledgeCatalogVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "trainingConfigurationKey": {
-            "$ref": "#/components/schemas/ConfigurationKey"
-          },
-          "bundleProtocol": {
-            "const": "ascendany.recommendation.training-bundle.v2"
-          },
-          "inputManifestSha256": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "inputArtifactSha256": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "inputArtifactSizeBytes": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "queued",
-              "running",
-              "succeeded",
-              "superseded",
-              "failed"
-            ]
-          },
-          "attemptCount": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "startedAt": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "finishedAt": {
-            "oneOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "failure": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/RecommendationTrainingFailure"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        }
-      },
-      "RecommendationTrainingFailure": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "code",
-          "message"
-        ],
-        "properties": {
-          "code": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{0,127}$"
-          },
-          "message": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
-          }
-        }
-      },
-      "RecommendationTrainingEventPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "runId",
-          "items",
-          "nextAfterSequence"
-        ],
-        "properties": {
-          "runId": {
-            "$ref": "#/components/schemas/CanonicalUUIDv4"
-          },
-          "items": {
-            "type": "array",
-            "maxItems": 100,
-            "items": {
-              "$ref": "#/components/schemas/RecommendationTrainingEvent"
-            }
-          },
-          "nextAfterSequence": {
-            "oneOf": [
-              {
-                "type": "integer",
-                "format": "int64",
-                "minimum": 1
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        }
-      },
-      "RecommendationTrainingEvent": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingQueuedEvent"
-          },
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingClaimedEvent"
-          },
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingReclaimedEvent"
-          },
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingLeaseRenewedEvent"
-          },
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingRetryScheduledEvent"
-          },
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingFailedEvent"
-          },
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingActivatedEvent"
-          },
-          {
-            "$ref": "#/components/schemas/RecommendationTrainingSupersededEvent"
-          }
-        ]
-      },
-      "RecommendationTrainingQueuedEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "queued"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingQueuedPayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingClaimedEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "claimed"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingLeasePayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingReclaimedEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "reclaimed"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingLeasePayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingLeaseRenewedEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "lease_renewed"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingLeasePayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingRetryScheduledEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "retry_scheduled"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingRetryPayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingFailedEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "failed"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingFailedPayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingActivatedEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "activated"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingPublishedPayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingSupersededEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "sequence",
-          "type",
-          "payload",
-          "createdAt"
-        ],
-        "properties": {
-          "sequence": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "type": {
-            "const": "superseded"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/RecommendationTrainingPublishedPayload"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "RecommendationTrainingQueuedPayload": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "artifactSha256",
-          "configurationVersionId",
-          "knowledgeCatalogVersionId",
-          "sourceAnalyticsGenerationId",
-          "sourceAnalyticsHeadRevision"
-        ],
-        "properties": {
-          "artifactSha256": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "configurationVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "knowledgeCatalogVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "sourceAnalyticsGenerationId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "sourceAnalyticsHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          }
-        }
-      },
-      "RecommendationTrainingLeasePayload": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "attemptCount",
-          "leaseOwner"
-        ],
-        "properties": {
-          "attemptCount": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "leaseOwner": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          }
-        }
-      },
-      "RecommendationTrainingRetryPayload": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "attemptCount",
-          "delayMilliseconds",
-          "reason"
-        ],
-        "properties": {
-          "attemptCount": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "delayMilliseconds": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "reason": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{0,127}$"
-          }
-        }
-      },
-      "RecommendationTrainingFailedPayload": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "attemptCount",
-          "code"
-        ],
-        "properties": {
-          "attemptCount": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "code": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]{0,127}$"
-          }
-        }
-      },
-      "RecommendationTrainingPublishedPayload": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "modelId",
-          "outputArtifactSha256",
-          "sourceAnalyticsGenerationId",
-          "sourceAnalyticsHeadRevision"
-        ],
-        "properties": {
-          "modelId": {
-            "$ref": "#/components/schemas/CanonicalUUIDv4"
-          },
-          "outputArtifactSha256": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
-          },
-          "sourceAnalyticsGenerationId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "sourceAnalyticsHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
           }
         }
       },
@@ -7709,6 +6641,13 @@
         "format": "uuid",
         "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
       },
+      "PintiaId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "description": "Canonical Pintia snapshot v2 identity containing 1 to 256 ASCII bytes."
+      },
       "CanonicalPositiveInt64String": {
         "type": "string",
         "minLength": 1,
@@ -7951,9 +6890,6 @@
             "$ref": "#/components/schemas/RecommendationFresh"
           },
           {
-            "$ref": "#/components/schemas/RecommendationStale"
-          },
-          {
             "$ref": "#/components/schemas/RecommendationUnavailable"
           }
         ],
@@ -7961,7 +6897,6 @@
           "propertyName": "state",
           "mapping": {
             "fresh": "#/components/schemas/RecommendationFresh",
-            "stale": "#/components/schemas/RecommendationStale",
             "unavailable": "#/components/schemas/RecommendationUnavailable"
           }
         }
@@ -7973,7 +6908,7 @@
           "state",
           "currentAnalyticsGenerationId",
           "currentAnalyticsHeadRevision",
-          "recommendationHeadRevision",
+          "modelHeadRevision",
           "model",
           "result"
         ],
@@ -7989,7 +6924,7 @@
             "format": "int64",
             "minimum": 1
           },
-          "recommendationHeadRevision": {
+          "modelHeadRevision": {
             "type": "integer",
             "format": "int64",
             "minimum": 1
@@ -7998,43 +6933,7 @@
             "$ref": "#/components/schemas/RecommendationModelProvenance"
           },
           "result": {
-            "$ref": "#/components/schemas/RecommendationResultV2"
-          }
-        }
-      },
-      "RecommendationStale": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "state",
-          "currentAnalyticsGenerationId",
-          "currentAnalyticsHeadRevision",
-          "recommendationHeadRevision",
-          "model",
-          "result"
-        ],
-        "properties": {
-          "state": {
-            "const": "stale"
-          },
-          "currentAnalyticsGenerationId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "currentAnalyticsHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "recommendationHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "model": {
-            "$ref": "#/components/schemas/RecommendationModelProvenance"
-          },
-          "result": {
-            "$ref": "#/components/schemas/RecommendationResultV2"
+            "$ref": "#/components/schemas/RecommendationInferenceResultV1"
           }
         }
       },
@@ -8045,7 +6944,8 @@
           "state",
           "unavailableReason",
           "currentAnalyticsHeadRevision",
-          "recommendationHeadRevision"
+          "modelHeadRevision",
+          "model"
         ],
         "properties": {
           "state": {
@@ -8054,8 +6954,11 @@
           "unavailableReason": {
             "type": "string",
             "enum": [
-              "no_active_model",
-              "actor_not_in_active_model"
+              "analytics_unavailable",
+              "actor_analytics_unavailable",
+              "knowledge_catalog_unavailable",
+              "knowledge_catalog_mismatch",
+              "eligible_problems_unavailable"
             ]
           },
           "currentAnalyticsGenerationId": {
@@ -8066,10 +6969,10 @@
             "format": "int64",
             "minimum": 0
           },
-          "recommendationHeadRevision": {
+          "modelHeadRevision": {
             "type": "integer",
             "format": "int64",
-            "minimum": 0
+            "minimum": 1
           },
           "model": {
             "$ref": "#/components/schemas/RecommendationModelProvenance"
@@ -8081,125 +6984,122 @@
         "additionalProperties": false,
         "required": [
           "modelId",
-          "trainingRunId",
-          "analyticsGenerationId",
-          "analyticsHeadRevision",
-          "inputManifestSha256",
-          "trainingConfigurationVersionId",
-          "trainingConfigurationKey",
-          "trainingConfigurationVersion",
-          "trainingConfigurationSchema",
-          "trainingConfigurationSha256",
-          "knowledgeCatalogVersionId",
-          "knowledgeCatalogKey",
-          "knowledgeCatalogVersion",
-          "knowledgeCatalogSchema",
-          "knowledgeCatalogSha256",
-          "outputArtifactSha256",
+          "purpose",
+          "artifactSha256",
+          "artifactSizeBytes",
+          "artifactMode",
           "modelSchema",
-          "modelManifest",
-          "modelManifestSha256",
-          "metrics",
-          "createdAt"
+          "algorithm",
+          "inferenceContract",
+          "trainedAt",
+          "trainingProvenanceSha256",
+          "featureSchemaSha256",
+          "knowledgeCatalogSha256",
+          "parameterSha256",
+          "goldenVectorsSha256",
+          "modelHeadRevision",
+          "applicationVersion",
+          "applicationCommit",
+          "applicationBuildTime"
         ],
         "properties": {
           "modelId": {
             "$ref": "#/components/schemas/CanonicalUUIDv4"
           },
-          "trainingRunId": {
-            "$ref": "#/components/schemas/CanonicalUUIDv4"
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "production",
+              "acceptance_test"
+            ]
           },
-          "analyticsGenerationId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "analyticsHeadRevision": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "inputManifestSha256": {
+          "artifactSha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
-          "trainingConfigurationVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "trainingConfigurationKey": {
-            "$ref": "#/components/schemas/ConfigurationKey"
-          },
-          "trainingConfigurationVersion": {
+          "artifactSizeBytes": {
             "type": "integer",
             "format": "int64",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 16777216
           },
-          "trainingConfigurationSchema": {
-            "$ref": "#/components/schemas/ConfigurationSchemaId"
+          "artifactMode": {
+            "const": 420
           },
-          "trainingConfigurationSha256": {
+          "modelSchema": {
+            "const": "ascendany.recommendation.inference-model.v1"
+          },
+          "algorithm": {
+            "const": "knowledge_mirt_feature_v1"
+          },
+          "inferenceContract": {
+            "const": "ascendany.recommendation.inference.v1"
+          },
+          "trainedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{0,5}[1-9])?Z$"
+          },
+          "trainingProvenanceSha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
-          "knowledgeCatalogVersionId": {
-            "$ref": "#/components/schemas/CanonicalPositiveInt64String"
-          },
-          "knowledgeCatalogKey": {
-            "$ref": "#/components/schemas/ConfigurationKey"
-          },
-          "knowledgeCatalogVersion": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          },
-          "knowledgeCatalogSchema": {
-            "$ref": "#/components/schemas/ConfigurationSchemaId"
+          "featureSchemaSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
           },
           "knowledgeCatalogSha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
-          "outputArtifactSha256": {
+          "parameterSha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
-          "modelSchema": {
-            "const": "ascendany.recommendation.model.v2"
-          },
-          "modelManifest": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "modelManifestSha256": {
+          "goldenVectorsSha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
-          "metrics": {
-            "type": "object",
-            "additionalProperties": true
+          "modelHeadRevision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
           },
-          "createdAt": {
+          "applicationVersion": {
             "type": "string",
-            "format": "date-time"
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "applicationCommit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "applicationBuildTime": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
           }
         }
       },
-      "RecommendationResultV2": {
+      "RecommendationInferenceResultV1": {
         "oneOf": [
           {
-            "$ref": "#/components/schemas/RecommendationReadyResultV2"
+            "$ref": "#/components/schemas/RecommendationInferenceReadyResultV1"
           },
           {
-            "$ref": "#/components/schemas/RecommendationInsufficientResultV2"
+            "$ref": "#/components/schemas/RecommendationInferenceInsufficientResultV1"
           }
         ],
         "discriminator": {
           "propertyName": "status",
           "mapping": {
-            "ready": "#/components/schemas/RecommendationReadyResultV2",
-            "insufficient": "#/components/schemas/RecommendationInsufficientResultV2"
+            "ready": "#/components/schemas/RecommendationInferenceReadyResultV1",
+            "insufficient": "#/components/schemas/RecommendationInferenceInsufficientResultV1"
           }
         }
       },
-      "RecommendationReadyResultV2": {
+      "RecommendationInferenceReadyResultV1": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -8213,7 +7113,7 @@
         ],
         "properties": {
           "schema": {
-            "const": "ascendany.recommendation.result.v2"
+            "const": "ascendany.recommendation.inference-result.v1"
           },
           "sha256": {
             "type": "string",
@@ -8228,14 +7128,14 @@
             "maximum": 1000000
           },
           "evidence": {
-            "$ref": "#/components/schemas/RecommendationEvidenceV2"
+            "$ref": "#/components/schemas/RecommendationInferenceEvidenceV1"
           },
           "knowledgeMastery": {
             "type": "array",
             "minItems": 1,
             "maxItems": 1024,
             "items": {
-              "$ref": "#/components/schemas/RecommendationKnowledgeMasteryV2"
+              "$ref": "#/components/schemas/RecommendationKnowledgeMasteryV1"
             }
           },
           "learningPath": {
@@ -8248,7 +7148,7 @@
           }
         }
       },
-      "RecommendationInsufficientResultV2": {
+      "RecommendationInferenceInsufficientResultV1": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -8262,7 +7162,7 @@
         ],
         "properties": {
           "schema": {
-            "const": "ascendany.recommendation.result.v2"
+            "const": "ascendany.recommendation.inference-result.v1"
           },
           "sha256": {
             "type": "string",
@@ -8277,14 +7177,14 @@
             "maximum": 1000000
           },
           "evidence": {
-            "$ref": "#/components/schemas/RecommendationEvidenceV2"
+            "$ref": "#/components/schemas/RecommendationInferenceEvidenceV1"
           },
           "knowledgeMastery": {
             "type": "array",
             "minItems": 1,
             "maxItems": 1024,
             "items": {
-              "$ref": "#/components/schemas/RecommendationKnowledgeMasteryV2"
+              "$ref": "#/components/schemas/RecommendationKnowledgeMasteryV1"
             }
           },
           "insufficiency": {
@@ -8292,22 +7192,16 @@
           }
         }
       },
-      "RecommendationEvidenceV2": {
+      "RecommendationInferenceEvidenceV1": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "trainInteractionCount",
-          "validationInteractionCount",
+          "observationCount",
           "distinctProblemCount",
           "passedProblemCount"
         ],
         "properties": {
-          "trainInteractionCount": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "validationInteractionCount": {
+          "observationCount": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -8324,7 +7218,7 @@
           }
         }
       },
-      "RecommendationKnowledgeMasteryV2": {
+      "RecommendationKnowledgeMasteryV1": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -8333,7 +7227,7 @@
           "description",
           "prerequisiteIds",
           "mastery",
-          "trainInteractionCount"
+          "observationCount"
         ],
         "properties": {
           "knowledgePointId": {
@@ -8367,7 +7261,7 @@
             "minimum": 0,
             "maximum": 1
           },
-          "trainInteractionCount": {
+          "observationCount": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -8478,9 +7372,7 @@
             "const": "pintia"
           },
           "problemId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
+            "$ref": "#/components/schemas/PintiaId"
           },
           "title": {
             "type": "string",
@@ -8516,9 +7408,7 @@
         ],
         "properties": {
           "problemSetId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
+            "$ref": "#/components/schemas/PintiaId"
           },
           "sourceUrl": {
             "type": "string",
@@ -9041,8 +7931,7 @@
             "const": "pintia"
           },
           "problemSetId": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/components/schemas/PintiaId"
           },
           "title": {
             "type": "string",
@@ -9157,8 +8046,7 @@
             "const": "pintia"
           },
           "problemSetId": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/components/schemas/PintiaId"
           },
           "title": {
             "type": "string",
@@ -9262,12 +8150,10 @@
         ],
         "properties": {
           "id": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/components/schemas/PintiaId"
           },
           "problemId": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/components/schemas/PintiaId"
           },
           "label": {
             "oneOf": [

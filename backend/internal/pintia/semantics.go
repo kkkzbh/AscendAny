@@ -209,12 +209,13 @@ func validateSemantics(snapshot *Snapshot) error {
 }
 
 func validateExamSourceURL(sourceURL string, problemSetID string) error {
-	parsed, err := url.ParseRequestURI(sourceURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host != "pintia.cn" || parsed.User != nil {
+	parsed, err := url.Parse(sourceURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "pintia.cn" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(sourceURL, "#") {
 		return validationError(
 			ErrorSemanticViolation,
 			"$.exam.sourceUrl",
-			"must be an absolute https://pintia.cn problem-set URL",
+			"must be an absolute https://pintia.cn problem-set URL without query or fragment",
 		)
 	}
 	segments := strings.Split(strings.TrimPrefix(parsed.EscapedPath(), "/"), "/")

@@ -24,6 +24,7 @@ readonly GLOBAL_GIT_CONFIG="${WORK_ROOT}/global-git-config"
 readonly EXPECTED_PROVENANCE="${WORK_ROOT}/expected-provenance"
 readonly WEIRD_PROVENANCE_RELATIVE=$'provenance/name-with-tab\tand-newline\n.bin'
 readonly SOURCE_DATE_EPOCH="1700000000"
+readonly RECOMMENDATION_MODEL="${WORK_ROOT}/recommendation-model.json"
 
 cleanup() {
   rm -rf -- "${WORK_ROOT}"
@@ -53,7 +54,6 @@ assert_no_private_workspace() {
 install -d -m 0700 \
   "${FIXTURE_REPOSITORY}/tools" \
   "${FIXTURE_REPOSITORY}/backend" \
-  "${FIXTURE_REPOSITORY}/trainers/recommendation/src/ascendany_recommendation_trainer" \
   "${FIXTURE_REPOSITORY}/deploy/v2/config" \
   "${FIXTURE_REPOSITORY}/deploy/v2/systemd" \
   "${FIXTURE_REPOSITORY}/deploy/v2/systemd/ascendanyd.service.d" \
@@ -71,40 +71,30 @@ install -d -m 0700 \
 install -m 0755 "${BUILDER_SOURCE}" "${FIXTURE_REPOSITORY}/tools/build-v2-release.sh"
 
 printf 'module fixture.invalid/ascendany\n\ngo 1.26\n' >"${FIXTURE_REPOSITORY}/backend/go.mod"
-for trainer_source in __init__.py __main__.py attestation.py cli.py contract.py model.py train.py; do
-  printf 'committed trainer %s\n' "$trainer_source" \
-    >"${FIXTURE_REPOSITORY}/trainers/recommendation/src/ascendany_recommendation_trainer/$trainer_source"
-done
-printf '{"distributions":[],"schema":"ascendany.trainer-runtime.closure.v1"}\n' \
-  >"${FIXTURE_REPOSITORY}/trainers/recommendation/runtime-closure-cu130.json"
-printf '{"fixture-python":true}\n' \
-  >"${FIXTURE_REPOSITORY}/trainers/recommendation/runtime-python-cu130.json"
-printf 'fixture-runtime==1.0 --hash=sha256:%064d\n' 0 \
-  >"${FIXTURE_REPOSITORY}/trainers/recommendation/runtime-requirements-cu130.lock"
-printf '{"schema":"ascendany.trainer-runtime.wheels.v1","wheels":[]}\n' \
-  >"${FIXTURE_REPOSITORY}/trainers/recommendation/runtime-wheels-cu130.json"
 printf 'fixture release readme\n' >"${FIXTURE_REPOSITORY}/deploy/v2/README.md"
 printf 'fixture judge contract\n' >"${FIXTURE_REPOSITORY}/deploy/v2/OJ_JUDGE_CONTRACT.md"
 printf 'fixture lsp contract\n' >"${FIXTURE_REPOSITORY}/deploy/v2/LSP_CONTROL_CONTRACT.md"
-printf 'fixture trainer contract\n' >"${FIXTURE_REPOSITORY}/deploy/v2/TRAINER_AGENT_CONTRACT.md"
 printf 'openapi: 3.1.0\n' >"${FIXTURE_REPOSITORY}/contracts/openapi/ascendany-v2.yaml"
 printf '{"fixture":true}\n' >"${FIXTURE_REPOSITORY}/contracts/pintia/ascendany.pintia.snapshot.v2.schema.json"
 printf 'fixture role contract\n' >"${FIXTURE_REPOSITORY}/db/roles/README.md"
 printf 'fixture role bootstrap\n' >"${FIXTURE_REPOSITORY}/db/roles/001_v2_roles.sql"
 printf 'fixture role verification\n' >"${FIXTURE_REPOSITORY}/db/roles/verify_v2_roles.sql"
-for config in analytics.json.example ascendanyd.env.example ascendanyd-read-only-smoke.env.example backup.env.example judge.env.example migrate.env.example restore.env.example trainer-agent.env.example; do
+for config in analytics.json.example ascendanyd-read-only-smoke.env.example backup.env.example judge.env.example migrate.env.example restore.env.example; do
   printf 'fixture configuration %s\n' "${config}" >"${FIXTURE_REPOSITORY}/deploy/v2/config/${config}"
 done
+printf '%s\n' \
+  'ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json' \
+  'ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__' \
+  'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__' \
+  >"${FIXTURE_REPOSITORY}/deploy/v2/config/ascendanyd.env.example"
 printf 'fixture judge image lock\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/judge-image-lock.json"
 printf 'fixture cloudflared configuration\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/cloudflared.yaml"
 printf 'fixture Fedora runtime package lock\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/fedora-runtime-packages.json"
 printf 'fixture pgbouncer hba\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/pgbouncer-hba.conf"
 printf 'fixture pgbouncer configuration\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/pgbouncer.ini"
-printf 'fixture PostgreSQL bootstrap hba\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/postgresql-hba-bootstrap.conf"
 printf 'fixture PostgreSQL hba\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/postgresql-hba.conf"
-printf 'fixture PostgreSQL bootstrap ident\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/postgresql-ident-bootstrap.conf"
 printf 'fixture PostgreSQL ident\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/postgresql-ident.conf"
-for unit in ascendanyd.service ascendany-admin-bootstrap.service ascendany-backup.service ascendany-backup.timer ascendany-cloudflared.service 'ascendany-judge@.service' 'ascendany-lsp@.service' ascendany-migrate.service ascendany-pgbouncer.service 'ascendany-restore-verify@.service' ascendany-trainer-agent.service; do
+for unit in ascendanyd.service ascendany-model-activate.service ascendany-admin-bootstrap.service ascendany-backup.service ascendany-backup.timer ascendany-cloudflared.service 'ascendany-judge@.service' 'ascendany-lsp@.service' ascendany-migrate.service ascendany-pgbouncer.service 'ascendany-restore-verify@.service'; do
   printf 'fixture unit %s\n' "${unit}" >"${FIXTURE_REPOSITORY}/deploy/v2/systemd/${unit}"
 done
 printf '%s\n' \
@@ -119,8 +109,6 @@ printf 'fixture sysusers\n' >"${FIXTURE_REPOSITORY}/deploy/v2/sysusers.d/ascenda
 printf 'fixture tmpfiles\n' >"${FIXTURE_REPOSITORY}/deploy/v2/tmpfiles.d/ascendany-v2.conf"
 printf '#!/usr/bin/env bash\nprintf cloudflared-validator\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-cloudflared.sh"
 printf '#!/usr/bin/env bash\nprintf production-validator\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-production.sh"
-printf '#!/usr/bin/env bash\nprintf trainer-validator\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-trainer-host.sh"
-printf '#!/usr/bin/env bash\nprintf trainer-runtime-installer\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/install-trainer-runtime.sh"
 printf '#!/usr/bin/env bash\nprintf server-release-installer\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/install-v2-release.sh"
 printf '#!/usr/bin/env bash\nprintf judge-image-acquirer\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/acquire-judge-image.sh"
 printf '#!/usr/bin/env bash\nprintf judge-image-attester\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/attest-judge-image.sh"
@@ -129,14 +117,12 @@ printf '#!/usr/bin/env bash\nprintf judge-image-preloader\n' >"${FIXTURE_REPOSIT
 printf '#!/usr/bin/env bash\nprintf pgbouncer-rpm-acquirer\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/acquire-pgbouncer-rpm.sh"
 printf '#!/usr/bin/env bash\nprintf pgbouncer-rpm-attester\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/attest-pgbouncer-rpm.sh"
 printf '#!/usr/bin/env bash\nprintf postgres-pgbouncer-provisioner\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/provision-postgres-pgbouncer.sh"
-printf '#!/usr/bin/env bash\nprintf trainer-host-capability\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/trainer-host-capability-identity.sh"
-printf '#!/usr/bin/env bash\nprintf trainer-runtime-tree\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/trainer-runtime-tree-identity.sh"
 printf '#!/usr/bin/env bash\nprintf restore-operator\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/restore-verify-operator.sh"
 printf '#!/usr/bin/env bash\nprintf restore-publisher\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/publish-restore-evidence.sh"
 printf 'literal hostile Git path\n' > \
   "${FIXTURE_REPOSITORY}/\$(printf injected >\$FIXTURE_GIT_PATH_EVAL_MARKER)"
 printf '%s\n' \
-  'trainers/recommendation/src/ascendany_recommendation_trainer/cli.py export-ignore' \
+  'deploy/v2/README.md export-ignore' \
   'provenance/crlf.txt text eol=lf' > \
   "${FIXTURE_REPOSITORY}/.gitattributes"
 printf 'first\r\nsecond\r\n' >"${FIXTURE_REPOSITORY}/provenance/crlf.txt"
@@ -164,7 +150,6 @@ install -m 0644 \
 chmod 0755 \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/publish-restore-evidence.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/restore-verify-operator.sh" \
-  "${FIXTURE_REPOSITORY}/deploy/v2/scripts/install-trainer-runtime.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/install-v2-release.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/acquire-judge-image.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/attest-judge-image.sh" \
@@ -173,11 +158,8 @@ chmod 0755 \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/acquire-pgbouncer-rpm.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/attest-pgbouncer-rpm.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/provision-postgres-pgbouncer.sh" \
-  "${FIXTURE_REPOSITORY}/deploy/v2/scripts/trainer-host-capability-identity.sh" \
-  "${FIXTURE_REPOSITORY}/deploy/v2/scripts/trainer-runtime-tree-identity.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-cloudflared.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-production.sh" \
-  "${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-trainer-host.sh" \
   "${FIXTURE_REPOSITORY}/provenance/executable.sh"
 
 git -C "${FIXTURE_REPOSITORY}" init --quiet
@@ -194,9 +176,9 @@ unset raw_crlf_blob
 git -C "${FIXTURE_REPOSITORY}" commit --quiet --message 'fixture: committed release source'
 readonly COMMIT="$(git -C "${FIXTURE_REPOSITORY}" rev-parse HEAD)"
 
-printf 'trainers/recommendation/src/ascendany_recommendation_trainer/cli.py export-ignore\n' > \
+printf 'deploy/v2/README.md export-ignore\n' > \
   "${FIXTURE_REPOSITORY}/.git/info/attributes"
-printf 'trainers/recommendation/src/ascendany_recommendation_trainer/cli.py export-ignore\n' > \
+printf 'deploy/v2/README.md export-ignore\n' > \
   "${GLOBAL_ATTRIBUTES}"
 printf '[core]\n\tattributesFile = %s\n' "${GLOBAL_ATTRIBUTES}" >"${GLOBAL_GIT_CONFIG}"
 
@@ -330,20 +312,33 @@ fi
 
 stat -Lc '%a' "${PWD}/.." >"${fixture_work_root}/source-mode"
 printf 'dirty during build\n' > \
-  "${fixture_repository}/trainers/recommendation/src/ascendany_recommendation_trainer/cli.py"
+  "${fixture_repository}/deploy/v2/README.md"
 
-printf 'fixture binary for %s\n' "${*: -1}" >"${output}"
+if [[ "${*: -1}" == './cmd/ascendany-model' ]]; then
+  cat >"${output}" <<'MODEL_VERIFIER'
+#!/usr/bin/bash -p
+set -Eeuo pipefail
+[[ "$#" == 7 && "$1" == verify && "$2" == --model && "$4" == --sha256 && "$6" == --expected-purpose ]]
+[[ "$(/usr/bin/sha256sum -- "$3" | /usr/bin/awk '{print $1}')" == "$5" ]]
+if [[ "$(/usr/bin/jq -er '.manifest.purpose' "$3")" != "$7" ]]; then
+  /usr/bin/printf 'model purpose differs from expected purpose\n' >&2
+  exit 1
+fi
+MODEL_VERIFIER
+else
+  printf 'fixture binary for %s\n' "${*: -1}" >"${output}"
+fi
 chmod 0755 "${output}"
 if [[ -f "${fixture_work_root}/extra-payload" ]]; then
   printf 'unexpected payload\n' >"$(dirname -- "${output}")/unexpected"
 fi
-if [[ "${*: -1}" == './cmd/ascendany-trainer-agent' &&
+if [[ "${*: -1}" == './cmd/ascendany-release-ops' &&
       -f "${fixture_work_root}/race-target" ]]; then
   race_target="$(<"${fixture_work_root}/race-target")"
   mkdir -- "${race_target}"
   printf 'racing owner marker\n' >"${race_target}/marker"
 fi
-if [[ "${*: -1}" == './cmd/ascendany-trainer-agent' &&
+if [[ "${*: -1}" == './cmd/ascendany-release-ops' &&
       -f "${fixture_work_root}/output-parent-swap" ]]; then
   swap_parent="$(<"${fixture_work_root}/output-parent-swap")"
   mv -- "${swap_parent}" "${swap_parent}.moved"
@@ -352,6 +347,10 @@ fi
 FAKE_GO
 chmod 0755 "${FAKE_BIN}/go"
 
+printf '%s' '{"manifest":{"purpose":"production"}}' >"${RECOMMENDATION_MODEL}"
+chmod 0400 "${RECOMMENDATION_MODEL}"
+readonly RECOMMENDATION_MODEL_SHA256="$(sha256sum -- "${RECOMMENDATION_MODEL}" | awk '{print $1}')"
+
 readonly -a PAYLOAD_PATHS=(
   bin/ascendanyd
   bin/ascendany-admin-bootstrap
@@ -359,23 +358,12 @@ readonly -a PAYLOAD_PATHS=(
   bin/ascendany-judge
   bin/ascendany-lsp
   bin/ascendany-migrate
+  bin/ascendany-model
   bin/ascendany-release-ops
-  bin/ascendany-trainer-agent
-  trainers/recommendation/ascendany_recommendation_trainer/__init__.py
-  trainers/recommendation/ascendany_recommendation_trainer/__main__.py
-  trainers/recommendation/ascendany_recommendation_trainer/attestation.py
-  trainers/recommendation/ascendany_recommendation_trainer/cli.py
-  trainers/recommendation/ascendany_recommendation_trainer/contract.py
-  trainers/recommendation/ascendany_recommendation_trainer/model.py
-  trainers/recommendation/ascendany_recommendation_trainer/train.py
-  trainers/recommendation/runtime-closure-cu130.json
-  trainers/recommendation/runtime-python-cu130.json
-  trainers/recommendation/runtime-requirements-cu130.lock
-  trainers/recommendation/runtime-wheels-cu130.json
+  models/recommendation-model.json
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
-  TRAINER_AGENT_CONTRACT.md
   contracts/openapi/ascendany-v2.yaml
   contracts/pintia/ascendany.pintia.snapshot.v2.schema.json
   db/roles/README.md
@@ -392,13 +380,11 @@ readonly -a PAYLOAD_PATHS=(
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
-  config/postgresql-hba-bootstrap.conf
   config/postgresql-hba.conf
-  config/postgresql-ident-bootstrap.conf
   config/postgresql-ident.conf
   config/restore.env
-  config/trainer-agent.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-activate.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -409,14 +395,12 @@ readonly -a PAYLOAD_PATHS=(
   systemd/ascendany-migrate.service
   systemd/ascendany-pgbouncer.service
   systemd/ascendany-restore-verify@.service
-  systemd/ascendany-trainer-agent.service
   polkit-1/rules.d/60-ascendany-judge.rules
   polkit-1/rules.d/61-ascendany-lsp.rules
   sysusers.d/ascendany-v2.conf
   tmpfiles.d/ascendany-v2.conf
   scripts/publish-restore-evidence.sh
   scripts/restore-verify-operator.sh
-  scripts/install-trainer-runtime.sh
   scripts/install-v2-release.sh
   scripts/acquire-judge-image.sh
   scripts/attest-judge-image.sh
@@ -425,11 +409,8 @@ readonly -a PAYLOAD_PATHS=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
-  scripts/trainer-host-capability-identity.sh
-  scripts/trainer-runtime-tree-identity.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
-  scripts/validate-trainer-host.sh
 )
 
 run_builder() {
@@ -460,6 +441,9 @@ run_builder() {
       --goos linux \
       --goarch amd64 \
       --goamd64 v1 \
+      --release-purpose "${FIXTURE_RELEASE_PURPOSE:-production}" \
+      --recommendation-model "${RECOMMENDATION_MODEL}" \
+      --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
       --output "${output}"
 }
 
@@ -510,16 +494,24 @@ readonly HAPPY_PARENT="${WORK_ROOT}/happy-parent"
 readonly HAPPY_OUTPUT="${HAPPY_PARENT}/release"
 readonly SOURCE_MODE_FILE="${WORK_ROOT}/source-mode"
 install -d -m 0700 "${HAPPY_PARENT}"
-printf 'dirty before build\n' >"${FIXTURE_REPOSITORY}/trainers/recommendation/src/ascendany_recommendation_trainer/cli.py"
+printf 'dirty before build\n' >"${FIXTURE_REPOSITORY}/deploy/v2/README.md"
 run_builder \
   "${HAPPY_OUTPUT}" \
   >"${WORK_ROOT}/happy.log"
 
 [[ "$(<"${SOURCE_MODE_FILE}")" == "700" ]] || fail 'detached source root was not mode 0700'
-[[ "$(<"${HAPPY_OUTPUT}/trainers/recommendation/ascendany_recommendation_trainer/cli.py")" == "committed trainer cli.py" ]] ||
+[[ "$(<"${HAPPY_OUTPUT}/README.md")" == "fixture release readme" ]] ||
   fail 'release payload read from the mutable live worktree'
-[[ "$(<"${FIXTURE_REPOSITORY}/trainers/recommendation/src/ascendany_recommendation_trainer/cli.py")" == "dirty during build" ]] ||
+[[ "$(<"${FIXTURE_REPOSITORY}/deploy/v2/README.md")" == "dirty during build" ]] ||
   fail 'fixture did not mutate the live worktree during the build'
+[[ "$(sha256sum -- "${HAPPY_OUTPUT}/models/recommendation-model.json" | awk '{print $1}')" == "${RECOMMENDATION_MODEL_SHA256}" ]] ||
+  fail 'release model differs from the externally anchored artifact'
+grep -Fx "ASCENDANY_RECOMMENDATION_MODEL_SHA256=${RECOMMENDATION_MODEL_SHA256}" \
+  "${HAPPY_OUTPUT}/config/ascendanyd.env" >/dev/null ||
+  fail 'release runtime configuration is not bound to the model digest'
+grep -Fx 'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production' \
+  "${HAPPY_OUTPUT}/config/ascendanyd.env" >/dev/null ||
+  fail 'release runtime configuration is not bound to the production model purpose'
 [[ ! -e "${PATH_HIJACK_MARKER}" ]] || fail 'release builder executed Go from the mutable live worktree PATH'
 [[ ! -e "${FAKE_BASH_MARKER}" ]] || fail 'release builder resolved Bash through caller PATH'
 [[ ! -e "${BASH_ENV_MARKER}" ]] || fail 'release builder evaluated caller BASH_ENV'
@@ -568,9 +560,10 @@ jq -e \
   '.schema == "ascendany.release.v2"
    and .version == "1.2.3"
    and .commit == $commit
+   and .purpose == "production"
    and .sourceDateEpoch == $epoch
    and .build == {"goVersion":"go1.26.0","goos":"linux","goarch":"amd64","goamd64":"v1","goExperiment":"none","gofips140":"off","cgoEnabled":false}
-   and (.files | length) == 77' \
+   and (.files | length) == 59' \
   "${HAPPY_OUTPUT}/release-manifest.json" >/dev/null || fail 'release manifest metadata is invalid'
 
 printf '%s\n' "${PAYLOAD_PATHS[@]}" >"${WORK_ROOT}/expected-manifest-paths"
@@ -591,6 +584,16 @@ while IFS=$'\t' read -r relative expected_hash expected_size expected_mode; do
     fail "manifest metadata drifted for ${relative}"
 done < <(jq -r '.files[] | [.path, .sha256, (.size | tostring), .mode] | @tsv' "${HAPPY_OUTPUT}/release-manifest.json")
 assert_no_private_workspace "${HAPPY_PARENT}"
+
+readonly PURPOSE_MISMATCH_PARENT="${WORK_ROOT}/purpose-mismatch-parent"
+install -d -m 0700 "${PURPOSE_MISMATCH_PARENT}"
+FIXTURE_RELEASE_PURPOSE=acceptance_test \
+  expect_failure "${WORK_ROOT}/purpose-mismatch.log" \
+    run_builder "${PURPOSE_MISMATCH_PARENT}/release"
+rg --quiet 'model purpose differs from expected purpose' "${WORK_ROOT}/purpose-mismatch.log" ||
+  fail 'release builder accepted a model whose purpose differs from the release purpose'
+[[ ! -e "${PURPOSE_MISMATCH_PARENT}/release" ]] || fail 'purpose mismatch published a release'
+assert_no_private_workspace "${PURPOSE_MISMATCH_PARENT}"
 
 for unsafe_mode in 0720 0702; do
   unsafe_parent="${WORK_ROOT}/unsafe-${unsafe_mode}"
@@ -636,7 +639,7 @@ expect_failure \
   "${WORK_ROOT}/output-parent-identity.log" \
   run_builder "${IDENTITY_PARENT}/release"
 rm -f -- "${OUTPUT_PARENT_SWAP}"
-rg --quiet 'output parent identity changed before publishing ascendany-trainer-agent build output' \
+rg --quiet 'output parent identity changed before publishing ascendany-release-ops build output' \
   "${WORK_ROOT}/output-parent-identity.log" ||
   fail 'output parent inode replacement was not rejected at the child-tool boundary'
 [[ ! -e "${IDENTITY_PARENT}/release" ]] ||
@@ -652,7 +655,7 @@ expect_failure \
   "${WORK_ROOT}/extra.log" \
   run_builder "${EXTRA_PARENT}/release"
 rm -f "${WORK_ROOT}/extra-payload"
-rg --quiet 'exact 77-path contract' "${WORK_ROOT}/extra.log" ||
+rg --quiet 'exact 59-path contract' "${WORK_ROOT}/extra.log" ||
   fail 'unexpected payload did not fail the closed-set gate'
 [[ ! -e "${EXTRA_PARENT}/release" ]] || fail 'closed-set failure published a release'
 assert_no_private_workspace "${EXTRA_PARENT}"
@@ -686,6 +689,9 @@ expect_failure \
       --goos linux \
       --goarch amd64 \
       --goamd64 v1 \
+      --release-purpose production \
+      --recommendation-model "${RECOMMENDATION_MODEL}" \
+      --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
       --output "${INVALID_PARENT}/release"
 rg --quiet 'commit payload could not be captured' "${WORK_ROOT}/invalid-commit.log" ||
   fail 'unavailable explicit commit did not fail before building'
@@ -703,6 +709,9 @@ expect_failure \
       --goos linux \
       --goarch amd64 \
       --goamd64 v1 \
+      --release-purpose production \
+      --recommendation-model "${RECOMMENDATION_MODEL}" \
+      --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
       --output "${INVALID_PARENT}/sha256-release"
 rg --quiet 'canonical 40-character Git object ID' \
   "${WORK_ROOT}/sha256-shaped-commit.log" ||
@@ -722,6 +731,9 @@ expect_failure \
       --goos linux \
       --goarch amd64 \
       --goamd64 v1 \
+      --release-purpose production \
+      --recommendation-model "${RECOMMENDATION_MODEL}" \
+      --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
       --output "${INVALID_VERSION_PARENT}/release"
 rg --quiet 'canonical semantic version' "${WORK_ROOT}/invalid-version.log" ||
   fail 'noncanonical numeric prerelease identifier was accepted'
@@ -739,6 +751,9 @@ expect_failure \
       --goos linux \
       --goarch amd64 \
       --goamd64 v1 \
+      --release-purpose production \
+      --recommendation-model "${RECOMMENDATION_MODEL}" \
+      --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
       --output "${INVALID_VERSION_PARENT}/long-release"
 rg --quiet 'at most 128 ASCII bytes' "${WORK_ROOT}/long-version.log" ||
   fail 'oversized canonical release version was accepted'

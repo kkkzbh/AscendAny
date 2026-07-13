@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	BundleSchema             = "ascendany.backup.bundle.v1"
+	BundleSchema             = "ascendany.backup.bundle.v2"
 	BackupFormat             = "pg_custom_plus_artifact_tar_zstd"
 	ManifestHashAlgorithm    = "sha256"
 	SourceDatabaseName       = "ascendany_v2"

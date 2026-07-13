@@ -62,12 +62,15 @@ func (service *ApplicationService) CreateVersion(ctx context.Context, token stri
 		return CreateVersionResult{}, err
 	}
 	return service.configuration.CreateVersion(ctx, CreateVersionCommand{
-		Principal:            principal,
-		Key:                  input.Key,
-		Kind:                 input.Kind,
-		ExpectedHeadRevision: input.ExpectedHeadRevision,
-		SchemaID:             input.SchemaID,
-		Document:             input.Document,
-		CredentialRef:        input.CredentialRef,
+		Principal:                     principal,
+		Key:                           input.Key,
+		Kind:                          input.Kind,
+		ExpectedHeadRevision:          input.ExpectedHeadRevision,
+		ExpectedAnalyticsGenerationID: input.ExpectedAnalyticsGenerationID,
+		ExpectedAnalyticsHeadRevision: input.ExpectedAnalyticsHeadRevision,
+		ExpectedInputManifestSHA256:   input.ExpectedInputManifestSHA256,
+		SchemaID:                      input.SchemaID,
+		Document:                      input.Document,
+		CredentialRef:                 input.CredentialRef,
 	})
 }

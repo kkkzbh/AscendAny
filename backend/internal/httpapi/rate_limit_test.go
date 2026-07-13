@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"sync"
@@ -104,61 +103,20 @@ func TestDefaultRateLimiterCoversEveryHTTPPolicyScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := Handler{routePolicies: apiRoutePolicies(time.Second, time.Second)}
-	for path, policy := range handler.routePolicies {
-		if !limiter.Allow(policy.rateScope, "test-client:"+path).Allowed {
-			t.Fatalf("static route %s has uncovered rate scope %q", path, policy.rateScope)
+	registry, err := newRouteRegistry(apiRouteContracts(&Handler{}, time.Second, time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, contract := range registry.contracts {
+		if contract.policy == nil {
+			continue
 		}
-	}
-	for _, path := range []string{
-		"/api/v2/admin/enrollment-claims/123e4567-e89b-42d3-a456-426614174020",
-		"/api/v2/account/sessions/123e4567-e89b-42d3-a456-426614174020",
-		"/api/v2/exams/123e4567-e89b-42d3-a456-426614174020",
-		"/api/v2/exams/123e4567-e89b-42d3-a456-426614174020/analysis-generation",
-		"/api/v2/exams/123e4567-e89b-42d3-a456-426614174020/analysis-generations/42/events",
-		"/api/v2/students/me/notes/123e4567-e89b-42d3-a456-426614174020",
-		"/api/v2/students/me/notes/123e4567-e89b-42d3-a456-426614174020/document",
-		"/api/v2/students/me/notes/123e4567-e89b-42d3-a456-426614174020/archive",
-		"/api/v2/students/me/notes/123e4567-e89b-42d3-a456-426614174020/restore",
-		"/api/v2/students/me/chat/threads/123e4567-e89b-42d3-a456-426614174050/messages",
-		"/api/v2/students/me/chat/threads/123e4567-e89b-42d3-a456-426614174050/runs",
-		"/api/v2/students/me/agent-runs/123e4567-e89b-42d3-a456-426614174051",
-		"/api/v2/students/me/agent-runs/123e4567-e89b-42d3-a456-426614174051/events",
-		"/api/v2/admin/accounts/123e4567-e89b-42d3-a456-426614174020/state",
-		"/api/v2/admin/configurations/feedback.delivery",
-		"/api/v2/admin/configurations/feedback.delivery/versions",
-		"/api/v2/admin/model-connections/chat.primary/test",
-		"/api/v2/oj/problems/123e4567-e89b-42d3-a456-426614174040",
-		"/api/v2/oj/submissions/123e4567-e89b-42d3-a456-426614174041",
-		"/api/v2/oj/submissions/123e4567-e89b-42d3-a456-426614174041/events",
-		"/api/v2/imports/123e4567-e89b-42d3-a456-426614174000",
-		"/api/v2/imports/123e4567-e89b-42d3-a456-426614174000/events",
-	} {
-		policy, known := handler.policyForPath(path)
-		if !known || !limiter.Allow(policy.rateScope, "test-client:"+path).Allowed {
-			t.Fatalf("dynamic route %s has uncovered rate policy %#v", path, policy)
-		}
-	}
-	if policy, known := handler.policyForMethod("/api/v2/students/me/notes", http.MethodGet); !known || !limiter.Allow(policy.rateScope, "test-client:notes-list").Allowed {
-		t.Fatalf("agent note list has uncovered rate policy %#v", policy)
-	}
-	if policy, known := handler.policyForMethod("/api/v2/students/me/chat/threads", http.MethodGet); !known || !limiter.Allow(policy.rateScope, "test-client:chat-thread-list").Allowed {
-		t.Fatalf("chat thread list has uncovered rate policy %#v", policy)
-	}
-	handler.trainerAgentTransportEnabled = true
-	for _, path := range []string{
-		"/api/v2/internal/recommendation/trainer-agent/claims",
-		"/api/v2/internal/recommendation/trainer-agent/claims/11111111-1111-4111-8111-111111111111/heartbeats",
-		"/api/v2/internal/recommendation/trainer-agent/claims/11111111-1111-4111-8111-111111111111/output",
-		"/api/v2/internal/recommendation/trainer-agent/claims/11111111-1111-4111-8111-111111111111/failures",
-	} {
-		policy, known := handler.policyForPath(path)
-		if !known || !policy.browserForbidden || !policy.internalProtocol || !limiter.Allow(policy.rateScope, "test-client:"+path).Allowed {
-			t.Fatalf("trainer-agent route %s has uncovered policy %#v", path, policy)
+		if !limiter.Allow(contract.policy.rateScope, "test-client:"+contract.examplePath).Allowed {
+			t.Fatalf("route %s %s has uncovered rate scope %q", contract.method, contract.pattern, contract.policy.rateScope)
 		}
 	}
 	for _, secondary := range []string{
-		"auth.login.username", "auth.enrollment.claim.token", "internal.recommendation.trainer-agent.claim.agent",
+		"auth.login.username", "auth.enrollment.claim.token",
 	} {
 		if !limiter.Allow(secondary, "test-secondary").Allowed {
 			t.Fatalf("secondary rate scope %q is not configured", secondary)

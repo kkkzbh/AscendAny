@@ -35,7 +35,7 @@ func TestRunAcceptsOnlyUpAndPassesValidatedConfig(t *testing.T) {
 	if !called {
 		t.Fatal("migration runner was not called")
 	}
-	if !strings.Contains(output.String(), `"schemaVersion":5`) {
+	if !strings.Contains(output.String(), `"schemaVersion":6`) {
 		t.Fatalf("output = %s", output.String())
 	}
 }
@@ -82,7 +82,7 @@ func validEnvironment() map[string]string {
 		"ASCENDANY_DATABASE_PASSWORD_FILE":   "/run/credentials/db_password",
 		"ASCENDANY_DATABASE_ROLE":            "ascendany_owner",
 		"ASCENDANY_DATABASE_SCHEMA":          "ascendany",
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "5",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "6",
 		"ASCENDANY_MIGRATION_HISTORY_TABLE":  "ascendany.schema_migrations_v2",
 		"ASCENDANY_MIGRATION_LOCK_TIMEOUT":   "30s",
 		"ASCENDANY_DATABASE_CONNECT_TIMEOUT": "5s",

@@ -30,7 +30,6 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/recommendation"
 	"github.com/kkkzbh/AscendAny/backend/internal/runtimeapp"
 	"github.com/kkkzbh/AscendAny/backend/internal/studentanalytics"
-	"github.com/kkkzbh/AscendAny/backend/internal/traineragentserver"
 )
 
 type constructionReadiness struct{}
@@ -278,21 +277,16 @@ func (constructionRecommendationAdminReader) ReadReviewContext(context.Context, 
 	return recommendation.ReviewContext{}, nil
 }
 
-func (constructionRecommendationAdminReader) ReadTrainingRun(context.Context, string, string) (recommendation.TrainingRunDetail, bool, error) {
-	return recommendation.TrainingRunDetail{}, false, nil
-}
-
-func (constructionRecommendationAdminReader) ReadTrainingEvents(context.Context, string, string, int64, int) (recommendation.TrainingEventPage, bool, error) {
-	return recommendation.TrainingEventPage{}, false, nil
-}
-
 func TestValidateCommand(t *testing.T) {
 	t.Parallel()
 
 	if err := validateCommand([]string{"serve"}); err != nil {
 		t.Fatalf("validateCommand(serve) error = %v", err)
 	}
-	for _, args := range [][]string{nil, {}, {"--config", "config.toml"}, {"unknown"}} {
+	if err := validateCommand([]string{"activate-model"}); err != nil {
+		t.Fatalf("validateCommand(activate-model) error = %v", err)
+	}
+	for _, args := range [][]string{nil, {}, {"--config", "config.toml"}, {"unknown"}, {"serve", "extra"}} {
 		if err := validateCommand(args); err == nil {
 			t.Fatalf("validateCommand(%q) error = nil", args)
 		}
@@ -374,9 +368,7 @@ func TestProductionHTTPOptionsConstructHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bindWriteHTTPRuntimeDependencies(disabled) error = %v", err)
 	}
-	if dependencies.artifacts != nil || dependencies.imports != nil || dependencies.lsp != nil ||
-		dependencies.recommendationQueue != nil || dependencies.modelProbe != nil ||
-		dependencies.trainerAgentVerifier != nil || dependencies.trainerAgent != nil || dependencies.trainerAgentTransportEnabled {
+	if dependencies.artifacts != nil || dependencies.imports != nil || dependencies.lsp != nil || dependencies.modelProbe != nil {
 		t.Fatal("disabled write dependency binding produced a typed-nil HTTP capability")
 	}
 	options := buildHTTPHandlerOptions(configuration, dependencies)
@@ -401,19 +393,14 @@ func TestEnabledWriteHTTPDependenciesRequireAndBindCompleteCapability(t *testing
 			Artifacts: &artifact.Store{},
 			Imports:   &importing.Service{},
 		},
-		lspManager:          &lspexecutor.Manager{},
-		lspPolicy:           lsp.DefaultPolicy(),
-		recommendationQueue: &recommendation.QueueApplicationService{},
-		modelProbe:          &modelprobe.Service{},
-		trainerVerifier:     &traineragentserver.ScopedBearerVerifier{},
-		trainerAgent:        &traineragentserver.Service{},
+		lspManager: &lspexecutor.Manager{},
+		lspPolicy:  lsp.DefaultPolicy(),
+		modelProbe: &modelprobe.Service{},
 	})
 	if err != nil {
 		t.Fatalf("bindWriteHTTPRuntimeDependencies(enabled) error = %v", err)
 	}
-	if dependencies.artifacts == nil || dependencies.imports == nil || dependencies.lsp == nil ||
-		dependencies.recommendationQueue == nil || dependencies.modelProbe == nil ||
-		dependencies.trainerAgentVerifier == nil || dependencies.trainerAgent == nil || !dependencies.trainerAgentTransportEnabled {
+	if dependencies.artifacts == nil || dependencies.imports == nil || dependencies.lsp == nil || dependencies.modelProbe == nil {
 		t.Fatal("enabled write dependency binding omitted a capability")
 	}
 }

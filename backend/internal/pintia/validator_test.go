@@ -97,6 +97,10 @@ func TestValidatorRejectsSourceURLForAnotherProblemSet(t *testing.T) {
 		"different ID":     "https://pintia.cn/problem-sets/problem-set-200/submissions",
 		"prefix collision": "https://pintia.cn/problem-sets/problem-set-1000/problems",
 		"nested route":     "https://pintia.cn/archive/problem-sets/problem-set-100/problems",
+		"query":            "https://pintia.cn/problem-sets/problem-set-100/problems?page=1",
+		"empty query":      "https://pintia.cn/problem-sets/problem-set-100/problems?",
+		"fragment":         "https://pintia.cn/problem-sets/problem-set-100/problems#fragment",
+		"empty fragment":   "https://pintia.cn/problem-sets/problem-set-100/problems#",
 	}
 	for name, sourceURL := range testCases {
 		t.Run(name, func(t *testing.T) {

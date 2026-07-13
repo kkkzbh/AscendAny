@@ -146,11 +146,12 @@ func RestoreVerify(ctx context.Context, config RestoreConfig, backupID string) (
 		return RestoreResult{}, fmt.Errorf("post-restore gate failed: %w", err)
 	}
 	return RestoreResult{
-		BackupID:       backupID,
-		ManifestSHA256: verifyResult.ManifestSHA256,
-		ArtifactCount:  manifest.Artifacts.Count,
-		DatabaseName:   RestoreDatabaseName,
-		ArtifactRoot:   config.ArtifactRoot,
+		BackupID:            backupID,
+		ManifestSHA256:      verifyResult.ManifestSHA256,
+		ArtifactCount:       manifest.Artifacts.Count,
+		DatabaseName:        RestoreDatabaseName,
+		ArtifactRoot:        config.ArtifactRoot,
+		RecommendationModel: manifest.Database.RecommendationModel,
 	}, nil
 }
 

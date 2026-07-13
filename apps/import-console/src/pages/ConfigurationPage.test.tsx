@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigurationItem, ConfigurationVersionPage } from "@ascendany/sdk";
 import { ConfigurationPage } from "./ConfigurationPage";
@@ -138,14 +138,27 @@ describe("ConfigurationPage", () => {
     expect(api.putConfigurationVersion).not.toHaveBeenCalled();
   });
 
-  it("routes recommendation-owned configuration publishing to the dedicated workflow", async () => {
+  it("keeps knowledge catalog ownership out of the generic editor", async () => {
+    api.getConfigurations.mockResolvedValue({
+      items: [{ ...activeItem, key: "recommendation.catalog.active", kind: "knowledge_catalog" }],
+      nextCursor: null,
+    });
     render(<ConfigurationPage />);
+
+    expect(await screen.findByText("当前筛选下没有配置。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建配置" }));
+    const kindSelect = screen.getByRole("combobox", { name: "Kind" });
+    expect(within(kindSelect).queryByRole("option", { name: "知识目录" })).not.toBeInTheDocument();
+  });
+
+  it("rejects the reserved knowledge catalog key in the generic editor", async () => {
+    const { container } = render(<ConfigurationPage />);
     fireEvent.click(await screen.findByRole("button", { name: "新建配置" }));
-    fireEvent.change(screen.getByRole("textbox", { name: /^Key/ }), { target: { value: "recommendation.training.new" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Kind" }), { target: { value: "training" } });
+    const inputs = container.querySelectorAll<HTMLInputElement>(".configuration-form-grid input");
+    fireEvent.change(inputs[0]!, { target: { value: "recommendation.catalog.active" } });
     fireEvent.click(screen.getByRole("button", { name: "发布 immutable version" }));
 
-    expect(await screen.findByText("推荐 training 与 knowledge catalog 只能在推荐训练页面发布。")).toBeInTheDocument();
+    expect(await screen.findByText("recommendation.catalog.active 仅由推荐知识目录页面维护。")).toBeInTheDocument();
     expect(api.putConfigurationVersion).not.toHaveBeenCalled();
   });
 

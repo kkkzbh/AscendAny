@@ -185,7 +185,7 @@ func TestLoadAdminBootstrapRequiresOnlyOwnedConfiguration(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":             "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":       "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":   databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "5",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "6",
 		"ASCENDANY_PASSWORD_PEPPER_FILE":     passwordPepperPath,
 		"ASCENDANY_DATABASE_MIN_CONNECTIONS": "0",
 		"ASCENDANY_DATABASE_MAX_CONNECTIONS": "4",
@@ -195,7 +195,7 @@ func TestLoadAdminBootstrapRequiresOnlyOwnedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAdminBootstrap() error = %v", err)
 	}
-	if got.Database.ExpectedSchemaVersion != 5 || got.Database.MinConnections != 0 ||
+	if got.Database.ExpectedSchemaVersion != 6 || got.Database.MinConnections != 0 ||
 		got.Database.MaxConnections != 4 || got.Database.HealthTimeout != 750*time.Millisecond {
 		t.Fatalf("bootstrap database config = %#v", got.Database)
 	}
@@ -210,11 +210,68 @@ func TestLoadAdminBootstrapRequiresPasswordPepper(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":            "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":      "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":  databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION": "5",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION": "6",
 	}
 	_, err := LoadAdminBootstrap(mapLookup(env), testReadFile)
 	if err == nil || err.Error() != "ASCENDANY_PASSWORD_PEPPER_FILE is required" {
 		t.Fatalf("LoadAdminBootstrap() error = %v", err)
+	}
+}
+
+func TestLoadModelActivationRequiresOnlyOwnedConfiguration(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{
+		"ASCENDANY_DATABASE_URL":                      "postgres://ascendany@127.0.0.1:6432/ascendany",
+		"ASCENDANY_DATABASE_POOL_MODE":                "transaction",
+		"ASCENDANY_DATABASE_PASSWORD_FILE":            databasePasswordPath,
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":           "6",
+		"ASCENDANY_DATABASE_CONNECT_TIMEOUT":          "4s",
+		"ASCENDANY_DATABASE_HEALTH_TIMEOUT":           "750ms",
+		"ASCENDANY_RECOMMENDATION_MODEL_PATH":         "/opt/ascendany/v2/models/recommendation-model.json",
+		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":       strings.Repeat("a", 64),
+		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE":      "production",
+		"ASCENDANY_JWT_SIGNING_KEY_FILE":              "/must/not/be/read",
+		"ASCENDANY_PASSWORD_PEPPER_FILE":              "/must/not/be/read",
+		"ASCENDANY_IMPORT_WORKER_OWNER":               "must-not-be-read",
+		"ASCENDANY_DATABASE_MAX_CONNECTIONS":          "999",
+		"ASCENDANY_DATABASE_MIN_CONNECTIONS":          "999",
+		"ASCENDANY_DATABASE_MAX_CONNECTION_LIFETIME":  "999h",
+		"ASCENDANY_DATABASE_MAX_CONNECTION_IDLE_TIME": "999h",
+	}
+	readFile := func(path string) ([]byte, error) {
+		if path != databasePasswordPath {
+			t.Fatalf("LoadModelActivation read unowned credential %q", path)
+		}
+		return testReadFile(path)
+	}
+	got, err := LoadModelActivation(mapLookup(env), readFile)
+	if err != nil {
+		t.Fatalf("LoadModelActivation() error = %v", err)
+	}
+	if got.Database.ExpectedSchemaVersion != 6 || got.Database.MaxConnections != 1 ||
+		got.Database.MinConnections != 0 || got.Database.ConnectTimeout != 4*time.Second ||
+		got.Database.HealthTimeout != 750*time.Millisecond || got.Database.Password != strings.Repeat("d", minimumDatabasePasswordBytes) {
+		t.Fatalf("activation database config = %#v", got.Database)
+	}
+	if got.Recommendation.ModelPath != "/opt/ascendany/v2/models/recommendation-model.json" ||
+		got.Recommendation.ModelSHA256 != strings.Repeat("a", 64) || got.Recommendation.ModelPurpose != "production" {
+		t.Fatalf("activation model config = %#v", got.Recommendation)
+	}
+}
+
+func TestLoadModelActivationRequiresOnlyDatabaseCredential(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{
+		"ASCENDANY_DATABASE_URL":                 "postgres://ascendany@127.0.0.1:6432/ascendany",
+		"ASCENDANY_DATABASE_POOL_MODE":           "transaction",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":      "6",
+		"ASCENDANY_RECOMMENDATION_MODEL_PATH":    "/opt/ascendany/v2/models/recommendation-model.json",
+		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":  strings.Repeat("a", 64),
+		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE": "production",
+	}
+	_, err := LoadModelActivation(mapLookup(env), testReadFile)
+	if err == nil || err.Error() != "ASCENDANY_DATABASE_PASSWORD_FILE is required" {
+		t.Fatalf("LoadModelActivation() error = %v", err)
 	}
 }
 
@@ -251,7 +308,7 @@ func TestLoadReturnsValidatedConfiguration(t *testing.T) {
 	if got.Database.HealthTimeout != 750*time.Millisecond {
 		t.Fatalf("health timeout = %s", got.Database.HealthTimeout)
 	}
-	if got.Database.ExpectedSchemaVersion != 5 {
+	if got.Database.ExpectedSchemaVersion != 6 {
 		t.Fatalf("schema version = %d", got.Database.ExpectedSchemaVersion)
 	}
 	if got.Database.Password != strings.Repeat("d", minimumDatabasePasswordBytes) {
@@ -308,11 +365,8 @@ func TestLoadReturnsValidatedConfiguration(t *testing.T) {
 		got.ChatAgent.MaximumToolRounds != 8 {
 		t.Fatalf("chat agent runtime = %#v", got.ChatAgent)
 	}
-	if got.Recommendation.TrainerAgentID != "rtx-01" ||
-		got.Recommendation.TrainerLeaseDuration != 5*time.Minute ||
-		got.Recommendation.TrainerRetryDelay != 30*time.Second ||
-		got.Recommendation.MaximumInputBundleBytes != 128<<20 ||
-		got.Recommendation.MaximumOutputBundleBytes != 128<<20 {
+	if got.Recommendation.ModelPath != "/opt/ascendany/current/models/recommendation-model.json" ||
+		got.Recommendation.ModelSHA256 != strings.Repeat("a", 64) || got.Recommendation.ModelPurpose != "production" {
 		t.Fatalf("recommendation runtime = %#v", got.Recommendation)
 	}
 	if got.Judge.SocketDirectory != "/run/ascendany-judge" || got.Judge.WorkerUser != "ascendany-judge" ||
@@ -375,11 +429,9 @@ func TestLoadRequiresRuntimeWorkerAndLimitSettings(t *testing.T) {
 		"ASCENDANY_CHAT_AGENT_POLL_INTERVAL",
 		"ASCENDANY_CHAT_AGENT_MAXIMUM_CONTEXT_ITEMS",
 		"ASCENDANY_CHAT_AGENT_MAXIMUM_TOOL_ROUNDS",
-		"ASCENDANY_RECOMMENDATION_TRAINER_AGENT_ID",
-		"ASCENDANY_RECOMMENDATION_TRAINER_LEASE_DURATION",
-		"ASCENDANY_RECOMMENDATION_TRAINER_RETRY_DELAY",
-		"ASCENDANY_RECOMMENDATION_MAXIMUM_INPUT_BUNDLE_BYTES",
-		"ASCENDANY_RECOMMENDATION_MAXIMUM_OUTPUT_BUNDLE_BYTES",
+		"ASCENDANY_RECOMMENDATION_MODEL_PATH",
+		"ASCENDANY_RECOMMENDATION_MODEL_SHA256",
+		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE",
 		"ASCENDANY_JUDGE_SOCKET_DIRECTORY",
 		"ASCENDANY_JUDGE_WORKER_USER",
 		"ASCENDANY_JUDGE_SYSTEMCTL_PATH",
@@ -598,13 +650,10 @@ func TestLoadRejectsInvalidWorkerAndLimitSettings(t *testing.T) {
 		{name: "chat agent poll exceeds lease", key: "ASCENDANY_CHAT_AGENT_POLL_INTERVAL", value: "5m", want: "must be shorter"},
 		{name: "excessive chat context", key: "ASCENDANY_CHAT_AGENT_MAXIMUM_CONTEXT_ITEMS", value: "1001", want: "must not exceed 1000"},
 		{name: "excessive chat tool rounds", key: "ASCENDANY_CHAT_AGENT_MAXIMUM_TOOL_ROUNDS", value: "65", want: "must not exceed 64"},
-		{name: "invalid trainer agent ID", key: "ASCENDANY_RECOMMENDATION_TRAINER_AGENT_ID", value: "rtx agent", want: "canonical trainer-agent ID"},
-		{name: "unsafe trainer lease", key: "ASCENDANY_RECOMMENDATION_TRAINER_LEASE_DURATION", value: "299ms", want: "at least 300 milliseconds"},
-		{name: "fractional trainer lease", key: "ASCENDANY_RECOMMENDATION_TRAINER_LEASE_DURATION", value: "300000001ns", want: "whole-millisecond"},
-		{name: "short trainer retry", key: "ASCENDANY_RECOMMENDATION_TRAINER_RETRY_DELAY", value: "999ms", want: "at least one second"},
-		{name: "fractional trainer retry", key: "ASCENDANY_RECOMMENDATION_TRAINER_RETRY_DELAY", value: "1000000001ns", want: "whole-millisecond"},
-		{name: "input bundle exceeds artifact", key: "ASCENDANY_RECOMMENDATION_MAXIMUM_INPUT_BUNDLE_BYTES", value: "134217729", want: "must not exceed"},
-		{name: "output bundle exceeds artifact", key: "ASCENDANY_RECOMMENDATION_MAXIMUM_OUTPUT_BUNDLE_BYTES", value: "134217729", want: "must not exceed"},
+		{name: "relative recommendation model", key: "ASCENDANY_RECOMMENDATION_MODEL_PATH", value: "models/recommendation-model.json", want: "absolute path"},
+		{name: "uppercase recommendation digest", key: "ASCENDANY_RECOMMENDATION_MODEL_SHA256", value: strings.Repeat("A", 64), want: "lowercase SHA-256"},
+		{name: "short recommendation digest", key: "ASCENDANY_RECOMMENDATION_MODEL_SHA256", value: strings.Repeat("a", 63), want: "lowercase SHA-256"},
+		{name: "invalid recommendation purpose", key: "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE", value: "test", want: "production or acceptance_test"},
 		{name: "relative judge socket", key: "ASCENDANY_JUDGE_SOCKET_DIRECTORY", value: "run/judge", want: "absolute path"},
 		{name: "long judge socket", key: "ASCENDANY_JUDGE_SOCKET_DIRECTORY", value: "/run/" + strings.Repeat("a", 80), want: "socket path limit"},
 		{name: "invalid judge worker user", key: "ASCENDANY_JUDGE_WORKER_USER", value: "AscendAny Judge", want: "canonical system user"},
@@ -699,78 +748,76 @@ func TestLoadRejectsUnreadableSecretWithoutLeakingPath(t *testing.T) {
 
 func validEnvironment() map[string]string {
 	return map[string]string{
-		"ASCENDANY_DATABASE_URL":                               "postgres://ascendany@127.0.0.1:6432/ascendany",
-		"ASCENDANY_DATABASE_POOL_MODE":                         "transaction",
-		"ASCENDANY_DATABASE_PASSWORD_FILE":                     databasePasswordPath,
-		"ASCENDANY_JWT_SIGNING_KEY_FILE":                       jwtSigningKeyPath,
-		"ASCENDANY_PASSWORD_PEPPER_FILE":                       passwordPepperPath,
-		"ASCENDANY_AUTH_ISSUER":                                "ascendany",
-		"ASCENDANY_AUTH_AUDIENCE":                              "ascendany-v2",
-		"ASCENDANY_AUTH_ALLOWED_ORIGINS":                       "https://ascendany.kkkzbh.cn,ascendany-app://bundle,capacitor://localhost,https://localhost,http://127.0.0.1:5173",
-		"ASCENDANY_AUTH_ACCESS_TTL":                            "15m",
-		"ASCENDANY_AUTH_REFRESH_TTL":                           "720h",
-		"ASCENDANY_HTTP_TRUSTED_PROXY_CIDRS":                   "127.0.0.1/32",
-		"ASCENDANY_HTTP_CLIENT_IP_HEADER":                      "CF-Connecting-IP",
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":                    "5",
-		"ASCENDANY_ARTIFACT_ROOT":                              "/var/lib/ascendany/artifacts",
-		"ASCENDANY_ARTIFACT_MAX_BYTES":                         "134217728",
-		"ASCENDANY_ARTIFACT_ORPHAN_MIN_AGE":                    "24h",
-		"ASCENDANY_ARTIFACT_RECONCILE_INTERVAL":                "1h",
-		"ASCENDANY_PINTIA_MAX_TOTAL_NODES":                     "2000000",
-		"ASCENDANY_PINTIA_MAX_TOTAL_STRING_BYTES":              "33554432",
-		"ASCENDANY_PINTIA_MAX_JSON_DEPTH":                      "32",
-		"ASCENDANY_PINTIA_MAX_STRING_BYTES":                    "8388608",
-		"ASCENDANY_PINTIA_MAX_PROBLEMS":                        "1000",
-		"ASCENDANY_PINTIA_MAX_PARTICIPANTS":                    "20000",
-		"ASCENDANY_PINTIA_MAX_PROBLEM_RESULTS_PER_RANKING":     "1000",
-		"ASCENDANY_PINTIA_MAX_SUBMISSIONS":                     "20000",
-		"ASCENDANY_PINTIA_MAX_CASE_RESULTS_PER_SUBMISSION":     "1000",
-		"ASCENDANY_PINTIA_MAX_CODE_BYTES":                      "1048576",
-		"ASCENDANY_IMPORT_WORKER_OWNER":                        "km6-import",
-		"ASCENDANY_IMPORT_LEASE_DURATION":                      "5m",
-		"ASCENDANY_IMPORT_RETRY_DELAY":                         "30s",
-		"ASCENDANY_IMPORT_POLL_INTERVAL":                       "1s",
-		"ASCENDANY_ANALYTICS_CONFIG":                           "/etc/ascendany/v2/analytics.json",
-		"ASCENDANY_ANALYTICS_WORKER_OWNER":                     "km6-analytics",
-		"ASCENDANY_ANALYTICS_LEASE_DURATION":                   "5m",
-		"ASCENDANY_ANALYTICS_POLL_INTERVAL":                    "1s",
-		"ASCENDANY_FEEDBACK_RATE_WINDOW":                       "1h",
-		"ASCENDANY_FEEDBACK_RATE_MAXIMUM":                      "5",
-		"ASCENDANY_FEEDBACK_DELIVERY_CONFIGURATION_KEY":        "feedback.delivery.default",
-		"ASCENDANY_FEEDBACK_WORKER_OWNER":                      "km6-feedback",
-		"ASCENDANY_FEEDBACK_LEASE_DURATION":                    "5m",
-		"ASCENDANY_FEEDBACK_RETRY_DELAY":                       "30s",
-		"ASCENDANY_FEEDBACK_POLL_INTERVAL":                     "1s",
-		"ASCENDANY_CHAT_AGENT_WORKER_OWNER":                    "km6-chat-agent",
-		"ASCENDANY_CHAT_AGENT_LEASE_DURATION":                  "5m",
-		"ASCENDANY_CHAT_AGENT_POLL_INTERVAL":                   "1s",
-		"ASCENDANY_CHAT_AGENT_MAXIMUM_CONTEXT_ITEMS":           "200",
-		"ASCENDANY_CHAT_AGENT_MAXIMUM_TOOL_ROUNDS":             "8",
-		"ASCENDANY_RECOMMENDATION_TRAINER_AGENT_ID":            "rtx-01",
-		"ASCENDANY_RECOMMENDATION_TRAINER_LEASE_DURATION":      "5m",
-		"ASCENDANY_RECOMMENDATION_TRAINER_RETRY_DELAY":         "30s",
-		"ASCENDANY_RECOMMENDATION_MAXIMUM_INPUT_BUNDLE_BYTES":  "134217728",
-		"ASCENDANY_RECOMMENDATION_MAXIMUM_OUTPUT_BUNDLE_BYTES": "134217728",
-		"ASCENDANY_JUDGE_SOCKET_DIRECTORY":                     "/run/ascendany-judge",
-		"ASCENDANY_JUDGE_WORKER_USER":                          "ascendany-judge",
-		"ASCENDANY_JUDGE_SYSTEMCTL_PATH":                       "/usr/bin/systemctl",
-		"ASCENDANY_JUDGE_STARTUP_TIMEOUT":                      "30s",
-		"ASCENDANY_JUDGE_SESSION_TIMEOUT":                      "30m",
-		"ASCENDANY_JUDGE_STOP_TIMEOUT":                         "15s",
-		"ASCENDANY_JUDGE_WORKER_OWNER":                         "km6-judge",
-		"ASCENDANY_JUDGE_LEASE_DURATION":                       "5m",
-		"ASCENDANY_JUDGE_RETRY_DELAY":                          "30s",
-		"ASCENDANY_JUDGE_POLL_INTERVAL":                        "1s",
-		"ASCENDANY_JUDGE_MAXIMUM_ATTEMPTS":                     "3",
-		"ASCENDANY_LSP_CONTROL_SOCKET":                         "/run/ascendany-lsp-control/control.sock",
-		"ASCENDANY_LSP_WORKER_USER":                            "ascendany-lsp",
-		"ASCENDANY_LSP_SYSTEMCTL_PATH":                         "/usr/bin/systemctl",
-		"ASCENDANY_LSP_MAXIMUM_SESSIONS":                       "64",
-		"ASCENDANY_LSP_MAXIMUM_PENDING_HANDSHAKES":             "16",
-		"ASCENDANY_LSP_HANDSHAKE_TIMEOUT":                      "5s",
-		"ASCENDANY_LSP_STARTUP_TIMEOUT":                        "30s",
-		"ASCENDANY_LSP_STOP_TIMEOUT":                           "15s",
-		"ASCENDANY_WRITE_MODE":                                 "disabled",
+		"ASCENDANY_DATABASE_URL":                           "postgres://ascendany@127.0.0.1:6432/ascendany",
+		"ASCENDANY_DATABASE_POOL_MODE":                     "transaction",
+		"ASCENDANY_DATABASE_PASSWORD_FILE":                 databasePasswordPath,
+		"ASCENDANY_JWT_SIGNING_KEY_FILE":                   jwtSigningKeyPath,
+		"ASCENDANY_PASSWORD_PEPPER_FILE":                   passwordPepperPath,
+		"ASCENDANY_AUTH_ISSUER":                            "ascendany",
+		"ASCENDANY_AUTH_AUDIENCE":                          "ascendany-v2",
+		"ASCENDANY_AUTH_ALLOWED_ORIGINS":                   "https://ascendany.kkkzbh.cn,ascendany-app://bundle,capacitor://localhost,https://localhost,http://127.0.0.1:5173",
+		"ASCENDANY_AUTH_ACCESS_TTL":                        "15m",
+		"ASCENDANY_AUTH_REFRESH_TTL":                       "720h",
+		"ASCENDANY_HTTP_TRUSTED_PROXY_CIDRS":               "127.0.0.1/32",
+		"ASCENDANY_HTTP_CLIENT_IP_HEADER":                  "CF-Connecting-IP",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":                "6",
+		"ASCENDANY_ARTIFACT_ROOT":                          "/var/lib/ascendany/artifacts",
+		"ASCENDANY_ARTIFACT_MAX_BYTES":                     "134217728",
+		"ASCENDANY_ARTIFACT_ORPHAN_MIN_AGE":                "24h",
+		"ASCENDANY_ARTIFACT_RECONCILE_INTERVAL":            "1h",
+		"ASCENDANY_PINTIA_MAX_TOTAL_NODES":                 "2000000",
+		"ASCENDANY_PINTIA_MAX_TOTAL_STRING_BYTES":          "33554432",
+		"ASCENDANY_PINTIA_MAX_JSON_DEPTH":                  "32",
+		"ASCENDANY_PINTIA_MAX_STRING_BYTES":                "8388608",
+		"ASCENDANY_PINTIA_MAX_PROBLEMS":                    "1000",
+		"ASCENDANY_PINTIA_MAX_PARTICIPANTS":                "20000",
+		"ASCENDANY_PINTIA_MAX_PROBLEM_RESULTS_PER_RANKING": "1000",
+		"ASCENDANY_PINTIA_MAX_SUBMISSIONS":                 "20000",
+		"ASCENDANY_PINTIA_MAX_CASE_RESULTS_PER_SUBMISSION": "1000",
+		"ASCENDANY_PINTIA_MAX_CODE_BYTES":                  "1048576",
+		"ASCENDANY_IMPORT_WORKER_OWNER":                    "km6-import",
+		"ASCENDANY_IMPORT_LEASE_DURATION":                  "5m",
+		"ASCENDANY_IMPORT_RETRY_DELAY":                     "30s",
+		"ASCENDANY_IMPORT_POLL_INTERVAL":                   "1s",
+		"ASCENDANY_ANALYTICS_CONFIG":                       "/etc/ascendany/v2/analytics.json",
+		"ASCENDANY_ANALYTICS_WORKER_OWNER":                 "km6-analytics",
+		"ASCENDANY_ANALYTICS_LEASE_DURATION":               "5m",
+		"ASCENDANY_ANALYTICS_POLL_INTERVAL":                "1s",
+		"ASCENDANY_FEEDBACK_RATE_WINDOW":                   "1h",
+		"ASCENDANY_FEEDBACK_RATE_MAXIMUM":                  "5",
+		"ASCENDANY_FEEDBACK_DELIVERY_CONFIGURATION_KEY":    "feedback.delivery.default",
+		"ASCENDANY_FEEDBACK_WORKER_OWNER":                  "km6-feedback",
+		"ASCENDANY_FEEDBACK_LEASE_DURATION":                "5m",
+		"ASCENDANY_FEEDBACK_RETRY_DELAY":                   "30s",
+		"ASCENDANY_FEEDBACK_POLL_INTERVAL":                 "1s",
+		"ASCENDANY_CHAT_AGENT_WORKER_OWNER":                "km6-chat-agent",
+		"ASCENDANY_CHAT_AGENT_LEASE_DURATION":              "5m",
+		"ASCENDANY_CHAT_AGENT_POLL_INTERVAL":               "1s",
+		"ASCENDANY_CHAT_AGENT_MAXIMUM_CONTEXT_ITEMS":       "200",
+		"ASCENDANY_CHAT_AGENT_MAXIMUM_TOOL_ROUNDS":         "8",
+		"ASCENDANY_RECOMMENDATION_MODEL_PATH":              "/opt/ascendany/current/models/recommendation-model.json",
+		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":            strings.Repeat("a", 64),
+		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE":           "production",
+		"ASCENDANY_JUDGE_SOCKET_DIRECTORY":                 "/run/ascendany-judge",
+		"ASCENDANY_JUDGE_WORKER_USER":                      "ascendany-judge",
+		"ASCENDANY_JUDGE_SYSTEMCTL_PATH":                   "/usr/bin/systemctl",
+		"ASCENDANY_JUDGE_STARTUP_TIMEOUT":                  "30s",
+		"ASCENDANY_JUDGE_SESSION_TIMEOUT":                  "30m",
+		"ASCENDANY_JUDGE_STOP_TIMEOUT":                     "15s",
+		"ASCENDANY_JUDGE_WORKER_OWNER":                     "km6-judge",
+		"ASCENDANY_JUDGE_LEASE_DURATION":                   "5m",
+		"ASCENDANY_JUDGE_RETRY_DELAY":                      "30s",
+		"ASCENDANY_JUDGE_POLL_INTERVAL":                    "1s",
+		"ASCENDANY_JUDGE_MAXIMUM_ATTEMPTS":                 "3",
+		"ASCENDANY_LSP_CONTROL_SOCKET":                     "/run/ascendany-lsp-control/control.sock",
+		"ASCENDANY_LSP_WORKER_USER":                        "ascendany-lsp",
+		"ASCENDANY_LSP_SYSTEMCTL_PATH":                     "/usr/bin/systemctl",
+		"ASCENDANY_LSP_MAXIMUM_SESSIONS":                   "64",
+		"ASCENDANY_LSP_MAXIMUM_PENDING_HANDSHAKES":         "16",
+		"ASCENDANY_LSP_HANDSHAKE_TIMEOUT":                  "5s",
+		"ASCENDANY_LSP_STARTUP_TIMEOUT":                    "30s",
+		"ASCENDANY_LSP_STOP_TIMEOUT":                       "15s",
+		"ASCENDANY_WRITE_MODE":                             "disabled",
 	}
 }
 

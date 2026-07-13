@@ -56,10 +56,6 @@ func (handler *Handler) createPintiaImport(writer http.ResponseWriter, request *
 	if _, ok := handler.requireAdmin(writer, request); !ok {
 		return
 	}
-	if !handler.capabilities.WritesEnabled {
-		handler.writeAPIError(writer, request, http.StatusServiceUnavailable, "writes_disabled", "Write operations are disabled.")
-		return
-	}
 	contentType, present, valid := singleHeader(request.Header, "Content-Type")
 	if !valid || !present || contentType != importing.PintiaSnapshotV2MediaType {
 		handler.writeAPIError(writer, request, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must match the Pintia snapshot v2 contract.")

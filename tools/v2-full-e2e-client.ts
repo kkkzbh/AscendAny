@@ -1,13 +1,17 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import {
   consumeEnrollmentClaim,
   createClient,
+  createConfigurationVersion,
   createPintiaImport,
   getCapabilities,
   getExamAnalysisGeneration,
   getImportJob,
   getLiveness,
   getReadiness,
+  getRecommendationReviewContext,
+  getSelfRecommendation,
   getSelfStudentAnalytics,
   getStudentLeaderboard,
   getVersion,
@@ -19,6 +23,7 @@ import {
   type AuthSession,
   type ExamAnalysisGeneration,
   type ImportJob,
+  type RecommendationKnowledgeCatalogV1,
 } from "../packages/sdk/src/index.ts";
 
 type SnapshotIdentity = {
@@ -63,6 +68,96 @@ function apiErrorCode(error: unknown): string {
     return error.code;
   }
   return "unknown_error";
+}
+
+function canonicalJSONString(value: string): string {
+  if (value.includes("\0")) {
+    throw new Error("canonical JSON strings must not contain NUL");
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new Error("canonical JSON strings must not contain an unpaired surrogate");
+      }
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new Error("canonical JSON strings must not contain an unpaired surrogate");
+    }
+  }
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("&", "\\u0026")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+}
+
+function canonicalJSON(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return canonicalJSONString(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("canonical JSON numbers must be finite");
+    }
+    const encoded = JSON.stringify(Object.is(value, -0) ? 0 : value);
+    const exponentIndex = encoded.search(/[eE]/);
+    if (exponentIndex < 0) {
+      return encoded;
+    }
+    const coefficient = encoded.slice(0, exponentIndex);
+    const exponent = Number.parseInt(encoded.slice(exponentIndex + 1), 10);
+    const negative = coefficient.startsWith("-");
+    const unsigned = negative ? coefficient.slice(1) : coefficient;
+    const decimalIndex = unsigned.indexOf(".");
+    const digits = unsigned.replace(".", "");
+    const expandedIndex = (decimalIndex < 0 ? unsigned.length : decimalIndex) + exponent;
+    const magnitude = expandedIndex <= 0
+      ? `0.${"0".repeat(-expandedIndex)}${digits}`
+      : expandedIndex >= digits.length
+        ? `${digits}${"0".repeat(expandedIndex - digits.length)}`
+        : `${digits.slice(0, expandedIndex)}.${digits.slice(expandedIndex)}`;
+    return negative ? `-${magnitude}` : magnitude;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJSON(item)).join(",")}]`;
+  }
+  if (isObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${canonicalJSONString(key)}:${canonicalJSON(value[key])}`)
+      .join(",")}}`;
+  }
+  throw new Error("canonical JSON contains an unsupported value");
+}
+
+function parseCanonicalCatalog(bytes: Buffer, expectedSHA256: string): RecommendationKnowledgeCatalogV1 {
+  const actualSHA256 = createHash("sha256").update(bytes).digest("hex");
+  if (actualSHA256 !== expectedSHA256) {
+    throw new Error("knowledge catalog bytes differ from the independently supplied SHA-256");
+  }
+  const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+  if (!isObject(parsed)) {
+    throw new Error("knowledge catalog root must be an object");
+  }
+  if (!Buffer.from(canonicalJSON(parsed), "utf8").equals(bytes)) {
+    throw new Error("knowledge catalog bytes must already use the server canonical JSON encoding");
+  }
+  return parsed as RecommendationKnowledgeCatalogV1;
+}
+
+function strictlyOrdered(values: readonly string[]): boolean {
+  return values.length > 0 && values.every((value, index) => (
+    value.length > 0 && (index === 0 || values[index - 1] < value)
+  ));
 }
 
 function assertAPIResult<T>(
@@ -134,8 +229,23 @@ async function main(): Promise<void> {
   const adminPasswordPath = requiredEnvironment("ASCENDANY_E2E_ADMIN_PASSWORD_FILE");
   const expectedCommit = requiredEnvironment("ASCENDANY_E2E_EXPECTED_COMMIT");
   const expectedVersion = requiredEnvironment("ASCENDANY_E2E_EXPECTED_VERSION");
+  const expectedModelSHA256 = requiredEnvironment("ASCENDANY_E2E_EXPECTED_MODEL_SHA256");
+  const expectedModelPurpose = requiredEnvironment("ASCENDANY_E2E_EXPECTED_MODEL_PURPOSE");
+  if (expectedModelPurpose !== "acceptance_test") {
+    throw new Error("full E2E requires the acceptance_test model purpose");
+  }
+  const catalogPath = requiredEnvironment("ASCENDANY_E2E_KNOWLEDGE_CATALOG_PATH");
+  const expectedCatalogSHA256 = requiredEnvironment("ASCENDANY_E2E_EXPECTED_CATALOG_SHA256");
 
   const snapshotBytes = await readFile(snapshotPath);
+  const catalogDocument = parseCanonicalCatalog(
+    await readFile(catalogPath),
+    expectedCatalogSHA256,
+  );
+  const catalogKnowledgePointIDs = catalogDocument.knowledgePoints.map((point) => point.id);
+  if (!strictlyOrdered(catalogKnowledgePointIDs)) {
+    throw new Error("knowledge catalog points must be nonempty and strictly ordered");
+  }
   const snapshot = JSON.parse(snapshotBytes.toString("utf8")) as unknown;
   if (
     !isObject(snapshot)
@@ -283,6 +393,67 @@ async function main(): Promise<void> {
     throw new Error(`analytics generation terminated as ${generation.status}`);
   }
 
+  const reviewContext = assertAPIResult(
+    "recommendation review context",
+    await getRecommendationReviewContext({ client: adminClient }),
+  );
+  const assignmentByIdentity = new Map(catalogDocument.problemAssignments.map((assignment) => [
+    `${assignment.problemId}\0${assignment.problemFactSha256}`,
+    assignment,
+  ]));
+  const reviewProblemKeys = reviewContext.problems.map((problem) => problem.problemKey);
+  if (
+    reviewContext.analyticsGenerationId !== generation.generationId
+    || reviewContext.analyticsHeadRevision < 1
+    || !/^[0-9a-f]{64}$/.test(reviewContext.inputManifestSha256)
+    || reviewContext.problems.length !== assignmentByIdentity.size
+    || !strictlyOrdered(reviewProblemKeys)
+  ) {
+    throw new Error("recommendation review context provenance is noncanonical");
+  }
+  for (const problem of reviewContext.problems) {
+    const sourceProblemKey = `pintia:problem:${Buffer.byteLength(problem.problemId, "utf8")}:${problem.problemId}`;
+    if (
+      problem.platform !== "pintia"
+      || problem.sourceProblemKey !== sourceProblemKey
+      || problem.problemKey !== `${sourceProblemKey}:${problem.problemFactSha256}`
+      || !assignmentByIdentity.has(`${problem.problemId}\0${problem.problemFactSha256}`)
+      || problem.sourceProblemSets.length < 1
+      || !problem.sourceProblemSets.some((source) => source.problemSetId === identity.exam.problemSetId)
+    ) {
+      throw new Error("recommendation review problem identity differs from the published catalog assignment");
+    }
+  }
+
+  const catalogPublication = assertAPIResult(
+    "publish recommendation knowledge catalog",
+    await createConfigurationVersion({
+      client: adminClient,
+      body: {
+        key: "recommendation.catalog.active",
+        kind: "knowledge_catalog",
+        expectedHeadRevision: 0,
+        expectedAnalyticsGenerationId: reviewContext.analyticsGenerationId,
+        expectedAnalyticsHeadRevision: reviewContext.analyticsHeadRevision,
+        expectedInputManifestSha256: reviewContext.inputManifestSha256,
+        schemaId: "ascendany.knowledge_catalog.recommendation.v1",
+        document: catalogDocument,
+        credentialRef: null,
+      },
+    }),
+  );
+  if (
+    catalogPublication.idempotent
+    || catalogPublication.item.kind !== "knowledge_catalog"
+    || catalogPublication.item.headRevision !== 1
+    || catalogPublication.item.activeVersion?.number !== 1
+    || catalogPublication.item.activeVersion.schemaId
+      !== "ascendany.knowledge_catalog.recommendation.v1"
+    || catalogPublication.item.activeVersion.documentSha256 !== expectedCatalogSHA256
+  ) {
+    throw new Error("knowledge catalog publication provenance is noncanonical");
+  }
+
   const managedStudents = assertAPIResult(
     "list managed students",
     await listManagedStudents({ client: adminClient, query: { limit: 100 } }),
@@ -344,6 +515,46 @@ async function main(): Promise<void> {
     throw new Error("enrolled student is missing from the published leaderboard");
   }
 
+  const recommendation = assertAPIResult(
+    "student recommendation",
+    await getSelfRecommendation({ client: studentClient }),
+  );
+  if (
+    recommendation.state !== "fresh"
+    || recommendation.result.schema !== "ascendany.recommendation.inference-result.v1"
+    || !/^[0-9a-f]{64}$/.test(recommendation.result.sha256)
+    || recommendation.model.purpose !== expectedModelPurpose
+    || recommendation.model.artifactSha256 !== expectedModelSHA256
+    || recommendation.model.knowledgeCatalogSha256 !== expectedCatalogSHA256
+    || recommendation.model.modelSchema !== "ascendany.recommendation.inference-model.v1"
+    || recommendation.model.inferenceContract !== "ascendany.recommendation.inference.v1"
+    || recommendation.model.modelHeadRevision !== recommendation.modelHeadRevision
+    || recommendation.model.applicationVersion !== expectedVersion
+    || recommendation.model.applicationCommit !== expectedCommit
+    || recommendation.model.applicationBuildTime !== version.buildTime
+  ) {
+    throw new Error("fresh recommendation model/catalog provenance differs from the release contract");
+  }
+  const masteryIDs = recommendation.result.knowledgeMastery.map((item) => item.knowledgePointId);
+  if (
+    !strictlyOrdered(masteryIDs)
+    || masteryIDs.length !== catalogKnowledgePointIDs.length
+    || masteryIDs.some((value, index) => value !== catalogKnowledgePointIDs[index])
+  ) {
+    throw new Error("recommendation knowledge-mastery output is empty or noncanonical");
+  }
+  if (
+    recommendation.result.status === "ready"
+    && (
+      recommendation.result.learningPath.length === 0
+      || recommendation.result.learningPath.some((step, index) => (
+        step.order !== index + 1 || step.recommendedProblems.length === 0
+      ))
+    )
+  ) {
+    throw new Error("ready recommendation learning path is empty or unordered");
+  }
+
   const audit = assertAPIResult(
     "audit events",
     await listAuditEvents({ client: adminClient, query: { limit: 100 } }),
@@ -361,9 +572,19 @@ async function main(): Promise<void> {
     newSnapshotStatus: nextJob.status,
     snapshotSequence: exam.snapshotSequence,
     analyticsStatus: generation.status,
+    recommendationReviewContextVerified: true,
     enrollmentSingleUse: true,
     studentAnalyticsState: analytics.state,
     leaderboardState: leaderboard.state,
+    knowledgeCatalogPublished: true,
+    knowledgeCatalogSha256: expectedCatalogSHA256,
+    recommendationState: recommendation.state,
+    recommendationResultSchema: recommendation.result.schema,
+    recommendationResultStatus: recommendation.result.status,
+    recommendationResultSha256: recommendation.result.sha256,
+    recommendationOutputCount: recommendation.result.knowledgeMastery.length,
+    recommendationOrdered: true,
+    model: recommendation.model,
     examCount: exams.items.length,
     auditEventCount: audit.items.length,
   })}\n`);

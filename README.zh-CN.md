@@ -10,7 +10,7 @@
   <strong>学生能力分析平台</strong>
 </p>
 
-AscendAny 把 Pintia 程序设计题目集的完整快照转换为可追溯的能力画像、Rating、成就、排行榜、考试分析和个性化学习建议。Web、Desktop 和 Mobile 共享账号、画像、考试、AI 对话与推荐等核心学生能力；各客户端按平台提供适配交互。管理员通过独立 Import Console 管理导入、账号、配置、审计与模型训练任务。
+AscendAny 把 Pintia 程序设计题目集的完整快照转换为可追溯的能力画像、Rating、成就、排行榜、考试分析和个性化学习建议。Web、Desktop 和 Mobile 共享账号、画像、考试、AI 对话与推荐等核心学生能力；各客户端按平台提供适配交互。管理员通过独立 Import Console 管理导入、账号、配置、审计与推荐知识目录。
 
 ## v2 架构
 
@@ -22,10 +22,9 @@ AscendAny 把 Pintia 程序设计题目集的完整快照转换为可追溯的�
 | 隔离 OJ 与 C++ LSP | Go `ascendany-judge`、`ascendany-lsp` |
 | Web、Desktop、Mobile、Import Console、官网 | TypeScript |
 | Pintia 数据采集 | TypeScript Manifest V3 浏览器插件 |
-| 推荐模型编排 | Go `ascendany-trainer-agent` |
-| 推荐模型训练实现 | 隔离 Python trainer |
+| 推荐模型制品校验与在线推理 | Go `ascendany-model`、`ascendanyd` |
 
-在线 runtime 不依赖 Python。Python trainer 只读取 Go 生成的 immutable training bundle，并在无网络、无数据库凭据的子进程中写出一个受限 output bundle。
+生产 release build 接收一个外部训练完成的 immutable `ascendany.recommendation.inference-model.v1` 制品。Release builder 校验其精确 SHA-256、闭合 contract、feature schema、parameter digests 与 golden vectors。`ascendanyd` 将制品绑定为不可变数据库 model release，并在 Go 中执行在线推理。训练属于后续独立模块，不进入本仓库、生产 release、systemd unit、credential、HTTP API 或数据库 role。
 
 ## 数据边界
 
@@ -40,10 +39,10 @@ AscendAny 把 Pintia 程序设计题目集的完整快照转换为可追溯的�
 - enrollment claim、登录、refresh、logout、profile、session 撤销与 role authorization；
 - 五维能力、Rating 历史、成就、排行榜、考试列表与考试分析；
 - durable AI chat、自动分析、笔记工具调用与审计；
-- fresh/stale/unavailable 推荐状态、学习路径与知识详情；
+- fresh/unavailable 推荐状态、学习路径、evidence、不可变模型 provenance 与知识详情；
 - OJ run/submit 和 clangd LSP，执行进程不持有数据库凭据；
 - Pintia v2 导入、任务历史、失败诊断与断线续传事件；
-- 账号、学生、审计、prompt/model 配置、模型连接测试与训练任务管理。
+- 账号、学生、审计、prompt/model 配置、模型连接测试与推荐知识目录管理。
 
 ## 仓库入口
 
@@ -57,8 +56,7 @@ AscendAny 把 Pintia 程序设计题目集的完整快照转换为可追溯的�
 | `apps/site/` | 产品官网。 |
 | `packages/sdk/` | 由最终 OpenAPI contract 生成的唯一 TypeScript SDK。 |
 | `tools/pintia-exporter-extension/` | Pintia snapshot v2 Chrome 插件。 |
-| `trainers/recommendation/` | 唯一允许保留 Python 的隔离训练器。 |
-| `contracts/` | OpenAPI 与 Pintia snapshot v2 contract/fixtures。 |
+| `contracts/` | OpenAPI、Pintia snapshot v2 与外部推荐模型 contract/fixtures。 |
 | `deploy/v2/` | systemd、权限、配置和生产验收 contract。 |
 | `doc/重写v2架构与验收.md` | v2 ownership、数据流、清理范围和验收门槛。 |
 
@@ -80,8 +78,6 @@ pnpm --filter @ascendany/mobile check
 pnpm --filter @ascendany/import-console check
 pnpm --filter @ascendany/desktop test
 pnpm --filter @ascendany/desktop build
-
-.venv/bin/python -m unittest discover -s trainers/recommendation/tests -v
 ```
 
 ### Rootless PostgreSQL 演练
@@ -92,7 +88,7 @@ Fedora 44 x86_64 native PgBouncer 1.25.2 RPM。PgBouncer 的临时配置与 HBA 
 绑定 loopback。PostgreSQL 镜像缺失时需要显式执行 pull；演练脚本不会拉取或启动
 PgBouncer 镜像。
 每次重置一次性 role password 后，integration runner 都会通过同目录 fsync 与
-atomic rename 发布精确的 admin/legacy/runtime SCRAM verifier 集合，再显式执行 PgBouncer
+atomic rename 发布精确的 v2 capability-role SCRAM verifier 集合，再显式执行 PgBouncer
 `RELOAD` 和 database `RECONNECT`。
 
 ```bash
@@ -121,11 +117,14 @@ Pintia validator 校验，再执行真实的 create、verify、restore-verify、
 
 ```bash
 tools/run-v2-backup-restore-podman-rehearsal.sh \
-  --confirm-reset drop-disposable-ascendany-v2-backup-restore
+  --confirm-reset drop-disposable-ascendany-v2-backup-restore \
+  --recommendation-model /absolute/canonical/recommendation-model.json \
+  --recommendation-model-sha256 64_lowercase_hex
 ```
 
 使用受保护的真实导出文件时传入
-`--snapshot /absolute/canonical/snapshot.json`，无需修改脚本或仓库内容。
+`--snapshot /absolute/canonical/snapshot.json`，无需修改脚本或仓库内容。模型参数必须
+指向外部训练并经过 review 的制品；演练只验证、绑定模型并执行 Go inference，不执行训练。
 
 release 到 restore 的完整验收入口、guarded 本地运行方式，以及独立且 fail-closed
 的真实 Judge/LSP sandbox gate 见 [AscendAny v2 full E2E](doc/v2-full-e2e.md)。

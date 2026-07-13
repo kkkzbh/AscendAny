@@ -269,7 +269,6 @@ func newAchievementTestHandler(
 func disableHTTPWrites(options *Options) {
 	options.Artifacts = nil
 	options.Imports = nil
-	options.RecommendationQueue = nil
 	options.ModelProbe = nil
 	options.Capabilities = testCapabilities(false)
 }

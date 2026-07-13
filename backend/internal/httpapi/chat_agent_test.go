@@ -324,7 +324,6 @@ func newChatAgentTestHandler(t *testing.T, service ChatAgentService, writes bool
 	if !writes {
 		options.Artifacts = nil
 		options.Imports = nil
-		options.RecommendationQueue = nil
 	}
 	handler, err := New(options)
 	if err != nil {

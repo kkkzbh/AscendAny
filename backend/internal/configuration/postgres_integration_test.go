@@ -3,12 +3,14 @@ package configuration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
 )
@@ -32,7 +34,7 @@ func TestPostgresConfigurationVersionLifecycle(t *testing.T) {
 	if !found {
 		t.Skip("integration database has no active administrator session")
 	}
-	repository, err := NewPostgresRepository(pool)
+	repository, err := NewPostgresRepository(pool, acceptingRecommendationDocumentValidator{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +117,38 @@ WHERE account_id = (SELECT account_id FROM ascendany.auth_accounts WHERE public_
 	}
 	if auditCount != 2 {
 		t.Fatalf("audit count=%d", auditCount)
+	}
+}
+
+func TestPostgresRejectsReservedCatalogKeyWithWrongKind(t *testing.T) {
+	databaseURL := os.Getenv("ASCENDANY_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("ASCENDANY_TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	identifier, err := randomUUIDv4()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tx.Exec(ctx, `
+INSERT INTO ascendany.configuration_items (public_id, configuration_key, configuration_kind)
+VALUES ($1::uuid, $2, 'prompt')`, identifier, KnowledgeCatalogKey)
+	var databaseError *pgconn.PgError
+	if !errors.As(err, &databaseError) || databaseError.Code != "23514" ||
+		databaseError.ConstraintName != "configuration_items_recommendation_catalog_identity" {
+		t.Fatalf("reserved catalog key error=%v", err)
 	}
 }
 
