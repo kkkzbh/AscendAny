@@ -3923,6 +3923,22 @@ run_runtime_psql() {
     /usr/bin/psql -X "$@"
 }
 
+run_runtime_psql_with_variables() {
+  local argument_count="$#"
+  local command_index command
+  local -a arguments=("$@")
+  if (( argument_count < 2 )); then
+    return 2
+  fi
+  command_index=$((argument_count - 2))
+  if [[ "${arguments[$command_index]}" != -c ]]; then
+    return 2
+  fi
+  command="${arguments[$((argument_count - 1))]}"
+  unset 'arguments[command_index]' 'arguments[argument_count - 1]'
+  printf '%s\n' "$command" | run_runtime_psql "${arguments[@]}"
+}
+
 check_admin_bootstrap_database() {
   local result admin_count active_admin_count canonical_admin_count
   local bootstrap_audit_count canonical_bootstrap_audit_count
@@ -4216,7 +4232,7 @@ check_catalog_publication_binding() {
       analytics_generation_id analytics_head_revision input_manifest_sha \
       current_model_head_revision current_model_artifact_sha published_account_id \
       published_session_id published_at audit_event_id configuration_mutated <<<"$receipt_values"
-    database_match="$(run_runtime_psql -A -t -v ON_ERROR_STOP=1 \
+    database_match="$(run_runtime_psql_with_variables -A -t -v ON_ERROR_STOP=1 \
       -v knowledge_catalog_publication_id="$publication_id" \
       -v publication_authorization_id="$authorization_id" \
       -v target_model_release_id="$target_model_release_id" \
@@ -4381,7 +4397,7 @@ ORDER BY knowledge_catalog_publication_id')" || database_ids=""
     fail "catalog publication target has no canonical prior model or release model identity"
     return
   fi
-  target_state="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 \
+  target_state="$(run_runtime_psql_with_variables -A -t -F '|' -v ON_ERROR_STOP=1 \
     -v release_model_id="$target_model_id" \
     -v release_model_sha="$release_model_sha256" \
     -v release_catalog_sha="$release_catalog_sha256" \
@@ -4459,7 +4475,7 @@ WHERE publication.target_model_id = :'\''release_model_id'\''::uuid
     fail "target catalog publication consumption differs from the selected model activation phase"
   fi
 
-  activation_state="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 \
+  activation_state="$(run_runtime_psql_with_variables -A -t -F '|' -v ON_ERROR_STOP=1 \
     -v target_publication_id="$target_publication_id" -c '
 /* ascendany-validator:catalog-publication-activation-state */
 WITH initial_publication AS (

@@ -144,6 +144,11 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   fixture_activation_state='1|1|1|1|1|0|1|1|0'
   run_runtime_psql() {
     local arguments="$*"
+    local sql=''
+    if [[ "$arguments" != *ascendany-validator:* ]]; then
+      sql="$(cat)"
+      arguments+=" $sql"
+    fi
     case "$arguments" in
       *ascendany-validator:catalog-publication-receipt*)
         if [[ "$arguments" == *'knowledge_catalog_publication_authorizations'* &&
