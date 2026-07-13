@@ -149,6 +149,29 @@ fi
   check_read_only_smoke_dropin_bytes "$fixture_root/read-only-smoke.conf"
   [[ "$failures" == "1" ]]
 
+  lsp_control_socket="$fixture_root/lsp-control.sock"
+  validation_phase=smoke
+  expected_write_mode=disabled
+  ascendanyd_active=1
+  failures=0
+  check_lsp_control_socket "$lsp_control_socket"
+  [[ "$failures" == "0" ]]
+  : >"$lsp_control_socket"
+  check_lsp_control_socket "$lsp_control_socket"
+  [[ "$failures" == "1" ]]
+  rm -f -- "$lsp_control_socket"
+  ln -s -- missing "$lsp_control_socket"
+  failures=0
+  check_lsp_control_socket "$lsp_control_socket"
+  [[ "$failures" == "1" ]]
+  rm -f -- "$lsp_control_socket"
+
+  validation_phase=production
+  expected_write_mode=enabled
+  failures=0
+  check_lsp_control_socket "$lsp_control_socket"
+  [[ "$failures" == "1" ]]
+
   health_fixture_mode=valid
   curl() {
     local endpoint="${!#}"

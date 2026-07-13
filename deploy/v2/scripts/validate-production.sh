@@ -1284,16 +1284,7 @@ check_lsp_runtime() {
     pass "ascendany-lsp belongs only to its primary and dedicated control groups"
   fi
 
-  if [[ "$ascendanyd_active" == "1" && "$expected_write_mode" == "enabled" ]]; then
-    local control_socket=/run/ascendany-lsp-control/control.sock
-    metadata="$(stat -Lc '%U:%G:%a' "$control_socket" 2>/dev/null || true)"
-    if [[ ! -S "$control_socket" || -L "$control_socket" ||
-          "$metadata" != 'ascendany:ascendany-lsp-control:660' ]]; then
-      fail "active LSP control socket lacks the exact non-root server identity boundary"
-    else
-      pass "active LSP control socket binds its non-root inode owner to peer authentication"
-    fi
-  fi
+  check_lsp_control_socket
 
   root=/var/lib/ascendany-lsp-root
   expected=$'bin\ndev\netc\nhome\nlib\nlib64\nopt\nproc\nrun\nsys\ntmp\nusr\nvar'
@@ -1338,6 +1329,25 @@ check_lsp_runtime() {
     fail "LSP polkit rule is missing or not root:root 0644"
   else
     pass "LSP systemd authorization rule is root-owned"
+  fi
+}
+
+check_lsp_control_socket() {
+  local control_socket="${1:-/run/ascendany-lsp-control/control.sock}"
+  local metadata
+  if [[ "$ascendanyd_active" == "1" && "$expected_write_mode" == "enabled" ]]; then
+    metadata="$(stat -Lc '%U:%G:%a' "$control_socket" 2>/dev/null || true)"
+    if [[ ! -S "$control_socket" || -L "$control_socket" ||
+          "$metadata" != 'ascendany:ascendany-lsp-control:660' ]]; then
+      fail "active write runtime LSP control socket lacks the exact non-root server identity boundary"
+    else
+      pass "active write runtime LSP control socket binds its non-root inode owner to peer authentication"
+    fi
+  elif [[ "$ascendanyd_active" == "1" &&
+          ( -e "$control_socket" || -L "$control_socket" ) ]]; then
+    fail "read-only runtime exposes an LSP control socket"
+  elif [[ "$ascendanyd_active" == "1" ]]; then
+    pass "read-only runtime exposes no LSP control socket"
   fi
 }
 
