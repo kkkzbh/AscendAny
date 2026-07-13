@@ -152,12 +152,15 @@ readonly -a required_paths=(
   bin/ascendanyd
   bin/ascendany-admin-bootstrap
   bin/ascendany-backup
+  bin/ascendany-catalog-publish
   bin/ascendany-judge
   bin/ascendany-lsp
   bin/ascendany-migrate
   bin/ascendany-model
   bin/ascendany-release-ops
   models/recommendation-model.json
+  models/recommendation-knowledge-catalog.json
+  operators/ascendany-production-initialize.mjs
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
@@ -170,10 +173,13 @@ readonly -a required_paths=(
   config/ascendanyd.env
   config/ascendanyd-read-only-smoke.env
   config/backup.env
+  config/catalog-publish.env
   config/cloudflared.yaml
   config/fedora-runtime-packages.json
   config/judge.env
+  config/judge-compiler-rootfs.inventory
   config/judge-image-lock.json
+  config/judge-images.Containerfile
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
@@ -181,7 +187,9 @@ readonly -a required_paths=(
   config/postgresql-ident.conf
   config/restore.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-register.service
   systemd/ascendany-model-activate.service
+  systemd/ascendany-catalog-publish.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -206,12 +214,14 @@ readonly -a required_paths=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
+  scripts/postgres-schema-fingerprint.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
 )
 readonly -a required_directories=(
   bin
   models
+  operators
   contracts
   contracts/openapi
   contracts/pintia
@@ -228,7 +238,9 @@ readonly -a required_directories=(
 )
 readonly -a release_consumer_service_units=(
   ascendanyd.service
+  ascendany-model-register.service
   ascendany-model-activate.service
+  ascendany-catalog-publish.service
   ascendany-admin-bootstrap.service
   ascendany-backup.service
   ascendany-cloudflared.service
@@ -490,7 +502,7 @@ validate_manifest_contract() {
       (.path | type == "string" and length >= 1 and length <= 4096 and test("^[0-9A-Za-z_@./+-]+$")) and
       (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
       (.size | type == "number" and (floor == .) and . > 0 and . <= $max_file_size) and
-      (.mode == "0644" or .mode == "0755"))) and
+      (.mode == "0555" or .mode == "0644" or .mode == "0755"))) and
     ([.files[].path] | length == (unique | length)) and
     ([.files[].size] | add <= $max_total_size)
     ' "$manifest_path" >/dev/null || die "$label violates the strict installation contract"
@@ -531,6 +543,8 @@ load_manifest_entries() {
     expected_mode=0644
     if [[ "$relative" == bin/* || "$relative" == scripts/* ]]; then
       expected_mode=0755
+    elif [[ "$relative" == 'operators/ascendany-production-initialize.mjs' ]]; then
+      expected_mode=0555
     fi
     [[ "${modes_ref[$index]}" == "$expected_mode" ]] || die "$label mode differs from the release contract: $relative"
   done
@@ -931,24 +945,35 @@ verify_installed_tree \
   manifest_sizes \
   manifest_modes
 model_index=-1
+catalog_index=-1
 for index in "${!required_paths[@]}"; do
   if [[ "${required_paths[$index]}" == 'models/recommendation-model.json' ]]; then
     model_index="$index"
-    break
+  elif [[ "${required_paths[$index]}" == 'models/recommendation-knowledge-catalog.json' ]]; then
+    catalog_index="$index"
   fi
 done
 (( model_index >= 0 )) || die 'recommendation model is absent from the release contract'
+(( catalog_index >= 0 )) || die 'knowledge catalog is absent from the release contract'
 if ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
-    "$stage_root/bin/ascendany-model" verify \
+    "$stage_root/bin/ascendany-model" verify-catalog \
+      --catalog "$stage_root/models/recommendation-knowledge-catalog.json" \
+      --catalog-sha256 "${manifest_hashes[$catalog_index]}" \
       --model "$stage_root/models/recommendation-model.json" \
-      --sha256 "${manifest_hashes[$model_index]}" \
+      --model-sha256 "${manifest_hashes[$model_index]}" \
       --expected-purpose "$expected_release_purpose"; then
-  die 'manifest-bound recommendation model failed semantic verification'
+  die 'manifest-bound recommendation model/catalog pair failed semantic verification'
 fi
-if [[ "$(/usr/bin/grep -Fxc "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=$expected_release_purpose" "$stage_root/config/ascendanyd.env")" != 1 ||
-      "$(/usr/bin/grep -Ec '^ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=' "$stage_root/config/ascendanyd.env")" != 1 ]]; then
-  die 'runtime recommendation model purpose differs from the release purpose'
-fi
+for release_config in "$stage_root/config/ascendanyd.env" "$stage_root/config/catalog-publish.env"; do
+  [[ "$(/usr/bin/grep -Fxc "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=$expected_release_purpose" "$release_config")" == 1 &&
+     "$(/usr/bin/grep -Ec '^ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=' "$release_config")" == 1 &&
+     "$(/usr/bin/grep -Fxc "ASCENDANY_RECOMMENDATION_MODEL_SHA256=${manifest_hashes[$model_index]}" "$release_config")" == 1 &&
+     "$(/usr/bin/grep -Ec '^ASCENDANY_RECOMMENDATION_MODEL_SHA256=' "$release_config")" == 1 &&
+     "$(/usr/bin/grep -Fxc "ASCENDANY_KNOWLEDGE_CATALOG_SHA256=${manifest_hashes[$catalog_index]}" "$release_config")" == 1 &&
+     "$(/usr/bin/grep -Ec '^ASCENDANY_KNOWLEDGE_CATALOG_SHA256=' "$release_config")" == 1 ]] ||
+    die "release model/catalog configuration differs from the manifest: $release_config"
+done
+unset release_config
 
 while IFS= read -r -d '' staged_file; do
   /usr/bin/sync -- "$staged_file"

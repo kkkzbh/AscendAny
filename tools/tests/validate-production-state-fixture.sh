@@ -140,7 +140,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
     --arg applicationCommit "$release_manifest_commit" \
     --arg applicationBuildTime "$release_manifest_build_time" '
       $model[0] as $installed |
-      ($installed | {
+	      ($installed | {
         schema: .schema,
         modelId: .manifest.modelId,
         purpose: .manifest.purpose,
@@ -155,23 +155,54 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
         actorFeatureIds: .manifest.actorFeatureIds,
         problemFeatureIds: .manifest.problemFeatureIds,
         knowledgePointIds: .manifest.knowledgePointIds
-      }) as $manifest |
-      {
+	      }) as $manifest |
+	      ({
+	        schema: "ascendany.knowledge_catalog.publication-receipt.v1",
+	        authorizationId: "77777777-7777-4777-8777-777777777777",
+	        knowledgeCatalogPublicationId: "1",
+	        targetModelReleaseId: "1",
+	        catalogSha256: $installed.manifest.knowledgeCatalogSha256,
+	        modelArtifactSha256: $artifactSHA256,
+	        modelId: $installed.manifest.modelId,
+	        targetApplicationVersion: $applicationVersion,
+	        targetApplicationCommit: $applicationCommit,
+	        targetApplicationBuildTime: $applicationBuildTime,
+	        configurationKey: "recommendation.catalog.active",
+	        configurationId: "11111111-1111-4111-8111-111111111111",
+	        expectedConfigurationHeadRevision: 0,
+	        configurationHeadRevision: 1,
+	        configurationVersionId: "1",
+	        configurationVersionNumber: 1,
+	        analyticsGenerationId: "1",
+	        analyticsHeadRevision: 1,
+	        inputManifestSha256: ("a" * 64),
+	        currentModelHeadRevision: 1,
+	        currentModelArtifactSha256: $artifactSHA256,
+	        publishedByAccountId: "22222222-2222-4222-8222-222222222222",
+	        publishedBySessionId: "33333333-3333-4333-8333-333333333333",
+	        publishedAt: "2026-07-13T08:03:00Z",
+	        auditEventId: "1",
+	        configurationMutated: true
+	      }) as $publication |
+	      {
         schema: "ascendany.backup.bundle.v2",
         backupId: $backupId,
         createdAt: "2026-07-13T08:10:00Z",
         database: {
           databaseName: "ascendany_v2",
           file: {filename: "database.dump", format: "postgresql-custom", sha256: ("1" * 64), sizeBytes: 1},
-          migrations: [
+	          migrations: [
             {version: 1, name: "one", sha256: ("1" * 64)},
             {version: 2, name: "two", sha256: ("2" * 64)},
             {version: 3, name: "three", sha256: ("3" * 64)},
             {version: 4, name: "four", sha256: ("4" * 64)},
             {version: 5, name: "five", sha256: ("5" * 64)},
-            {version: 6, name: "six", sha256: ("6" * 64)}
-          ],
-          recommendationModel: {
+            {version: 6, name: "six", sha256: ("6" * 64)},
+	            {version: 7, name: "seven", sha256: ("7" * 64)}
+	          ],
+	          knowledgeCatalogPublicationIds: ["1"],
+	          knowledgeCatalogPublications: [$publication],
+	          recommendationModel: {
             releaseId: 1,
             headRevision: 2,
             modelId: $installed.manifest.modelId,
@@ -198,12 +229,18 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
             headUpdatedAt: "2026-07-13T08:02:00Z"
           }
         },
-        artifacts: {
-          file: {filename: "artifacts.tar.zst", format: "tar+zstd", sha256: ("2" * 64), sizeBytes: 1},
-          count: 0,
-          totalBytes: 0,
-          entries: []
-        }
+	        artifacts: {
+	          file: {filename: "artifacts.tar.zst", format: "tar+zstd", sha256: ("2" * 64), sizeBytes: 1},
+	          count: 0,
+	          totalBytes: 0,
+	          entries: []
+	        },
+	        catalogPublicationReceipts: {
+	          file: {filename: "catalog-receipts.tar.zst", format: "tar+zstd", sha256: ("3" * 64), sizeBytes: 1},
+	          count: 1,
+	          totalBytes: 1024,
+	          entries: [{publicationId: "1", path: "1.json", sha256: ("4" * 64), sizeBytes: 1024, mode: 416}]
+	        }
       }
     ' >"$backup_manifest"
 
@@ -212,9 +249,10 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
     manifest_sha256="$(sha256sum "$manifest_path" | awk '{print $1}')"
     jq -n \
       --slurpfile backup "$manifest_path" \
-      --arg manifestSHA256 "$manifest_sha256" \
-      --arg releaseCommit "$release_manifest_commit" \
-      --arg releaseVersion "$release_manifest_version" '
+	      --arg manifestSHA256 "$manifest_sha256" \
+	      --arg releaseCommit "$release_manifest_commit" \
+	      --arg releaseVersion "$release_manifest_version" \
+	      --arg catalogReceiptRoot "$restore_catalog_receipt_root" '
         $backup[0] as $bundle |
         $bundle.database.recommendationModel as $model |
         {
@@ -224,8 +262,10 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
           manifestSHA256: $manifestSHA256,
           artifactCount: $bundle.artifacts.count,
           databaseName: "ascendany_v2_restore_verify",
-          releaseCommit: $releaseCommit,
-          releaseVersion: $releaseVersion,
+	          releaseCommit: $releaseCommit,
+	          releaseVersion: $releaseVersion,
+	          catalogReceiptRoot: $catalogReceiptRoot,
+	          catalogReceiptCount: $bundle.catalogPublicationReceipts.count,
           modelId: $model.modelId,
           modelPurpose: $model.modelPurpose,
           modelArtifactSHA256: $model.artifactSha256,
@@ -317,6 +357,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
     local catalog_kind_count="${5:-1}" catalog_key_count="${6:-1}"
     local catalog_kind="${7:-knowledge_catalog}" catalog_document_sha="${8:-$catalog_sha}"
     local catalog_revision="${9:-1}"
+    local pending_publication_id="${10:-}"
     local catalog_key='recommendation.catalog.active'
     local catalog_schema='ascendany.knowledge_catalog.recommendation.v1'
     if [[ "$catalog_kind_count:$catalog_key_count" == 0:0 ]]; then
@@ -327,7 +368,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
       catalog_document_sha=''
     fi
     printf '%s\n' \
-      "$model_id|$release_model_sha256|$model_size|420|ascendany.recommendation.inference-model.v1|production|knowledge_mirt_feature_v1|ascendany.recommendation.inference.v1|$catalog_sha|$revision|$release_model_sha256|$event_version|$event_commit|$event_build_time|$catalog_kind_count|$catalog_key_count|$catalog_key|$catalog_kind|$catalog_revision|$catalog_revision|$catalog_schema|$catalog_document_sha|"
+      "$model_id|$release_model_sha256|$model_size|420|ascendany.recommendation.inference-model.v1|production|knowledge_mirt_feature_v1|ascendany.recommendation.inference.v1|$catalog_sha|$revision|$pending_publication_id|$release_model_sha256|$event_version|$event_commit|$event_build_time|$catalog_kind_count|$catalog_key_count|$catalog_key|$catalog_kind|$catalog_revision|$catalog_revision|$catalog_schema|$catalog_document_sha|"
   }
 
   deployment_transition=forward
@@ -339,6 +380,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
 
   validation_phase=smoke
   expected_forward_model_head_revision=2
+  expected_forward_model_artifact_sha256="$release_model_sha256"
   failures=0
   check_recommendation_model_binding
   [[ "$failures" == 0 && "$observed_forward_model_head_revision" == 2 ]]
@@ -369,6 +411,20 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   [[ "$failures" == 1 ]]
 
   deployment_transition=initial
+  validation_phase=staged
+  fixture_runtime_result='0|0|0'
+  failures=0
+  check_recommendation_model_binding
+  [[ "$failures" == 0 ]]
+  validation_phase=smoke
+  failures=0
+  check_recommendation_model_binding
+  [[ "$failures" == 0 ]]
+  fixture_runtime_result="$(fixture_model_binding_row "$release_manifest_version" "$release_manifest_commit" "$release_manifest_build_time" 1 0 0)"
+  failures=0
+  check_recommendation_model_binding
+  [[ "$failures" == 1 ]]
+
   validation_phase=activation
   fixture_runtime_result="$(fixture_model_binding_row "$release_manifest_version" "$release_manifest_commit" "$release_manifest_build_time" 1 0 0)"
   failures=0
@@ -402,11 +458,27 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   check_forward_database_state
   [[ "$failures" == 1 ]]
 
+  validation_phase=catalog
+  failures=0
+  check_forward_database_state
+  [[ "$failures" == 1 ]]
+  fingerprint_business="$(printf '4%.0s' {1..64})"
+  failures=0
+  check_forward_database_state
+  [[ "$failures" == 0 && "$observed_forward_database_fingerprint" == "$fingerprint_full" &&
+     "$observed_forward_business_fingerprint" == "$fingerprint_business" ]]
+
   validation_phase=activation
+  expected_forward_database_fingerprint="$fingerprint_full"
+  expected_forward_business_fingerprint="$fingerprint_business"
+  failures=0
+  check_forward_database_state
+  [[ "$failures" == 1 ]]
+  fingerprint_full="$(printf '5%.0s' {1..64})"
   failures=0
   check_forward_database_state
   [[ "$failures" == 0 ]]
-  fingerprint_business="$(printf '4%.0s' {1..64})"
+  fingerprint_business="$(printf '6%.0s' {1..64})"
   failures=0
   check_forward_database_state
   [[ "$failures" == 1 ]]
@@ -424,6 +496,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   expected_forward_database_fingerprint=''
   expected_forward_business_fingerprint=''
   expected_forward_model_head_revision=''
+  expected_forward_model_artifact_sha256=''
   deployment_transition=initial
   validation_phase=staged
   failures=0
@@ -441,6 +514,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   expected_forward_database_fingerprint="$(printf '1%.0s' {1..64})"
   expected_forward_business_fingerprint="$(printf '2%.0s' {1..64})"
   expected_forward_model_head_revision=2
+  expected_forward_model_artifact_sha256="$(printf '3%.0s' {1..64})"
   failures=0
   validate_input_contract
   [[ "$failures" == 0 ]]

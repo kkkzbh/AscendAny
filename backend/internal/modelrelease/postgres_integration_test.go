@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,9 +26,12 @@ func TestPostgresBindingPersistsVerifiedArtifact(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	controlPool := openIntegrationPool(t, ctx, databaseURL)
+	var binderAcquireArmed atomic.Bool
+	binderAcquireReady := make(chan struct{}, 2)
+	binderAcquireRelease := make(chan struct{})
 	binderPools := [2]*pgxpool.Pool{
-		openIntegrationPool(t, ctx, databaseURL),
-		openIntegrationPool(t, ctx, databaseURL),
+		openGatedIntegrationPool(t, ctx, databaseURL, &binderAcquireArmed, binderAcquireReady, binderAcquireRelease),
+		openGatedIntegrationPool(t, ctx, databaseURL, &binderAcquireArmed, binderAcquireReady, binderAcquireRelease),
 	}
 
 	var initialReleaseCount, initialActivationCount, initialHeadCount int64
@@ -59,9 +63,35 @@ SELECT (SELECT count(*) FROM ascendany.recommendation_model_releases),
 		}
 	}
 	application := ApplicationIdentity{
-		Version:   "v2-backup-rehearsal",
+		Version:   "0.2.0-integration",
 		Commit:    "0000000000000000000000000000000000000000",
 		BuildTime: "1970-01-01T00:00:00Z",
+	}
+	for index, repository := range repositories {
+		registered, registerErr := repository.Register(ctx, loaded)
+		if registerErr != nil {
+			t.Fatalf("register through repository %d: %v", index, registerErr)
+		}
+		if registered.ReleaseID != 1 || registered.HeadRevision != 0 || registered.Activated ||
+			registered.ArtifactSHA256 != loaded.SHA256 || registered.ManifestSHA256 == "" {
+			t.Fatalf("registered model through repository %d = %#v", index, registered)
+		}
+	}
+	var registeredReleaseCount, registeredActivationCount, registeredHeadCount int64
+	if err := controlPool.QueryRow(ctx, `
+SELECT (SELECT count(*) FROM ascendany.recommendation_model_releases),
+       (SELECT count(*) FROM ascendany.recommendation_model_activation_events),
+       (SELECT count(*) FROM ascendany.recommendation_model_head)
+`).Scan(&registeredReleaseCount, &registeredActivationCount, &registeredHeadCount); err != nil {
+		t.Fatal(err)
+	}
+	if registeredReleaseCount != 1 || registeredActivationCount != 0 || registeredHeadCount != 0 {
+		t.Fatalf(
+			"registration mutated activation state: releases=%d activations=%d heads=%d",
+			registeredReleaseCount,
+			registeredActivationCount,
+			registeredHeadCount,
+		)
 	}
 	gate, err := controlPool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -73,28 +103,62 @@ SELECT (SELECT count(*) FROM ascendany.recommendation_model_releases),
 			_ = gate.Rollback(context.Background())
 		}
 	}()
-	if _, err := gate.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, advisoryLockID); err != nil {
+	if _, err := gate.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, ModelTransitionAdvisoryLockID); err != nil {
 		t.Fatal(err)
 	}
+	binderAcquireArmed.Store(true)
 
 	start := make(chan struct{})
 	bindings := make([]Binding, 2)
 	errorsByIndex := make([]error, 2)
+	started := make(chan struct{}, len(bindings))
+	finished := make(chan int, len(bindings))
 	var binders sync.WaitGroup
 	for index := range bindings {
 		binders.Add(1)
 		go func(index int) {
 			defer binders.Done()
 			<-start
+			started <- struct{}{}
 			bindings[index], errorsByIndex[index] = repositories[index].Bind(ctx, loaded, application)
+			finished <- index
 		}(index)
 	}
 	close(start)
-	if err := waitForAdvisoryLockWaiters(ctx, controlPool, 2); err != nil {
+	for range bindings {
+		<-started
+	}
+	for range bindings {
+		select {
+		case <-binderAcquireReady:
+		case index := <-finished:
+			close(binderAcquireRelease)
+			_ = gate.Rollback(context.Background())
+			gateOpen = false
+			binders.Wait()
+			t.Fatalf("concurrent binder %d completed before reaching the acquisition gate: %v", index, errorsByIndex[index])
+		case <-ctx.Done():
+			close(binderAcquireRelease)
+			_ = gate.Rollback(context.Background())
+			gateOpen = false
+			binders.Wait()
+			t.Fatal(errors.Join(ctx.Err(), errors.New("concurrent binders did not reach the acquisition gate")))
+		}
+	}
+	close(binderAcquireRelease)
+	if err := waitForAdvisoryLockWaiters(ctx, controlPool, ModelTransitionAdvisoryLockID, int64(len(bindings))); err != nil {
 		_ = gate.Rollback(context.Background())
 		gateOpen = false
 		binders.Wait()
 		t.Fatal(err)
+	}
+	select {
+	case index := <-finished:
+		_ = gate.Rollback(context.Background())
+		gateOpen = false
+		binders.Wait()
+		t.Fatalf("concurrent binder %d completed while the model transition lock was held", index)
+	default:
 	}
 	if err := gate.Commit(ctx); err != nil {
 		_ = gate.Rollback(context.Background())
@@ -112,6 +176,7 @@ SELECT (SELECT count(*) FROM ascendany.recommendation_model_releases),
 	if bindings[0].ReleaseID != 1 || bindings[0].HeadRevision != 1 ||
 		bindings[1].ReleaseID != bindings[0].ReleaseID || bindings[1].HeadRevision != bindings[0].HeadRevision ||
 		bindings[0].ManifestSHA256 != bindings[1].ManifestSHA256 ||
+		bindings[0].ArtifactSHA256 != loaded.SHA256 || bindings[1].ArtifactSHA256 != loaded.SHA256 ||
 		bindings[0].Activated == bindings[1].Activated {
 		t.Fatalf("concurrent fresh bindings = %#v and %#v", bindings[0], bindings[1])
 	}
@@ -181,14 +246,53 @@ func openIntegrationPool(t *testing.T, ctx context.Context, databaseURL string) 
 	return pool
 }
 
+func openGatedIntegrationPool(
+	t *testing.T,
+	ctx context.Context,
+	databaseURL string,
+	armed *atomic.Bool,
+	ready chan<- struct{},
+	release <-chan struct{},
+) *pgxpool.Pool {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocked atomic.Bool
+	config.BeforeAcquire = func(acquireContext context.Context, _ *pgx.Conn) bool {
+		if !armed.Load() || !blocked.CompareAndSwap(false, true) {
+			return true
+		}
+		select {
+		case ready <- struct{}{}:
+		case <-acquireContext.Done():
+			return false
+		}
+		select {
+		case <-release:
+			return true
+		case <-acquireContext.Done():
+			return false
+		}
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return pool
+}
+
 func waitForAdvisoryLockWaiters(
 	ctx context.Context,
 	pool *pgxpool.Pool,
+	lockID int64,
 	want int64,
 ) error {
-	const maximumUint32 = int64(1<<32 - 1)
-	classID := int64(uint64(advisoryLockID) >> 32)
-	objectID := advisoryLockID & maximumUint32
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -199,18 +303,18 @@ SELECT count(*)
 FROM pg_catalog.pg_locks
 WHERE locktype = 'advisory'
   AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
-  AND classid::bigint = $1
-  AND objid::bigint = $2
+  AND classid = (($1::bigint >> 32) & 4294967295)::oid
+  AND objid = ($1::bigint & 4294967295)::oid
   AND objsubid = 1
-  AND NOT granted`, classID, objectID).Scan(&waiters); err != nil {
+  AND NOT granted`, lockID).Scan(&waiters); err != nil {
 			return err
 		}
-		if waiters == want {
+		if waiters >= want {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(ctx.Err(), errors.New("concurrent binders did not both wait for the model release lock"))
+			return errors.Join(ctx.Err(), errors.New("no concurrent binder reached the model release lock"))
 		case <-ticker.C:
 		}
 	}

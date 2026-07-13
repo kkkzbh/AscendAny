@@ -68,6 +68,7 @@ func run(
 			"backupId", result.BackupID,
 			"manifestSHA256", result.ManifestSHA256,
 			"artifactCount", result.ArtifactCount,
+			"catalogReceiptCount", result.CatalogReceiptCount,
 		)
 		return 0
 	case "verify":
@@ -90,6 +91,7 @@ func run(
 			"backupId", result.BackupID,
 			"manifestSHA256", result.ManifestSHA256,
 			"artifactCount", result.ArtifactCount,
+			"catalogReceiptCount", result.CatalogReceiptCount,
 		)
 		return 0
 	case "restore-verify":
@@ -113,7 +115,9 @@ func run(
 			"backupId", result.BackupID,
 			"manifestSHA256", result.ManifestSHA256,
 			"artifactCount", result.ArtifactCount,
+			"catalogReceiptCount", result.CatalogReceiptCount,
 			"databaseName", result.DatabaseName,
+			"catalogReceiptRoot", result.CatalogReceiptRoot,
 			"releaseCommit", release.Commit,
 			"releaseVersion", release.Version,
 			"modelId", result.RecommendationModel.ModelID,

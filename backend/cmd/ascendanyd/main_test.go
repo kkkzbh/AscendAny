@@ -173,6 +173,10 @@ func (constructionConfiguration) CreateVersion(context.Context, string, configur
 	panic("unused")
 }
 
+func (constructionConfiguration) AuthorizeKnowledgeCatalogPublication(context.Context, string, configurationdomain.CatalogPublicationAuthorizationInput) (configurationdomain.CatalogPublicationAuthorizationResult, error) {
+	panic("unused")
+}
+
 type constructionFeedback struct{}
 
 func (constructionFeedback) SubmitAuthenticated(context.Context, string, feedback.ApplicationInput) (feedback.SubmitResult, error) {
@@ -285,6 +289,9 @@ func TestValidateCommand(t *testing.T) {
 	}
 	if err := validateCommand([]string{"activate-model"}); err != nil {
 		t.Fatalf("validateCommand(activate-model) error = %v", err)
+	}
+	if err := validateCommand([]string{"register-model"}); err != nil {
+		t.Fatalf("validateCommand(register-model) error = %v", err)
 	}
 	for _, args := range [][]string{nil, {}, {"--config", "config.toml"}, {"unknown"}, {"serve", "extra"}} {
 		if err := validateCommand(args); err == nil {

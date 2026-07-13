@@ -20,19 +20,22 @@ DECLARE
         'ascendany_owner',
         'ascendany_runtime',
         'ascendany_migrator',
-        'ascendany_backup'
+        'ascendany_backup',
+        'ascendany_catalog_publisher'
     ];
     login_roles constant text[] := ARRAY[
         'ascendanyd_login',
         'ascendany_migrator_login',
         'ascendany_backup_login',
-        'ascendany_restore_login'
+        'ascendany_restore_login',
+        'ascendany_catalog_publisher_login'
     ];
     managed_roles constant text[] := capability_roles || login_roles;
     expected_memberships constant text[] := ARRAY[
         'ascendany_runtime>ascendanyd_login>false>true>true',
         'ascendany_migrator>ascendany_migrator_login>false>false>true',
         'ascendany_backup>ascendany_backup_login>false>true>true',
+        'ascendany_catalog_publisher>ascendany_catalog_publisher_login>false>true>true',
         'ascendany_owner>ascendany_migrator>false>false>true',
         'ascendany_owner>ascendany_restore_login>false>false>true'
     ];
@@ -98,6 +101,7 @@ DECLARE
         'agent_notes.updated_at',
         'recommendation_model_head.current_release_id',
         'recommendation_model_head.head_revision',
+        'recommendation_model_head.pending_catalog_publication_id',
         'recommendation_model_head.updated_at',
         'oj_problems.current_version_id',
         'oj_problems.head_revision',
@@ -165,6 +169,7 @@ DECLARE
         'recommendation_model_releases',
         'recommendation_model_activation_events',
         'recommendation_model_head',
+        'knowledge_catalog_publication_authorizations',
         'oj_problems',
         'oj_problem_versions',
         'oj_submissions',
@@ -179,6 +184,12 @@ DECLARE
     runtime_no_usage_sequences constant text[] := ARRAY[
         'achievement_rule_sets_achievement_rule_set_id_seq'
     ];
+    publisher_select_tables constant text[] := ARRAY[
+        'schema_migrations_v2'
+    ];
+    publisher_insert_tables constant text[] := ARRAY[]::text[];
+    publisher_sequences constant text[] := ARRAY[]::text[];
+    publisher_update_columns constant text[] := ARRAY[]::text[];
     violation_count bigint;
     distinct_verifier_count bigint;
     database_owner_oid oid;
@@ -221,10 +232,12 @@ BEGIN
             ('ascendany_runtime', false, true, false),
             ('ascendany_migrator', false, false, false),
             ('ascendany_backup', false, true, false),
+            ('ascendany_catalog_publisher', false, true, false),
             ('ascendanyd_login', true, true, false),
             ('ascendany_migrator_login', true, false, false),
             ('ascendany_backup_login', true, true, false),
-            ('ascendany_restore_login', true, false, true)
+            ('ascendany_restore_login', true, false, true),
+            ('ascendany_catalog_publisher_login', true, true, false)
     ) AS expected(rolname, can_login, inherits_privileges, can_create_database)
     LEFT JOIN pg_roles AS actual ON actual.rolname = expected.rolname
     WHERE actual.oid IS NULL
@@ -356,7 +369,8 @@ BEGIN
             ('ascendany_database_owner', 'TEMPORARY', false),
             ('ascendanyd_login', 'CONNECT', false),
             ('ascendany_migrator_login', 'CONNECT', false),
-            ('ascendany_backup_login', 'CONNECT', false)
+            ('ascendany_backup_login', 'CONNECT', false),
+            ('ascendany_catalog_publisher_login', 'CONNECT', false)
         ) AS source_acl(grantee_name, privilege_type, is_grantable)
         WHERE verification_profile IN ('source_admin', 'source_snapshot')
 
@@ -412,7 +426,8 @@ BEGIN
             ('ascendany', 'ascendany_owner', 'CREATE', false),
             ('ascendany', 'ascendany_owner', 'USAGE', false),
             ('ascendany', 'ascendany_runtime', 'USAGE', false),
-            ('ascendany', 'ascendany_backup', 'USAGE', false)
+            ('ascendany', 'ascendany_backup', 'USAGE', false),
+            ('ascendany', 'ascendany_catalog_publisher', 'USAGE', false)
     ), difference AS (
         (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)
         UNION ALL
@@ -472,6 +487,32 @@ BEGIN
     WHERE relation.oid IS NULL;
     IF violation_count <> 0 THEN
         RAISE EXCEPTION '% runtime sequence deny-list entries are missing', violation_count;
+    END IF;
+
+    SELECT count(*)
+    INTO violation_count
+    FROM unnest(publisher_select_tables || publisher_insert_tables) AS expected(table_name)
+    LEFT JOIN pg_namespace AS namespace ON namespace.nspname = 'ascendany'
+    LEFT JOIN pg_class AS relation
+      ON relation.relnamespace = namespace.oid
+     AND relation.relname = expected.table_name
+     AND relation.relkind IN ('r', 'p')
+    WHERE relation.oid IS NULL;
+    IF violation_count <> 0 THEN
+        RAISE EXCEPTION '% catalog publisher table allowlist entries are missing', violation_count;
+    END IF;
+
+    SELECT count(*)
+    INTO violation_count
+    FROM unnest(publisher_sequences) AS expected(sequence_name)
+    LEFT JOIN pg_namespace AS namespace ON namespace.nspname = 'ascendany'
+    LEFT JOIN pg_class AS relation
+      ON relation.relnamespace = namespace.oid
+     AND relation.relname = expected.sequence_name
+     AND relation.relkind = 'S'
+    WHERE relation.oid IS NULL;
+    IF violation_count <> 0 THEN
+        RAISE EXCEPTION '% catalog publisher sequence allowlist entries are missing', violation_count;
     END IF;
 
     WITH relations AS (
@@ -538,6 +579,28 @@ BEGIN
         SELECT relation.oid, 'ascendany_backup', 'SELECT', false
         FROM relations AS relation
         WHERE relation.relkind = 'S'
+
+        UNION ALL
+
+        SELECT relation.oid, 'ascendany_catalog_publisher', 'SELECT', false
+        FROM relations AS relation
+        WHERE relation.relkind IN ('r', 'p')
+          AND relation.relname = ANY(publisher_select_tables)
+
+        UNION ALL
+
+        SELECT relation.oid, 'ascendany_catalog_publisher', 'INSERT', false
+        FROM relations AS relation
+        WHERE relation.relkind IN ('r', 'p')
+          AND relation.relname = ANY(publisher_insert_tables)
+
+        UNION ALL
+
+        SELECT relation.oid, 'ascendany_catalog_publisher', publisher_privilege, false
+        FROM relations AS relation
+        CROSS JOIN LATERAL unnest(ARRAY['USAGE']::text[]) AS privileges(publisher_privilege)
+        WHERE relation.relkind = 'S'
+          AND relation.relname = ANY(publisher_sequences)
     ), difference AS (
         (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)
         UNION ALL
@@ -564,6 +627,24 @@ BEGIN
     WHERE attribute.attnum IS NULL;
     IF violation_count <> 0 THEN
         RAISE EXCEPTION '% runtime UPDATE allowlist columns are missing', violation_count;
+    END IF;
+
+    SELECT count(*)
+    INTO violation_count
+    FROM unnest(publisher_update_columns) AS expected(column_name)
+    LEFT JOIN pg_namespace AS namespace ON namespace.nspname = 'ascendany'
+    LEFT JOIN pg_class AS relation
+      ON relation.relnamespace = namespace.oid
+     AND relation.relname = split_part(expected.column_name, '.', 1)
+     AND relation.relkind IN ('r', 'p')
+    LEFT JOIN pg_attribute AS attribute
+      ON attribute.attrelid = relation.oid
+     AND attribute.attname = split_part(expected.column_name, '.', 2)
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped
+    WHERE attribute.attnum IS NULL;
+    IF violation_count <> 0 THEN
+        RAISE EXCEPTION '% catalog publisher UPDATE allowlist columns are missing', violation_count;
     END IF;
 
     WITH actual AS (
@@ -598,6 +679,25 @@ BEGIN
          AND attribute.attname = split_part(expected.column_name, '.', 2)
          AND attribute.attnum > 0
          AND NOT attribute.attisdropped
+
+        UNION ALL
+
+        SELECT relation.oid AS object_oid,
+               attribute.attnum,
+               'ascendany_catalog_publisher'::text AS grantee_name,
+               'UPDATE'::text AS privilege_type,
+               false AS is_grantable
+        FROM unnest(publisher_update_columns) AS expected(column_name)
+        JOIN pg_namespace AS namespace ON namespace.nspname = 'ascendany'
+        JOIN pg_class AS relation
+          ON relation.relnamespace = namespace.oid
+         AND relation.relname = split_part(expected.column_name, '.', 1)
+         AND relation.relkind IN ('r', 'p')
+        JOIN pg_attribute AS attribute
+          ON attribute.attrelid = relation.oid
+         AND attribute.attname = split_part(expected.column_name, '.', 2)
+         AND attribute.attnum > 0
+         AND NOT attribute.attisdropped
     ), difference AS (
         (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)
         UNION ALL
@@ -606,6 +706,40 @@ BEGIN
     SELECT count(*) INTO violation_count FROM difference;
     IF violation_count <> 0 THEN
         RAISE EXCEPTION '% column ACL entries differ from the exact v2 contract', violation_count;
+    END IF;
+
+    SELECT count(*)
+    INTO violation_count
+    FROM pg_proc AS procedure
+    JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+    JOIN pg_roles AS owner ON owner.oid = procedure.proowner
+    WHERE procedure.oid = to_regprocedure('ascendany.publish_authorized_knowledge_catalog(uuid,text,text)')
+      AND namespace.nspname = 'ascendany'
+      AND owner.rolname = 'ascendany_owner'
+      AND procedure.prokind = 'f'
+      AND procedure.prosecdef
+      AND procedure.prorettype = 'jsonb'::regtype
+      AND procedure.provolatile = 'v'
+      AND procedure.proconfig = ARRAY['search_path=pg_catalog']::text[];
+    IF violation_count <> 1 THEN
+        RAISE EXCEPTION 'catalog publisher atomic routine differs from the exact security-definer contract';
+    END IF;
+
+    SELECT count(*)
+    INTO violation_count
+    FROM pg_proc AS procedure
+    JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+    JOIN pg_roles AS owner ON owner.oid = procedure.proowner
+    WHERE procedure.oid = to_regprocedure('ascendany.validate_recommendation_model_activation()')
+      AND namespace.nspname = 'ascendany'
+      AND owner.rolname = 'ascendany_owner'
+      AND procedure.prokind = 'f'
+      AND procedure.prosecdef
+      AND procedure.prorettype = 'trigger'::regtype
+      AND procedure.provolatile = 'v'
+      AND procedure.proconfig = ARRAY['search_path=pg_catalog']::text[];
+    IF violation_count <> 1 THEN
+        RAISE EXCEPTION 'deferred model activation validator differs from the exact owner-execution contract';
     END IF;
 
     WITH routines AS (
@@ -627,6 +761,15 @@ BEGIN
                'EXECUTE'::text AS privilege_type,
                false AS is_grantable
         FROM routines AS procedure
+
+        UNION ALL
+
+        SELECT procedure.oid AS object_oid,
+               'ascendany_catalog_publisher'::text AS grantee_name,
+               'EXECUTE'::text AS privilege_type,
+               false AS is_grantable
+        FROM routines AS procedure
+        WHERE procedure.oid = to_regprocedure('ascendany.publish_authorized_knowledge_catalog(uuid,text,text)')
     ), difference AS (
         (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)
         UNION ALL
@@ -634,7 +777,7 @@ BEGIN
     )
     SELECT count(*) INTO violation_count FROM difference;
     IF violation_count <> 0 THEN
-        RAISE EXCEPTION '% routine ACL entries differ from the owner-only contract', violation_count;
+        RAISE EXCEPTION '% routine ACL entries differ from the exact v2 contract', violation_count;
     END IF;
 
     WITH types AS (

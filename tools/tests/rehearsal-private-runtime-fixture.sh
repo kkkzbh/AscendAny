@@ -5,7 +5,12 @@ export LC_ALL=C
 
 readonly repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly postgres_rehearsal="${repository_root}/tools/run-v2-postgres-podman-rehearsal.sh"
+readonly postgres_integration="${repository_root}/tools/run-v2-postgres-integration.sh"
 readonly backup_rehearsal="${repository_root}/tools/run-v2-backup-restore-podman-rehearsal.sh"
+readonly recommendation_catalog_fixture="${repository_root}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json"
+readonly recommendation_catalog_sha256="a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
+readonly recommendation_model_fixture="${repository_root}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json"
+readonly recommendation_model_sha256="5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
 
 fixture_root=""
 private_fixture_root=""
@@ -65,22 +70,76 @@ cleanup_body() {
   ' "${file}"
 }
 
-for command_name in awk chmod env grep id ln mapfile mktemp realpath rm stat; do
+contains_ambient_work_root_fallback() {
+  local file="$1"
+  local boundary_start
+  local boundary_end
+  boundary_start="$(line_number "${file}" 'readonly PRIVATE_RUNTIME_ROOT=')"
+  boundary_end="$(line_number "${file}" 'WORK_ROOT="$(mktemp')"
+  ((boundary_start < boundary_end)) ||
+    fail "${file} defines WORK_ROOT before validating the private runtime root"
+  sed -n "${boundary_start},${boundary_end}p" "${file}" |
+    grep -Fq -- '${TMPDIR:-/tmp}'
+}
+
+append_required_rehearsal_inputs() {
+  local script="$1"
+  local arguments_name="$2"
+  local -n target_arguments="${arguments_name}"
+  if [[ "${script}" == "${backup_rehearsal}" ]]; then
+    target_arguments+=(
+      --recommendation-model "${recommendation_model_fixture}"
+      --recommendation-model-sha256 "${recommendation_model_sha256}"
+      --recommendation-catalog "${recommendation_catalog_fixture}"
+      --recommendation-catalog-sha256 "${recommendation_catalog_sha256}"
+    )
+  fi
+}
+
+for command_name in awk chmod env grep id ln mapfile mktemp realpath rm sed stat; do
   command -v "${command_name}" >/dev/null 2>&1 ||
     fail "required command is unavailable: ${command_name}"
 done
 unset command_name
 
 ((EUID != 0)) || fail 'the executable fixture must run as a non-root user'
-[[ -f "${postgres_rehearsal}" && -f "${backup_rehearsal}" ]] ||
+[[ -f "${postgres_rehearsal}" && -f "${postgres_integration}" &&
+  -f "${backup_rehearsal}" && -f "${recommendation_catalog_fixture}" &&
+  -f "${recommendation_model_fixture}" ]] ||
   fail 'one or more rehearsal scripts are unavailable'
+
+static_boundary_fixture_root="$(mktemp -d "${repository_root}/.ascendany-work-root-boundary-fixture.XXXXXX")"
+runtime_fixture_roots+=("${static_boundary_fixture_root}")
+readonly safe_boundary_fixture="${static_boundary_fixture_root}/safe-isolated-tmpdir.sh"
+readonly unsafe_boundary_fixture="${static_boundary_fixture_root}/unsafe-work-root-fallback.sh"
+printf '%s\n' \
+  'readonly PRIVATE_RUNTIME_ROOT="$(realpath -e -- "${XDG_RUNTIME_DIR}")"' \
+  'readonly WORK_ROOT_PREFIX="${PRIVATE_RUNTIME_ROOT}/ascendany-v2-safe."' \
+  'WORK_ROOT="$(mktemp -d "${WORK_ROOT_PREFIX}XXXXXX")"' \
+  '/usr/bin/env -i \' \
+  '  TMPDIR="${TMPDIR:-/tmp}" \' \
+  '  go test ./...' \
+  >"${safe_boundary_fixture}"
+printf '%s\n' \
+  'readonly PRIVATE_RUNTIME_ROOT="$(realpath -e -- "${XDG_RUNTIME_DIR}")"' \
+  'readonly WORK_ROOT_PREFIX="${TMPDIR:-/tmp}/ascendany-v2-unsafe."' \
+  'WORK_ROOT="$(mktemp -d "${WORK_ROOT_PREFIX}XXXXXX")"' \
+  >"${unsafe_boundary_fixture}"
+if contains_ambient_work_root_fallback "${safe_boundary_fixture}"; then
+  fail 'isolated Go TMPDIR was misclassified as an ambient work-root fallback'
+fi
+printf 'PASS fixture static-work-root-boundary-safe-tmpdir-env\n'
+if ! contains_ambient_work_root_fallback "${unsafe_boundary_fixture}"; then
+  fail 'ambient TMPDIR work-root fallback escaped the scoped static check'
+fi
+printf 'PASS fixture static-work-root-boundary-rejects-ambient-fallback\n'
 
 readonly expected_canonical_error='XDG_RUNTIME_DIR must identify an absolute canonical directory'
 readonly expected_owner_mode_error='XDG_RUNTIME_DIR must be owned by the rehearsal user with mode 0700'
 readonly expected_tmpfs_error='XDG_RUNTIME_DIR must use tmpfs'
 
 for rehearsal in "${postgres_rehearsal}" "${backup_rehearsal}"; do
-  if grep -Fq -- '${TMPDIR:-/tmp}' "${rehearsal}"; then
+  if contains_ambient_work_root_fallback "${rehearsal}"; then
     fail "${rehearsal} reintroduced the ambient TMPDIR work-root fallback"
   fi
 
@@ -122,6 +181,20 @@ for rehearsal in "${postgres_rehearsal}" "${backup_rehearsal}"; do
   printf 'PASS fixture static-private-runtime-contract script=%s\n' "$(basename -- "${rehearsal}")"
 done
 unset rehearsal trap_line allocation_line body create_attempt_line pod_create_line
+
+require_fixed \
+  "${postgres_rehearsal}" \
+  'ASCENDANY_CI_RECOMMENDATION_CATALOG_SHA256="${RECOMMENDATION_CATALOG_SHA256}"'
+require_fixed \
+  "${postgres_integration}" \
+  'readonly RECOMMENDATION_CATALOG_SHA256="$(required_environment ASCENDANY_CI_RECOMMENDATION_CATALOG_SHA256)"'
+require_fixed \
+  "${postgres_integration}" \
+  'ASCENDANY_TEST_RECOMMENDATION_CATALOG_SHA256="${RECOMMENDATION_CATALOG_SHA256}"'
+require_fixed \
+  "${postgres_integration}" \
+  'runtime|./internal/catalogartifact|TestPostgresCatalogArtifactLoadBoundary|none'
+printf 'PASS fixture recommendation-catalog-trust-anchor-propagation\n'
 
 backup_run_tmpfs_line="$(line_number "${backup_rehearsal}" '--tmpfs /run \')"
 backup_work_root_bind_line="$(line_number \
@@ -166,6 +239,7 @@ run_rejected_runtime() {
   local output
   local status
   local -a arguments=(--confirm-reset "${confirmation}")
+  append_required_rehearsal_inputs "${script}" arguments
 
   set +e
   if [[ "${runtime_kind}" == 'unset' ]]; then
@@ -227,6 +301,52 @@ run_rejected_runtime() {
     "$(basename -- "${script}")" "${runtime_kind}"
 }
 
+run_rejected_catalog_contract() {
+  local case_name="$1"
+  local expected_error="$2"
+  shift 2
+  local probe_marker="${fixture_root}/podman-probe-catalog-${case_name}"
+  local output
+  local status
+
+  set +e
+  output="$({
+    env \
+      XDG_RUNTIME_DIR="${host_runtime}" \
+      PODMAN_PROBE_MARKER="${probe_marker}" \
+      /usr/bin/bash -c '
+        ss() { return 0; }
+        podman() {
+          if [[ "$1" == "info" && "$2" == "--format" ]]; then
+            printf true
+            return 0
+          fi
+          if [[ "$1" == "image" && "$2" == "exists" ]]; then
+            return 0
+          fi
+          : >"${PODMAN_PROBE_MARKER}"
+          return 97
+        }
+        export -f podman ss
+        exec /usr/bin/bash "$@"
+      ' _ \
+        "${postgres_rehearsal}" \
+        --confirm-reset drop-disposable-ascendany-v2 \
+        "$@"
+  } 2>&1)"
+  status=$?
+  set -e
+
+  [[ "${status}" == '2' ]] ||
+    fail "catalog ${case_name} failed with status ${status}: ${output}"
+  grep -Fqx -- "${expected_error}" <<<"${output}" ||
+    fail "catalog ${case_name} did not fail with the exact contract error: ${output}"
+  [[ ! -e "${probe_marker}" ]] ||
+    fail "catalog ${case_name} attempted a Podman resource operation"
+
+  printf 'PASS fixture rejected-recommendation-catalog case=%s\n' "${case_name}"
+}
+
 run_failed_allocation() {
   local script="$1"
   local confirmation="$2"
@@ -236,6 +356,8 @@ run_failed_allocation() {
   local podman_marker="${fixture_root}/podman-resource-${tag}"
   local output
   local status
+  local -a arguments=(--confirm-reset "${confirmation}")
+  append_required_rehearsal_inputs "${script}" arguments
 
   set +e
   output="$({
@@ -262,7 +384,7 @@ run_failed_allocation() {
         }
         export -f mktemp podman ss
         exec /usr/bin/bash "$@"
-      ' _ "${script}" --confirm-reset "${confirmation}"
+      ' _ "${script}" "${arguments[@]}"
   } 2>&1)"
   status=$?
   set -e
@@ -290,6 +412,8 @@ run_cleanup_boundary_case() {
   local unsupported_marker="${fixture_root}/unsupported-podman-${case_name}"
   local output
   local status
+  local -a arguments=(--confirm-reset "${confirmation}")
+  append_required_rehearsal_inputs "${script}" arguments
 
   if [[ "${expected_action}" == 'remove' ]]; then
     work_root="$(mktemp -d "${host_runtime}/${work_root_prefix_basename}XXXXXX")"
@@ -326,7 +450,7 @@ run_cleanup_boundary_case() {
         }
         export -f mktemp podman ss
         exec /usr/bin/bash "$@"
-      ' _ "${script}" --confirm-reset "${confirmation}"
+      ' _ "${script}" "${arguments[@]}"
   } 2>&1)"
   status=$?
   set -e
@@ -368,6 +492,8 @@ run_partial_pod_create_case() {
   local exists_marker="${fixture_root}/partial-pod-exists-${case_name}"
   local inspect_marker="${fixture_root}/partial-pod-inspect-${case_name}"
   local unexpected_marker="${fixture_root}/partial-pod-unexpected-${case_name}"
+  local -a arguments=(--confirm-reset "${confirmation}")
+  append_required_rehearsal_inputs "${script}" arguments
 
   work_root="$(mktemp -d "${host_runtime}/${work_root_prefix_basename}XXXXXX")"
   runtime_fixture_roots+=("${work_root}")
@@ -541,7 +667,7 @@ run_partial_pod_create_case() {
 
         export -f go mktemp podman ss
         exec /usr/bin/bash "$@"
-      ' _ "${script}" --confirm-reset "${confirmation}"
+      ' _ "${script}" "${arguments[@]}"
   } 2>&1)"
   status=$?
   set -e
@@ -581,6 +707,16 @@ run_partial_pod_create_case() {
 }
 
 readonly noncanonical_runtime="${host_runtime}/../$(basename -- "${host_runtime}")"
+
+run_rejected_catalog_contract \
+  'missing-sha256' \
+  '--knowledge-catalog and --knowledge-catalog-sha256 must be supplied together' \
+  --knowledge-catalog "${recommendation_catalog_fixture}"
+run_rejected_catalog_contract \
+  'digest-mismatch' \
+  'the recommendation knowledge catalog is noncanonical or differs from its pinned SHA-256' \
+  --knowledge-catalog "${recommendation_catalog_fixture}" \
+  --knowledge-catalog-sha256 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
 
 for rehearsal_spec in \
   "${postgres_rehearsal}|drop-disposable-ascendany-v2" \

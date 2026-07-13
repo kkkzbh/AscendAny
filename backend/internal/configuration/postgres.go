@@ -1,12 +1,15 @@
 package configuration
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -54,6 +57,264 @@ type storedItem struct {
 	Item
 	databaseID      int64
 	activeVersionID *int64
+}
+
+func (repository *PostgresRepository) CreateCatalogPublicationAuthorization(
+	ctx context.Context,
+	command CreateCatalogPublicationAuthorizationCommand,
+	catalogSHA256 string,
+) (CatalogPublicationAuthorizationRecord, error) {
+	var result CatalogPublicationAuthorizationRecord
+	err := repository.transaction(ctx, "authorize knowledge catalog publication", false, func(tx postgresTx) error {
+		actor, err := resolveAdmin(ctx, tx, command.Principal, true)
+		if err != nil {
+			return err
+		}
+		existing, found, err := loadCatalogPublicationAuthorization(ctx, tx, command, catalogSHA256, actor)
+		if err != nil {
+			return err
+		}
+		if found {
+			result = existing
+			return nil
+		}
+		var authorizedAt time.Time
+		if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&authorizedAt); err != nil {
+			return databaseFailure("read catalog publication authorization time", err)
+		}
+		authorizedAt = authorizedAt.UTC()
+		if !command.Principal.ExpiresAt.After(authorizedAt) {
+			return configurationError(
+				ErrorPrincipalRejected,
+				"authorize knowledge catalog publication",
+				errors.New("administrator access token expired before authorization"),
+			)
+		}
+		var targetModelReleaseID int64
+		var targetModelID string
+		if err := tx.QueryRow(ctx, `
+SELECT recommendation_model_release_id,
+       model_id::text
+FROM ascendany.recommendation_model_releases
+WHERE artifact_sha256 = $1
+  AND knowledge_catalog_sha256 = $2`,
+			command.PublicationIntent.TargetModelArtifactSHA256,
+			catalogSHA256,
+		).Scan(&targetModelReleaseID, &targetModelID); errors.Is(err, pgx.ErrNoRows) {
+			return configurationError(
+				ErrorStoredDataInvalid,
+				"resolve catalog publication authorization target",
+				errors.New("target model release is not registered"),
+			)
+		} else if err != nil {
+			return databaseFailure("resolve catalog publication authorization target", err)
+		}
+		intent := command.PublicationIntent
+		generationID := intent.ExpectedAnalyticsGenerationID
+		analyticsHeadRevision := intent.ExpectedAnalyticsHeadRevision
+		inputManifestSHA256 := intent.ExpectedInputManifestSHA256
+		currentModelHeadRevision := intent.ExpectedCurrentModelHeadRevision
+		currentModelArtifactSHA256 := intent.ExpectedCurrentModelArtifactSHA256
+		validationCommand := CreateVersionCommand{
+			Principal: command.Principal, Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
+			ExpectedHeadRevision:          intent.ExpectedConfigurationHeadRevision,
+			ExpectedAnalyticsGenerationID: &generationID, ExpectedAnalyticsHeadRevision: &analyticsHeadRevision,
+			ExpectedInputManifestSHA256:        &inputManifestSHA256,
+			ExpectedCurrentModelHeadRevision:   &currentModelHeadRevision,
+			ExpectedCurrentModelArtifactSHA256: &currentModelArtifactSHA256,
+			TargetCatalogSHA256:                catalogSHA256, TargetModelID: targetModelID,
+			TargetModelArtifactSHA256:  intent.TargetModelArtifactSHA256,
+			TargetApplicationVersion:   intent.TargetApplicationVersion,
+			TargetApplicationCommit:    intent.TargetApplicationCommit,
+			TargetApplicationBuildTime: intent.TargetApplicationBuildTime,
+			SchemaID:                   KnowledgeCatalogSchemaID, Document: command.Document,
+		}
+		if err := repository.writePrecondition.ValidateVersionWrite(ctx, tx, validationCommand); err != nil {
+			if CodeOf(err) == "" {
+				return configurationError(ErrorStoredDataInvalid, "validate catalog publication authorization precondition", err)
+			}
+			return err
+		}
+		var configurationID string
+		var currentConfigurationKind string
+		var currentConfigurationHeadRevision int64
+		err = tx.QueryRow(ctx, `
+SELECT public_id::text,
+	   configuration_kind,
+	   head_revision
+FROM ascendany.configuration_items
+WHERE configuration_key = $1
+FOR SHARE`, KnowledgeCatalogKey).Scan(
+			&configurationID,
+			&currentConfigurationKind,
+			&currentConfigurationHeadRevision,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if intent.ExpectedConfigurationHeadRevision != 0 {
+				return configurationError(ErrorHeadConflict, "authorize knowledge catalog publication", errors.New("catalog configuration head is absent"))
+			}
+			configurationID, err = randomUUIDv4()
+			if err != nil {
+				return configurationError(ErrorStoredDataInvalid, "generate catalog publication configuration ID", err)
+			}
+		} else if err != nil {
+			return databaseFailure("read catalog configuration authorization head", err)
+		} else if currentConfigurationKind != string(KindKnowledgeCatalog) ||
+			currentConfigurationHeadRevision != intent.ExpectedConfigurationHeadRevision {
+			return configurationError(ErrorHeadConflict, "authorize knowledge catalog publication", errors.New("catalog configuration head changed"))
+		}
+		authorizationID, err := randomUUIDv4()
+		if err != nil {
+			return configurationError(ErrorStoredDataInvalid, "generate catalog publication authorization ID", err)
+		}
+		publicationRequest := AuthorizedCatalogPublicationRequest{
+			AuthorizationID:          authorizationID,
+			CatalogPublicationIntent: intent,
+		}
+		canonicalRequest, err := CanonicalCatalogPublicationRequest(publicationRequest)
+		if err != nil {
+			return configurationError(ErrorStoredDataInvalid, "encode catalog publication authorization request", err)
+		}
+		_, err = tx.Exec(ctx, `
+INSERT INTO ascendany.knowledge_catalog_publication_authorizations (
+    public_id,
+    access_jwt_id,
+    access_token_sha256,
+    request_canonical_json,
+    configuration_public_id,
+    expected_configuration_head_revision,
+    expected_analytics_generation_id,
+    expected_analytics_head_revision,
+    expected_input_manifest_sha256,
+    expected_current_model_head_revision,
+    expected_current_model_artifact_sha256,
+    catalog_schema_id,
+    catalog_document,
+    catalog_sha256,
+    target_model_release_id,
+    target_model_id,
+    target_model_artifact_sha256,
+    target_application_version,
+    target_application_commit,
+    target_application_build_time,
+    authorized_account_id,
+    authorized_session_id,
+    authorized_auth_revision,
+    access_token_expires_at,
+    authorized_at
+) VALUES (
+    $1::uuid, $2::uuid, $3, $4, $5::uuid,
+    $6, $7::bigint, $8, $9, $10, $11,
+    $12, $13::jsonb, $14, $15, $16::uuid, $17,
+    $18, $19, $20, $21, $22, $23, $24, $25
+)`,
+			authorizationID,
+			command.Principal.JWTID,
+			command.AccessTokenSHA256,
+			string(canonicalRequest),
+			configurationID,
+			intent.ExpectedConfigurationHeadRevision,
+			intent.ExpectedAnalyticsGenerationID,
+			intent.ExpectedAnalyticsHeadRevision,
+			intent.ExpectedInputManifestSHA256,
+			intent.ExpectedCurrentModelHeadRevision,
+			intent.ExpectedCurrentModelArtifactSHA256,
+			KnowledgeCatalogSchemaID,
+			string(command.Document),
+			catalogSHA256,
+			targetModelReleaseID,
+			targetModelID,
+			intent.TargetModelArtifactSHA256,
+			intent.TargetApplicationVersion,
+			intent.TargetApplicationCommit,
+			intent.TargetApplicationBuildTime,
+			actor.AccountDatabaseID,
+			actor.SessionDatabaseID,
+			actor.AuthRevision,
+			command.Principal.ExpiresAt.UTC(),
+			authorizedAt,
+		)
+		if err != nil {
+			return databaseFailure("store catalog publication authorization", err)
+		}
+		result = CatalogPublicationAuthorizationRecord{
+			AuthorizationID:    authorizationID,
+			ExpiresAt:          command.Principal.ExpiresAt.UTC(),
+			PublicationRequest: publicationRequest,
+		}
+		return nil
+	})
+	if err != nil {
+		return CatalogPublicationAuthorizationRecord{}, err
+	}
+	return result, nil
+}
+
+func loadCatalogPublicationAuthorization(
+	ctx context.Context,
+	tx postgresTx,
+	command CreateCatalogPublicationAuthorizationCommand,
+	catalogSHA256 string,
+	actor principalguard.Resolved,
+) (CatalogPublicationAuthorizationRecord, bool, error) {
+	var authorizationID string
+	var accessTokenSHA256 string
+	var requestText string
+	var expiresAt time.Time
+	var storedCatalogSHA256 string
+	var catalogDocumentMatches bool
+	var accountID string
+	var sessionID string
+	var authRevision int64
+	err := tx.QueryRow(ctx, `
+SELECT capability.public_id::text,
+       capability.access_token_sha256,
+       capability.request_canonical_json,
+       capability.access_token_expires_at,
+       capability.catalog_sha256,
+       capability.catalog_document = $2::jsonb,
+       account.public_id::text,
+       session.public_id::text,
+       capability.authorized_auth_revision
+FROM ascendany.knowledge_catalog_publication_authorizations AS capability
+JOIN ascendany.auth_accounts AS account
+  ON account.account_id = capability.authorized_account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.session_id = capability.authorized_session_id
+ AND session.account_id = capability.authorized_account_id
+WHERE capability.access_jwt_id = $1::uuid`, command.Principal.JWTID, string(command.Document)).Scan(
+		&authorizationID,
+		&accessTokenSHA256,
+		&requestText,
+		&expiresAt,
+		&storedCatalogSHA256,
+		&catalogDocumentMatches,
+		&accountID,
+		&sessionID,
+		&authRevision,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CatalogPublicationAuthorizationRecord{}, false, nil
+	}
+	if err != nil {
+		return CatalogPublicationAuthorizationRecord{}, false, databaseFailure("load catalog publication authorization", err)
+	}
+	request, parseErr := ParseCatalogPublicationRequest(json.RawMessage(requestText))
+	if parseErr != nil || accessTokenSHA256 != command.AccessTokenSHA256 || storedCatalogSHA256 != catalogSHA256 ||
+		!catalogDocumentMatches || accountID != actor.AccountID || sessionID != actor.SessionID ||
+		authRevision != actor.AuthRevision || !expiresAt.Equal(command.Principal.ExpiresAt) ||
+		request.AuthorizationID != authorizationID || request.CatalogPublicationIntent != command.PublicationIntent {
+		return CatalogPublicationAuthorizationRecord{}, false, configurationError(
+			ErrorDocumentConflict,
+			"replay catalog publication authorization",
+			errors.New("access token already owns a different immutable publication authorization"),
+		)
+	}
+	return CatalogPublicationAuthorizationRecord{
+		AuthorizationID:    authorizationID,
+		ExpiresAt:          expiresAt.UTC(),
+		PublicationRequest: request,
+	}, true, nil
 }
 
 func (repository *PostgresRepository) LoadItems(ctx context.Context, query ListQuery) (ItemPage, error) {
@@ -198,6 +459,12 @@ LIMIT $3`, stored.databaseID, query.BeforeNumber, query.Limit+1)
 }
 
 func (repository *PostgresRepository) StoreVersion(ctx context.Context, request CreateVersionCommand, documentSHA256 string) (CreateVersionResult, error) {
+	if request.Kind == KindKnowledgeCatalog || request.Key == KnowledgeCatalogKey {
+		if request.Kind != KindKnowledgeCatalog || request.Key != KnowledgeCatalogKey {
+			return CreateVersionResult{}, configurationError(ErrorInvalidQuery, "store knowledge catalog version", errors.New("knowledge catalog identity is inconsistent"))
+		}
+		return repository.storeKnowledgeCatalogVersion(ctx, request, documentSHA256)
+	}
 	var result CreateVersionResult
 	err := repository.transaction(ctx, "store configuration version", false, func(tx postgresTx) error {
 		actor, err := resolveAdmin(ctx, tx, request.Principal, true)
@@ -236,7 +503,11 @@ func (repository *PostgresRepository) StoreVersion(ctx context.Context, request 
 			if err != nil {
 				return err
 			}
-			result = CreateVersionResult{Item: item, Idempotent: true}
+			auditEventID, err := findVersionAuditEventID(ctx, tx, item, existing, request)
+			if err != nil {
+				return err
+			}
+			result = CreateVersionResult{Item: item, Idempotent: true, AuditEventID: auditEventID}
 			return nil
 		}
 		if stored.HeadRevision != request.ExpectedHeadRevision {
@@ -288,7 +559,10 @@ WHERE configuration_item_id = $1
 		if tag.RowsAffected() != 1 {
 			return configurationError(ErrorHeadConflict, "advance configuration head", errors.New("configuration head changed concurrently"))
 		}
-		if err := appendVersionAudit(ctx, tx, actor, request, documentSHA256, stored.ID, nextNumber, mutationTime); err != nil {
+		auditEventID, err := appendVersionAudit(
+			ctx, tx, actor, request, documentSHA256, stored.ID, nextNumber, mutationTime,
+		)
+		if err != nil {
 			return err
 		}
 		stored.activeVersionID = &versionID
@@ -298,13 +572,137 @@ WHERE configuration_item_id = $1
 		if err != nil {
 			return err
 		}
-		result = CreateVersionResult{Item: item}
+		result = CreateVersionResult{Item: item, AuditEventID: auditEventID}
 		return nil
 	})
 	if err != nil {
 		return CreateVersionResult{}, err
 	}
 	return result, nil
+}
+
+func (repository *PostgresRepository) storeKnowledgeCatalogVersion(
+	ctx context.Context,
+	request CreateVersionCommand,
+	documentSHA256 string,
+) (CreateVersionResult, error) {
+	var result CreateVersionResult
+	err := repository.transaction(ctx, "publish knowledge catalog", false, func(tx postgresTx) error {
+		var encoded []byte
+		err := tx.QueryRow(ctx, `
+SELECT ascendany.publish_authorized_knowledge_catalog($1::uuid, $2, $3)`,
+			request.PublicationAuthorizationID,
+			request.PublicationAccessTokenSHA256,
+			string(request.PublicationAuthorizationRequest),
+		).Scan(&encoded)
+		if err != nil {
+			return mapCatalogPublicationDatabaseError(err)
+		}
+		decoded, err := decodeCatalogPublicationResult(encoded)
+		if err != nil {
+			return configurationError(ErrorStoredDataInvalid, "decode authorized catalog publication result", err)
+		}
+		if err := validateCatalogPublicationResult(decoded, request, documentSHA256); err != nil {
+			return configurationError(ErrorStoredDataInvalid, "validate authorized catalog publication result", err)
+		}
+		result = decoded
+		return nil
+	})
+	if err != nil {
+		return CreateVersionResult{}, err
+	}
+	return result, nil
+}
+
+func mapCatalogPublicationDatabaseError(err error) error {
+	var databaseError *pgconn.PgError
+	if errors.As(err, &databaseError) {
+		switch databaseError.Code {
+		case "28000":
+			return configurationError(ErrorPrincipalRejected, "authorize catalog publication capability", err)
+		case "40001":
+			return configurationError(ErrorHeadConflict, "compare catalog publication release heads", err)
+		case "23514":
+			return configurationError(ErrorStoredDataInvalid, "enforce catalog publication provenance", err)
+		case "23505":
+			return configurationError(ErrorDocumentConflict, "reserve catalog publication intent", err)
+		}
+	}
+	return databaseFailure("publish authorized knowledge catalog", err)
+}
+
+func decodeCatalogPublicationResult(encoded []byte) (CreateVersionResult, error) {
+	var wire struct {
+		Item                        Item                        `json:"item"`
+		Idempotent                  bool                        `json:"idempotent"`
+		AuditEventID                int64                       `json:"auditEventId"`
+		KnowledgeCatalogPublication KnowledgeCatalogPublication `json:"knowledgeCatalogPublication"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return CreateVersionResult{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return CreateVersionResult{}, errors.New("catalog publication result contains a trailing value")
+	}
+	if wire.Item.ActiveVersion != nil {
+		canonical, digest, err := canonicalDocument(wire.Item.ActiveVersion.Document)
+		if err != nil || digest != wire.Item.ActiveVersion.DocumentSHA256 {
+			return CreateVersionResult{}, errors.New("catalog publication result contains an invalid configuration document")
+		}
+		wire.Item.ActiveVersion.Document = canonical
+	}
+	return CreateVersionResult{
+		Item:                        wire.Item,
+		Idempotent:                  wire.Idempotent,
+		AuditEventID:                wire.AuditEventID,
+		KnowledgeCatalogPublication: &wire.KnowledgeCatalogPublication,
+	}, nil
+}
+
+func validateCatalogPublicationResult(
+	result CreateVersionResult,
+	request CreateVersionCommand,
+	documentSHA256 string,
+) error {
+	publication := result.KnowledgeCatalogPublication
+	active := result.Item.ActiveVersion
+	if publication == nil || active == nil || result.AuditEventID < 1 ||
+		publication.AuthorizationID != request.PublicationAuthorizationID ||
+		!validPositiveInt64String(publication.KnowledgeCatalogPublicationID) ||
+		!validPositiveInt64String(publication.TargetModelReleaseID) ||
+		publication.CatalogSHA256 != documentSHA256 || publication.CatalogSHA256 != request.TargetCatalogSHA256 ||
+		publication.TargetModelArtifactSHA256 != request.TargetModelArtifactSHA256 ||
+		publication.TargetModelID != request.TargetModelID ||
+		publication.TargetApplicationVersion != request.TargetApplicationVersion ||
+		publication.TargetApplicationCommit != request.TargetApplicationCommit ||
+		publication.TargetApplicationBuildTime != request.TargetApplicationBuildTime ||
+		result.Item.ID != publication.ConfigurationID || result.Item.Key != request.Key ||
+		result.Item.Kind != request.Kind || result.Item.HeadRevision != publication.ConfigurationHeadRevision ||
+		publication.ExpectedConfigurationHeadRevision != request.ExpectedHeadRevision ||
+		publication.ConfigurationMutated && publication.ConfigurationHeadRevision != request.ExpectedHeadRevision+1 ||
+		!publication.ConfigurationMutated && publication.ConfigurationHeadRevision != request.ExpectedHeadRevision ||
+		publication.ConfigurationVersionID != active.ID || publication.ConfigurationVersionNumber != active.Number ||
+		active.SchemaID != request.SchemaID || active.CredentialRef != nil || active.DocumentSHA256 != documentSHA256 ||
+		!bytes.Equal(active.Document, request.Document) ||
+		publication.AnalyticsGenerationID != *request.ExpectedAnalyticsGenerationID ||
+		publication.AnalyticsHeadRevision != *request.ExpectedAnalyticsHeadRevision ||
+		publication.InputManifestSHA256 != *request.ExpectedInputManifestSHA256 ||
+		publication.CurrentModelHeadRevision != *request.ExpectedCurrentModelHeadRevision ||
+		publication.CurrentModelArtifactSHA256 != *request.ExpectedCurrentModelArtifactSHA256 ||
+		publication.PublishedByAccountID != request.Principal.AccountID ||
+		publication.PublishedBySessionID != request.Principal.SessionID ||
+		!validUTCTime(publication.PublishedAt) || publication.AuditEventID != result.AuditEventID ||
+		publication.ConfigurationMutated && active.CreatedByAccountID != publication.PublishedByAccountID ||
+		publication.ConfigurationMutated && active.CreatedBySessionID != publication.PublishedBySessionID ||
+		publication.ConfigurationMutated && !active.CreatedAt.Equal(publication.PublishedAt) {
+		return errors.New("database result differs from the authorized catalog publication")
+	}
+	if err := validateItem(result.Item); err != nil {
+		return err
+	}
+	return nil
 }
 
 const itemSelect = `
@@ -440,7 +838,16 @@ WHERE version.configuration_item_id = $1
 	return version, versionID, true, nil
 }
 
-func appendVersionAudit(ctx context.Context, tx postgresTx, actor principalguard.Resolved, request CreateVersionCommand, documentSHA256, itemID string, number int64, occurredAt time.Time) error {
+func appendVersionAudit(
+	ctx context.Context,
+	tx postgresTx,
+	actor principalguard.Resolved,
+	request CreateVersionCommand,
+	documentSHA256 string,
+	itemID string,
+	number int64,
+	occurredAt time.Time,
+) (int64, error) {
 	payloadValue := map[string]any{
 		"configurationId": itemID,
 		"key":             request.Key,
@@ -451,21 +858,62 @@ func appendVersionAudit(ctx context.Context, tx postgresTx, actor principalguard
 		"headRevision":    request.ExpectedHeadRevision + 1,
 		"credentialRef":   request.CredentialRef,
 	}
-	if request.Kind == KindKnowledgeCatalog {
-		payloadValue["analyticsGenerationId"] = *request.ExpectedAnalyticsGenerationID
-		payloadValue["analyticsHeadRevision"] = *request.ExpectedAnalyticsHeadRevision
-		payloadValue["inputManifestSha256"] = *request.ExpectedInputManifestSHA256
-	}
 	payload, err := json.Marshal(payloadValue)
 	if err != nil {
-		return configurationError(ErrorStoredDataInvalid, "encode configuration audit event", err)
+		return 0, configurationError(ErrorStoredDataInvalid, "encode configuration audit event", err)
 	}
-	if _, err := tx.Exec(ctx, `
+	var auditEventID int64
+	if err := tx.QueryRow(ctx, `
 INSERT INTO ascendany.audit_events (account_id, session_id, event_type, occurred_at, payload)
-VALUES ($1, $2, 'admin.configuration_version_created', $3, $4::jsonb)`, actor.AccountDatabaseID, actor.SessionDatabaseID, occurredAt, string(payload)); err != nil {
-		return databaseFailure("append configuration audit event", err)
+VALUES ($1, $2, 'admin.configuration_version_created', $3, $4::jsonb)
+RETURNING audit_event_id`, actor.AccountDatabaseID, actor.SessionDatabaseID, occurredAt, string(payload)).Scan(&auditEventID); err != nil {
+		return 0, databaseFailure("append configuration audit event", err)
 	}
-	return nil
+	if auditEventID < 1 {
+		return 0, configurationError(ErrorStoredDataInvalid, "append configuration audit event", errors.New("database returned an invalid audit event ID"))
+	}
+	return auditEventID, nil
+}
+
+func findVersionAuditEventID(ctx context.Context, tx postgresTx, item Item, version Version, request CreateVersionCommand) (int64, error) {
+	var auditEventID int64
+	var count int64
+	if err := tx.QueryRow(ctx, `
+SELECT COALESCE(min(audit.audit_event_id), 0), count(*)
+FROM ascendany.audit_events AS audit
+JOIN ascendany.auth_accounts AS account
+  ON account.account_id = audit.account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.session_id = audit.session_id
+ AND session.account_id = audit.account_id
+WHERE audit.event_type = 'admin.configuration_version_created'
+  AND account.public_id = $1::uuid
+  AND session.public_id = $2::uuid
+  AND audit.occurred_at = $3
+  AND audit.payload ->> 'configurationId' = $4
+  AND audit.payload ->> 'key' = $5
+  AND audit.payload ->> 'kind' = $6
+  AND audit.payload ->> 'versionNumber' = $7
+  AND audit.payload ->> 'schemaId' = $8
+  AND audit.payload ->> 'documentSha256' = $9
+	AND audit.payload ->> 'headRevision' = $10`,
+		version.CreatedByAccountID,
+		version.CreatedBySessionID,
+		version.CreatedAt,
+		item.ID,
+		item.Key,
+		string(item.Kind),
+		strconv.FormatInt(version.Number, 10),
+		version.SchemaID,
+		version.DocumentSHA256,
+		strconv.FormatInt(item.HeadRevision, 10),
+	).Scan(&auditEventID, &count); err != nil {
+		return 0, databaseFailure("resolve configuration version audit event", err)
+	}
+	if count != 1 || auditEventID < 1 {
+		return 0, configurationError(ErrorStoredDataInvalid, "resolve configuration version audit event", errors.New("configuration version audit ownership is ambiguous"))
+	}
+	return auditEventID, nil
 }
 
 func resolveAdmin(ctx context.Context, tx postgresTx, principal auth.AccessPrincipal, lock bool) (principalguard.Resolved, error) {

@@ -36,6 +36,7 @@ var embeddedManifest = []HistoryEntry{
 	{Version: 4, Name: "achievement_rules", SHA256: "3242ddfbdee0911d961ebe0f46237f6e2b8a6e7c5e09cf1d94f6ae98c4caaccb"},
 	{Version: 5, Name: "auto_analysis_once", SHA256: "40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17"},
 	{Version: 6, Name: "inference_model_runtime", SHA256: "330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea"},
+	{Version: 7, Name: "catalog_publication_provenance", SHA256: "a69c081d1b0eaa31df8490773d3feed355fdb4053925f84087552df9b5fc940b"},
 }
 
 func CurrentVersion() int64 {

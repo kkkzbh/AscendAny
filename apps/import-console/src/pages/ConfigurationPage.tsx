@@ -46,7 +46,7 @@ interface EditorState {
 
 function editorFromItem(item: ConfigurationItem | null): EditorState {
   if (item?.kind === "knowledge_catalog") {
-    throw new Error("Knowledge catalog 由推荐知识目录页面维护。");
+    throw new Error("Knowledge catalog 仅由停机发布流程写入。");
   }
   const active = item?.activeVersion ?? null;
   return {
@@ -143,7 +143,7 @@ export function ConfigurationPage() {
     setNotice(null);
     try {
       if (editor.key === KNOWLEDGE_CATALOG_KEY) {
-        throw new Error("recommendation.catalog.active 仅由推荐知识目录页面维护。");
+        throw new Error("recommendation.catalog.active 仅由停机发布流程写入。");
       }
       const parsed: unknown = JSON.parse(editor.document);
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {

@@ -62,6 +62,7 @@ readonly RESERVED_POOL_CONTAINER=ascendany-pgbouncer
 
 readonly INPUT_ROOT=/run/ascendany-v2-provision
 readonly CREDENTIAL_ROOT=/etc/ascendany/credentials
+readonly CATALOG_PUBLISHER_CREDENTIAL_ROOT=/etc/ascendany-catalog-publisher/credentials
 readonly POOL_PARENT=/opt/ascendany/infra
 readonly POOL_CONFIG_ROOT="$POOL_PARENT/pgbouncer"
 readonly RECEIPT_ROOT=/var/lib/ascendany-v2-provision
@@ -72,6 +73,7 @@ readonly RUNTIME_PASSWORD_FILE="$INPUT_ROOT/runtime_db_password"
 readonly MIGRATOR_PASSWORD_FILE="$INPUT_ROOT/migrator_db_password"
 readonly BACKUP_PASSWORD_FILE="$INPUT_ROOT/backup_db_password"
 readonly RESTORE_PASSWORD_FILE="$INPUT_ROOT/restore_db_password"
+readonly CATALOG_PUBLISHER_PASSWORD_FILE="$INPUT_ROOT/catalog_publisher_db_password"
 
 stage_root=''
 pool_stage=''
@@ -92,6 +94,7 @@ ASCII value per file, no newline):
   /run/ascendany-v2-provision/migrator_db_password
   /run/ascendany-v2-provision/backup_db_password
   /run/ascendany-v2-provision/restore_db_password
+  /run/ascendany-v2-provision/catalog_publisher_db_password
 
 Preconditions:
   - package pgbouncer.service is masked and inactive;
@@ -270,6 +273,12 @@ verify_output_boundaries() {
     [[ ! -e "$CREDENTIAL_ROOT/$output" && ! -L "$CREDENTIAL_ROOT/$output" ]] ||
       fail credential_output "credential output already exists: $output"
   done
+  [[ -d "$CATALOG_PUBLISHER_CREDENTIAL_ROOT" && ! -L "$CATALOG_PUBLISHER_CREDENTIAL_ROOT" &&
+     "$(/usr/bin/stat -Lc '%u:%g:%a' -- "$CATALOG_PUBLISHER_CREDENTIAL_ROOT")" == 0:0:700 ]] ||
+    fail credential_output 'catalog publisher credential root identity differs'
+  [[ ! -e "$CATALOG_PUBLISHER_CREDENTIAL_ROOT/catalog_publisher_db_password.cred" &&
+     ! -L "$CATALOG_PUBLISHER_CREDENTIAL_ROOT/catalog_publisher_db_password.cred" ]] ||
+    fail credential_output 'catalog publisher database credential output already exists'
 
   [[ -d /opt/ascendany && ! -L /opt/ascendany &&
      "$(/usr/bin/stat -Lc '%u:%g:%a' /opt/ascendany)" == 0:0:755 ]] ||
@@ -286,15 +295,17 @@ verify_password_inputs() {
     fail password_input 'password input root identity differs'
   local entries
   entries="$(/usr/bin/find "$INPUT_ROOT" -mindepth 1 -maxdepth 1 -printf '%f|%y\n' | LC_ALL=C /usr/bin/sort)"
-  [[ "$entries" == $'backup_db_password|f\nmigrator_db_password|f\nrestore_db_password|f\nruntime_db_password|f' ]] ||
+  [[ "$entries" == $'backup_db_password|f\ncatalog_publisher_db_password|f\nmigrator_db_password|f\nrestore_db_password|f\nruntime_db_password|f' ]] ||
     fail password_input 'password input root has an unexpected entry set'
   require_password_file "$RUNTIME_PASSWORD_FILE"
   require_password_file "$MIGRATOR_PASSWORD_FILE"
   require_password_file "$BACKUP_PASSWORD_FILE"
   require_password_file "$RESTORE_PASSWORD_FILE"
+  require_password_file "$CATALOG_PUBLISHER_PASSWORD_FILE"
   local -a password_files=(
     "$RUNTIME_PASSWORD_FILE" "$MIGRATOR_PASSWORD_FILE"
     "$BACKUP_PASSWORD_FILE" "$RESTORE_PASSWORD_FILE"
+    "$CATALOG_PUBLISHER_PASSWORD_FILE"
   )
   local left right
   for ((left = 0; left < ${#password_files[@]}; left++)); do
@@ -405,24 +416,26 @@ SQL
   set_role_password ascendany_migrator_login "$MIGRATOR_PASSWORD_FILE"
   set_role_password ascendany_backup_login "$BACKUP_PASSWORD_FILE"
   set_role_password ascendany_restore_login "$RESTORE_PASSWORD_FILE"
+  set_role_password ascendany_catalog_publisher_login "$CATALOG_PUBLISHER_PASSWORD_FILE"
 
   local created_state
   created_state="$(postgres_psql --dbname=postgres --tuples-only --no-align --field-separator='|' <<'SQL'
 SELECT (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'ascendany_v2'),
        (SELECT obj_description(oid, 'pg_database') FROM pg_database WHERE datname = 'ascendany_v2'),
        (SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname !~ '^pg_'),
-       (SELECT count(*) = 4 AND count(DISTINCT rolpassword) = 4
+       (SELECT count(*) = 5 AND count(DISTINCT rolpassword) = 5
         FROM pg_authid
         WHERE rolname = ANY(ARRAY[
           'ascendanyd_login', 'ascendany_migrator_login',
-          'ascendany_backup_login', 'ascendany_restore_login'
+          'ascendany_backup_login', 'ascendany_restore_login',
+          'ascendany_catalog_publisher_login'
         ])
           AND rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$'),
        (SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = 'postgres'),
        (SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = 'postgres');
 SQL
 )"
-  [[ "$created_state" == 'ascendany_database_owner|ascendany.v2.fresh|ascendany_backup,ascendany_backup_login,ascendany_database_owner,ascendany_migrator,ascendany_migrator_login,ascendany_owner,ascendany_restore_login,ascendany_runtime,ascendanyd_login,postgres|t|t|ascendany.postgres.dba.v2' ]] ||
+  [[ "$created_state" == 'ascendany_database_owner|ascendany.v2.fresh|ascendany_backup,ascendany_backup_login,ascendany_catalog_publisher,ascendany_catalog_publisher_login,ascendany_database_owner,ascendany_migrator,ascendany_migrator_login,ascendany_owner,ascendany_restore_login,ascendany_runtime,ascendanyd_login,postgres|t|t|ascendany.postgres.dba.v2' ]] ||
     fail v2_database 'created v2 database, role set or SCRAM credentials differ'
 }
 
@@ -431,11 +444,12 @@ generate_pool_credential() {
   postgres_psql --dbname=postgres --tuples-only --no-align >"$plaintext" <<'SQL'
 SELECT format('"%s" "%s"', rolname, rolpassword)
 FROM pg_authid
-WHERE rolname = 'ascendanyd_login'
-  AND rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$';
+WHERE rolname = ANY(ARRAY['ascendanyd_login', 'ascendany_catalog_publisher_login'])
+  AND rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$'
+ORDER BY rolname;
 SQL
-  [[ "$(/usr/bin/wc -l <"$plaintext")" == 1 ]] ||
-    fail pgbouncer_auth 'PgBouncer userlist generation did not produce exactly one SCRAM identity'
+  [[ "$(/usr/bin/wc -l <"$plaintext")" == 2 ]] ||
+    fail pgbouncer_auth 'PgBouncer userlist generation did not produce exactly two SCRAM identities'
   /usr/bin/chown 0:0 "$plaintext"
   /usr/bin/chmod 0600 "$plaintext"
   encrypt_credential pgbouncer_userlist "$plaintext" pgbouncer_userlist.cred
@@ -454,6 +468,15 @@ publish_credentials() {
     /usr/bin/mv -T "$temporary" "$CREDENTIAL_ROOT/$name"
     /usr/bin/sync -f "$CREDENTIAL_ROOT"
   done
+  temporary="$CATALOG_PUBLISHER_CREDENTIAL_ROOT/.catalog_publisher_db_password.cred.$$"
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] ||
+    fail credential_output "credential temporary output exists: $temporary"
+  /usr/bin/install -o root -g root -m 0400 \
+    "$stage_root/catalog_publisher_db_password.cred" "$temporary"
+  /usr/bin/sync -f "$temporary"
+  /usr/bin/mv -T "$temporary" \
+    "$CATALOG_PUBLISHER_CREDENTIAL_ROOT/catalog_publisher_db_password.cred"
+  /usr/bin/sync -f "$CATALOG_PUBLISHER_CREDENTIAL_ROOT"
 }
 
 publish_pool_config() {
@@ -526,30 +549,36 @@ SQL
     fail postgres_access 'loaded PostgreSQL HBA/ident catalog differs from the closed contract'
 }
 
-verify_pool_once() {
-  local pgpass="$stage_root/runtime.pgpass" identity='' attempt
-  /usr/bin/printf '127.0.0.1:6432:ascendany_v2:ascendanyd_login:' >"$pgpass"
-  /usr/bin/cat "$RUNTIME_PASSWORD_FILE" >>"$pgpass"
+verify_pool_identity() {
+  local login="$1" password_file="$2"
+  local pgpass="$stage_root/${login}.pgpass" identity='' attempt
+  /usr/bin/printf '127.0.0.1:6432:ascendany_v2:%s:' "$login" >"$pgpass"
+  /usr/bin/cat "$password_file" >>"$pgpass"
   /usr/bin/printf '\n' >>"$pgpass"
   /usr/bin/chmod 0600 "$pgpass"
-  /usr/bin/systemctl start "$TARGET_POOL_UNIT" || fail pgbouncer 'native PgBouncer failed to start'
-  pool_started=1
   for attempt in {1..50}; do
     if identity="$(PGPASSFILE="$pgpass" /usr/bin/psql -X --no-psqlrc --no-password \
-      --host=127.0.0.1 --port=6432 --dbname=ascendany_v2 --username=ascendanyd_login \
+      --host=127.0.0.1 --port=6432 --dbname=ascendany_v2 --username="$login" \
       --tuples-only --no-align --set=ON_ERROR_STOP=1 --command='SELECT current_user' 2>/dev/null)"; then
       break
     fi
     /usr/bin/sleep 0.1
   done
-  [[ "$identity" == ascendanyd_login ]] || fail pgbouncer 'runtime authentication through native PgBouncer failed'
+  [[ "$identity" == "$login" ]] || fail pgbouncer "$login authentication through native PgBouncer failed"
+  /usr/bin/rm -f -- "$pgpass"
+}
+
+verify_pool_once() {
+  /usr/bin/systemctl start "$TARGET_POOL_UNIT" || fail pgbouncer 'native PgBouncer failed to start'
+  pool_started=1
+  verify_pool_identity ascendanyd_login "$RUNTIME_PASSWORD_FILE"
+  verify_pool_identity ascendany_catalog_publisher_login "$CATALOG_PUBLISHER_PASSWORD_FILE"
   /usr/bin/systemctl stop "$TARGET_POOL_UNIT" || fail pgbouncer 'native PgBouncer failed to return to inactive state'
   pool_started=0
   [[ "$(/usr/bin/systemctl is-enabled "$TARGET_POOL_UNIT" 2>/dev/null || true)" == disabled &&
      "$(/usr/bin/systemctl is-active "$TARGET_POOL_UNIT" 2>/dev/null || true)" == inactive ]] ||
     fail pgbouncer 'native PgBouncer did not remain disabled and inactive after verification'
   require_unused_port 6432
-  /usr/bin/rm -f -- "$pgpass"
 }
 
 write_receipt() {
@@ -586,7 +615,7 @@ write_receipt() {
 
 consume_password_inputs() {
   /usr/bin/rm -f -- "$RUNTIME_PASSWORD_FILE" "$MIGRATOR_PASSWORD_FILE" \
-    "$BACKUP_PASSWORD_FILE" "$RESTORE_PASSWORD_FILE"
+    "$BACKUP_PASSWORD_FILE" "$RESTORE_PASSWORD_FILE" "$CATALOG_PUBLISHER_PASSWORD_FILE"
   /usr/bin/rmdir -- "$INPUT_ROOT"
   /usr/bin/sync -f /run
 }
@@ -620,6 +649,7 @@ main() {
   encrypt_credential migrator_db_password "$MIGRATOR_PASSWORD_FILE" migrator_db_password.cred
   encrypt_credential backup_db_password "$BACKUP_PASSWORD_FILE" backup_db_password.cred
   encrypt_credential restore_db_password "$RESTORE_PASSWORD_FILE" restore_db_password.cred
+  encrypt_credential catalog_publisher_db_password "$CATALOG_PUBLISHER_PASSWORD_FILE" catalog_publisher_db_password.cred
   pass credential_stage
 
   create_v2_database_and_roles

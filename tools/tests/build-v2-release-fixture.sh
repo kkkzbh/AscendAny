@@ -25,8 +25,13 @@ readonly EXPECTED_PROVENANCE="${WORK_ROOT}/expected-provenance"
 readonly WEIRD_PROVENANCE_RELATIVE=$'provenance/name-with-tab\tand-newline\n.bin'
 readonly SOURCE_DATE_EPOCH="1700000000"
 readonly RECOMMENDATION_MODEL="${WORK_ROOT}/recommendation-model.json"
+readonly KNOWLEDGE_CATALOG="${WORK_ROOT}/recommendation-knowledge-catalog.json"
 
 cleanup() {
+  if [[ "${ASCENDANY_FIXTURE_KEEP_WORK_ROOT:-0}" == 1 ]]; then
+    printf 'fixture work root retained: %s\n' "${WORK_ROOT}" >&2
+    return
+  fi
   rm -rf -- "${WORK_ROOT}"
 }
 trap cleanup EXIT
@@ -54,6 +59,7 @@ assert_no_private_workspace() {
 install -d -m 0700 \
   "${FIXTURE_REPOSITORY}/tools" \
   "${FIXTURE_REPOSITORY}/backend" \
+  "${FIXTURE_REPOSITORY}/packages/sdk/src" \
   "${FIXTURE_REPOSITORY}/deploy/v2/config" \
   "${FIXTURE_REPOSITORY}/deploy/v2/systemd" \
   "${FIXTURE_REPOSITORY}/deploy/v2/systemd/ascendanyd.service.d" \
@@ -71,6 +77,15 @@ install -d -m 0700 \
 install -m 0755 "${BUILDER_SOURCE}" "${FIXTURE_REPOSITORY}/tools/build-v2-release.sh"
 
 printf 'module fixture.invalid/ascendany\n\ngo 1.26\n' >"${FIXTURE_REPOSITORY}/backend/go.mod"
+printf '%s\n' \
+  'import { productionInitializationFixture } from "../packages/sdk/src/index.ts";' \
+  'console.log(productionInitializationFixture);' \
+  >"${FIXTURE_REPOSITORY}/tools/v2-production-initialization-client.ts"
+printf '%s\n' '{"devDependencies":{"esbuild":"0.25.12"}}' \
+  >"${FIXTURE_REPOSITORY}/packages/sdk/package.json"
+printf '%s\n' \
+  'export const productionInitializationFixture = "reviewed SDK dependency";' \
+  >"${FIXTURE_REPOSITORY}/packages/sdk/src/index.ts"
 printf 'fixture release readme\n' >"${FIXTURE_REPOSITORY}/deploy/v2/README.md"
 printf 'fixture judge contract\n' >"${FIXTURE_REPOSITORY}/deploy/v2/OJ_JUDGE_CONTRACT.md"
 printf 'fixture lsp contract\n' >"${FIXTURE_REPOSITORY}/deploy/v2/LSP_CONTROL_CONTRACT.md"
@@ -86,15 +101,21 @@ printf '%s\n' \
   'ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json' \
   'ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__' \
   'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__' \
+  'ASCENDANY_KNOWLEDGE_CATALOG_PATH=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json' \
+  'ASCENDANY_KNOWLEDGE_CATALOG_SHA256=__ASCENDANY_KNOWLEDGE_CATALOG_SHA256__' \
   >"${FIXTURE_REPOSITORY}/deploy/v2/config/ascendanyd.env.example"
+cp -- "${FIXTURE_REPOSITORY}/deploy/v2/config/ascendanyd.env.example" \
+  "${FIXTURE_REPOSITORY}/deploy/v2/config/catalog-publish.env.example"
 printf 'fixture judge image lock\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/judge-image-lock.json"
+printf 'fixture judge compiler inventory\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/judge-compiler-rootfs.inventory"
+printf 'fixture judge image Containerfile\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/judge-images.Containerfile"
 printf 'fixture cloudflared configuration\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/cloudflared.yaml"
 printf 'fixture Fedora runtime package lock\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/fedora-runtime-packages.json"
 printf 'fixture pgbouncer hba\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/pgbouncer-hba.conf"
 printf 'fixture pgbouncer configuration\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/pgbouncer.ini"
 printf 'fixture PostgreSQL hba\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/postgresql-hba.conf"
 printf 'fixture PostgreSQL ident\n' >"${FIXTURE_REPOSITORY}/deploy/v2/config/postgresql-ident.conf"
-for unit in ascendanyd.service ascendany-model-activate.service ascendany-admin-bootstrap.service ascendany-backup.service ascendany-backup.timer ascendany-cloudflared.service 'ascendany-judge@.service' 'ascendany-lsp@.service' ascendany-migrate.service ascendany-pgbouncer.service 'ascendany-restore-verify@.service'; do
+for unit in ascendanyd.service ascendany-model-register.service ascendany-model-activate.service ascendany-catalog-publish.service ascendany-admin-bootstrap.service ascendany-backup.service ascendany-backup.timer ascendany-cloudflared.service 'ascendany-judge@.service' 'ascendany-lsp@.service' ascendany-migrate.service ascendany-pgbouncer.service 'ascendany-restore-verify@.service'; do
   printf 'fixture unit %s\n' "${unit}" >"${FIXTURE_REPOSITORY}/deploy/v2/systemd/${unit}"
 done
 printf '%s\n' \
@@ -117,6 +138,7 @@ printf '#!/usr/bin/env bash\nprintf judge-image-preloader\n' >"${FIXTURE_REPOSIT
 printf '#!/usr/bin/env bash\nprintf pgbouncer-rpm-acquirer\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/acquire-pgbouncer-rpm.sh"
 printf '#!/usr/bin/env bash\nprintf pgbouncer-rpm-attester\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/attest-pgbouncer-rpm.sh"
 printf '#!/usr/bin/env bash\nprintf postgres-pgbouncer-provisioner\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/provision-postgres-pgbouncer.sh"
+printf '#!/usr/bin/env bash\nprintf postgres-schema-fingerprint\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/postgres-schema-fingerprint.sh"
 printf '#!/usr/bin/env bash\nprintf restore-operator\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/restore-verify-operator.sh"
 printf '#!/usr/bin/env bash\nprintf restore-publisher\n' >"${FIXTURE_REPOSITORY}/deploy/v2/scripts/publish-restore-evidence.sh"
 printf 'literal hostile Git path\n' > \
@@ -158,6 +180,7 @@ chmod 0755 \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/acquire-pgbouncer-rpm.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/attest-pgbouncer-rpm.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/provision-postgres-pgbouncer.sh" \
+  "${FIXTURE_REPOSITORY}/deploy/v2/scripts/postgres-schema-fingerprint.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-cloudflared.sh" \
   "${FIXTURE_REPOSITORY}/deploy/v2/scripts/validate-production.sh" \
   "${FIXTURE_REPOSITORY}/provenance/executable.sh"
@@ -175,6 +198,29 @@ git -C "${FIXTURE_REPOSITORY}" update-index \
 unset raw_crlf_blob
 git -C "${FIXTURE_REPOSITORY}" commit --quiet --message 'fixture: committed release source'
 readonly COMMIT="$(git -C "${FIXTURE_REPOSITORY}" rev-parse HEAD)"
+
+readonly FIXTURE_ESBUILD="${FIXTURE_REPOSITORY}/node_modules/.pnpm/esbuild@0.25.12/node_modules/esbuild/bin/esbuild"
+install -d -m 0700 -- "${FIXTURE_ESBUILD%/*}"
+cat >"${FIXTURE_ESBUILD}" <<'FAKE_ESBUILD'
+#!/usr/bin/bash -p
+set -Eeuo pipefail
+if [[ "$#" == 1 && "$1" == --version ]]; then
+  printf '%s\n' '0.25.12'
+  exit 0
+fi
+[[ -z "${BASH_ENV+x}" && -z "${ENV+x}" && "${LC_ALL:-}" == C && "${HOME:-}" == /* ]] || exit 65
+[[ "$#" == 11 && "$1" == tools/v2-production-initialization-client.ts ]] || exit 65
+[[ "$PWD" == */source ]] || exit 65
+readonly expected_client=$'import { productionInitializationFixture } from "../packages/sdk/src/index.ts";\nconsole.log(productionInitializationFixture);'
+[[ "$(<"$1")" == "$expected_client" ]] || exit 65
+[[ "$(<packages/sdk/src/index.ts)" == 'export const productionInitializationFixture = "reviewed SDK dependency";' ]] || exit 65
+readonly expected_flags=$'--bundle\n--platform=node\n--format=esm\n--target=node22.22\n--packages=bundle\n--tree-shaking=true\n--charset=utf8\n--legal-comments=none\n--log-level=error'
+actual_flags="$(printf '%s\n' "${@:2:9}")"
+[[ "$actual_flags" == "$expected_flags" ]] || exit 65
+[[ "${11}" == --outfile=/*/release/operators/ascendany-production-initialize.mjs ]] || exit 65
+printf '%s\n' 'console.log("bundled reviewed production initialization client");' >"${11#--outfile=}"
+FAKE_ESBUILD
+chmod 0755 "${FIXTURE_ESBUILD}"
 
 printf 'deploy/v2/README.md export-ignore\n' > \
   "${FIXTURE_REPOSITORY}/.git/info/attributes"
@@ -318,12 +364,23 @@ if [[ "${*: -1}" == './cmd/ascendany-model' ]]; then
   cat >"${output}" <<'MODEL_VERIFIER'
 #!/usr/bin/bash -p
 set -Eeuo pipefail
-[[ "$#" == 7 && "$1" == verify && "$2" == --model && "$4" == --sha256 && "$6" == --expected-purpose ]]
-[[ "$(/usr/bin/sha256sum -- "$3" | /usr/bin/awk '{print $1}')" == "$5" ]]
-if [[ "$(/usr/bin/jq -er '.manifest.purpose' "$3")" != "$7" ]]; then
-  /usr/bin/printf 'model purpose differs from expected purpose\n' >&2
-  exit 1
-fi
+case "$1" in
+  verify)
+    [[ "$#" == 7 && "$2" == --model && "$4" == --sha256 && "$6" == --expected-purpose ]]
+    [[ "$(/usr/bin/sha256sum -- "$3" | /usr/bin/awk '{print $1}')" == "$5" ]]
+    [[ "$(/usr/bin/jq -er '.manifest.purpose' "$3")" == "$7" ]] || {
+      /usr/bin/printf 'model purpose differs from expected purpose\n' >&2
+      exit 1
+    }
+    ;;
+  verify-catalog)
+    [[ "$#" == 11 && "$2" == --catalog && "$4" == --catalog-sha256 && "$6" == --model && "$8" == --model-sha256 && "${10}" == --expected-purpose ]]
+    [[ "$(/usr/bin/sha256sum -- "$3" | /usr/bin/awk '{print $1}')" == "$5" ]]
+    [[ "$(/usr/bin/sha256sum -- "$7" | /usr/bin/awk '{print $1}')" == "$9" ]]
+    [[ "$(/usr/bin/jq -er '.manifest.purpose' "$7")" == "${11}" ]]
+    ;;
+  *) exit 64 ;;
+esac
 MODEL_VERIFIER
 else
   printf 'fixture binary for %s\n' "${*: -1}" >"${output}"
@@ -350,17 +407,23 @@ chmod 0755 "${FAKE_BIN}/go"
 printf '%s' '{"manifest":{"purpose":"production"}}' >"${RECOMMENDATION_MODEL}"
 chmod 0400 "${RECOMMENDATION_MODEL}"
 readonly RECOMMENDATION_MODEL_SHA256="$(sha256sum -- "${RECOMMENDATION_MODEL}" | awk '{print $1}')"
+printf '%s' '{"fixture":"catalog"}' >"${KNOWLEDGE_CATALOG}"
+chmod 0400 "${KNOWLEDGE_CATALOG}"
+readonly KNOWLEDGE_CATALOG_SHA256="$(sha256sum -- "${KNOWLEDGE_CATALOG}" | awk '{print $1}')"
 
 readonly -a PAYLOAD_PATHS=(
   bin/ascendanyd
   bin/ascendany-admin-bootstrap
   bin/ascendany-backup
+  bin/ascendany-catalog-publish
   bin/ascendany-judge
   bin/ascendany-lsp
   bin/ascendany-migrate
   bin/ascendany-model
   bin/ascendany-release-ops
   models/recommendation-model.json
+  models/recommendation-knowledge-catalog.json
+  operators/ascendany-production-initialize.mjs
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
@@ -373,10 +436,13 @@ readonly -a PAYLOAD_PATHS=(
   config/ascendanyd.env
   config/ascendanyd-read-only-smoke.env
   config/backup.env
+  config/catalog-publish.env
   config/cloudflared.yaml
   config/fedora-runtime-packages.json
   config/judge.env
+  config/judge-compiler-rootfs.inventory
   config/judge-image-lock.json
+  config/judge-images.Containerfile
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
@@ -384,7 +450,9 @@ readonly -a PAYLOAD_PATHS=(
   config/postgresql-ident.conf
   config/restore.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-register.service
   systemd/ascendany-model-activate.service
+  systemd/ascendany-catalog-publish.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -409,6 +477,7 @@ readonly -a PAYLOAD_PATHS=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
+  scripts/postgres-schema-fingerprint.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
 )
@@ -444,6 +513,8 @@ run_builder() {
       --release-purpose "${FIXTURE_RELEASE_PURPOSE:-production}" \
       --recommendation-model "${RECOMMENDATION_MODEL}" \
       --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+      --knowledge-catalog "${KNOWLEDGE_CATALOG}" \
+      --knowledge-catalog-sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
       --output "${output}"
 }
 
@@ -495,6 +566,11 @@ readonly HAPPY_OUTPUT="${HAPPY_PARENT}/release"
 readonly SOURCE_MODE_FILE="${WORK_ROOT}/source-mode"
 install -d -m 0700 "${HAPPY_PARENT}"
 printf 'dirty before build\n' >"${FIXTURE_REPOSITORY}/deploy/v2/README.md"
+printf '%s\n' 'console.log("dirty live production initialization client");' \
+  >"${FIXTURE_REPOSITORY}/tools/v2-production-initialization-client.ts"
+printf '%s\n' \
+  'export const productionInitializationFixture = "dirty live SDK dependency";' \
+  >"${FIXTURE_REPOSITORY}/packages/sdk/src/index.ts"
 run_builder \
   "${HAPPY_OUTPUT}" \
   >"${WORK_ROOT}/happy.log"
@@ -502,16 +578,27 @@ run_builder \
 [[ "$(<"${SOURCE_MODE_FILE}")" == "700" ]] || fail 'detached source root was not mode 0700'
 [[ "$(<"${HAPPY_OUTPUT}/README.md")" == "fixture release readme" ]] ||
   fail 'release payload read from the mutable live worktree'
+[[ "$(<"${HAPPY_OUTPUT}/operators/ascendany-production-initialize.mjs")" == 'console.log("bundled reviewed production initialization client");' ]] ||
+  fail 'release initialization bundle was not built from the reviewed TypeScript source'
+[[ "$(stat -Lc '%a' -- "${HAPPY_OUTPUT}/operators/ascendany-production-initialize.mjs")" == 555 ]] ||
+  fail 'release initialization bundle mode differs from 0555'
 [[ "$(<"${FIXTURE_REPOSITORY}/deploy/v2/README.md")" == "dirty during build" ]] ||
   fail 'fixture did not mutate the live worktree during the build'
 [[ "$(sha256sum -- "${HAPPY_OUTPUT}/models/recommendation-model.json" | awk '{print $1}')" == "${RECOMMENDATION_MODEL_SHA256}" ]] ||
   fail 'release model differs from the externally anchored artifact'
+[[ "$(sha256sum -- "${HAPPY_OUTPUT}/models/recommendation-knowledge-catalog.json" | awk '{print $1}')" == "${KNOWLEDGE_CATALOG_SHA256}" ]] ||
+  fail 'release catalog differs from the externally anchored artifact'
 grep -Fx "ASCENDANY_RECOMMENDATION_MODEL_SHA256=${RECOMMENDATION_MODEL_SHA256}" \
   "${HAPPY_OUTPUT}/config/ascendanyd.env" >/dev/null ||
   fail 'release runtime configuration is not bound to the model digest'
 grep -Fx 'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production' \
   "${HAPPY_OUTPUT}/config/ascendanyd.env" >/dev/null ||
   fail 'release runtime configuration is not bound to the production model purpose'
+for config in ascendanyd.env catalog-publish.env; do
+  grep -Fx "ASCENDANY_KNOWLEDGE_CATALOG_SHA256=${KNOWLEDGE_CATALOG_SHA256}" \
+    "${HAPPY_OUTPUT}/config/${config}" >/dev/null ||
+    fail "release configuration is not bound to the catalog digest: ${config}"
+done
 [[ ! -e "${PATH_HIJACK_MARKER}" ]] || fail 'release builder executed Go from the mutable live worktree PATH'
 [[ ! -e "${FAKE_BASH_MARKER}" ]] || fail 'release builder resolved Bash through caller PATH'
 [[ ! -e "${BASH_ENV_MARKER}" ]] || fail 'release builder evaluated caller BASH_ENV'
@@ -563,7 +650,7 @@ jq -e \
    and .purpose == "production"
    and .sourceDateEpoch == $epoch
    and .build == {"goVersion":"go1.26.0","goos":"linux","goarch":"amd64","goamd64":"v1","goExperiment":"none","gofips140":"off","cgoEnabled":false}
-   and (.files | length) == 59' \
+   and (.files | length) == 68' \
   "${HAPPY_OUTPUT}/release-manifest.json" >/dev/null || fail 'release manifest metadata is invalid'
 
 printf '%s\n' "${PAYLOAD_PATHS[@]}" >"${WORK_ROOT}/expected-manifest-paths"
@@ -655,7 +742,7 @@ expect_failure \
   "${WORK_ROOT}/extra.log" \
   run_builder "${EXTRA_PARENT}/release"
 rm -f "${WORK_ROOT}/extra-payload"
-rg --quiet 'exact 59-path contract' "${WORK_ROOT}/extra.log" ||
+rg --quiet 'exact 68-path contract' "${WORK_ROOT}/extra.log" ||
   fail 'unexpected payload did not fail the closed-set gate'
 [[ ! -e "${EXTRA_PARENT}/release" ]] || fail 'closed-set failure published a release'
 assert_no_private_workspace "${EXTRA_PARENT}"
@@ -692,6 +779,8 @@ expect_failure \
       --release-purpose production \
       --recommendation-model "${RECOMMENDATION_MODEL}" \
       --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+      --knowledge-catalog "${KNOWLEDGE_CATALOG}" \
+      --knowledge-catalog-sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
       --output "${INVALID_PARENT}/release"
 rg --quiet 'commit payload could not be captured' "${WORK_ROOT}/invalid-commit.log" ||
   fail 'unavailable explicit commit did not fail before building'
@@ -712,6 +801,8 @@ expect_failure \
       --release-purpose production \
       --recommendation-model "${RECOMMENDATION_MODEL}" \
       --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+      --knowledge-catalog "${KNOWLEDGE_CATALOG}" \
+      --knowledge-catalog-sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
       --output "${INVALID_PARENT}/sha256-release"
 rg --quiet 'canonical 40-character Git object ID' \
   "${WORK_ROOT}/sha256-shaped-commit.log" ||
@@ -734,6 +825,8 @@ expect_failure \
       --release-purpose production \
       --recommendation-model "${RECOMMENDATION_MODEL}" \
       --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+      --knowledge-catalog "${KNOWLEDGE_CATALOG}" \
+      --knowledge-catalog-sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
       --output "${INVALID_VERSION_PARENT}/release"
 rg --quiet 'canonical semantic version' "${WORK_ROOT}/invalid-version.log" ||
   fail 'noncanonical numeric prerelease identifier was accepted'
@@ -754,6 +847,8 @@ expect_failure \
       --release-purpose production \
       --recommendation-model "${RECOMMENDATION_MODEL}" \
       --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+      --knowledge-catalog "${KNOWLEDGE_CATALOG}" \
+      --knowledge-catalog-sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
       --output "${INVALID_VERSION_PARENT}/long-release"
 rg --quiet 'at most 128 ASCII bytes' "${WORK_ROOT}/long-version.log" ||
   fail 'oversized canonical release version was accepted'

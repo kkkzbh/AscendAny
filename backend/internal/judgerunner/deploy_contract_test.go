@@ -12,30 +12,71 @@ import (
 )
 
 type judgeImageLock struct {
-	Schema     string `json:"schema"`
-	Dockerfile struct {
-		Repository string `json:"repository"`
-		Revision   string `json:"revision"`
-		Path       string `json:"path"`
-		SHA256     string `json:"sha256"`
-	} `json:"dockerfile"`
-	Image struct {
-		Index             string `json:"index"`
-		IndexMediaType    string `json:"indexMediaType"`
-		Leaf              string `json:"leaf"`
-		ManifestMediaType string `json:"manifestMediaType"`
-		ManifestSize      int64  `json:"manifestSize"`
+	Schema string `json:"schema"`
+	Build  struct {
+		BuildahVersion      string `json:"buildahVersion"`
+		ContainerfilePath   string `json:"containerfilePath"`
+		ContainerfileSHA256 string `json:"containerfileSHA256"`
+		Format              string `json:"format"`
+		PodmanVersion       string `json:"podmanVersion"`
+		SourceDateEpoch     int64  `json:"sourceDateEpoch"`
+	} `json:"build"`
+	Compiler struct {
+		Architecture      string   `json:"architecture"`
+		ConfigDigest      string   `json:"configDigest"`
+		ConfigSize        int64    `json:"configSize"`
+		Identity          string   `json:"identity"`
+		ManifestMediaType string   `json:"manifestMediaType"`
+		ManifestSize      int64    `json:"manifestSize"`
+		OS                string   `json:"os"`
+		Packages          []string `json:"packages"`
+		RootFS            struct {
+			EntryCount      int64  `json:"entryCount"`
+			InventoryPath   string `json:"inventoryPath"`
+			InventorySHA256 string `json:"inventorySHA256"`
+			LayerDigest     string `json:"layerDigest"`
+			LayerMediaType  string `json:"layerMediaType"`
+			LayerSize       int64  `json:"layerSize"`
+		} `json:"rootfs"`
+		Toolchain struct {
+			Compiler       string `json:"compiler"`
+			Package        string `json:"package"`
+			PackageVersion string `json:"packageVersion"`
+			Version        string `json:"version"`
+		} `json:"toolchain"`
+	} `json:"compiler"`
+	Runtime struct {
+		Architecture      string `json:"architecture"`
 		ConfigDigest      string `json:"configDigest"`
 		ConfigSize        int64  `json:"configSize"`
-	} `json:"image"`
-	Platform struct {
-		OS           string `json:"os"`
-		Architecture string `json:"architecture"`
-	} `json:"platform"`
-	Toolchain struct {
-		Compiler string `json:"compiler"`
-		Version  string `json:"version"`
-	} `json:"toolchain"`
+		Identity          string `json:"identity"`
+		ManifestMediaType string `json:"manifestMediaType"`
+		ManifestSize      int64  `json:"manifestSize"`
+		OS                string `json:"os"`
+		RootFS            struct {
+			EntryCount      int64  `json:"entryCount"`
+			InventorySHA256 string `json:"inventorySHA256"`
+			LayerDigest     string `json:"layerDigest"`
+			LayerMediaType  string `json:"layerMediaType"`
+			LayerSize       int64  `json:"layerSize"`
+		} `json:"rootfs"`
+	} `json:"runtime"`
+	Source struct {
+		Architecture         string `json:"architecture"`
+		ConfigDigest         string `json:"configDigest"`
+		ConfigSize           int64  `json:"configSize"`
+		Index                string `json:"index"`
+		IndexMediaType       string `json:"indexMediaType"`
+		IndexSize            int64  `json:"indexSize"`
+		Leaf                 string `json:"leaf"`
+		ManifestMediaType    string `json:"manifestMediaType"`
+		ManifestSize         int64  `json:"manifestSize"`
+		OS                   string `json:"os"`
+		Release              string `json:"release"`
+		RootFSLayerDigest    string `json:"rootfsLayerDigest"`
+		RootFSLayerMediaType string `json:"rootfsLayerMediaType"`
+		RootFSLayerSize      int64  `json:"rootfsLayerSize"`
+	} `json:"source"`
 }
 
 func TestJudgeReleasePinsReviewedImageAndCompilerClosure(t *testing.T) {
@@ -54,28 +95,28 @@ func TestJudgeReleasePinsReviewedImageAndCompilerClosure(t *testing.T) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		t.Fatalf("judge image lock has trailing JSON: %v", err)
 	}
-	digest := regexp.MustCompile(`^docker[.]io/library/gcc@sha256:[0-9a-f]{64}$`)
+	digest := regexp.MustCompile(`^localhost/ascendany-judge-(compiler|runtime)@sha256:[0-9a-f]{64}$`)
 	hex := regexp.MustCompile(`^[0-9a-f]{64}$`)
-	if lock.Schema != "ascendany.judge-image-lock.v1" ||
-		lock.Dockerfile.Repository != "https://github.com/docker-library/gcc.git" ||
-		lock.Dockerfile.Path != "15/Dockerfile" || len(lock.Dockerfile.Revision) != 40 ||
-		!hex.MatchString(lock.Dockerfile.SHA256) || !digest.MatchString(lock.Image.Index) ||
-		!digest.MatchString(lock.Image.Leaf) || lock.Image.Index == lock.Image.Leaf ||
-		lock.Image.IndexMediaType != "application/vnd.oci.image.index.v1+json" ||
-		lock.Image.ManifestMediaType != "application/vnd.oci.image.manifest.v1+json" ||
-		lock.Image.ManifestSize < 1 || lock.Image.ConfigSize < 1 ||
-		!strings.HasPrefix(lock.Image.ConfigDigest, "sha256:") ||
-		lock.Platform.OS != "linux" || lock.Platform.Architecture != "amd64" ||
-		lock.Toolchain.Compiler != cpp20Compiler || lock.Toolchain.Version != "15.2.0" {
-		t.Fatalf("judge image lock differs from the reviewed GCC closure: %#v", lock)
+	if lock.Schema != "ascendany.judge-image-lock.v2" ||
+		lock.Build.ContainerfilePath != "config/judge-images.Containerfile" || !hex.MatchString(lock.Build.ContainerfileSHA256) ||
+		lock.Build.Format != "oci" || lock.Build.SourceDateEpoch != 0 ||
+		!digest.MatchString(lock.Compiler.Identity) || !digest.MatchString(lock.Runtime.Identity) ||
+		lock.Compiler.Identity == lock.Runtime.Identity || lock.Compiler.OS != "linux" || lock.Runtime.OS != "linux" ||
+		lock.Compiler.Architecture != "amd64" || lock.Runtime.Architecture != "amd64" ||
+		lock.Compiler.Toolchain.Compiler != cpp20Compiler || lock.Compiler.Toolchain.PackageVersion != "15.2.0-r2" ||
+		lock.Compiler.Toolchain.Version != "15.2.0" || lock.Compiler.RootFS.EntryCount != 2681 ||
+		!hex.MatchString(lock.Compiler.RootFS.InventorySHA256) || lock.Runtime.RootFS.EntryCount != 0 ||
+		lock.Runtime.RootFS.InventorySHA256 != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ||
+		lock.Source.Release != "3.23.5" || !strings.Contains(lock.Source.Leaf, "docker.io/library/alpine@sha256:") {
+		t.Fatalf("judge image lock differs from the reviewed two-image closure: %#v", lock)
 	}
 	environment, err := os.ReadFile("../../../deploy/v2/config/judge.env.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(environment), "ASCENDANY_JUDGE_CPP20_IMAGE="+lock.Image.Leaf+"\n") ||
-		strings.Contains(string(environment), "ASCENDANY_JUDGE_CPP20_IMAGE="+lock.Image.Index+"\n") {
-		t.Fatal("production Judge environment does not select the locked linux/amd64 leaf")
+	if !strings.Contains(string(environment), "ASCENDANY_JUDGE_COMPILER_IMAGE="+lock.Compiler.Identity+"\n") ||
+		!strings.Contains(string(environment), "ASCENDANY_JUDGE_RUNTIME_IMAGE="+lock.Runtime.Identity+"\n") {
+		t.Fatal("production Judge environment does not select both locked image identities")
 	}
 	for _, relative := range []string{
 		"acquire-judge-image.sh",

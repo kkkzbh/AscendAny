@@ -13,14 +13,14 @@
       "cache": "immutable"
     },
     {
-      "path": "admin/assets/index-CfDefd20.js",
-      "sha256": "42c196277bdf5aee066e56283672ad377cc4f52942593d54a849b889617f04b2",
-      "size": 315696,
+      "path": "admin/assets/index-DYIamMgo.js",
+      "sha256": "1d369508a7443bff2b2429f022bbba9d31d3cd90fe12bfcbe3b403ad2d44e939",
+      "size": 312614,
       "cache": "immutable"
     },
     {
       "path": "admin/index.html",
-      "sha256": "0a081b8c99b1600dd3f96494c3614d23bc30b4f765a520fdf78ddb3f9a7e7886",
+      "sha256": "3230ec9a02d9638c3a570fc9036897c309139b133670ea04c4baf773014886c7",
       "size": 431,
       "cache": "revalidate"
     },

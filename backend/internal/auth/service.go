@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,15 +19,15 @@ type systemClock struct{}
 func (systemClock) Now() time.Time { return time.Now() }
 
 type ServiceConfig struct {
-	Issuer         string
-	Audience       string
-	JWTKey         []byte
-	PasswordPepper []byte
-	AccessTTL      time.Duration
-	RefreshTTL     time.Duration
-	Clock          Clock
-	Random         io.Reader
-	passwordWork   *passwordWorkLimiter
+	Issuer               string
+	Audience             string
+	JWTSigningPrivateKey ed25519.PrivateKey
+	PasswordPepper       []byte
+	AccessTTL            time.Duration
+	RefreshTTL           time.Duration
+	Clock                Clock
+	Random               io.Reader
+	passwordWork         *passwordWorkLimiter
 }
 
 type Service struct {
@@ -60,7 +61,7 @@ func NewService(repository Repository, config ServiceConfig) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	jwtManager, err := NewJWTManager(config.Issuer, config.Audience, config.JWTKey, config.AccessTTL)
+	jwtManager, err := NewJWTManager(config.Issuer, config.Audience, config.JWTSigningPrivateKey, config.AccessTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -85,17 +86,22 @@ func NewService(repository Repository, config ServiceConfig) (*Service, error) {
 	}, nil
 }
 
-func ProductionConfig(issuer, audience string, jwtKey, passwordPepper []byte, accessTTL, refreshTTL time.Duration) ServiceConfig {
+func ProductionConfig(
+	issuer, audience string,
+	jwtSigningPrivateKey ed25519.PrivateKey,
+	passwordPepper []byte,
+	accessTTL, refreshTTL time.Duration,
+) ServiceConfig {
 	return ServiceConfig{
-		Issuer:         issuer,
-		Audience:       audience,
-		JWTKey:         jwtKey,
-		PasswordPepper: passwordPepper,
-		AccessTTL:      accessTTL,
-		RefreshTTL:     refreshTTL,
-		Clock:          systemClock{},
-		Random:         rand.Reader,
-		passwordWork:   productionPasswordWorkLimiter,
+		Issuer:               issuer,
+		Audience:             audience,
+		JWTSigningPrivateKey: jwtSigningPrivateKey,
+		PasswordPepper:       passwordPepper,
+		AccessTTL:            accessTTL,
+		RefreshTTL:           refreshTTL,
+		Clock:                systemClock{},
+		Random:               rand.Reader,
+		passwordWork:         productionPasswordWorkLimiter,
 	}
 }
 

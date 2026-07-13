@@ -2,6 +2,8 @@ package configuration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
@@ -16,6 +18,22 @@ type Configuration interface {
 	Get(context.Context, ItemQuery) (Item, bool, error)
 	ListVersions(context.Context, VersionsQuery) (VersionPage, bool, error)
 	CreateVersion(context.Context, CreateVersionCommand) (CreateVersionResult, error)
+	CreateCatalogPublicationAuthorization(context.Context, CreateCatalogPublicationAuthorizationCommand) (CatalogPublicationAuthorizationResult, error)
+}
+
+func (service *ApplicationService) AuthorizeKnowledgeCatalogPublication(
+	ctx context.Context,
+	token string,
+	input CatalogPublicationAuthorizationInput,
+) (CatalogPublicationAuthorizationResult, error) {
+	principal, err := service.verifier.VerifyAccessToken(token)
+	if err != nil {
+		return CatalogPublicationAuthorizationResult{}, err
+	}
+	return service.configuration.CreateCatalogPublicationAuthorization(ctx, CreateCatalogPublicationAuthorizationCommand{
+		Principal: principal, AccessTokenSHA256: accessTokenSHA256(token),
+		PublicationIntent: input.PublicationIntent, Document: input.Document,
+	})
 }
 
 type ApplicationService struct {
@@ -57,20 +75,67 @@ func (service *ApplicationService) ListVersions(ctx context.Context, token, key 
 }
 
 func (service *ApplicationService) CreateVersion(ctx context.Context, token string, input CreateVersionInput) (CreateVersionResult, error) {
+	if input.Kind == KindKnowledgeCatalog || input.Key == KnowledgeCatalogKey {
+		return CreateVersionResult{}, configurationError(
+			ErrorInvalidQuery,
+			"create public configuration version",
+			errors.New("knowledge catalog publication requires the stopped-runtime operator"),
+		)
+	}
 	principal, err := service.verifier.VerifyAccessToken(token)
 	if err != nil {
 		return CreateVersionResult{}, err
 	}
 	return service.configuration.CreateVersion(ctx, CreateVersionCommand{
-		Principal:                     principal,
-		Key:                           input.Key,
-		Kind:                          input.Kind,
-		ExpectedHeadRevision:          input.ExpectedHeadRevision,
-		ExpectedAnalyticsGenerationID: input.ExpectedAnalyticsGenerationID,
-		ExpectedAnalyticsHeadRevision: input.ExpectedAnalyticsHeadRevision,
-		ExpectedInputManifestSHA256:   input.ExpectedInputManifestSHA256,
-		SchemaID:                      input.SchemaID,
-		Document:                      input.Document,
-		CredentialRef:                 input.CredentialRef,
+		Principal: principal, Key: input.Key, Kind: input.Kind,
+		ExpectedHeadRevision: input.ExpectedHeadRevision, SchemaID: input.SchemaID,
+		Document: input.Document, CredentialRef: input.CredentialRef,
 	})
+}
+
+// PublishKnowledgeCatalogVersion is exposed only to the stopped-runtime
+// publisher. The verified token principal becomes the immutable publication
+// actor inside the database transaction.
+func (service *ApplicationService) PublishKnowledgeCatalogVersion(
+	ctx context.Context,
+	token string,
+	input KnowledgeCatalogPublicationInput,
+) (CreateVersionResult, error) {
+	principal, err := service.verifier.VerifyAccessToken(token)
+	if err != nil {
+		return CreateVersionResult{}, err
+	}
+	analyticsGenerationID := input.ExpectedAnalyticsGenerationID
+	analyticsHeadRevision := input.ExpectedAnalyticsHeadRevision
+	inputManifestSHA256 := input.ExpectedInputManifestSHA256
+	currentModelHeadRevision := input.ExpectedCurrentModelHeadRevision
+	currentModelArtifactSHA256 := input.ExpectedCurrentModelArtifactSHA256
+	return service.configuration.CreateVersion(ctx, CreateVersionCommand{
+		Principal:                          principal,
+		PublicationAuthorizationID:         input.PublicationAuthorizationID,
+		PublicationAccessTokenSHA256:       accessTokenSHA256(token),
+		PublicationAuthorizationRequest:    input.PublicationAuthorizationRequest,
+		Key:                                input.Key,
+		Kind:                               input.Kind,
+		ExpectedHeadRevision:               input.ExpectedHeadRevision,
+		ExpectedAnalyticsGenerationID:      &analyticsGenerationID,
+		ExpectedAnalyticsHeadRevision:      &analyticsHeadRevision,
+		ExpectedInputManifestSHA256:        &inputManifestSHA256,
+		ExpectedCurrentModelHeadRevision:   &currentModelHeadRevision,
+		ExpectedCurrentModelArtifactSHA256: &currentModelArtifactSHA256,
+		TargetCatalogSHA256:                input.TargetCatalogSHA256,
+		TargetModelID:                      input.TargetModelID,
+		TargetModelArtifactSHA256:          input.TargetModelArtifactSHA256,
+		TargetApplicationVersion:           input.TargetApplicationVersion,
+		TargetApplicationCommit:            input.TargetApplicationCommit,
+		TargetApplicationBuildTime:         input.TargetApplicationBuildTime,
+		SchemaID:                           input.SchemaID,
+		Document:                           input.Document,
+		CredentialRef:                      input.CredentialRef,
+	})
+}
+
+func accessTokenSHA256(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
 }

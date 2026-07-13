@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,15 +21,24 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/oj"
 )
 
-const integrationImage = "localhost/ascendany-cpp20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const (
+	integrationCompilerImage = "localhost/ascendany-compiler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	integrationRuntimeImage  = "localhost/ascendany-runtime@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
 
-type integrationEngine struct{}
+type integrationEngine struct {
+	identity string
+	compiler bool
+}
 
-func (*integrationEngine) Identity() string { return integrationImage }
+func (engine *integrationEngine) Identity() string { return engine.identity }
 
-func (*integrationEngine) Run(_ context.Context, command judgerunner.ContainerCommand) (judgerunner.ContainerResult, error) {
-	if command.Executable == "/usr/local/bin/g++" {
-		if err := os.WriteFile(filepath.Join(command.Workspace, "program"), []byte("executable"), 0o500); err != nil {
+func (engine *integrationEngine) Run(_ context.Context, command judgerunner.ContainerCommand) (judgerunner.ContainerResult, error) {
+	if engine.compiler {
+		if command.Executable != "/usr/bin/g++" {
+			return judgerunner.ContainerResult{}, fmt.Errorf("unexpected compiler executable %q", command.Executable)
+		}
+		if err := os.WriteFile(filepath.Join(command.Workspace, "program"), staticIntegrationELF(), 0o500); err != nil {
 			return judgerunner.ContainerResult{}, err
 		}
 		return judgerunner.ContainerResult{ExitCode: 0, Duration: time.Millisecond}, nil
@@ -77,7 +87,11 @@ func TestExecutorAndIsolatedServerStreamVerifiedJob(t *testing.T) {
 		}
 	}
 	workRoot := filepath.Join(workParent, jobID)
-	runner, err := judgerunner.New(&integrationEngine{}, judgerunner.DefaultConfig(jobID, workRoot))
+	runner, err := judgerunner.New(
+		&integrationEngine{identity: integrationCompilerImage, compiler: true},
+		&integrationEngine{identity: integrationRuntimeImage},
+		judgerunner.DefaultConfig(jobID, workRoot),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +137,30 @@ func TestExecutorAndIsolatedServerStreamVerifiedJob(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(socketDirectory, jobID+".sock")); !os.IsNotExist(err) {
 		t.Fatalf("socket remains after execution: %v", err)
 	}
+}
+
+func staticIntegrationELF() []byte {
+	const headerSize, programSize = 64, 56
+	value := make([]byte, headerSize+programSize)
+	copy(value[:4], []byte{0x7f, 'E', 'L', 'F'})
+	value[4], value[5], value[6] = 2, 1, 1
+	binary.LittleEndian.PutUint16(value[16:18], 2)
+	binary.LittleEndian.PutUint16(value[18:20], 62)
+	binary.LittleEndian.PutUint32(value[20:24], 1)
+	binary.LittleEndian.PutUint64(value[24:32], 0x400000)
+	binary.LittleEndian.PutUint64(value[32:40], headerSize)
+	binary.LittleEndian.PutUint16(value[52:54], headerSize)
+	binary.LittleEndian.PutUint16(value[54:56], programSize)
+	binary.LittleEndian.PutUint16(value[56:58], 1)
+	program := value[headerSize:]
+	binary.LittleEndian.PutUint32(program[0:4], 1)
+	binary.LittleEndian.PutUint32(program[4:8], 5)
+	binary.LittleEndian.PutUint64(program[16:24], 0x400000)
+	binary.LittleEndian.PutUint64(program[24:32], 0x400000)
+	binary.LittleEndian.PutUint64(program[32:40], uint64(len(value)))
+	binary.LittleEndian.PutUint64(program[40:48], uint64(len(value)))
+	binary.LittleEndian.PutUint64(program[48:56], 0x1000)
+	return value
 }
 
 func TestResultResponseRejectsAmbiguousEnvelope(t *testing.T) {

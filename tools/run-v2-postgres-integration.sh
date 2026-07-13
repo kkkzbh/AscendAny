@@ -8,7 +8,7 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly BACKEND_ROOT="${REPOSITORY_ROOT}/backend"
 readonly DATABASE_NAME="ascendany_v2"
 readonly EXPECTED_POSTGRES_MAJOR="17"
-readonly EXPECTED_SCHEMA_VERSION="6"
+readonly EXPECTED_SCHEMA_VERSION="7"
 readonly MIGRATOR_TEST_PASSWORD="local-rehearsal-password"
 readonly RESTORE_TEST_PASSWORD="local-restore-rehearsal-password"
 
@@ -59,6 +59,7 @@ readonly PGBOUNCER_ADMIN_USER="$(required_environment ASCENDANY_CI_PGBOUNCER_ADM
 readonly PGBOUNCER_ADMIN_PASSWORD="$(required_environment ASCENDANY_CI_PGBOUNCER_ADMIN_PASSWORD)"
 readonly PGBOUNCER_USERLIST_PATH="$(required_environment ASCENDANY_CI_PGBOUNCER_USERLIST_PATH)"
 readonly RUNTIME_PASSWORD="$(required_environment ASCENDANY_CI_RUNTIME_PASSWORD)"
+readonly CATALOG_PUBLISHER_PASSWORD="$(required_environment ASCENDANY_CI_CATALOG_PUBLISHER_PASSWORD)"
 readonly MIGRATOR_PASSWORD="$(required_environment ASCENDANY_CI_MIGRATOR_PASSWORD)"
 readonly BACKUP_PASSWORD="$(required_environment ASCENDANY_CI_BACKUP_PASSWORD)"
 readonly DIRECT_PORT="$(optional_port ASCENDANY_CI_POSTGRES_PORT 5432)"
@@ -73,6 +74,7 @@ for credential_name in \
   ASCENDANY_CI_POSTGRES_ADMIN_PASSWORD \
   ASCENDANY_CI_PGBOUNCER_ADMIN_PASSWORD \
   ASCENDANY_CI_RUNTIME_PASSWORD \
+  ASCENDANY_CI_CATALOG_PUBLISHER_PASSWORD \
   ASCENDANY_CI_MIGRATOR_PASSWORD \
   ASCENDANY_CI_BACKUP_PASSWORD; do
   credential_value="${!credential_name}"
@@ -83,13 +85,23 @@ for credential_name in \
 done
 unset credential_name credential_value
 
+if [[ "${CATALOG_PUBLISHER_PASSWORD}" == "${RUNTIME_PASSWORD}" ||
+  "${CATALOG_PUBLISHER_PASSWORD}" == "${MIGRATOR_PASSWORD}" ||
+  "${CATALOG_PUBLISHER_PASSWORD}" == "${BACKUP_PASSWORD}" ||
+  "${CATALOG_PUBLISHER_PASSWORD}" == "${POSTGRES_ADMIN_PASSWORD}" ||
+  "${CATALOG_PUBLISHER_PASSWORD}" == "${PGBOUNCER_ADMIN_PASSWORD}" ]]; then
+  printf 'ASCENDANY_CI_CATALOG_PUBLISHER_PASSWORD must be independent from every other integration credential\n' >&2
+  exit 2
+fi
+
 if [[ "${MIGRATOR_PASSWORD}" != "${MIGRATOR_TEST_PASSWORD}" ]]; then
   printf 'ASCENDANY_CI_MIGRATOR_PASSWORD must equal the isolated migration-test credential\n' >&2
   exit 2
 fi
 
 if [[ ! "${PGBOUNCER_ADMIN_USER}" =~ ^[a-z][a-z0-9_]{0,62}$ ||
-  "${PGBOUNCER_ADMIN_USER}" == ascendanyd_login ]]; then
+  "${PGBOUNCER_ADMIN_USER}" == ascendanyd_login ||
+  "${PGBOUNCER_ADMIN_USER}" == ascendany_catalog_publisher_login ]]; then
   printf 'ASCENDANY_CI_PGBOUNCER_ADMIN_USER must be one distinct canonical PostgreSQL identifier\n' >&2
   exit 2
 fi
@@ -125,6 +137,7 @@ readonly GO_BINARY="$(command -v go)"
 # Env-gated integration packages construct their own pgx pools. Encode the
 # transaction-pooling execution contract in the URL they all receive.
 readonly RUNTIME_DATABASE_URL="postgresql://ascendanyd_login@${PGBOUNCER_HOST}:${PGBOUNCER_PORT}/${DATABASE_NAME}?sslmode=disable&default_query_exec_mode=exec&statement_cache_capacity=0&description_cache_capacity=0"
+readonly CATALOG_PUBLISHER_DATABASE_URL="postgresql://ascendany_catalog_publisher_login@${PGBOUNCER_HOST}:${PGBOUNCER_PORT}/${DATABASE_NAME}?sslmode=disable&default_query_exec_mode=exec&statement_cache_capacity=0&description_cache_capacity=0"
 readonly MIGRATOR_DATABASE_URL="postgresql://ascendany_migrator_login@${MIGRATOR_POSTGRES_HOST}:5432/${DATABASE_NAME}?sslmode=disable"
 readonly REAL_SNAPSHOT_PATH="$(optional_absolute_file \
   ASCENDANY_CI_REAL_PINTIA_SNAPSHOT_PATH \
@@ -133,6 +146,11 @@ readonly ANALYTICS_CONFIG_PATH="${REPOSITORY_ROOT}/deploy/v2/config/analytics.js
 readonly RECOMMENDATION_CATALOG_PATH="$(optional_absolute_file \
   ASCENDANY_CI_RECOMMENDATION_CATALOG_PATH \
   "${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json")"
+readonly RECOMMENDATION_CATALOG_SHA256="$(required_environment ASCENDANY_CI_RECOMMENDATION_CATALOG_SHA256)"
+if [[ ! "${RECOMMENDATION_CATALOG_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'ASCENDANY_CI_RECOMMENDATION_CATALOG_SHA256 must be a canonical lowercase SHA-256 trust anchor\n' >&2
+  exit 2
+fi
 readonly RECOMMENDATION_MODEL_PATH="$(optional_absolute_file \
   ASCENDANY_CI_RECOMMENDATION_MODEL_PATH \
   "${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json")"
@@ -215,21 +233,27 @@ publish_pgbouncer_userlist() {
       >>"${temporary_userlist}" <<'SQL'
 SELECT format('"%s" "%s"', rolname, rolpassword)
 FROM pg_authid
-WHERE rolname = 'ascendanyd_login'
+WHERE rolname IN ('ascendanyd_login', 'ascendany_catalog_publisher_login')
   AND rolpassword LIKE 'SCRAM-SHA-256$%'
+ORDER BY CASE rolname
+    WHEN 'ascendanyd_login' THEN 1
+    WHEN 'ascendany_catalog_publisher_login' THEN 2
+END;
 SQL
-    if [[ "$(wc -l <"${temporary_userlist}" | tr -d ' ')" != 2 ||
-      "$(grep -c ' "SCRAM-SHA-256\$' "${temporary_userlist}")" != 2 ]]; then
+    if [[ "$(wc -l <"${temporary_userlist}" | tr -d ' ')" != 3 ||
+      "$(grep -c ' "SCRAM-SHA-256\$' "${temporary_userlist}")" != 3 ]]; then
       printf 'PostgreSQL did not yield the exact ordered PgBouncer SCRAM identities\n' >&2
       exit 1
     fi
     if [[ "$(sed -n '1s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != "${PGBOUNCER_ADMIN_USER}" ||
-      "$(sed -n '2s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != ascendanyd_login ]]; then
+      "$(sed -n '2s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != ascendanyd_login ||
+      "$(sed -n '3s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != ascendany_catalog_publisher_login ]]; then
       printf 'PostgreSQL returned PgBouncer SCRAM identities in a noncanonical order\n' >&2
       exit 1
     fi
     if grep -Fq -- "${PGBOUNCER_ADMIN_PASSWORD}" "${temporary_userlist}" ||
-      grep -Fq -- "${RUNTIME_PASSWORD}" "${temporary_userlist}"; then
+      grep -Fq -- "${RUNTIME_PASSWORD}" "${temporary_userlist}" ||
+      grep -Fq -- "${CATALOG_PUBLISHER_PASSWORD}" "${temporary_userlist}"; then
       printf 'PgBouncer userlist publication exposed plaintext credential material\n' >&2
       exit 1
     fi
@@ -249,6 +273,18 @@ runtime_psql() {
     --host="${PGBOUNCER_HOST}" \
     --port="${PGBOUNCER_PORT}" \
     --username=ascendanyd_login \
+    --dbname="${DATABASE_NAME}" \
+    "$@"
+}
+
+catalog_publisher_psql() {
+  PGPASSWORD="${CATALOG_PUBLISHER_PASSWORD}" psql \
+    -X \
+    --no-password \
+    --set=ON_ERROR_STOP=1 \
+    --host="${PGBOUNCER_HOST}" \
+    --port="${PGBOUNCER_PORT}" \
+    --username=ascendany_catalog_publisher_login \
     --dbname="${DATABASE_NAME}" \
     "$@"
 }
@@ -328,10 +364,12 @@ SQL
 
   admin_psql "${DATABASE_NAME}" \
     --set=runtime_password="${RUNTIME_PASSWORD}" \
+    --set=catalog_publisher_password="${CATALOG_PUBLISHER_PASSWORD}" \
     --set=migrator_password="${MIGRATOR_PASSWORD}" \
     --set=backup_password="${BACKUP_PASSWORD}" \
     --set=restore_password="${RESTORE_TEST_PASSWORD}" >/dev/null <<'SQL'
 ALTER ROLE ascendanyd_login PASSWORD :'runtime_password';
+ALTER ROLE ascendany_catalog_publisher_login PASSWORD :'catalog_publisher_password';
 ALTER ROLE ascendany_migrator_login PASSWORD :'migrator_password';
 ALTER ROLE ascendany_backup_login PASSWORD :'backup_password';
 ALTER ROLE ascendany_restore_login PASSWORD :'restore_password';
@@ -357,6 +395,7 @@ run_migrations() {
 assert_schema_roles_and_ports() {
   local migration_state
   local backup_identity
+  local catalog_publisher_identity
   local runtime_identity
   local denial_log="${WORK_ROOT}/denial.log"
   local restore_denial_log="${WORK_ROOT}/restore-denial.log"
@@ -386,6 +425,12 @@ FROM ascendany.schema_migrations_v2")"
   runtime_identity="$(runtime_psql --tuples-only --no-align --command="SELECT session_user || ':' || current_user || ':' || current_database()")"
   if [[ "${runtime_identity}" != "ascendanyd_login:ascendanyd_login:${DATABASE_NAME}" ]]; then
     printf 'runtime PgBouncer identity is %s\n' "${runtime_identity}" >&2
+    exit 1
+  fi
+
+  catalog_publisher_identity="$(catalog_publisher_psql --tuples-only --no-align --command="SELECT session_user || ':' || current_user || ':' || current_database()")"
+  if [[ "${catalog_publisher_identity}" != "ascendany_catalog_publisher_login:ascendany_catalog_publisher_login:${DATABASE_NAME}" ]]; then
+    printf 'catalog publisher PgBouncer identity is %s\n' "${catalog_publisher_identity}" >&2
     exit 1
   fi
 
@@ -794,11 +839,42 @@ run_go_test() {
           ASCENDANY_TEST_DATABASE_URL="${RUNTIME_DATABASE_URL}" \
           ASCENDANY_TEST_DATABASE_PASSWORD="${RUNTIME_PASSWORD}" \
           ASCENDANY_TEST_RECOMMENDATION_CATALOG_PATH="${RECOMMENDATION_CATALOG_PATH}" \
+          ASCENDANY_TEST_RECOMMENDATION_CATALOG_SHA256="${RECOMMENDATION_CATALOG_SHA256}" \
           ASCENDANY_TEST_RECOMMENDATION_MODEL_PATH="${RECOMMENDATION_MODEL_PATH}" \
           ASCENDANY_TEST_RECOMMENDATION_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
           ASCENDANY_REAL_PINTIA_SNAPSHOT_PATH="${REAL_SNAPSHOT_PATH}" \
           ASCENDANY_REAL_ANALYTICS_CONFIG_PATH="${ANALYTICS_CONFIG_PATH}" \
           PGPASSFILE="${RUNTIME_PGPASS_FILE}" \
+          "${GO_BINARY}" test -count=1 -json "${package_path}" -run "^${test_name}$"
+      ) >"${log_path}" 2>&1; then
+        cat "${log_path}" >&2
+        return 1
+      fi
+      ;;
+    publisher)
+      if ! (
+        cd -- "${BACKEND_ROOT}"
+        /usr/bin/env -i \
+          PATH=/usr/bin:/bin \
+          HOME="${HOME}" \
+          TMPDIR="${TMPDIR:-/tmp}" \
+          LC_ALL=C \
+          TZ=UTC \
+          GOTOOLCHAIN=local \
+          GOENV=off \
+          GOWORK=off \
+          GOFLAGS= \
+          GOPROXY=off \
+          ASCENDANY_TEST_DATABASE_URL="${CATALOG_PUBLISHER_DATABASE_URL}" \
+          ASCENDANY_TEST_DATABASE_PASSWORD="${CATALOG_PUBLISHER_PASSWORD}" \
+          ASCENDANY_TEST_RUNTIME_DATABASE_URL="${RUNTIME_DATABASE_URL}" \
+          ASCENDANY_TEST_RUNTIME_DATABASE_PASSWORD="${RUNTIME_PASSWORD}" \
+          ASCENDANY_TEST_RECOMMENDATION_CATALOG_PATH="${RECOMMENDATION_CATALOG_PATH}" \
+          ASCENDANY_TEST_RECOMMENDATION_CATALOG_SHA256="${RECOMMENDATION_CATALOG_SHA256}" \
+          ASCENDANY_TEST_RECOMMENDATION_MODEL_PATH="${RECOMMENDATION_MODEL_PATH}" \
+          ASCENDANY_TEST_RECOMMENDATION_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
+          ASCENDANY_REAL_PINTIA_SNAPSHOT_PATH="${REAL_SNAPSHOT_PATH}" \
+          ASCENDANY_REAL_ANALYTICS_CONFIG_PATH="${ANALYTICS_CONFIG_PATH}" \
           "${GO_BINARY}" test -count=1 -json "${package_path}" -run "^${test_name}$"
       ) >"${log_path}" 2>&1; then
         cat "${log_path}" >&2
@@ -875,11 +951,12 @@ readonly -a TEST_CASES=(
   'runtime|./internal/importing|TestPostgresRealPintiaSnapshotImport|none'
   'runtime|./internal/migrate|TestPostgresImportLifecycleCannotBeBypassed|none'
   'migrator|./internal/migrate|TestPostgresAchievementRuleVersionsAreAppendOnly|none'
+  'runtime|./internal/catalogartifact|TestPostgresCatalogArtifactLoadBoundary|none'
   'runtime|./internal/modelrelease|TestPostgresBindingPersistsVerifiedArtifact|none'
   'runtime|./internal/oj|TestPostgresOJProblemSubmissionAndFencedJudgeLifecycle|none'
   'runtime|./internal/oj|TestPostgresOJConcurrentNewSlugConvergesOnOneHead|none'
   'runtime|./internal/recommendation|TestPostgresModelBindingMatchesVerifiedArtifact|admin'
-  'runtime|./internal/recommendation|TestPostgresRecommendationCatalogPublicationFencesAnalyticsReview|catalog'
+  'publisher|./internal/recommendation|TestPostgresRecommendationCatalogPublicationFencesAnalyticsReview|publication'
   'runtime|./internal/studentanalytics|TestPostgresSelfAnalyticsReadPath|none'
 )
 
@@ -976,6 +1053,12 @@ main() {
       catalog)
         run_go_test runtime ./internal/importing TestPostgresRealPintiaSnapshotImport
         report_real_snapshot_database_summary
+        seed_admin_fixture
+        ;;
+      publication)
+        run_go_test runtime ./internal/importing TestPostgresRealPintiaSnapshotImport
+        report_real_snapshot_database_summary
+        run_go_test runtime ./internal/modelrelease TestPostgresBindingPersistsVerifiedArtifact
         seed_admin_fixture
         ;;
       *)

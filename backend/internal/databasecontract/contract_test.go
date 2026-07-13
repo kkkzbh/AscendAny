@@ -52,6 +52,32 @@ func TestGeneratedVerifierMatchesCanonicalContract(t *testing.T) {
 	}
 }
 
+func TestGeneratedVerifierOwnsExactCatalogPublisherBoundary(t *testing.T) {
+	t.Parallel()
+	for _, fragment := range []string{
+		"publisher_select_tables constant text[] := ARRAY[\n        'schema_migrations_v2'\n    ];",
+		"publisher_insert_tables constant text[] := ARRAY[]::text[];",
+		"publisher_sequences constant text[] := ARRAY[]::text[];",
+		"publisher_update_columns constant text[] := ARRAY[]::text[];",
+		"procedure.oid = to_regprocedure('ascendany.publish_authorized_knowledge_catalog(uuid,text,text)')",
+		"owner.rolname = 'ascendany_owner'",
+		"procedure.prokind = 'f'",
+		"procedure.prosecdef",
+		"procedure.prorettype = 'jsonb'::regtype",
+		"procedure.provolatile = 'v'",
+		"procedure.proconfig = ARRAY['search_path=pg_catalog']::text[]",
+		"'ascendany_catalog_publisher'::text AS grantee_name",
+		"RAISE EXCEPTION 'catalog publisher atomic routine differs from the exact security-definer contract'",
+	} {
+		if !strings.Contains(verifierSQL, fragment) {
+			t.Errorf("generated verifier is missing catalog publisher contract %q", fragment)
+		}
+	}
+	if strings.Contains(verifierSQL, "lock_knowledge_catalog_publication_state") {
+		t.Fatal("generated verifier retains the removed catalog publication lock routine")
+	}
+}
+
 func TestVerifyRejectsACLDriftBeforeInventory(t *testing.T) {
 	t.Parallel()
 	aclFailure := errors.New("routine ACL entries differ")
@@ -82,6 +108,14 @@ func TestReleaseInventoryRejectsExtraSchemaObject(t *testing.T) {
 	}
 }
 
+func TestReleaseInventoryRejectsIdentifiersPostgreSQLWouldTruncate(t *testing.T) {
+	t.Parallel()
+	err := addInventoryKey(map[string]struct{}{}, "constraint:c:"+strings.Repeat("a", 64))
+	if err == nil || !strings.Contains(err.Error(), "exceeds 63 bytes") {
+		t.Fatalf("addInventoryKey() error = %v", err)
+	}
+}
+
 func TestReleaseInventoryCoversMigrationObjectClasses(t *testing.T) {
 	t.Parallel()
 	inventory, err := expectedInventory()
@@ -90,12 +124,42 @@ func TestReleaseInventoryCoversMigrationObjectClasses(t *testing.T) {
 	}
 	for _, required := range []string{
 		"relation:r:recommendation_model_releases",
+		"relation:r:knowledge_catalog_publication_authorizations",
+		"relation:r:knowledge_catalog_publications",
 		"sequence:recommendation_model_release_ids_seq",
+		"sequence:knowledge_catalog_publication_ids_seq",
 		"type:recommendation_model_releases",
 		"type:_recommendation_model_releases",
+		"type:knowledge_catalog_publication_authorizations",
+		"type:_knowledge_catalog_publication_authorizations",
 		"routine:f:validate_recommendation_model_activation()",
+		"routine:f:enforce_catalog_publication_authorization_transition()",
+		"routine:f:catalog_publication_result(requested_publication_id bigint, idempotent_result boolean)",
+		"routine:f:publish_authorized_knowledge_catalog(authorization_public_id uuid, supplied_access_token_sha256 text, supplied_request_canonical_json text)",
 		"trigger:recommendation_model_head_activation_complete",
+		"trigger:catalog_publication_authorizations_transition",
+		"trigger:catalog_publication_authorizations_immutable_truncate",
+		"trigger:knowledge_catalog_publications_immutable_rows",
+		"trigger:knowledge_catalog_publications_immutable_truncate",
 		"constraint:t:recommendation_model_head_activation_complete",
+		"constraint:p:knowledge_catalog_publication_authorizations_pkey",
+		"constraint:u:catalog_publication_auth_jwt_unique",
+		"constraint:u:catalog_publication_auth_request_unique",
+		"constraint:f:catalog_publication_authorizations_consumed_publication_fk",
+		"constraint:u:knowledge_catalog_publications_auth_unique",
+		"constraint:f:knowledge_catalog_publications_authorization_fk",
+		"constraint:u:recommendation_model_activation_events_head_artifact_unique",
+		"constraint:u:recommendation_model_release_catalog_identity_unique",
+		"constraint:u:recommendation_model_activation_catalog_publication_unique",
+		"constraint:f:recommendation_model_head_pending_publication_fk",
+		"constraint:u:recommendation_model_head_pending_publication_unique",
+		"constraint:c:recommendation_model_activation_catalog_publication_required",
+		"constraint:f:recommendation_model_activation_events_catalog_publication_fk",
+		"constraint:f:knowledge_catalog_publications_current_model_activation_fk",
+		"constraint:u:knowledge_catalog_publications_activation_intent_unique",
+		"constraint:u:knowledge_catalog_publications_activation_reference_unique",
+		"constraint:u:knowledge_catalog_publications_intent_unique",
+		"constraint:u:knowledge_catalog_publications_audit_event_unique",
 		"constraint:p:recommendation_model_releases_pkey",
 		"constraint:u:recommendation_model_releases_model_id_key",
 		"index:recommendation_model_releases_model_id_key",
@@ -105,6 +169,16 @@ func TestReleaseInventoryCoversMigrationObjectClasses(t *testing.T) {
 	} {
 		if !containsInventoryKey(inventory, required) {
 			t.Errorf("release inventory is missing %q", required)
+		}
+	}
+	for _, removed := range []string{
+		"routine:f:lock_knowledge_catalog_publication_state(account_public_id uuid, session_public_id uuid, principal_auth_revision bigint)",
+		"sequence:knowledge_catalog_publication_authorization_ids_seq",
+		"trigger:knowledge_catalog_publication_authorizations_immutable_rows",
+		"constraint:u:knowledge_catalog_publications_publication_authorization_id_key",
+	} {
+		if containsInventoryKey(inventory, removed) {
+			t.Errorf("release inventory retains removed migration object %q", removed)
 		}
 	}
 }

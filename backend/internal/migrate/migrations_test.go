@@ -17,13 +17,14 @@ func TestEmbeddedMigrationsHaveFixedContiguousManifestAndHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embedded() error = %v", err)
 	}
-	if len(definitions) != 6 ||
+	if len(definitions) != 7 ||
 		definitions[0].Version != 1 || definitions[0].Name != "fresh_schema" ||
 		definitions[1].Version != 2 || definitions[1].Name != "product_domains" ||
 		definitions[2].Version != 3 || definitions[2].Name != "recommendation_catalog_contract" ||
 		definitions[3].Version != 4 || definitions[3].Name != "achievement_rules" ||
 		definitions[4].Version != 5 || definitions[4].Name != "auto_analysis_once" ||
-		definitions[5].Version != 6 || definitions[5].Name != "inference_model_runtime" {
+		definitions[5].Version != 6 || definitions[5].Name != "inference_model_runtime" ||
+		definitions[6].Version != 7 || definitions[6].Name != "catalog_publication_provenance" {
 		t.Fatalf("definitions = %#v", definitions)
 	}
 	for index := range definitions {
@@ -31,8 +32,144 @@ func TestEmbeddedMigrationsHaveFixedContiguousManifestAndHashes(t *testing.T) {
 			t.Fatalf("definition %d hash = %q, manifest = %q", index, definitions[index].SHA256, embeddedManifest[index].SHA256)
 		}
 	}
-	if CurrentVersion() != 6 {
+	if CurrentVersion() != 7 {
 		t.Fatalf("CurrentVersion() = %d", CurrentVersion())
+	}
+}
+
+func TestCatalogPublicationMigrationOwnsAuthorizedAtomicPublication(t *testing.T) {
+	t.Parallel()
+	contents, err := os.ReadFile(filepath.Join("migrations", "0007_catalog_publication_provenance.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(contents)
+	for _, fragment := range []string{
+		"CREATE TABLE ascendany.knowledge_catalog_publication_authorizations",
+		"public_id uuid PRIMARY KEY",
+		"access_jwt_id uuid NOT NULL",
+		"access_token_sha256 text NOT NULL",
+		"request_canonical_json text NOT NULL",
+		"catalog_publication_auth_jwt_unique",
+		"catalog_publication_auth_request_unique",
+		"catalog_publication_authorizations_consumed_publication_fk",
+		"CREATE FUNCTION ascendany.enforce_catalog_publication_authorization_transition()",
+		"CREATE TRIGGER catalog_publication_authorizations_transition",
+		"CREATE TRIGGER catalog_publication_authorizations_immutable_truncate",
+		"CREATE TABLE ascendany.knowledge_catalog_publications",
+		"SEQUENCE NAME ascendany.knowledge_catalog_publication_ids_seq",
+		"publication_authorization_id uuid NOT NULL",
+		"knowledge_catalog_publications_auth_unique",
+		"knowledge_catalog_publications_authorization_fk",
+		"expected_configuration_head_revision",
+		"target_model_artifact_sha256",
+		"target_application_version",
+		"target_application_commit",
+		"target_application_build_time",
+		"target_model_release_id",
+		"knowledge_catalog_publication_id",
+		"current_model_artifact_sha256",
+		"configuration_mutated",
+		"knowledge_catalog_publications_immutable_rows",
+		"knowledge_catalog_publications_intent_unique",
+		"knowledge_catalog_publications_activation_intent_unique",
+		"knowledge_catalog_publications_activation_reference_unique",
+		"knowledge_catalog_publications_current_model_activation_fk",
+		"knowledge_catalog_publications_audit_event_unique",
+		"recommendation_model_activation_events_head_artifact_unique",
+		"publication_current_model_head_revision bigint GENERATED ALWAYS AS",
+		"recommendation_model_activation_events_catalog_publication_fk",
+		"pending_catalog_publication_id bigint",
+		"recommendation_model_head_pending_publication_fk",
+		"CREATE OR REPLACE FUNCTION ascendany.enforce_recommendation_model_head_transition",
+		"model head activation must consume its pending catalog publication",
+		"ALTER FUNCTION ascendany.validate_recommendation_model_activation()\nSECURITY DEFINER",
+		"ALTER FUNCTION ascendany.validate_recommendation_model_activation()\nSET search_path = pg_catalog",
+		"CREATE FUNCTION ascendany.catalog_publication_result(",
+		"CREATE FUNCTION ascendany.publish_authorized_knowledge_catalog(",
+		"GRANT EXECUTE ON FUNCTION ascendany.publish_authorized_knowledge_catalog(uuid, text, text)",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("catalog publication migration is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		"ON DELETE CASCADE",
+		"DROP TABLE",
+		"IF NOT EXISTS",
+		"CREATE FUNCTION ascendany.lock_knowledge_catalog_publication_state",
+		"GRANT SELECT ON TABLE ascendany.knowledge_catalog_publications\nTO ascendany_catalog_publisher",
+		"GRANT SELECT, INSERT ON TABLE ascendany.knowledge_catalog_publication_authorizations\nTO ascendany_catalog_publisher",
+		"ON SEQUENCE ascendany.knowledge_catalog_publication_ids_seq\nTO ascendany_catalog_publisher",
+		"RAISE EXCEPTION 'recommendation model head is unavailable'",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("catalog publication migration contains forbidden fragment %q", forbidden)
+		}
+	}
+	publisherGrants := make([]string, 0, 1)
+	for _, statement := range strings.Split(sql, ";") {
+		if strings.Contains(statement, "GRANT ") && strings.Contains(statement, "TO ascendany_catalog_publisher") {
+			publisherGrants = append(publisherGrants, strings.Join(strings.Fields(statement), " "))
+		}
+	}
+	wantPublisherGrant := "GRANT EXECUTE ON FUNCTION ascendany.publish_authorized_knowledge_catalog(uuid, text, text) TO ascendany_catalog_publisher"
+	if len(publisherGrants) != 1 || publisherGrants[0] != wantPublisherGrant {
+		t.Errorf("catalog publisher migration grants = %#v, want [%q]", publisherGrants, wantPublisherGrant)
+	}
+	routineStart := strings.Index(sql, "CREATE FUNCTION ascendany.publish_authorized_knowledge_catalog(")
+	if routineStart < 0 {
+		t.Fatal("catalog publication migration has no atomic publish routine")
+	}
+	routineEnd := strings.Index(sql[routineStart:], "\n$function$;")
+	if routineEnd < 0 {
+		t.Fatal("catalog publication atomic routine has no canonical end marker")
+	}
+	routineSQL := sql[routineStart : routineStart+routineEnd]
+	for _, fragment := range []string{
+		"authorization_public_id uuid,\n    supplied_access_token_sha256 text,\n    supplied_request_canonical_json text",
+		"RETURNS jsonb\nLANGUAGE plpgsql\nSECURITY DEFINER\nSET search_path = pg_catalog",
+		"pg_catalog.pg_advisory_xact_lock(4707180034853717324)",
+		"FROM ascendany.knowledge_catalog_publication_authorizations AS stored",
+		"FOR UPDATE OF stored",
+		"current_account_role text",
+		"current_account_auth_revision bigint",
+		"current_account_disabled_at timestamptz",
+		"current_session_auth_revision bigint",
+		"current_session_expires_at timestamptz",
+		"current_session_revoked_at timestamptz",
+		"SELECT account.role,\n           account.auth_revision,\n           account.disabled_at,\n           session.auth_revision,\n           session.expires_at,\n           session.revoked_at",
+		"FOR UPDATE OF account, session",
+		"current_account_role <> 'admin'",
+		"current_account_auth_revision <> capability.authorized_auth_revision",
+		"current_account_disabled_at IS NOT NULL",
+		"current_session_auth_revision <> capability.authorized_auth_revision",
+		"current_session_revoked_at IS NOT NULL",
+		"current_session_expires_at <= authorized_use_at",
+		"USING ERRCODE = '28000'",
+		"UPDATE ascendany.knowledge_catalog_publication_authorizations",
+	} {
+		if !strings.Contains(routineSQL, fragment) {
+			t.Errorf("catalog publication atomic routine is missing %q", fragment)
+		}
+	}
+	advisoryLock := strings.Index(routineSQL, "pg_catalog.pg_advisory_xact_lock(4707180034853717324)")
+	authorizationLock := strings.Index(routineSQL, "FOR UPDATE OF stored")
+	principalLock := strings.Index(routineSQL, "FOR UPDATE OF account, session")
+	modelHeadLock := strings.Index(routineSQL, "FROM ascendany.recommendation_model_head AS head")
+	analyticsHeadLock := strings.Index(routineSQL, "FROM ascendany.analytics_head AS head")
+	configurationLock := strings.Index(routineSQL, "FROM ascendany.configuration_items AS item")
+	if advisoryLock < 0 || authorizationLock <= advisoryLock || principalLock <= authorizationLock ||
+		modelHeadLock <= principalLock || analyticsHeadLock <= modelHeadLock || configurationLock <= analyticsHeadLock {
+		t.Errorf(
+			"catalog publication lock order is advisory=%d authorization=%d principal=%d model=%d analytics=%d configuration=%d",
+			advisoryLock,
+			authorizationLock,
+			principalLock,
+			modelHeadLock,
+			analyticsHeadLock,
+			configurationLock,
+		)
 	}
 }
 

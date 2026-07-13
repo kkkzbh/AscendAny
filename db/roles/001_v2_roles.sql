@@ -3,7 +3,7 @@
 BEGIN;
 
 -- The bootstrap has two valid entry states: a fresh template0 database, or
--- the exact embedded schema-v6 history. The second state makes ACL repair
+-- the exact embedded schema-v7 history. The second state makes ACL repair
 -- idempotent while preserving one closed v2 schema identity.
 DO $database_boundary$
 DECLARE
@@ -15,7 +15,8 @@ DECLARE
         '3:recommendation_catalog_contract:6fa4a81fbe3440fc4b149a5b77d6c3860031e285bafef50b5a881e8783f36267',
         '4:achievement_rules:3242ddfbdee0911d961ebe0f46237f6e2b8a6e7c5e09cf1d94f6ae98c4caaccb',
         '5:auto_analysis_once:40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17',
-        '6:inference_model_runtime:330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea'
+        '6:inference_model_runtime:330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea',
+        '7:catalog_publication_provenance:a69c081d1b0eaa31df8490773d3feed355fdb4053925f84087552df9b5fc940b'
     ];
 BEGIN
     IF current_database() <> 'ascendany_v2' THEN
@@ -47,12 +48,12 @@ BEGIN
     INTO actual_history;
 
     IF actual_history IS DISTINCT FROM expected_history THEN
-        RAISE EXCEPTION 'non-empty ascendany schema does not match the embedded schema-v6 history';
+        RAISE EXCEPTION 'non-empty ascendany schema does not match the embedded schema-v7 history';
     END IF;
 END
 $database_boundary$;
 
--- Capability roles never authenticate. Four login principals have one
+-- Capability roles never authenticate. Five login principals have one
 -- reviewed purpose each; passwords are provisioned outside this SQL file.
 DO $roles$
 BEGIN
@@ -71,6 +72,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ascendany_backup') THEN
         CREATE ROLE ascendany_backup;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ascendany_catalog_publisher') THEN
+        CREATE ROLE ascendany_catalog_publisher;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ascendanyd_login') THEN
         CREATE ROLE ascendanyd_login LOGIN;
     END IF;
@@ -83,6 +87,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ascendany_restore_login') THEN
         CREATE ROLE ascendany_restore_login LOGIN;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ascendany_catalog_publisher_login') THEN
+        CREATE ROLE ascendany_catalog_publisher_login LOGIN;
+    END IF;
 END
 $roles$;
 
@@ -91,20 +98,24 @@ ALTER ROLE ascendany_owner WITH NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREAT
 ALTER ROLE ascendany_runtime WITH NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
 ALTER ROLE ascendany_migrator WITH NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
 ALTER ROLE ascendany_backup WITH NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
+ALTER ROLE ascendany_catalog_publisher WITH NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
 ALTER ROLE ascendanyd_login WITH LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
 ALTER ROLE ascendany_migrator_login WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
 ALTER ROLE ascendany_backup_login WITH LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
 ALTER ROLE ascendany_restore_login WITH LOGIN NOINHERIT NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
+ALTER ROLE ascendany_catalog_publisher_login WITH LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
 
 ALTER ROLE ascendany_database_owner RESET ALL;
 ALTER ROLE ascendany_owner RESET ALL;
 ALTER ROLE ascendany_runtime RESET ALL;
 ALTER ROLE ascendany_migrator RESET ALL;
 ALTER ROLE ascendany_backup RESET ALL;
+ALTER ROLE ascendany_catalog_publisher RESET ALL;
 ALTER ROLE ascendanyd_login RESET ALL;
 ALTER ROLE ascendany_migrator_login RESET ALL;
 ALTER ROLE ascendany_backup_login RESET ALL;
 ALTER ROLE ascendany_restore_login RESET ALL;
+ALTER ROLE ascendany_catalog_publisher_login RESET ALL;
 
 DO $closed_memberships$
 DECLARE
@@ -115,14 +126,16 @@ DECLARE
         'ascendany_runtime',
         'ascendany_migrator',
         'ascendany_backup',
+        'ascendany_catalog_publisher',
         'ascendanyd_login',
         'ascendany_migrator_login',
         'ascendany_backup_login',
-        'ascendany_restore_login'
+        'ascendany_restore_login',
+        'ascendany_catalog_publisher_login'
     ];
 BEGIN
     -- Remove every direct edge touching a managed role, including edges
-    -- recorded under a different grantor, then reconstruct five exact edges.
+    -- recorded under a different grantor, then reconstruct six exact edges.
     -- ascendany_database_owner remains isolated from the membership graph.
     FOR membership IN
         SELECT granted_role.rolname AS role_name,
@@ -148,6 +161,7 @@ $closed_memberships$;
 GRANT ascendany_runtime TO ascendanyd_login WITH ADMIN FALSE, INHERIT TRUE, SET TRUE;
 GRANT ascendany_migrator TO ascendany_migrator_login WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 GRANT ascendany_backup TO ascendany_backup_login WITH ADMIN FALSE, INHERIT TRUE, SET TRUE;
+GRANT ascendany_catalog_publisher TO ascendany_catalog_publisher_login WITH ADMIN FALSE, INHERIT TRUE, SET TRUE;
 GRANT ascendany_owner TO ascendany_migrator WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 GRANT ascendany_owner TO ascendany_restore_login WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 
@@ -192,7 +206,7 @@ SELECT format('REVOKE ALL PRIVILEGES ON DATABASE %I FROM ascendany_database_owne
 SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO ascendany_database_owner', current_database())
 \gexec
 SELECT format(
-    'GRANT CONNECT ON DATABASE %I TO ascendanyd_login, ascendany_migrator_login, ascendany_backup_login',
+    'GRANT CONNECT ON DATABASE %I TO ascendanyd_login, ascendany_migrator_login, ascendany_backup_login, ascendany_catalog_publisher_login',
     current_database()
 )
 \gexec
@@ -204,8 +218,9 @@ REVOKE ALL PRIVILEGES ON DATABASE postgres FROM ascendany_restore_login;
 GRANT CONNECT ON DATABASE postgres TO ascendany_restore_login;
 
 -- The public schema keeps PostgreSQL 17's owner plus PUBLIC USAGE contract.
--- The application schema exposes USAGE only to runtime and backup capability
--- roles. Login principals receive no direct schema ACL.
+-- The application schema exposes USAGE only to the runtime, backup, and
+-- catalog publisher capability roles. Login principals receive no direct
+-- schema ACL.
 DO $schema_acl$
 DECLARE
     acl_entry record;
@@ -241,7 +256,7 @@ GRANT USAGE ON SCHEMA public TO PUBLIC;
 
 REVOKE ALL PRIVILEGES ON SCHEMA ascendany FROM PUBLIC, ascendany_owner;
 GRANT ALL PRIVILEGES ON SCHEMA ascendany TO ascendany_owner;
-GRANT USAGE ON SCHEMA ascendany TO ascendany_runtime, ascendany_backup;
+GRANT USAGE ON SCHEMA ascendany TO ascendany_runtime, ascendany_backup, ascendany_catalog_publisher;
 
 -- Remove every explicit relation ACL, including unknown grantees and direct
 -- login grants, before rebuilding the table and sequence capability sets.
@@ -327,6 +342,7 @@ DECLARE
         'recommendation_model_releases',
         'recommendation_model_activation_events',
         'recommendation_model_head',
+        'knowledge_catalog_publication_authorizations',
         'oj_problems',
         'oj_problem_versions',
         'oj_submissions',
@@ -361,6 +377,46 @@ BEGIN
     END IF;
 END
 $table_allowlists$;
+
+DO $catalog_publisher_table_allowlists$
+DECLARE
+    relation record;
+    publisher_select_tables constant text[] := ARRAY[
+        'schema_migrations_v2'
+    ];
+    publisher_insert_tables constant text[] := ARRAY[]::text[];
+BEGIN
+    FOR relation IN
+        SELECT namespace.nspname, class.relname
+        FROM pg_class AS class
+        JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+        WHERE namespace.nspname = 'ascendany'
+          AND class.relkind IN ('r', 'p')
+          AND class.relname = ANY(publisher_select_tables)
+    LOOP
+        EXECUTE format(
+            'GRANT SELECT ON TABLE %I.%I TO ascendany_catalog_publisher',
+            relation.nspname,
+            relation.relname
+        );
+    END LOOP;
+
+    FOR relation IN
+        SELECT namespace.nspname, class.relname
+        FROM pg_class AS class
+        JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+        WHERE namespace.nspname = 'ascendany'
+          AND class.relkind IN ('r', 'p')
+          AND class.relname = ANY(publisher_insert_tables)
+    LOOP
+        EXECUTE format(
+            'GRANT INSERT ON TABLE %I.%I TO ascendany_catalog_publisher',
+            relation.nspname,
+            relation.relname
+        );
+    END LOOP;
+END
+$catalog_publisher_table_allowlists$;
 
 -- Column privileges do not follow table-level REVOKE. Clear each explicit
 -- column ACL and reconstruct the reviewed runtime UPDATE list.
@@ -433,6 +489,7 @@ DECLARE
         'agent_notes.updated_at',
         'recommendation_model_head.current_release_id',
         'recommendation_model_head.head_revision',
+        'recommendation_model_head.pending_catalog_publication_id',
         'recommendation_model_head.updated_at',
         'oj_problems.current_version_id',
         'oj_problems.head_revision',
@@ -508,9 +565,9 @@ BEGIN
 END
 $column_acl$;
 
--- Trigger routines remain owner-only. Routine ACL cleanup handles functions,
--- procedures, aggregates, and window functions through PostgreSQL's ROUTINE
--- object class.
+-- Routine ACL cleanup handles functions, procedures, aggregates, and window
+-- functions through PostgreSQL's ROUTINE object class. The stopped-runtime
+-- publisher receives one exact atomic capability routine after the owner baseline is rebuilt.
 DO $routine_acl$
 DECLARE
     acl_entry record;
@@ -545,6 +602,14 @@ $routine_acl$;
 
 REVOKE ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA ascendany FROM PUBLIC, ascendany_owner;
 GRANT ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA ascendany TO ascendany_owner;
+
+DO $catalog_publisher_routine_acl$
+BEGIN
+    IF to_regprocedure('ascendany.publish_authorized_knowledge_catalog(uuid,text,text)') IS NOT NULL THEN
+        EXECUTE 'GRANT EXECUTE ON FUNCTION ascendany.publish_authorized_knowledge_catalog(uuid, text, text) TO ascendany_catalog_publisher';
+    END IF;
+END
+$catalog_publisher_routine_acl$;
 
 -- PostgreSQL creates array and composite types with every table. Close their
 -- default PUBLIC USAGE and grant exact type access to runtime and backup.

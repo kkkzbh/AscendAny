@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/ed25519"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
@@ -32,23 +34,53 @@ func (c AccessClaims) Validate() error {
 }
 
 type JWTManager struct {
-	issuer   string
-	audience string
-	key      []byte
-	ttl      time.Duration
+	privateKey ed25519.PrivateKey
+	verifier   *AccessTokenVerifier
+	ttl        time.Duration
 }
 
-func NewJWTManager(issuer, audience string, key []byte, ttl time.Duration) (*JWTManager, error) {
+// AccessTokenVerifier owns only the public capability required to authenticate
+// access tokens. It cannot issue a token.
+type AccessTokenVerifier struct {
+	issuer    string
+	audience  string
+	publicKey ed25519.PublicKey
+}
+
+func NewAccessTokenVerifier(issuer, audience string, publicKey ed25519.PublicKey) (*AccessTokenVerifier, error) {
 	if issuer == "" || audience == "" {
 		return nil, authError(ErrorInvalidConfiguration, "JWT issuer and audience are required.", nil)
 	}
-	if len(key) < 32 {
-		return nil, authError(ErrorInvalidConfiguration, "JWT HS256 key must contain at least 32 bytes.", nil)
+	if len(publicKey) != ed25519.PublicKeySize {
+		return nil, authError(ErrorInvalidConfiguration, "JWT Ed25519 verification key must contain exactly 32 bytes.", nil)
+	}
+	return &AccessTokenVerifier{
+		issuer:    issuer,
+		audience:  audience,
+		publicKey: append(ed25519.PublicKey(nil), publicKey...),
+	}, nil
+}
+
+func NewJWTManager(issuer, audience string, privateKey ed25519.PrivateKey, ttl time.Duration) (*JWTManager, error) {
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return nil, authError(ErrorInvalidConfiguration, "JWT Ed25519 signing key must contain exactly 64 bytes.", nil)
+	}
+	canonicalPrivateKey := ed25519.NewKeyFromSeed(privateKey[:ed25519.SeedSize])
+	if subtle.ConstantTimeCompare(privateKey, canonicalPrivateKey) != 1 {
+		return nil, authError(ErrorInvalidConfiguration, "JWT Ed25519 signing key is internally inconsistent.", nil)
 	}
 	if ttl <= 0 {
 		return nil, authError(ErrorInvalidConfiguration, "JWT access lifetime must be positive.", nil)
 	}
-	return &JWTManager{issuer: issuer, audience: audience, key: append([]byte(nil), key...), ttl: ttl}, nil
+	verifier, err := NewAccessTokenVerifier(issuer, audience, canonicalPrivateKey.Public().(ed25519.PublicKey))
+	if err != nil {
+		return nil, err
+	}
+	return &JWTManager{
+		privateKey: append(ed25519.PrivateKey(nil), canonicalPrivateKey...),
+		verifier:   verifier,
+		ttl:        ttl,
+	}, nil
 }
 
 func (m *JWTManager) Issue(principal AccessPrincipal, now time.Time) (string, time.Time, error) {
@@ -74,18 +106,18 @@ func (m *JWTManager) Issue(principal AccessPrincipal, now time.Time) (string, ti
 		Role:         principal.Role,
 		AuthRevision: principal.AuthRevision,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    m.issuer,
+			Issuer:    m.verifier.issuer,
 			Subject:   principal.AccountID,
-			Audience:  jwt.ClaimStrings{m.audience},
+			Audience:  jwt.ClaimStrings{m.verifier.audience},
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			NotBefore: jwt.NewNumericDate(issuedAt),
 			IssuedAt:  jwt.NewNumericDate(issuedAt),
 			ID:        principal.JWTID,
 		},
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
 	token.Header["typ"] = "JWT"
-	serialized, err := token.SignedString(m.key)
+	serialized, err := token.SignedString(m.privateKey)
 	if err != nil {
 		return "", time.Time{}, authError(ErrorInternal, "Access token signing failed.", err)
 	}
@@ -96,33 +128,62 @@ func (m *JWTManager) ParseAt(serialized string, now time.Time) (AccessPrincipal,
 	if m == nil {
 		return AccessPrincipal{}, authError(ErrorInvalidConfiguration, "JWT manager is required.", nil)
 	}
+	return m.verifier.VerifyAt(serialized, now)
+}
+
+func (v *AccessTokenVerifier) VerifyAt(serialized string, now time.Time) (AccessPrincipal, error) {
+	if v == nil {
+		return AccessPrincipal{}, authError(ErrorInvalidConfiguration, "JWT access-token verifier is required.", nil)
+	}
+	return v.verify(
+		serialized,
+		jwt.WithIssuer(v.issuer),
+		jwt.WithAudience(v.audience),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+		jwt.WithNotBeforeRequired(),
+		jwt.WithTimeFunc(func() time.Time { return now }),
+	)
+}
+
+// VerifyCatalogPublicationCapability authenticates the immutable access-token
+// bytes without applying current-time claim validity. The database owns the
+// first-use wall-clock/session check and permits exact recovery of an already
+// consumed publication after the token or session expires.
+func (v *AccessTokenVerifier) VerifyCatalogPublicationCapability(serialized string) (AccessPrincipal, error) {
+	if v == nil {
+		return AccessPrincipal{}, authError(ErrorInvalidConfiguration, "JWT access-token verifier is required.", nil)
+	}
+	return v.verify(serialized, jwt.WithoutClaimsValidation())
+}
+
+func (v *AccessTokenVerifier) verify(serialized string, options ...jwt.ParserOption) (AccessPrincipal, error) {
 	claims := &AccessClaims{}
+	parserOptions := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
+		jwt.WithStrictDecoding(),
+	}
+	parserOptions = append(parserOptions, options...)
 	token, err := jwt.ParseWithClaims(
 		serialized,
 		claims,
 		func(token *jwt.Token) (any, error) {
-			if token.Method != jwt.SigningMethodHS256 {
+			if !validEdDSAJWTHeader(token) {
 				return nil, errors.New("unexpected JWT signing method")
 			}
-			return m.key, nil
+			return v.publicKey, nil
 		},
-		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
-		jwt.WithIssuer(m.issuer),
-		jwt.WithAudience(m.audience),
-		jwt.WithExpirationRequired(),
-		jwt.WithIssuedAt(),
-		jwt.WithNotBeforeRequired(),
-		jwt.WithStrictDecoding(),
-		jwt.WithTimeFunc(func() time.Time { return now }),
+		parserOptions...,
 	)
 	if err != nil || token == nil || !token.Valid {
 		return AccessPrincipal{}, authenticationRejected(err)
 	}
-	if token.Method != jwt.SigningMethodHS256 || token.Header["alg"] != jwt.SigningMethodHS256.Alg() {
-		return AccessPrincipal{}, authenticationRejected(errors.New("JWT algorithm is not HS256"))
+	if !validEdDSAJWTHeader(token) {
+		return AccessPrincipal{}, authenticationRejected(errors.New("JWT header is not the exact EdDSA contract"))
 	}
-	if len(claims.Audience) != 1 || claims.Audience[0] != m.audience {
-		return AccessPrincipal{}, authenticationRejected(errors.New("JWT audience is not exact"))
+	if err := claims.Validate(); err != nil || claims.Issuer != v.issuer ||
+		len(claims.Audience) != 1 || claims.Audience[0] != v.audience {
+		return AccessPrincipal{}, authenticationRejected(errors.New("JWT registered claims violate the exact access-token contract"))
 	}
 	for name, value := range map[string]string{
 		"sub": claims.Subject,
@@ -139,5 +200,15 @@ func (m *JWTManager) ParseAt(serialized string, now time.Time) (AccessPrincipal,
 		Role:         claims.Role,
 		AuthRevision: claims.AuthRevision,
 		JWTID:        claims.ID,
+		ExpiresAt:    claims.ExpiresAt.Time.UTC(),
 	}, nil
+}
+
+func validEdDSAJWTHeader(token *jwt.Token) bool {
+	if token == nil || token.Method != jwt.SigningMethodEdDSA || len(token.Header) != 2 {
+		return false
+	}
+	algorithm, algorithmOK := token.Header["alg"].(string)
+	typeName, typeOK := token.Header["typ"].(string)
+	return algorithmOK && algorithm == jwt.SigningMethodEdDSA.Alg() && typeOK && typeName == "JWT"
 }

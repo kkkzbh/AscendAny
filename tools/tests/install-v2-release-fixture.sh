@@ -14,12 +14,15 @@ readonly -a PAYLOAD_PATHS=(
   bin/ascendanyd
   bin/ascendany-admin-bootstrap
   bin/ascendany-backup
+  bin/ascendany-catalog-publish
   bin/ascendany-judge
   bin/ascendany-lsp
   bin/ascendany-migrate
   bin/ascendany-model
   bin/ascendany-release-ops
   models/recommendation-model.json
+  models/recommendation-knowledge-catalog.json
+  operators/ascendany-production-initialize.mjs
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
@@ -32,10 +35,13 @@ readonly -a PAYLOAD_PATHS=(
   config/ascendanyd.env
   config/ascendanyd-read-only-smoke.env
   config/backup.env
+  config/catalog-publish.env
   config/cloudflared.yaml
   config/fedora-runtime-packages.json
   config/judge.env
+  config/judge-compiler-rootfs.inventory
   config/judge-image-lock.json
+  config/judge-images.Containerfile
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
@@ -43,7 +49,9 @@ readonly -a PAYLOAD_PATHS=(
   config/postgresql-ident.conf
   config/restore.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-register.service
   systemd/ascendany-model-activate.service
+  systemd/ascendany-catalog-publish.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -68,6 +76,7 @@ readonly -a PAYLOAD_PATHS=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
+  scripts/postgres-schema-fingerprint.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
 )
@@ -126,9 +135,10 @@ chmod 0755 "$RELEASE_OPS_BINARY"
 cat >"$MODEL_BINARY" <<'MODEL_VERIFIER'
 #!/usr/bin/bash -p
 set -Eeuo pipefail
-[[ "$#" == 7 && "$1" == verify && "$2" == --model && "$4" == --sha256 && "$6" == --expected-purpose ]]
+[[ "$#" == 11 && "$1" == verify-catalog && "$2" == --catalog && "$4" == --catalog-sha256 && "$6" == --model && "$8" == --model-sha256 && "${10}" == --expected-purpose ]]
 [[ "$(/usr/bin/sha256sum -- "$3" | /usr/bin/awk '{print $1}')" == "$5" ]]
-[[ "$(/usr/bin/jq -er '.manifest.purpose' "$3")" == "$7" ]]
+[[ "$(/usr/bin/sha256sum -- "$7" | /usr/bin/awk '{print $1}')" == "$9" ]]
+[[ "$(/usr/bin/jq -er '.manifest.purpose' "$7")" == "${11}" ]]
 MODEL_VERIFIER
 chmod 0755 "$MODEL_BINARY"
 cat >"$SYSTEMCTL_BINARY" <<'SYSTEMCTL_STUB'
@@ -187,7 +197,7 @@ create_release() {
   local large_payload="${2:-0}"
   local release_purpose="${3:-production}"
   local release_version="${4:-1.2.3}"
-  local relative parent mode path sha size files='[]'
+  local relative parent mode path sha size files='[]' model_sha='' catalog_sha=''
 
   install -d -m 0755 -- "$source_root"
   for relative in "${PAYLOAD_PATHS[@]}"; do
@@ -197,6 +207,8 @@ create_release() {
     mode=0644
     if [[ "$relative" == bin/* || "$relative" == scripts/* ]]; then
       mode=0755
+    elif [[ "$relative" == 'operators/ascendany-production-initialize.mjs' ]]; then
+      mode=0555
     fi
     path="$source_root/$relative"
     if [[ "$relative" == 'scripts/install-v2-release.sh' ]]; then
@@ -208,8 +220,17 @@ create_release() {
     elif [[ "$relative" == 'models/recommendation-model.json' ]]; then
       jq -jcnS --arg purpose "$release_purpose" '{manifest: {purpose: $purpose}}' >"$path"
       chmod "$mode" -- "$path"
-    elif [[ "$relative" == 'config/ascendanyd.env' ]]; then
-      printf 'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=%s\n' "$release_purpose" >"$path"
+      model_sha="$(sha256sum -- "$path" | awk '{print $1}')"
+    elif [[ "$relative" == 'models/recommendation-knowledge-catalog.json' ]]; then
+      printf '%s' '{"fixture":"catalog"}' >"$path"
+      chmod "$mode" -- "$path"
+      catalog_sha="$(sha256sum -- "$path" | awk '{print $1}')"
+    elif [[ "$relative" == 'config/ascendanyd.env' || "$relative" == 'config/catalog-publish.env' ]]; then
+      [[ -n "$model_sha" && -n "$catalog_sha" ]] || fail 'fixture model/catalog digests were not initialized'
+      printf '%s\n' \
+        "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=$release_purpose" \
+        "ASCENDANY_RECOMMENDATION_MODEL_SHA256=$model_sha" \
+        "ASCENDANY_KNOWLEDGE_CATALOG_SHA256=$catalog_sha" >"$path"
       chmod "$mode" -- "$path"
     elif [[ "$relative" == systemd/* ]]; then
       install -m 0644 -- "$REPOSITORY_ROOT/deploy/v2/$relative" "$path"
@@ -367,6 +388,7 @@ run_shell "$happy_case" '
   set -Eeuo pipefail
   [[ "$(stat -Lc "%u:%g:%a" /opt/ascendany/v2)" == 0:0:755 ]]
   [[ "$(stat -Lc "%u:%g:%a:%h" /opt/ascendany/v2/release-manifest.json)" == 0:0:644:1 ]]
+  [[ "$(stat -Lc "%u:%g:%a:%h" /opt/ascendany/v2/operators/ascendany-production-initialize.mjs)" == 0:0:555:1 ]]
   if find /opt/ascendany/v2 -type d ! -perm 0755 -print -quit | grep -q .; then exit 1; fi
   if find /opt/ascendany/v2 -type f \( ! -uid 0 -o ! -gid 0 -o -links +1 \) -print -quit | grep -q .; then exit 1; fi
 ' >/dev/null
@@ -571,6 +593,19 @@ chmod 0664 "$mode_case/source/config/analytics.json"
 expect_failure "$mode_case/install.log" run_installer "$mode_case" /usr/bin/env
 require_log "$mode_case/install.log" 'release source payload integrity differs from its manifest: config/analytics.json'
 [[ ! -e "$mode_case/opt/ascendany/v2" ]] || fail 'mode-drift case published a target'
+
+operator_mode_case="$(new_case initialization-operator-mode-contract)"
+chmod 0755 "$operator_mode_case/source/operators/ascendany-production-initialize.mjs"
+jq -jSc '
+  (.files[] | select(.path == "operators/ascendany-production-initialize.mjs").mode) = "0755"
+' "$operator_mode_case/source/release-manifest.json" >"$operator_mode_case/manifest.new"
+mv -- "$operator_mode_case/manifest.new" "$operator_mode_case/source/release-manifest.json"
+chmod 0644 -- "$operator_mode_case/source/release-manifest.json"
+refresh_manifest_anchor "$operator_mode_case"
+expect_failure "$operator_mode_case/install.log" run_installer "$operator_mode_case" /usr/bin/env
+require_log "$operator_mode_case/install.log" \
+  'release manifest mode differs from the release contract: operators/ascendany-production-initialize.mjs'
+[[ ! -e "$operator_mode_case/opt/ascendany/v2" ]] || fail 'initialization operator mode-contract case published a target'
 
 anchor_case="$(new_case external-trust-anchor)"
 printf '%064d\n' 0 >"$anchor_case/expected-manifest.sha256"

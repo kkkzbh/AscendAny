@@ -85,11 +85,15 @@ load_judge_image_contract
 [[ "$(sha256sum /usr/bin/clangd | awk '{print $1}')" == "${EXPECTED_CLANGD_SHA256}" ]] ||
   fail '/usr/bin/clangd differs from the externally reviewed digest'
 
-mapfile -t judge_image_lines < <(sed -n 's/^ASCENDANY_JUDGE_CPP20_IMAGE=//p' "${JUDGE_CONFIG}")
-[[ "${#judge_image_lines[@]}" == 1 ]] || fail 'production judge config must define exactly one image'
-readonly JUDGE_IMAGE="${judge_image_lines[0]}"
-[[ "${JUDGE_IMAGE}" == "${JUDGE_IMAGE_LEAF}" ]] ||
-  fail 'production judge config must select the release-bound linux/amd64 leaf digest'
+mapfile -t judge_compiler_image_lines < <(sed -n 's/^ASCENDANY_JUDGE_COMPILER_IMAGE=//p' "${JUDGE_CONFIG}")
+mapfile -t judge_runtime_image_lines < <(sed -n 's/^ASCENDANY_JUDGE_RUNTIME_IMAGE=//p' "${JUDGE_CONFIG}")
+[[ "${#judge_compiler_image_lines[@]}" == 1 && "${#judge_runtime_image_lines[@]}" == 1 ]] ||
+  fail 'production judge config must define exactly one compiler image and one runtime image'
+readonly JUDGE_COMPILER_IMAGE_CONFIGURED="${judge_compiler_image_lines[0]}"
+readonly JUDGE_RUNTIME_IMAGE_CONFIGURED="${judge_runtime_image_lines[0]}"
+[[ "${JUDGE_COMPILER_IMAGE_CONFIGURED}" == "${JUDGE_COMPILER_IMAGE}" &&
+   "${JUDGE_RUNTIME_IMAGE_CONFIGURED}" == "${JUDGE_RUNTIME_IMAGE}" ]] ||
+  fail 'production judge config differs from the release-bound image identities'
 
 readonly WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ascendany-v2-sandbox-acceptance.XXXXXX")"
 readonly JUDGE_LOG="${WORK_ROOT}/judge.jsonl"
@@ -108,8 +112,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 readonly -a REQUIRED_JUDGE_TESTS=(
-  TestPodmanEngineCompilesAndRunsWhenImageConfigured
-  TestPodmanAttackCorpusWhenImageConfigured
+  TestPodmanEngineCompilesAndRunsWithSeparateImagesWhenConfigured
+  TestPodmanAttackCorpusWithSeparateImagesWhenConfigured
 )
 readonly -a REQUIRED_LSP_TESTS=(
   TestRealClangdSessionRoundTripAndDisconnectCleanup
@@ -167,24 +171,24 @@ assert_test_manifest_exists \
 assert_test_manifest_exists \
   'real clangd LSP acceptance' ./internal/lsprunner "${LSP_TEST_LIST}" \
   "${REQUIRED_LSP_TESTS[@]}"
-podman image exists "${JUDGE_IMAGE}" || fail "preload the production judge image: ${JUDGE_IMAGE}"
+podman image exists "${JUDGE_COMPILER_IMAGE}" || fail "preload the production compiler image: ${JUDGE_COMPILER_IMAGE}"
+podman image exists "${JUDGE_RUNTIME_IMAGE}" || fail "preload the production runtime image: ${JUDGE_RUNTIME_IMAGE}"
 "${JUDGE_ATTESTER}" >"${JUDGE_ATTESTATION}" || fail 'production judge image attestation failed'
 jq -e \
-  --arg image "${JUDGE_IMAGE}" \
-  --arg config_digest "${JUDGE_IMAGE_CONFIG_DIGEST}" \
-  --arg os "${JUDGE_IMAGE_OS}" \
-  --arg architecture "${JUDGE_IMAGE_ARCHITECTURE}" \
-  --arg compiler "${JUDGE_IMAGE_COMPILER}" \
-  --arg version "${JUDGE_IMAGE_TOOLCHAIN_VERSION}" '
-  type == "object" and .schema == "ascendany.judge-image-attestation.v1" and
-  .image == $image and .configDigest == $config_digest and
-  .os == $os and .architecture == $architecture and
-  .compiler == $compiler and .version == $version
+  --arg compiler_image "${JUDGE_COMPILER_IMAGE}" --arg compiler_config "${JUDGE_COMPILER_CONFIG_DIGEST}" \
+  --arg runtime_image "${JUDGE_RUNTIME_IMAGE}" --arg runtime_config "${JUDGE_RUNTIME_CONFIG_DIGEST}" \
+  --arg compiler "${JUDGE_COMPILER}" --arg version "${JUDGE_COMPILER_VERSION}" '
+  type == "object" and keys == ["compiler","runtime","schema","staticProbeSHA256"] and
+  .schema == "ascendany.judge-image-attestation.v2" and
+  .compiler == {configDigest:$compiler_config,image:$compiler_image,path:$compiler,version:$version} and
+  .runtime == {configDigest:$runtime_config,image:$runtime_image,rootfsEntryCount:0} and
+  (.staticProbeSHA256 | test("^[0-9a-f]{64}$"))
 ' "${JUDGE_ATTESTATION}" >/dev/null || fail 'production judge image attestation evidence is invalid'
 
 if ! /usr/bin/env -i \
     PATH="${PATH}" LC_ALL=C HOME="${HOME}" GOTOOLCHAIN=local GOENV=off GOWORK=off \
-    ASCENDANY_TEST_JUDGE_IMAGE="${JUDGE_IMAGE}" \
+    ASCENDANY_TEST_JUDGE_COMPILER_IMAGE="${JUDGE_COMPILER_IMAGE}" \
+    ASCENDANY_TEST_JUDGE_RUNTIME_IMAGE="${JUDGE_RUNTIME_IMAGE}" \
     go -C "${BACKEND_ROOT}" test -json -count=1 \
       -run "$(join_tests "${REQUIRED_JUDGE_TESTS[@]}")" ./internal/judgerunner \
       >"${JUDGE_LOG}"; then
@@ -203,5 +207,5 @@ fi
 assert_test_evidence 'real clangd LSP acceptance' "${LSP_LOG}" "${REQUIRED_LSP_TESTS[@]}"
 
 /usr/bin/printf \
-  'SANDBOX_ACCEPTANCE_RESULT judge_image_pinned=true judge_image_attested=true judge_required_tests=%s judge_skipped=0 clangd_sha256_verified=true lsp_rootfs=bwrap lsp_required_tests=%s lsp_skipped=0 passed=true\n' \
+  'SANDBOX_ACCEPTANCE_RESULT judge_compiler_image_pinned=true judge_runtime_image_pinned=true judge_images_attested=true judge_required_tests=%s judge_skipped=0 clangd_sha256_verified=true lsp_rootfs=bwrap lsp_required_tests=%s lsp_skipped=0 passed=true\n' \
   "${#REQUIRED_JUDGE_TESTS[@]}" "${#REQUIRED_LSP_TESTS[@]}"

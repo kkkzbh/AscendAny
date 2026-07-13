@@ -225,6 +225,10 @@ func (unusedConfigurationService) CreateVersion(context.Context, string, configu
 	panic("unexpected configuration version create")
 }
 
+func (unusedConfigurationService) AuthorizeKnowledgeCatalogPublication(context.Context, string, configuration.CatalogPublicationAuthorizationInput) (configuration.CatalogPublicationAuthorizationResult, error) {
+	panic("unexpected catalog publication authorization")
+}
+
 type unusedFeedbackService struct{}
 
 func (unusedFeedbackService) SubmitAuthenticated(context.Context, string, feedback.ApplicationInput) (feedback.SubmitResult, error) {

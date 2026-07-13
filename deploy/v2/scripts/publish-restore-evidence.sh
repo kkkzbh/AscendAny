@@ -9,6 +9,7 @@ export LC_ALL=C
 
 readonly restore_user="ascendany-restore"
 readonly restore_parent="/var/lib/ascendany-restore"
+readonly catalog_receipt_root="${restore_parent}/catalog-receipts"
 readonly evidence_directory="/var/lib/ascendany-acceptance"
 readonly evidence_path="${evidence_directory}/restore-verify.json"
 readonly release_manifest="/opt/ascendany/v2/release-manifest.json"
@@ -100,6 +101,8 @@ installed_model_manifest_sha256="$(jq -jSc '{
 manifest_sha="$(sha256sum -- "$backup_root/$backup_id/manifest.json" | awk '{print $1}')"
 artifact_count="$(jq -er '.artifacts.count | select(type == "number" and floor == . and . >= 0)' "$backup_root/$backup_id/manifest.json")" ||
   fail "restored backup artifact count is invalid"
+catalog_receipt_count="$(jq -er '.catalogPublicationReceipts.count | select(type == "number" and floor == . and . > 0)' "$backup_root/$backup_id/manifest.json")" ||
+  fail "restored backup catalog receipt count is invalid"
 jq -e \
   --arg backupId "$backup_id" \
   --arg manifestSHA256 "$manifest_sha" \
@@ -109,18 +112,25 @@ jq -e \
   --arg releaseBuildTime "$release_build_time" \
   --arg releaseModelSHA256 "$release_model_sha256" \
   --arg installedModelManifestSHA256 "$installed_model_manifest_sha256" \
+  --arg catalogReceiptRoot "$catalog_receipt_root" \
   --slurpfile manifest "$backup_root/$backup_id/manifest.json" \
   --slurpfile model "$recommendation_model" \
-  --argjson artifactCount "$artifact_count" '
+  --argjson artifactCount "$artifact_count" \
+  --argjson catalogReceiptCount "$catalog_receipt_count" '
     type == "object" and
-    (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"]) and
+    (keys == ["artifactCount", "backupId", "catalogReceiptCount", "catalogReceiptRoot", "databaseName", "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"]) and
     .level == "INFO" and .msg == "backup restore verified" and
     .backupId == $backupId and .manifestSHA256 == $manifestSHA256 and
     .databaseName == "ascendany_v2_restore_verify" and
     .releaseCommit == $releaseCommit and .releaseVersion == $releaseVersion and
     .artifactCount == $artifactCount and
+    .catalogReceiptCount == $catalogReceiptCount and
+    .catalogReceiptRoot == $catalogReceiptRoot and
     ($manifest | length == 1) and ($model | length == 1) and
     $manifest[0].schema == "ascendany.backup.bundle.v2" and
+    .catalogReceiptCount == ($manifest[0].catalogPublicationReceipts.entries | length) and
+    .catalogReceiptCount == ($manifest[0].database.knowledgeCatalogPublicationIds | length) and
+    .catalogReceiptCount == ($manifest[0].database.knowledgeCatalogPublications | length) and
     .modelId == $manifest[0].database.recommendationModel.modelId and
     .modelArtifactSHA256 == $manifest[0].database.recommendationModel.artifactSha256 and
     .modelHeadRevision == $manifest[0].database.recommendationModel.headRevision and

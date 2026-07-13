@@ -32,13 +32,18 @@ func TestRunCreateLoadsSecretAndReportsSafeIdentity(t *testing.T) {
 			if config.DatabasePassword != strings.Repeat("s", 24) || config.RuntimeRoot != backup.BackupRuntimeRoot {
 				t.Fatalf("create config = %#v", config)
 			}
-			return backup.CreateResult{BackupID: validBackupID, ManifestSHA256: strings.Repeat("a", 64), ArtifactCount: 7}, nil
+			return backup.CreateResult{
+				BackupID: validBackupID, ManifestSHA256: strings.Repeat("a", 64),
+				ArtifactCount: 7, CatalogReceiptCount: 3,
+			}, nil
 		}},
 	)
 	if exitCode != 0 || !called {
 		t.Fatalf("exit=%d called=%v output=%s", exitCode, called, output.String())
 	}
-	if !strings.Contains(output.String(), `"backupId":"`+validBackupID+`"`) || strings.Contains(output.String(), strings.Repeat("s", 24)) {
+	if !strings.Contains(output.String(), `"backupId":"`+validBackupID+`"`) ||
+		!strings.Contains(output.String(), `"catalogReceiptCount":3`) ||
+		strings.Contains(output.String(), strings.Repeat("s", 24)) {
 		t.Fatalf("output = %s", output.String())
 	}
 }
@@ -68,6 +73,7 @@ func TestRunRestoreVerifyUsesDedicatedCredential(t *testing.T) {
 	t.Parallel()
 	values := validEnvironment()
 	values["ASCENDANY_RESTORE_ARTIFACT_ROOT"] = "/var/lib/ascendany-restore/artifacts"
+	values["ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT"] = "/var/lib/ascendany-restore/catalog-receipts"
 	values["ASCENDANY_RESTORE_DATABASE_URL"] = "postgresql://ascendany_restore_login@127.0.0.1:5432/ascendany_v2_restore_verify"
 	values["ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE"] = "/run/credentials/restore-password"
 	values["ASCENDANY_RESTORE_RUNTIME_ROOT"] = backup.RestoreRuntimeRootPrefix + validBackupID
@@ -137,6 +143,7 @@ func validEnvironment() map[string]string {
 		"ASCENDANY_DATABASE_URL":             "postgresql://ascendany_backup_login@127.0.0.1:5432/ascendany_v2",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":   "/run/credentials/backup-password",
 		"ASCENDANY_ARTIFACT_ROOT":            "/var/lib/ascendany/artifacts",
+		"ASCENDANY_CATALOG_RECEIPT_ROOT":     "/var/lib/ascendany-catalog-publisher/receipts",
 		"ASCENDANY_BACKUP_ROOT":              "/var/backups/ascendany",
 		"ASCENDANY_BACKUP_RUNTIME_ROOT":      backup.BackupRuntimeRoot,
 		"ASCENDANY_BACKUP_FORMAT":            backup.BackupFormat,

@@ -11,12 +11,17 @@ import type {
   AgentRunEnqueueResult,
   AgentRunEvent,
   AutomaticAnalysisRequest,
-	CanonicalPositiveInt64String,
   ChatMessage,
   ChatThreadPage,
   ArchiveAgentNoteData,
   AuthenticatedFeedbackRequest,
   AuthSession,
+  AuthorizedCatalogPublicationRequest,
+  AuthorizeKnowledgeCatalogPublicationData,
+  AuthorizeKnowledgeCatalogPublicationResponses,
+  CatalogPublicationAuthorizationRequest,
+  CatalogPublicationAuthorizationResult,
+  CatalogPublicationIntent,
   ConsumeEnrollmentClaimData,
   ConsumeEnrollmentClaimResponses,
   CreateConfigurationVersionData,
@@ -24,7 +29,6 @@ import type {
   CreateConfigurationVersionResponses,
   CreateConfigurationVersionResult,
   CreateGenericConfigurationVersionRequest,
-  CreateRecommendationKnowledgeCatalogVersionRequest,
   CreateAgentNoteData,
   CreateAgentNoteRequest,
   CreateAgentNoteResponses,
@@ -322,36 +326,29 @@ export type OnlineRecommendationTrainingOperationsAreAbsent = Assert<
 export type RecommendationReviewContextIsGeneratedResponse = Assert<
   Equal<GetRecommendationReviewContextResponses[200], RecommendationReviewContext>
 >;
+export type CatalogPublicationAuthorizationBodyIsGenerated = Assert<
+  Equal<AuthorizeKnowledgeCatalogPublicationData["body"], CatalogPublicationAuthorizationRequest>
+>;
+export type CatalogPublicationAuthorizationReturnsImmutableRequest = Assert<
+  Equal<AuthorizeKnowledgeCatalogPublicationResponses[201], CatalogPublicationAuthorizationResult>
+>;
+export type AuthorizedCatalogPublicationRequestAddsOnlyIdentity = Assert<
+  Equal<AuthorizedCatalogPublicationRequest, CatalogPublicationIntent & { authorizationId: string }>
+>;
 export type RecommendationCatalogV1UsesTypedClosedEntries = Assert<
   Equal<RecommendationKnowledgeCatalogV1["knowledgePoints"], Array<RecommendationKnowledgePointV1>>
 >;
-export type RecommendationCatalogPublishUsesTypedDocument = Assert<
+export type OnlineConfigurationPublishCannotCarryReleaseProvenance = Assert<
   Equal<
-    Extract<CreateConfigurationVersionRequest, { kind: "knowledge_catalog" }>,
-    CreateRecommendationKnowledgeCatalogVersionRequest
-  >
->;
-export type RecommendationCatalogPublishDocumentIsGenerated = Assert<
-  Equal<CreateRecommendationKnowledgeCatalogVersionRequest["document"], RecommendationKnowledgeCatalogV1>
->;
-export type RecommendationCatalogPublishPinsReviewGeneration = Assert<
-  Equal<CreateRecommendationKnowledgeCatalogVersionRequest["expectedAnalyticsGenerationId"], CanonicalPositiveInt64String>
->;
-export type RecommendationCatalogPublishPinsReviewHead = Assert<
-  Equal<CreateRecommendationKnowledgeCatalogVersionRequest["expectedAnalyticsHeadRevision"], number>
->;
-export type RecommendationCatalogPublishPinsReviewManifest = Assert<
-  Equal<CreateRecommendationKnowledgeCatalogVersionRequest["expectedInputManifestSha256"], string>
->;
-export type GenericConfigurationPublishCannotCarryRecommendationReview = Assert<
-  Equal<
-	Extract<
-	  keyof CreateGenericConfigurationVersionRequest,
-	  | "expectedAnalyticsGenerationId"
-	  | "expectedAnalyticsHeadRevision"
-	  | "expectedInputManifestSha256"
-	>,
-	never
+		Extract<
+			keyof CreateConfigurationVersionRequest,
+			| "expectedAnalyticsGenerationId"
+			| "expectedAnalyticsHeadRevision"
+			| "expectedInputManifestSha256"
+			| "expectedCurrentModelHeadRevision"
+			| "expectedCurrentModelArtifactSha256"
+		>,
+		never
   >
 >;
 export type ConfigurationContractHasNoTrainingKind = Assert<
@@ -369,6 +366,9 @@ export type ConfigurationPublishHasNoTrainingVariant = Assert<
 >;
 export type GenericConfigurationPublishCannotOwnKnowledgeCatalog = Assert<
   Equal<Extract<CreateGenericConfigurationVersionRequest["kind"], "knowledge_catalog">, never>
+>;
+export type OnlineConfigurationPublishCannotOwnKnowledgeCatalog = Assert<
+  Equal<Extract<CreateConfigurationVersionRequest["kind"], "knowledge_catalog">, never>
 >;
 export type SelfAnalyticsMissingHeadIsLiteralZero = Assert<
   Equal<StudentAnalyticsNotGenerated["headRevision"], 0>

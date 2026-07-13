@@ -13,7 +13,8 @@ func TestParseOptionsAcceptsOnlyExplicitPerJobContract(t *testing.T) {
 		"--control-socket", "/run/ascendany-judge/11111111-1111-4111-8111-111111111111.sock",
 		"--work-root", "/var/lib/ascendany-judge/jobs/11111111-1111-4111-8111-111111111111",
 		"--allowed-client-user", "ascendany",
-		"--container-image", "localhost/ascendany-cpp20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"--compiler-image", "localhost/ascendany-judge-compiler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"--runtime-image", "localhost/ascendany-judge-runtime@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"--delegated-cgroup-root", "/sys/fs/cgroup",
 	}, func(name string) (uint32, error) {
 		if name != "ascendany" {
@@ -35,7 +36,8 @@ func TestParseOptionsRejectsUnknownFlagsRootPeerAndNonRunCommand(t *testing.T) {
 		"--control-socket", "/run/ascendany-judge/11111111-1111-4111-8111-111111111111.sock",
 		"--work-root", "/var/lib/ascendany-judge/jobs/11111111-1111-4111-8111-111111111111",
 		"--allowed-client-user", "ascendany",
-		"--container-image", "localhost/ascendany-cpp20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"--compiler-image", "localhost/ascendany-judge-compiler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"--runtime-image", "localhost/ascendany-judge-runtime@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"--delegated-cgroup-root", "/sys/fs/cgroup",
 	}
 	for name, arguments := range map[string][]string{

@@ -24,16 +24,20 @@ type VersionWritePrecondition interface {
 }
 
 type PublicationIssue struct {
-	IssueCode                     string
-	ProblemKeys                   []string
-	MissingProblemKeys            []string
-	DanglingProblemKeys           []string
-	ExpectedAnalyticsGenerationID string
-	CurrentAnalyticsGenerationID  string
-	ExpectedAnalyticsHeadRevision int64
-	CurrentAnalyticsHeadRevision  int64
-	ExpectedInputManifestSHA256   string
-	CurrentInputManifestSHA256    string
+	IssueCode                          string
+	ProblemKeys                        []string
+	MissingProblemKeys                 []string
+	DanglingProblemKeys                []string
+	ExpectedAnalyticsGenerationID      string
+	CurrentAnalyticsGenerationID       string
+	ExpectedAnalyticsHeadRevision      int64
+	CurrentAnalyticsHeadRevision       int64
+	ExpectedInputManifestSHA256        string
+	CurrentInputManifestSHA256         string
+	ExpectedCurrentModelHeadRevision   int64
+	CurrentModelHeadRevision           int64
+	ExpectedCurrentModelArtifactSHA256 string
+	CurrentModelArtifactSHA256         string
 }
 
 func (issue *PublicationIssue) Error() string {

@@ -15,10 +15,10 @@ readonly FEDORA_PACKAGE_LOCK="${REPOSITORY_ROOT}/deploy/v2/config/fedora-runtime
 readonly RELEASE_PGBOUNCER_CONFIG="${REPOSITORY_ROOT}/deploy/v2/config/pgbouncer.ini"
 readonly RELEASE_PGBOUNCER_HBA="${REPOSITORY_ROOT}/deploy/v2/config/pgbouncer-hba.conf"
 readonly PGBOUNCER_BINARY="/usr/bin/pgbouncer"
-readonly RECOMMENDATION_CATALOG_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json"
-readonly RECOMMENDATION_CATALOG_SHA256="a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
-readonly RECOMMENDATION_MODEL_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json"
-readonly RECOMMENDATION_MODEL_SHA256="5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
+readonly DEFAULT_RECOMMENDATION_CATALOG_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json"
+readonly DEFAULT_RECOMMENDATION_CATALOG_SHA256="a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
+readonly DEFAULT_RECOMMENDATION_MODEL_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json"
+readonly DEFAULT_RECOMMENDATION_MODEL_SHA256="5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
 readonly LABEL_KEY="io.ascendany.v2-postgres-rehearsal"
 
 usage() {
@@ -27,6 +27,10 @@ Usage:
   tools/run-v2-postgres-podman-rehearsal.sh \
     --confirm-reset drop-disposable-ascendany-v2 \
     [--snapshot /absolute/path/to/ascendany-pintia-snapshot.json] \
+    [--knowledge-catalog /absolute/path/to/catalog.json \
+     --knowledge-catalog-sha256 64_lowercase_hex] \
+    [--recommendation-model /absolute/path/to/model.json \
+     --recommendation-model-sha256 64_lowercase_hex] \
     [--direct-port 55432] \
     [--pgbouncer-port 56432]
 
@@ -61,6 +65,14 @@ validate_port() {
 DIRECT_PORT="${DEFAULT_DIRECT_PORT}"
 PGBOUNCER_PORT="${DEFAULT_PGBOUNCER_PORT}"
 SNAPSHOT_PATH="${DEFAULT_SNAPSHOT_PATH}"
+RECOMMENDATION_CATALOG_PATH="${DEFAULT_RECOMMENDATION_CATALOG_PATH}"
+RECOMMENDATION_CATALOG_SHA256="${DEFAULT_RECOMMENDATION_CATALOG_SHA256}"
+RECOMMENDATION_MODEL_PATH="${DEFAULT_RECOMMENDATION_MODEL_PATH}"
+RECOMMENDATION_MODEL_SHA256="${DEFAULT_RECOMMENDATION_MODEL_SHA256}"
+CATALOG_PATH_EXPLICIT=0
+CATALOG_SHA256_EXPLICIT=0
+MODEL_PATH_EXPLICIT=0
+MODEL_SHA256_EXPLICIT=0
 CONFIRMATION=""
 
 while (($# > 0)); do
@@ -73,6 +85,30 @@ while (($# > 0)); do
     --snapshot)
       (($# >= 2)) || fail '--snapshot requires an absolute file path'
       SNAPSHOT_PATH="$2"
+      shift 2
+      ;;
+    --knowledge-catalog)
+      (($# >= 2)) || fail '--knowledge-catalog requires an absolute file path'
+      RECOMMENDATION_CATALOG_PATH="$2"
+      CATALOG_PATH_EXPLICIT=1
+      shift 2
+      ;;
+    --knowledge-catalog-sha256)
+      (($# >= 2)) || fail '--knowledge-catalog-sha256 requires a value'
+      RECOMMENDATION_CATALOG_SHA256="$2"
+      CATALOG_SHA256_EXPLICIT=1
+      shift 2
+      ;;
+    --recommendation-model)
+      (($# >= 2)) || fail '--recommendation-model requires an absolute file path'
+      RECOMMENDATION_MODEL_PATH="$2"
+      MODEL_PATH_EXPLICIT=1
+      shift 2
+      ;;
+    --recommendation-model-sha256)
+      (($# >= 2)) || fail '--recommendation-model-sha256 requires a value'
+      RECOMMENDATION_MODEL_SHA256="$2"
+      MODEL_SHA256_EXPLICIT=1
       shift 2
       ;;
     --direct-port)
@@ -104,15 +140,25 @@ fi
 if [[ "${SNAPSHOT_PATH}" != /* || ! -f "${SNAPSHOT_PATH}" ]]; then
   fail "--snapshot must identify an absolute regular file: ${SNAPSHOT_PATH}"
 fi
-if [[ ! -f "${RECOMMENDATION_CATALOG_PATH}" || -L "${RECOMMENDATION_CATALOG_PATH}" ||
+if ((CATALOG_PATH_EXPLICIT != CATALOG_SHA256_EXPLICIT)); then
+  fail '--knowledge-catalog and --knowledge-catalog-sha256 must be supplied together'
+fi
+if ((MODEL_PATH_EXPLICIT != MODEL_SHA256_EXPLICIT)); then
+  fail '--recommendation-model and --recommendation-model-sha256 must be supplied together'
+fi
+if [[ "${RECOMMENDATION_CATALOG_PATH}" != /* ||
+  ! "${RECOMMENDATION_CATALOG_SHA256}" =~ ^[0-9a-f]{64}$ ||
+  ! -f "${RECOMMENDATION_CATALOG_PATH}" || -L "${RECOMMENDATION_CATALOG_PATH}" ||
   "$(realpath -e -- "${RECOMMENDATION_CATALOG_PATH}")" != "${RECOMMENDATION_CATALOG_PATH}" ||
   "$(sha256sum -- "${RECOMMENDATION_CATALOG_PATH}" | awk '{print $1}')" != "${RECOMMENDATION_CATALOG_SHA256}" ]]; then
-  fail 'the committed synthetic knowledge catalog differs from its pinned SHA-256'
+  fail 'the recommendation knowledge catalog is noncanonical or differs from its pinned SHA-256'
 fi
-if [[ ! -f "${RECOMMENDATION_MODEL_PATH}" || -L "${RECOMMENDATION_MODEL_PATH}" ||
+if [[ "${RECOMMENDATION_MODEL_PATH}" != /* ||
+  ! "${RECOMMENDATION_MODEL_SHA256}" =~ ^[0-9a-f]{64}$ ||
+  ! -f "${RECOMMENDATION_MODEL_PATH}" || -L "${RECOMMENDATION_MODEL_PATH}" ||
   "$(realpath -e -- "${RECOMMENDATION_MODEL_PATH}")" != "${RECOMMENDATION_MODEL_PATH}" ||
   "$(sha256sum -- "${RECOMMENDATION_MODEL_PATH}" | awk '{print $1}')" != "${RECOMMENDATION_MODEL_SHA256}" ]]; then
-  fail 'the committed synthetic inference model differs from its pinned SHA-256'
+  fail 'the recommendation inference model is noncanonical or differs from its pinned SHA-256'
 fi
 
 DIRECT_PORT="$(validate_port --direct-port "${DIRECT_PORT}")"
@@ -388,7 +434,13 @@ readonly POSTGRES_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 readonly PGBOUNCER_ADMIN_USER="pgbouncer_rehearsal"
 readonly PGBOUNCER_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 readonly RUNTIME_PASSWORD="$(openssl rand -hex 24)"
+readonly CATALOG_PUBLISHER_PASSWORD="$(openssl rand -hex 24)"
 readonly BACKUP_PASSWORD="$(openssl rand -hex 24)"
+[[ "${CATALOG_PUBLISHER_PASSWORD}" != "${POSTGRES_ADMIN_PASSWORD}" &&
+  "${CATALOG_PUBLISHER_PASSWORD}" != "${PGBOUNCER_ADMIN_PASSWORD}" &&
+  "${CATALOG_PUBLISHER_PASSWORD}" != "${RUNTIME_PASSWORD}" &&
+  "${CATALOG_PUBLISHER_PASSWORD}" != "${BACKUP_PASSWORD}" ]] ||
+  fail 'catalog publisher credential is not independent'
 # Two migration integration tests construct this isolated credential internally.
 # It exists only for this disposable pod and is destroyed by the EXIT trap.
 readonly MIGRATOR_PASSWORD="local-rehearsal-password"
@@ -492,7 +544,8 @@ SQL
   "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 2 ]] ||
   fail 'native PgBouncer rehearsal did not capture exactly two SCRAM verifiers'
 if grep -Fq -- "${PGBOUNCER_ADMIN_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
-  grep -Fq -- "${RUNTIME_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}"; then
+  grep -Fq -- "${RUNTIME_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
+  grep -Fq -- "${CATALOG_PUBLISHER_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}"; then
   fail 'native PgBouncer userlist contains plaintext credential material'
 fi
 chmod 0400 -- "${PGBOUNCER_USERLIST_FILE}"
@@ -607,10 +660,12 @@ if ! env \
   ASCENDANY_CI_PGBOUNCER_ADMIN_PASSWORD="${PGBOUNCER_ADMIN_PASSWORD}" \
   ASCENDANY_CI_PGBOUNCER_USERLIST_PATH="${PGBOUNCER_USERLIST_FILE}" \
   ASCENDANY_CI_RUNTIME_PASSWORD="${RUNTIME_PASSWORD}" \
+  ASCENDANY_CI_CATALOG_PUBLISHER_PASSWORD="${CATALOG_PUBLISHER_PASSWORD}" \
   ASCENDANY_CI_MIGRATOR_PASSWORD="${MIGRATOR_PASSWORD}" \
   ASCENDANY_CI_BACKUP_PASSWORD="${BACKUP_PASSWORD}" \
   ASCENDANY_CI_REAL_PINTIA_SNAPSHOT_PATH="${SNAPSHOT_PATH}" \
   ASCENDANY_CI_RECOMMENDATION_CATALOG_PATH="${RECOMMENDATION_CATALOG_PATH}" \
+  ASCENDANY_CI_RECOMMENDATION_CATALOG_SHA256="${RECOMMENDATION_CATALOG_SHA256}" \
   ASCENDANY_CI_RECOMMENDATION_MODEL_PATH="${RECOMMENDATION_MODEL_PATH}" \
   ASCENDANY_CI_RECOMMENDATION_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
   "${INTEGRATION_RUNNER}" 2>&1 | tee "${RUN_LOG}"; then
@@ -626,9 +681,15 @@ readonly RUNTIME_POOL_IDENTITY="$(PGPASSWORD="${RUNTIME_PASSWORD}" psql \
   --username=ascendanyd_login --dbname=ascendany_v2 --command='SELECT current_user')"
 [[ "${RUNTIME_POOL_IDENTITY}" == ascendanyd_login ]] ||
   fail 'native PgBouncer rehearsal did not preserve the v2 runtime route'
+readonly CATALOG_PUBLISHER_POOL_IDENTITY="$(PGPASSWORD="${CATALOG_PUBLISHER_PASSWORD}" psql \
+  -X --no-password --tuples-only --no-align \
+  --host=127.0.0.1 --port="${PGBOUNCER_PORT}" \
+  --username=ascendany_catalog_publisher_login --dbname=ascendany_v2 --command='SELECT current_user')"
+[[ "${CATALOG_PUBLISHER_POOL_IDENTITY}" == ascendany_catalog_publisher_login ]] ||
+  fail 'native PgBouncer rehearsal did not preserve the v2 catalog publisher route'
 [[ "$(stat -Lc '%u:%a' -- "${PGBOUNCER_USERLIST_FILE}")" == "${EUID}:400" &&
-  "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 2 &&
-  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 2 ]] ||
+  "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 3 &&
+  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 3 ]] ||
   fail 'integration runner did not atomically publish the exact SCRAM userlist'
 
 mapfile -t MANIFEST_TEST_COUNTS < <(

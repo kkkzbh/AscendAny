@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net"
@@ -17,7 +18,6 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/workerlease"
 )
 
-const minimumJWTSecretBytes = 32
 const minimumPasswordPepperBytes = 32
 const minimumDatabasePasswordBytes = 16
 
@@ -70,13 +70,13 @@ type DatabaseConfig struct {
 }
 
 type AuthConfig struct {
-	JWTSigningKey  string
-	PasswordPepper string
-	Issuer         string
-	Audience       string
-	AllowedOrigins []string
-	AccessTTL      time.Duration
-	RefreshTTL     time.Duration
+	JWTSigningPrivateKey ed25519.PrivateKey
+	PasswordPepper       string
+	Issuer               string
+	Audience             string
+	AllowedOrigins       []string
+	AccessTTL            time.Duration
+	RefreshTTL           time.Duration
 }
 
 type ArtifactConfig struct {
@@ -132,9 +132,11 @@ type ChatAgentConfig struct {
 }
 
 type RecommendationConfig struct {
-	ModelPath    string
-	ModelSHA256  string
-	ModelPurpose inferencemodel.Purpose
+	ModelPath     string
+	ModelSHA256   string
+	ModelPurpose  inferencemodel.Purpose
+	CatalogPath   string
+	CatalogSHA256 string
 }
 
 type JudgeConfig struct {
@@ -203,12 +205,7 @@ func Load(lookup LookupEnv, readFile ReadFile) (Config, error) {
 		return Config{}, err
 	}
 
-	jwtSigningKey, err := loadSecret(
-		lookup,
-		readFile,
-		"ASCENDANY_JWT_SIGNING_KEY_FILE",
-		minimumJWTSecretBytes,
-	)
+	jwtSigningPrivateKey, err := loadJWTSigningPrivateKey(lookup, readFile)
 	if err != nil {
 		return Config{}, err
 	}
@@ -415,6 +412,17 @@ func Load(lookup LookupEnv, readFile ReadFile) (Config, error) {
 	recommendationModelPurpose, err := inferencemodel.ParsePurpose(recommendationModelPurposeValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("ASCENDANY_RECOMMENDATION_MODEL_PURPOSE: %w", err)
+	}
+	recommendationCatalogPath, err := requiredTrimmed(lookup, "ASCENDANY_KNOWLEDGE_CATALOG_PATH")
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validateAbsoluteFilePath(recommendationCatalogPath); err != nil {
+		return Config{}, fmt.Errorf("ASCENDANY_KNOWLEDGE_CATALOG_PATH: %w", err)
+	}
+	recommendationCatalogSHA256, err := requiredLowercaseSHA256(lookup, "ASCENDANY_KNOWLEDGE_CATALOG_SHA256")
+	if err != nil {
+		return Config{}, err
 	}
 	judgeSocketDirectory, err := requiredTrimmed(lookup, "ASCENDANY_JUDGE_SOCKET_DIRECTORY")
 	if err != nil {
@@ -649,13 +657,13 @@ func Load(lookup LookupEnv, readFile ReadFile) (Config, error) {
 			HealthTimeout:         healthTimeout,
 		},
 		Auth: AuthConfig{
-			JWTSigningKey:  jwtSigningKey,
-			PasswordPepper: passwordPepper,
-			Issuer:         issuer,
-			Audience:       audience,
-			AllowedOrigins: allowedOrigins,
-			AccessTTL:      accessTTL,
-			RefreshTTL:     refreshTTL,
+			JWTSigningPrivateKey: jwtSigningPrivateKey,
+			PasswordPepper:       passwordPepper,
+			Issuer:               issuer,
+			Audience:             audience,
+			AllowedOrigins:       allowedOrigins,
+			AccessTTL:            accessTTL,
+			RefreshTTL:           refreshTTL,
 		},
 		Artifact: ArtifactConfig{
 			Root:              artifactRoot,
@@ -704,9 +712,11 @@ func Load(lookup LookupEnv, readFile ReadFile) (Config, error) {
 			MaximumToolRounds:   int(chatAgentMaximumToolRounds),
 		},
 		Recommendation: RecommendationConfig{
-			ModelPath:    recommendationModelPath,
-			ModelSHA256:  recommendationModelSHA256,
-			ModelPurpose: recommendationModelPurpose,
+			ModelPath:     recommendationModelPath,
+			ModelSHA256:   recommendationModelSHA256,
+			ModelPurpose:  recommendationModelPurpose,
+			CatalogPath:   recommendationCatalogPath,
+			CatalogSHA256: recommendationCatalogSHA256,
 		},
 		Judge: JudgeConfig{
 			SocketDirectory: judgeSocketDirectory,

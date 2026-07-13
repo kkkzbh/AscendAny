@@ -23,6 +23,7 @@ func TestLoadCreateConfigAcceptsExactProductionContract(t *testing.T) {
 	}
 	if config.DatabaseURL != "postgresql://ascendany_backup_login@127.0.0.1:5432/ascendany_v2?sslmode=disable" ||
 		config.ArtifactRoot != "/var/lib/ascendany/artifacts" ||
+		config.CatalogReceiptRoot != "/var/lib/ascendany-catalog-publisher/receipts" ||
 		config.BackupRoot != "/var/backups/ascendany" ||
 		config.RuntimeRoot != BackupRuntimeRoot ||
 		config.RetainDaily != 14 || config.RetainWeekly != 8 ||
@@ -52,6 +53,12 @@ func TestLoadCreateConfigRejectsCapabilityAndPathDrift(t *testing.T) {
 		}, SourceDatabaseName},
 		{"nested backup root", func(values map[string]string) {
 			values["ASCENDANY_BACKUP_ROOT"] = "/var/lib/ascendany/artifacts/backups"
+		}, "disjoint"},
+		{"missing catalog receipt root", func(values map[string]string) {
+			delete(values, "ASCENDANY_CATALOG_RECEIPT_ROOT")
+		}, "ASCENDANY_CATALOG_RECEIPT_ROOT is required"},
+		{"nested catalog receipt root", func(values map[string]string) {
+			values["ASCENDANY_CATALOG_RECEIPT_ROOT"] = "/var/lib/ascendany/artifacts/catalog-receipts"
 		}, "disjoint"},
 		{"missing runtime root", func(values map[string]string) {
 			delete(values, "ASCENDANY_BACKUP_RUNTIME_ROOT")
@@ -101,6 +108,7 @@ func TestLoadRestoreConfigRequiresDedicatedScratchDatabase(t *testing.T) {
 	t.Parallel()
 	values := validCreateEnvironment()
 	values["ASCENDANY_RESTORE_ARTIFACT_ROOT"] = "/var/lib/ascendany-restore/artifacts"
+	values["ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT"] = "/var/lib/ascendany-restore/catalog-receipts"
 	values["ASCENDANY_RESTORE_DATABASE_URL"] = "postgresql://" + RestoreDatabaseLogin + "@127.0.0.1:5432/" + RestoreDatabaseName
 	values["ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE"] = "/run/credentials/restore-password"
 	values["ASCENDANY_RESTORE_RUNTIME_ROOT"] = RestoreRuntimeRootPrefix + testRestoreBackupID
@@ -111,7 +119,8 @@ func TestLoadRestoreConfigRequiresDedicatedScratchDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if config.DatabaseURL != values["ASCENDANY_RESTORE_DATABASE_URL"] ||
-		config.RuntimeRoot != RestoreRuntimeRootPrefix+testRestoreBackupID {
+		config.RuntimeRoot != RestoreRuntimeRootPrefix+testRestoreBackupID ||
+		config.CatalogReceiptRoot != values["ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT"] {
 		t.Fatalf("config = %#v", config)
 	}
 
@@ -141,6 +150,7 @@ func TestLoadRestoreConfigRequiresCanonicalPerInstanceRuntimeRoot(t *testing.T) 
 	} {
 		values := validCreateEnvironment()
 		values["ASCENDANY_RESTORE_ARTIFACT_ROOT"] = "/var/lib/ascendany-restore/artifacts"
+		values["ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT"] = "/var/lib/ascendany-restore/catalog-receipts"
 		values["ASCENDANY_RESTORE_DATABASE_URL"] = "postgresql://" + RestoreDatabaseLogin + "@127.0.0.1:5432/" + RestoreDatabaseName
 		values["ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE"] = "/run/credentials/restore-password"
 		values["ASCENDANY_RESTORE_RUNTIME_ROOT"] = runtimeRoot
@@ -153,11 +163,62 @@ func TestLoadRestoreConfigRequiresCanonicalPerInstanceRuntimeRoot(t *testing.T) 
 	}
 }
 
+func TestLoadRestoreConfigRejectsCatalogReceiptBoundaryDrift(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(map[string]string)
+		want   string
+	}{
+		{
+			name: "missing receipt root",
+			mutate: func(values map[string]string) {
+				delete(values, "ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT")
+			},
+			want: "ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT is required",
+		},
+		{
+			name: "receipt root overlaps artifacts",
+			mutate: func(values map[string]string) {
+				values["ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT"] = "/var/lib/ascendany-restore/artifacts/receipts"
+			},
+			want: "disjoint",
+		},
+		{
+			name: "receipt root overlaps backups",
+			mutate: func(values map[string]string) {
+				values["ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT"] = "/var/backups/ascendany/receipts"
+			},
+			want: "disjoint",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			values := validCreateEnvironment()
+			values["ASCENDANY_RESTORE_ARTIFACT_ROOT"] = "/var/lib/ascendany-restore/artifacts"
+			values["ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT"] = "/var/lib/ascendany-restore/catalog-receipts"
+			values["ASCENDANY_RESTORE_DATABASE_URL"] = "postgresql://" + RestoreDatabaseLogin + "@127.0.0.1:5432/" + RestoreDatabaseName
+			values["ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE"] = "/run/credentials/restore-password"
+			values["ASCENDANY_RESTORE_RUNTIME_ROOT"] = RestoreRuntimeRootPrefix + testRestoreBackupID
+			test.mutate(values)
+			_, err := LoadRestoreConfig(mapLookup(values), func(string) ([]byte, error) {
+				return []byte(strings.Repeat("r", 24)), nil
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LoadRestoreConfig() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func validCreateEnvironment() map[string]string {
 	return map[string]string{
 		"ASCENDANY_DATABASE_URL":             "postgresql://ascendany_backup_login@127.0.0.1:5432/ascendany_v2?sslmode=disable",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":   testCredentialPath,
 		"ASCENDANY_ARTIFACT_ROOT":            "/var/lib/ascendany/artifacts",
+		"ASCENDANY_CATALOG_RECEIPT_ROOT":     "/var/lib/ascendany-catalog-publisher/receipts",
 		"ASCENDANY_BACKUP_ROOT":              "/var/backups/ascendany",
 		"ASCENDANY_BACKUP_RUNTIME_ROOT":      BackupRuntimeRoot,
 		"ASCENDANY_BACKUP_FORMAT":            BackupFormat,

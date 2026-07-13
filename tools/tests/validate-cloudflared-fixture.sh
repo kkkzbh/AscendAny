@@ -42,7 +42,7 @@ fi
 if grep -F 'DO_NOT_TRACE_THIS_VALUE' "$WORK_ROOT/clean-env.out" "$WORK_ROOT/clean-env.err" >/dev/null; then
   fail 'validator leaked an inherited value through tracing'
 fi
-grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production' \
+grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, catalog, activation, or production' \
   "$WORK_ROOT/clean-env.err" >/dev/null
 
 (

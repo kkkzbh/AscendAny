@@ -120,6 +120,10 @@ func (handler *Handler) createConfigurationVersion(writer http.ResponseWriter, r
 		handler.handleRequestContractError(writer, request, err)
 		return
 	}
+	if payload.Kind == configuration.KindKnowledgeCatalog || payload.Key == configuration.KnowledgeCatalogKey {
+		handler.writeAPIError(writer, request, http.StatusBadRequest, "invalid_configuration_request", "Knowledge catalog publication requires the stopped-runtime release operator.")
+		return
+	}
 	result, err := handler.configuration.CreateVersion(request.Context(), access, payload)
 	if err != nil {
 		handler.handleConfigurationError(writer, request, err)
@@ -259,10 +263,6 @@ func (handler *Handler) handleConfigurationError(writer http.ResponseWriter, req
 		handler.writeAPIError(writer, request, http.StatusBadRequest, "invalid_configuration_request", "Configuration request is invalid.")
 		return
 	case configuration.ErrorDocumentInvalid:
-		if issue, ok := configuration.PublicationIssueOf(err); ok {
-			handler.writeAPIErrorDetails(writer, request, http.StatusUnprocessableEntity, "recommendation_preflight_failed", "Recommendation catalog coverage differs from the reviewed analytics problem set.", configurationPublicationIssueDetails(issue))
-			return
-		}
 		handler.writeAPIError(writer, request, http.StatusUnprocessableEntity, "configuration_document_invalid", "Configuration document violates its semantic schema.")
 		return
 	case configuration.ErrorPrincipalRejected:
@@ -275,10 +275,6 @@ func (handler *Handler) handleConfigurationError(writer http.ResponseWriter, req
 		handler.writeAPIError(writer, request, http.StatusConflict, "configuration_head_conflict", "Configuration head revision changed concurrently.")
 		return
 	case configuration.ErrorReviewConflict:
-		if issue, ok := configuration.PublicationIssueOf(err); ok {
-			handler.writeAPIErrorDetails(writer, request, http.StatusConflict, "recommendation_review_conflict", "Recommendation analytics review provenance is no longer current.", configurationPublicationIssueDetails(issue))
-			return
-		}
 		handler.writeAPIError(writer, request, http.StatusConflict, "recommendation_review_conflict", "Recommendation analytics review provenance is no longer current.")
 		return
 	case configuration.ErrorDocumentConflict:
@@ -299,36 +295,4 @@ func (handler *Handler) handleConfigurationError(writer http.ResponseWriter, req
 		"code", configuration.CodeOf(err),
 	)
 	handler.writeAPIError(writer, request, http.StatusInternalServerError, "internal_error", "Request could not be completed.")
-}
-
-func configurationPublicationIssueDetails(issue configuration.PublicationIssue) map[string]any {
-	details := map[string]any{"issueCode": issue.IssueCode}
-	if len(issue.ProblemKeys) > 0 {
-		details["problemKeys"] = issue.ProblemKeys
-	}
-	if len(issue.MissingProblemKeys) > 0 {
-		details["missingProblemKeys"] = issue.MissingProblemKeys
-	}
-	if len(issue.DanglingProblemKeys) > 0 {
-		details["danglingProblemKeys"] = issue.DanglingProblemKeys
-	}
-	if issue.ExpectedAnalyticsGenerationID != "" {
-		details["expectedAnalyticsGenerationId"] = issue.ExpectedAnalyticsGenerationID
-	}
-	if issue.CurrentAnalyticsGenerationID != "" {
-		details["currentAnalyticsGenerationId"] = issue.CurrentAnalyticsGenerationID
-	}
-	if issue.ExpectedAnalyticsHeadRevision > 0 {
-		details["expectedAnalyticsHeadRevision"] = issue.ExpectedAnalyticsHeadRevision
-	}
-	if issue.CurrentAnalyticsHeadRevision > 0 {
-		details["currentAnalyticsHeadRevision"] = issue.CurrentAnalyticsHeadRevision
-	}
-	if issue.ExpectedInputManifestSHA256 != "" {
-		details["expectedInputManifestSha256"] = issue.ExpectedInputManifestSHA256
-	}
-	if issue.CurrentInputManifestSHA256 != "" {
-		details["currentInputManifestSha256"] = issue.CurrentInputManifestSHA256
-	}
-	return details
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/canonicaljson"
+	"github.com/kkkzbh/AscendAny/backend/internal/catalogpublication"
 	"github.com/kkkzbh/AscendAny/backend/internal/databasecontract"
 	"github.com/kkkzbh/AscendAny/backend/internal/inferencemodel"
 )
@@ -148,6 +149,18 @@ func openDatabaseSnapshot(ctx context.Context, config CreateConfig) (*liveDataba
 	}
 	snapshot.data.Artifacts = artifacts
 	snapshot.data.Migrations = migrations
+	publications, err := readKnowledgeCatalogPublications(ctx, transaction)
+	if err != nil {
+		snapshot.Close(context.Background())
+		return nil, err
+	}
+	snapshot.data.KnowledgeCatalogPublications = publications
+	snapshot.data.KnowledgeCatalogPublicationIDs = make([]int64, len(publications))
+	for index, publication := range publications {
+		snapshot.data.KnowledgeCatalogPublicationIDs[index], _ = parseKnowledgeCatalogPublicationID(
+			publication.KnowledgeCatalogPublicationID,
+		)
+	}
 	model, err := readRecommendationModelDescriptor(ctx, transaction)
 	if err != nil {
 		snapshot.Close(context.Background())
@@ -221,7 +234,8 @@ JOIN ascendany.recommendation_model_activation_events AS activation
   ON activation.head_revision = head.head_revision
  AND activation.recommendation_model_release_id = head.current_release_id
  AND activation.artifact_sha256 = release.artifact_sha256
-WHERE head.singleton`).Scan(
+WHERE head.singleton
+  AND head.pending_catalog_publication_id IS NULL`).Scan(
 		&value.ReleaseID, &value.HeadRevision, &value.ModelID, &value.ModelPurpose, &value.ArtifactSHA256,
 		&value.ArtifactSizeBytes, &value.ArtifactMode, &value.ModelSchema, &value.Algorithm,
 		&value.InferenceContract, &value.TrainedAt, &value.TrainingProvenanceSHA256,
@@ -391,6 +405,117 @@ ORDER BY version`)
 	return values, nil
 }
 
+func readKnowledgeCatalogPublications(ctx context.Context, queryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}) ([]catalogpublication.Receipt, error) {
+	rows, err := queryer.Query(ctx, `
+SELECT publication.publication_authorization_id::text,
+	   publication.knowledge_catalog_publication_id::text,
+	   publication.target_model_release_id::text,
+	   publication.catalog_sha256,
+       publication.target_model_artifact_sha256,
+       publication.target_model_id::text,
+       publication.target_application_version,
+       publication.target_application_commit,
+       publication.target_application_build_time,
+       item.configuration_key,
+       item.public_id::text,
+       publication.expected_configuration_head_revision,
+       publication.configuration_head_revision,
+       publication.configuration_version_id::text,
+       version.version_number,
+       publication.analytics_generation_id::text,
+       publication.analytics_head_revision,
+       publication.input_manifest_sha256,
+       publication.current_model_head_revision,
+       publication.current_model_artifact_sha256,
+       account.public_id::text,
+       session.public_id::text,
+       publication.published_at,
+	   publication.audit_event_id::text,
+	   publication.configuration_mutated
+FROM ascendany.knowledge_catalog_publications AS publication
+JOIN ascendany.knowledge_catalog_publication_authorizations AS capability
+  ON capability.public_id = publication.publication_authorization_id
+ AND capability.consumed_publication_id = publication.knowledge_catalog_publication_id
+ AND capability.consumed_at = publication.published_at
+JOIN ascendany.configuration_items AS item
+  ON item.configuration_item_id = publication.configuration_item_id
+ AND item.configuration_key = 'recommendation.catalog.active'
+ AND item.configuration_kind = 'knowledge_catalog'
+JOIN ascendany.configuration_versions AS version
+  ON version.configuration_version_id = publication.configuration_version_id
+ AND version.configuration_item_id = publication.configuration_item_id
+ AND version.configuration_kind = 'knowledge_catalog'
+ AND version.document_sha256 = publication.catalog_sha256
+ AND version.credential_ref IS NULL
+JOIN ascendany.auth_accounts AS account
+  ON account.account_id = publication.published_by_account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.session_id = publication.published_by_session_id
+ AND session.account_id = publication.published_by_account_id
+JOIN ascendany.audit_events AS audit
+  ON audit.audit_event_id = publication.audit_event_id
+ AND audit.account_id = publication.published_by_account_id
+ AND audit.session_id = publication.published_by_session_id
+ AND audit.occurred_at = publication.published_at
+ AND audit.event_type = CASE
+       WHEN publication.configuration_mutated THEN 'admin.configuration_version_created'
+       ELSE 'admin.knowledge_catalog_release_bound'
+     END
+ORDER BY publication.knowledge_catalog_publication_id`)
+	if err != nil {
+		return nil, errors.New("read knowledge catalog publication snapshot")
+	}
+	defer rows.Close()
+	values := make([]catalogpublication.Receipt, 0)
+	for rows.Next() {
+		value := catalogpublication.Receipt{Schema: catalogpublication.ReceiptSchema}
+		var publishedAt time.Time
+		if err := rows.Scan(
+			&value.AuthorizationID,
+			&value.KnowledgeCatalogPublicationID,
+			&value.TargetModelReleaseID,
+			&value.CatalogSHA256,
+			&value.ModelArtifactSHA256,
+			&value.ModelID,
+			&value.TargetApplicationVersion,
+			&value.TargetApplicationCommit,
+			&value.TargetApplicationBuildTime,
+			&value.ConfigurationKey,
+			&value.ConfigurationID,
+			&value.ExpectedConfigurationHeadRevision,
+			&value.ConfigurationHeadRevision,
+			&value.ConfigurationVersionID,
+			&value.ConfigurationVersionNumber,
+			&value.AnalyticsGenerationID,
+			&value.AnalyticsHeadRevision,
+			&value.InputManifestSHA256,
+			&value.CurrentModelHeadRevision,
+			&value.CurrentModelArtifactSHA256,
+			&value.PublishedByAccountID,
+			&value.PublishedBySessionID,
+			&publishedAt,
+			&value.AuditEventID,
+			&value.ConfigurationMutated,
+		); err != nil {
+			return nil, errors.New("decode knowledge catalog publication snapshot")
+		}
+		value.PublishedAt = publishedAt.UTC().Format(time.RFC3339Nano)
+		if _, err := catalogpublication.CanonicalReceipt(value); err != nil {
+			return nil, fmt.Errorf("knowledge catalog publication snapshot rejected: %w", err)
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("read knowledge catalog publication snapshot")
+	}
+	if err := validateKnowledgeCatalogPublications(values); err != nil {
+		return nil, fmt.Errorf("knowledge catalog publication snapshot rejected: %w", err)
+	}
+	return values, nil
+}
+
 func (snapshot *liveDatabaseSnapshot) Data() databaseSnapshot {
 	return snapshot.data
 }
@@ -533,7 +658,13 @@ func beginRestoredDatabaseVerification(ctx context.Context, connection restoredD
 	return transaction, nil
 }
 
-func verifyRestoredDatabase(ctx context.Context, connection restoredDatabaseConnection, manifest Manifest, artifactRoot string) error {
+func verifyRestoredDatabase(
+	ctx context.Context,
+	connection restoredDatabaseConnection,
+	manifest Manifest,
+	artifactRoot string,
+	catalogReceiptRoot string,
+) error {
 	transaction, err := beginRestoredDatabaseVerification(ctx, connection)
 	if err != nil {
 		return err
@@ -556,6 +687,19 @@ func verifyRestoredDatabase(ctx context.Context, connection restoredDatabaseConn
 	if !equalArtifacts(artifacts, manifest.Artifacts.Entries) {
 		return errors.New("restored artifact table does not match the backup manifest")
 	}
+	publications, err := readKnowledgeCatalogPublications(ctx, transaction)
+	if err != nil {
+		return err
+	}
+	publicationIDs := make([]int64, len(publications))
+	for index, publication := range publications {
+		publicationIDs[index], _ = parseKnowledgeCatalogPublicationID(publication.KnowledgeCatalogPublicationID)
+	}
+	expectedPublicationIDs, err := parseKnowledgeCatalogPublicationIDs(manifest.Database.KnowledgeCatalogPublicationIDs)
+	if err != nil || !equalInt64s(publicationIDs, expectedPublicationIDs) ||
+		!equalKnowledgeCatalogPublications(publications, manifest.Database.KnowledgeCatalogPublications) {
+		return errors.New("restored knowledge catalog publication set does not match the backup manifest")
+	}
 	model, err := readRecommendationModelDescriptor(ctx, transaction)
 	if err != nil {
 		return err
@@ -576,6 +720,13 @@ func verifyRestoredDatabase(ctx context.Context, connection restoredDatabaseConn
 			return fmt.Errorf("restored artifact %s failed verification: %w", artifact.SHA256, err)
 		}
 	}
+	if err := verifyCatalogReceiptRoot(
+		catalogReceiptRoot,
+		manifest.CatalogPublicationReceipts.Entries,
+		publicationIDs,
+	); err != nil {
+		return fmt.Errorf("restored catalog publication receipts failed verification: %w", err)
+	}
 	return nil
 }
 
@@ -592,6 +743,30 @@ func equalMigrations(left, right []MigrationDescriptor) bool {
 }
 
 func equalArtifacts(left, right []ArtifactDescriptor) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalInt64s(left, right []int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalKnowledgeCatalogPublications(left, right []catalogpublication.Receipt) bool {
 	if len(left) != len(right) {
 		return false
 	}

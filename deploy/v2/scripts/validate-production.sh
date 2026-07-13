@@ -7,10 +7,11 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   while IFS= read -r -d '' entry; do
     name="${entry%%=*}"
     case "$name" in
-      PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_VALIDATOR_CLEAN_ENV|ASCENDANY_VALIDATION_PHASE|ASCENDANY_DEPLOYMENT_TRANSITION|ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS|ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256|ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256|ASCENDANY_FORWARD_MODEL_HEAD_REVISION)
+      PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_VALIDATOR_CLEAN_ENV|ASCENDANY_VALIDATION_PHASE|ASCENDANY_DEPLOYMENT_TRANSITION|ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS|ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256|ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256|ASCENDANY_FORWARD_MODEL_HEAD_REVISION|ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256)
         ;;
       PGPASSFILE)
         [[ "${ASCENDANY_VALIDATION_PHASE-}" == "staged" ||
+           "${ASCENDANY_VALIDATION_PHASE-}" == "catalog" ||
            "${ASCENDANY_VALIDATION_PHASE-}" == "activation" ]] || validator_environment_is_clean=0
         ;;
       *)
@@ -27,6 +28,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     forward_database_fingerprint_input="${ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256-}"
     forward_business_fingerprint_input="${ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256-}"
     forward_model_head_revision_input="${ASCENDANY_FORWARD_MODEL_HEAD_REVISION-}"
+    forward_model_artifact_sha256_input="${ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256-}"
     staged_pgpass_input="${PGPASSFILE-}"
     clean_environment=(
       /usr/bin/env -i
@@ -39,8 +41,10 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       "ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256=$forward_database_fingerprint_input"
       "ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256=$forward_business_fingerprint_input"
       "ASCENDANY_FORWARD_MODEL_HEAD_REVISION=$forward_model_head_revision_input"
+      "ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256=$forward_model_artifact_sha256_input"
     )
-    if [[ ( "$validation_phase_input" == "staged" || "$validation_phase_input" == "activation" ) &&
+    if [[ ( "$validation_phase_input" == "staged" || "$validation_phase_input" == "catalog" ||
+            "$validation_phase_input" == "activation" ) &&
           -n "$staged_pgpass_input" ]]; then
       clean_environment+=("PGPASSFILE=$staged_pgpass_input")
     fi
@@ -52,6 +56,13 @@ umask 077
 
 release_root="/opt/ascendany/v2"
 artifact_root="/var/lib/ascendany/artifacts"
+catalog_publisher_state_root="/var/lib/ascendany-catalog-publisher"
+catalog_publisher_config_root="/etc/ascendany-catalog-publisher"
+catalog_publisher_pending_root="$catalog_publisher_state_root/pending"
+catalog_publication_request_source="$catalog_publisher_pending_root/catalog_publication_request.cred"
+catalog_publication_access_token_source="$catalog_publisher_pending_root/admin_access_token.cred"
+catalog_receipt_root="$catalog_publisher_state_root/receipts"
+restore_catalog_receipt_root="/var/lib/ascendany-restore/catalog-receipts"
 backup_root="/var/backups/ascendany"
 restore_evidence="/var/lib/ascendany-acceptance/restore-verify.json"
 expected_db_user="ascendanyd_login"
@@ -63,6 +74,9 @@ postgres_network="podman"
 postgres_gateway="10.88.0.1"
 postgres_address="10.88.0.2"
 postgres_subnet="10.88.0.0/16"
+postgres_image_id="07f76768a0c956d6e9bddbcdb3c2be7fd9fd45ee6174a26873f8219fccbad65d"
+postgres_image_reference="docker.io/library/postgres@sha256:5c855ad7b85e68e48a62f34662853f38b57c1c1d80f3a927ab58034fd6d31c5e"
+postgres_data_volume="ascendany-postgres-data"
 pgbouncer_config_root="/opt/ascendany/infra/pgbouncer"
 pgbouncer_unit="ascendany-pgbouncer.service"
 pgbouncer_package_unit="pgbouncer.service"
@@ -70,10 +84,26 @@ pgbouncer_binary="/usr/bin/pgbouncer"
 pgbouncer_nevra="pgbouncer-1.25.2-1.fc44.x86_64"
 pgbouncer_binary_sha256="42c722ab7352ccbb1eaba8dcc6d7fb9d28df11fbe1a73aa8b177c88dcd0bb318"
 pgbouncer_binary_size="467960"
+initialization_node_binary="/usr/bin/node-22"
+initialization_node_version="v22.22.2"
+initialization_node_package="nodejs22-22.22.2-3.fc44.x86_64"
+initialization_node_sha256="7ed75caca3ed639ebde926277e43ed04c67de55bfece9d56bd752159d96368f0"
 pgbouncer_credential_source="/etc/ascendany/credentials/pgbouncer_userlist.cred"
 pgbouncer_runtime_credential="/run/credentials/ascendany-pgbouncer.service/pgbouncer_userlist"
 retired_api_unit="ascendany-api.service"
 retired_api_port="8000"
+retired_trainer_unit="ascendany-trainer-agent.service"
+production_namespace_root="/opt/ascendany"
+configuration_namespace_root="/etc/ascendany"
+systemd_system_root="/etc/systemd/system"
+systemd_runtime_root="/run/systemd/system"
+systemd_local_root="/usr/local/lib/systemd/system"
+systemd_vendor_root="/usr/lib/systemd/system"
+retired_trainer_runtime_root="/opt/ascendany-trainer-runtime"
+retired_trainer_state_root="/var/lib/ascendany-trainer"
+retired_trainer_log_root="/var/log/ascendany-trainer"
+retired_process_root="/proc"
+acceptance_root="/var/lib/ascendany-acceptance"
 managed_ports="5432 6432 18000"
 required_ports=""
 validation_phase="${ASCENDANY_VALIDATION_PHASE-}"
@@ -81,6 +111,7 @@ deployment_transition="${ASCENDANY_DEPLOYMENT_TRANSITION-}"
 expected_forward_database_fingerprint="${ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256-}"
 expected_forward_business_fingerprint="${ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256-}"
 expected_forward_model_head_revision="${ASCENDANY_FORWARD_MODEL_HEAD_REVISION-}"
+expected_forward_model_artifact_sha256="${ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256-}"
 expected_write_mode=""
 ascendanyd_active="0"
 smoke_dropin="/etc/systemd/system/ascendanyd.service.d/40-read-only-smoke.conf"
@@ -91,10 +122,12 @@ release_manifest_version=""
 release_manifest_build_time=""
 release_manifest_purpose=""
 release_model_sha256=""
+release_catalog_sha256=""
 release_payload_verified="0"
 observed_forward_database_fingerprint=""
 observed_forward_business_fingerprint=""
 observed_forward_model_head_revision=""
+observed_forward_model_artifact_sha256=""
 
 declare -a runtime_feedback_bindings=()
 declare -a runtime_feedback_credential_ids=()
@@ -180,7 +213,7 @@ parse_runtime_feedback_bindings() {
       continue
     fi
     case "$credential_id" in
-      admin_password|db_password|runtime_db_password|backup_db_password|migrator_db_password|restore_db_password|jwt_signing_key|password_pepper)
+      admin_access_token|admin_password|catalog_publication_request|catalog_publisher_db_password|db_password|runtime_db_password|backup_db_password|migrator_db_password|restore_db_password|jwt_signing_private_key|jwt_verification_public_key|password_pepper)
         fail "feedback credential binding reuses a core runtime credential ID: $credential_id"
         invalid=1
         continue
@@ -236,20 +269,26 @@ validate_input_contract() {
       expected_write_mode="enabled"
       ascendanyd_active="0"
       ;;
+    catalog)
+      required_ports="5432 6432"
+      expected_write_mode="enabled"
+      ascendanyd_active="0"
+      ;;
     production)
       required_ports="5432 6432 18000"
       expected_write_mode="enabled"
       ascendanyd_active="1"
       ;;
     *)
-      fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production"
+      fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, catalog, or production"
       ;;
   esac
   case "$deployment_transition" in
     initial)
       if [[ -n "$expected_forward_database_fingerprint" ||
             -n "$expected_forward_business_fingerprint" ||
-            -n "$expected_forward_model_head_revision" ]]; then
+            -n "$expected_forward_model_head_revision" ||
+            -n "$expected_forward_model_artifact_sha256" ]]; then
         fail "initial deployment forbids forward-state trust inputs"
       fi
       ;;
@@ -257,13 +296,15 @@ validate_input_contract() {
       if [[ "$validation_phase" == staged ]]; then
         if [[ -n "$expected_forward_database_fingerprint" ||
               -n "$expected_forward_business_fingerprint" ||
-              -n "$expected_forward_model_head_revision" ]]; then
+              -n "$expected_forward_model_head_revision" ||
+              -n "$expected_forward_model_artifact_sha256" ]]; then
           fail "forward staged capture forbids pre-existing forward-state trust inputs"
         fi
       elif [[ ! "$expected_forward_database_fingerprint" =~ ^[0-9a-f]{64}$ ||
               ! "$expected_forward_business_fingerprint" =~ ^[0-9a-f]{64}$ ||
-              ! "$expected_forward_model_head_revision" =~ ^[1-9][0-9]*$ ]]; then
-        fail "forward smoke, activation, and production require canonical database, business, and model-head trust inputs"
+              ! "$expected_forward_model_head_revision" =~ ^[1-9][0-9]*$ ||
+              ! "$expected_forward_model_artifact_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+        fail "forward smoke, catalog, activation, and production require canonical database, business, model-head, and model-artifact trust inputs"
       fi
       ;;
     *)
@@ -276,7 +317,7 @@ validate_input_contract() {
 
 smoke_dropin_required() {
   [[ "$validation_phase" == "staged" || "$validation_phase" == "smoke" ||
-     "$validation_phase" == "activation" ]]
+     "$validation_phase" == "catalog" || "$validation_phase" == "activation" ]]
 }
 
 production_phase() {
@@ -287,8 +328,16 @@ activation_phase() {
   [[ "$validation_phase" == "activation" ]]
 }
 
+catalog_phase() {
+  [[ "$validation_phase" == "catalog" ]]
+}
+
 initial_transition() {
   [[ "$deployment_transition" == initial ]]
+}
+
+initial_fresh_phase() {
+  initial_transition && [[ "$validation_phase" == staged || "$validation_phase" == smoke ]]
 }
 
 forward_transition() {
@@ -544,6 +593,8 @@ check_all_unit_effective_shapes() {
   local global_service_dropin="/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
   local ascendanyd_dropins="$global_service_dropin"
   local ascendanyd_start ascendanyd_pre model_activate_start model_activate_pre model_activate_environment
+  local model_register_start model_register_pre model_register_environment
+  local catalog_publish_start catalog_publish_pre catalog_publish_environment
   local admin_start admin_pre admin_environment
   local backup_start backup_pre ascendanyd_environment judge_environment backup_environment
   local judge_start lsp_start migrate_start migrate_pre restore_start restore_pre restore_environment environment
@@ -555,18 +606,24 @@ check_all_unit_effective_shapes() {
   fi
 
   ascendanyd_start='/opt/ascendany/v2/bin/ascendanyd serve'
-  ascendanyd_pre=$'/usr/bin/test -s %d/db_password\n/usr/bin/test -s %d/jwt_signing_key\n/usr/bin/test -s %d/password_pepper\n/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}'
-  ascendanyd_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password\nASCENDANY_JWT_SIGNING_KEY_FILE=%d/jwt_signing_key\nASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper'
+  ascendanyd_pre=$'/usr/bin/test -s %d/db_password\n/usr/bin/test -s %d/jwt_signing_private_key\n/usr/bin/test -s %d/password_pepper\n/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}'
+  ascendanyd_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password\nASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE=%d/jwt_signing_private_key\nASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper'
   for environment in "${runtime_feedback_environment[@]}"; do
     ascendanyd_environment+=$'\n'"$environment"
   done
   model_activate_start='/opt/ascendany/v2/bin/ascendanyd activate-model'
-  model_activate_pre=$'/usr/bin/test -s %d/db_password\n/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}'
+  model_activate_pre=$'/usr/bin/test -s %d/db_password\n/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}'
   model_activate_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password'
+  model_register_start='/opt/ascendany/v2/bin/ascendanyd register-model'
+  model_register_pre="$model_activate_pre"
+  model_register_environment="$model_activate_environment"
+  catalog_publish_start='/opt/ascendany/v2/bin/ascendany-catalog-publish publish'
+  catalog_publish_pre=$'+/usr/bin/test -x /opt/ascendany/v2/bin/ascendany-catalog-publish\n+/usr/bin/test -r /etc/ascendany-catalog-publisher/catalog-publish.env\n+/usr/bin/test -f /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred\n+/usr/bin/test ! -L /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred\n+/usr/bin/test -s /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred\n+/usr/bin/test -f /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred\n+/usr/bin/test ! -L /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred\n+/usr/bin/test -s /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred\n/usr/bin/test -s %d/catalog_publisher_db_password\n/usr/bin/test -s %d/jwt_verification_public_key\n/usr/bin/test -s %d/catalog_publication_request\n/usr/bin/test -s %d/admin_access_token'
+  catalog_publish_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/catalog_publisher_db_password\nASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE=%d/jwt_verification_public_key'
   backup_start='/opt/ascendany/v2/bin/ascendany-backup create'
   backup_pre='/usr/bin/test -s %d/backup_db_password'
   backup_environment=$'ASCENDANY_DATABASE_PASSWORD_FILE=%d/backup_db_password\nASCENDANY_BACKUP_RUNTIME_ROOT=/run/ascendany-backup'
-  judge_start='/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --container-image ${ASCENDANY_JUDGE_CPP20_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup'
+  judge_start='/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --compiler-image ${ASCENDANY_JUDGE_COMPILER_IMAGE} --runtime-image ${ASCENDANY_JUDGE_RUNTIME_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup'
   judge_environment=$'HOME=/var/lib/ascendany-judge\nXDG_RUNTIME_DIR=/run/ascendany-judge-podman/%i\nXDG_DATA_HOME=/var/lib/ascendany-judge/.local/share\nXDG_CONFIG_HOME=/var/lib/ascendany-judge/.config\nXDG_CACHE_HOME=/var/lib/ascendany-judge/.cache'
   lsp_start='/opt/ascendany/v2/bin/ascendany-lsp serve --session-id %i --control-socket /run/ascendany-lsp-control/control.sock --workspace /tmp/ascendany-lsp-sessions/%i'
   migrate_start='/opt/ascendany/v2/bin/ascendany-migrate up'
@@ -594,6 +651,30 @@ check_all_unit_effective_shapes() {
     "$model_activate_start" \
     "$model_activate_pre" \
     "$model_activate_environment"
+  check_unit_effective_shape \
+    ascendany-model-register.service \
+    /etc/systemd/system/ascendany-model-register.service \
+    /var/lib/ascendany \
+    "$global_service_dropin" \
+    "$model_register_start" \
+    "$model_register_pre" \
+    "$model_register_environment"
+  check_unit_effective_shape \
+    ascendany-catalog-publish.service \
+    /etc/systemd/system/ascendany-catalog-publish.service \
+    /var/lib/ascendany-catalog-publisher \
+    "$global_service_dropin" \
+    "$catalog_publish_start" \
+    "$catalog_publish_pre" \
+    "$catalog_publish_environment"
+  check_effective_directive_sequence \
+    ascendany-catalog-publish.service \
+    ExecStartPost \
+    $'/usr/bin/test -d /var/lib/ascendany-catalog-publisher/receipts\n+/usr/bin/rm -f -- /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred'
+  check_effective_directive_sequence \
+    ascendany-catalog-publish.service \
+    ExecStopPost \
+    ''
   check_unit_effective_shape \
     ascendany-judge@validation.service \
     /etc/systemd/system/ascendany-judge@.service \
@@ -655,21 +736,57 @@ check_all_unit_effective_shapes() {
   check_effective_value ascendanyd.service MemoryPressureWatch yes
   check_effective_value ascendanyd.service MemoryPressureThresholdUSec 200ms
   check_effective_value ascendany-model-activate.service Type oneshot
+  check_effective_value ascendany-model-register.service Type oneshot
+  check_effective_value ascendany-catalog-publish.service Type oneshot
+  check_effective_value ascendany-catalog-publish.service NoNewPrivileges yes
+  check_effective_value ascendany-catalog-publish.service ProtectSystem strict
+  check_effective_value ascendany-catalog-publish.service ProtectHome yes
+  check_effective_value ascendany-catalog-publish.service ProtectProc invisible
+  check_effective_value ascendany-catalog-publish.service ProcSubset pid
+  check_effective_value ascendany-catalog-publish.service PrivateDevices yes
+  check_effective_value ascendany-catalog-publish.service DevicePolicy closed
+  check_effective_value ascendany-catalog-publish.service RestrictNamespaces yes
+  check_effective_value ascendany-catalog-publish.service MemoryDenyWriteExecute yes
+  check_effective_word_set ascendany-catalog-publish.service RestrictAddressFamilies AF_UNIX AF_INET AF_INET6
+  check_effective_word_set ascendany-catalog-publish.service ReadWritePaths \
+    /var/lib/ascendany-catalog-publisher/pending /var/lib/ascendany-catalog-publisher/receipts
+  check_effective_word_set ascendany-catalog-publish.service InaccessiblePaths \
+    /etc/ascendany/credentials /etc/ascendany/v2 /opt/ascendany/Release \
+    /var/backups/ascendany /var/lib/ascendany
   check_effective_value ascendany-model-activate.service NoNewPrivileges yes
+  check_effective_value ascendany-model-register.service NoNewPrivileges yes
   check_effective_value ascendany-model-activate.service ProtectSystem strict
+  check_effective_value ascendany-model-register.service ProtectSystem strict
   check_effective_value ascendany-model-activate.service ProtectHome yes
+  check_effective_value ascendany-model-register.service ProtectHome yes
   check_effective_value ascendany-model-activate.service ProtectProc invisible
+  check_effective_value ascendany-model-register.service ProtectProc invisible
   check_effective_value ascendany-model-activate.service ProcSubset pid
+  check_effective_value ascendany-model-register.service ProcSubset pid
   check_effective_value ascendany-model-activate.service PrivateDevices yes
+  check_effective_value ascendany-model-register.service PrivateDevices yes
   check_effective_value ascendany-model-activate.service DevicePolicy closed
+  check_effective_value ascendany-model-register.service DevicePolicy closed
   check_effective_value ascendany-model-activate.service RestrictNamespaces yes
+  check_effective_value ascendany-model-register.service RestrictNamespaces yes
   check_effective_value ascendany-model-activate.service MemoryDenyWriteExecute yes
+  check_effective_value ascendany-model-register.service MemoryDenyWriteExecute yes
   check_effective_word_set ascendany-model-activate.service RestrictAddressFamilies AF_UNIX AF_INET AF_INET6
+  check_effective_word_set ascendany-model-register.service RestrictAddressFamilies AF_UNIX AF_INET AF_INET6
   check_effective_word_set ascendany-model-activate.service ReadWritePaths /var/lib/ascendany
+  check_effective_word_set ascendany-model-register.service ReadWritePaths /var/lib/ascendany
   check_effective_word_set ascendany-model-activate.service InaccessiblePaths \
-    /opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany
+    /opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany \
+    /var/lib/ascendany-catalog-publisher
+  check_effective_word_set ascendany-model-register.service InaccessiblePaths \
+    /opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany \
+    /var/lib/ascendany-catalog-publisher
+  check_effective_word_set ascendanyd.service InaccessiblePaths \
+    /opt/ascendany/Release /var/lib/ascendany-catalog-publisher
   check_effective_value ascendanyd.service TimeoutStopFailureMode abort
   check_effective_value ascendany-model-activate.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-model-register.service TimeoutStopFailureMode abort
+  check_effective_value ascendany-catalog-publish.service TimeoutStopFailureMode abort
   check_effective_value ascendany-judge@validation.service TimeoutStopFailureMode abort
   check_effective_value ascendany-lsp@validation.service TimeoutStopFailureMode abort
   check_effective_value ascendany-backup.service TimeoutStopFailureMode abort
@@ -871,17 +988,24 @@ check_unit_optional_environment_files() {
 check_ascendanyd_config_contract() {
   local path="${1:-/etc/ascendany/v2/ascendanyd.env}"
   local smoke_path="${2:-/etc/ascendany/v2/ascendanyd-read-only-smoke.env}"
-  local configured_model_sha256=""
-  local -a write_lines=() listen_lines=() model_path_lines=() model_sha_lines=() model_purpose_lines=() smoke_entries=()
+  local configured_model_sha256="" configured_catalog_sha256=""
+  local -a write_lines=() listen_lines=() model_path_lines=() model_sha_lines=() model_purpose_lines=()
+  local -a catalog_path_lines=() catalog_sha_lines=() smoke_entries=()
   mapfile -t write_lines < <(grep -E '^ASCENDANY_WRITE_MODE=' "$path" 2>/dev/null || true)
   mapfile -t listen_lines < <(grep -E '^ASCENDANY_HTTP_LISTEN=' "$path" 2>/dev/null || true)
   mapfile -t model_path_lines < <(grep -E '^ASCENDANY_RECOMMENDATION_MODEL_PATH=' "$path" 2>/dev/null || true)
   mapfile -t model_sha_lines < <(grep -E '^ASCENDANY_RECOMMENDATION_MODEL_SHA256=' "$path" 2>/dev/null || true)
   mapfile -t model_purpose_lines < <(grep -E '^ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=' "$path" 2>/dev/null || true)
+  mapfile -t catalog_path_lines < <(grep -E '^ASCENDANY_KNOWLEDGE_CATALOG_PATH=' "$path" 2>/dev/null || true)
+  mapfile -t catalog_sha_lines < <(grep -E '^ASCENDANY_KNOWLEDGE_CATALOG_SHA256=' "$path" 2>/dev/null || true)
   mapfile -t smoke_entries < <(sed '/^#/d; /^$/d' "$smoke_path" 2>/dev/null || true)
   if (( ${#model_sha_lines[@]} == 1 )) &&
      [[ "${model_sha_lines[0]}" =~ ^ASCENDANY_RECOMMENDATION_MODEL_SHA256=([0-9a-f]{64})$ ]]; then
     configured_model_sha256="${BASH_REMATCH[1]}"
+  fi
+  if (( ${#catalog_sha_lines[@]} == 1 )) &&
+     [[ "${catalog_sha_lines[0]}" =~ ^ASCENDANY_KNOWLEDGE_CATALOG_SHA256=([0-9a-f]{64})$ ]]; then
+    configured_catalog_sha256="${BASH_REMATCH[1]}"
   fi
   if (( ${#write_lines[@]} != 1 )) || [[ "${write_lines[0]:-}" != "ASCENDANY_WRITE_MODE=enabled" ]]; then
     fail "ascendanyd.env must contain one production write-mode value: enabled"
@@ -897,6 +1021,12 @@ check_ascendanyd_config_contract() {
        [[ "${model_purpose_lines[0]:-}" != "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production" ||
           "$release_manifest_purpose" != production ]]; then
     fail "ascendanyd.env and release manifest must authorize only a production recommendation model"
+  elif (( ${#catalog_path_lines[@]} != 1 )) ||
+       [[ "${catalog_path_lines[0]:-}" != "ASCENDANY_KNOWLEDGE_CATALOG_PATH=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json" ]]; then
+    fail "ascendanyd.env must bind the immutable release knowledge catalog path"
+  elif [[ -z "$configured_catalog_sha256" || -z "$release_catalog_sha256" ||
+          "$configured_catalog_sha256" != "$release_catalog_sha256" ]]; then
+    fail "ascendanyd.env knowledge catalog digest differs from the release manifest"
   elif (( ${#smoke_entries[@]} != 1 )) || [[ "${smoke_entries[0]:-}" != "ASCENDANY_WRITE_MODE=disabled" ]]; then
     fail "ascendanyd read-only smoke environment must contain only the disabled write mode"
   else
@@ -908,7 +1038,8 @@ check_ascendanyd_phase_state() {
   local active_state enabled_state
   active_state="$(unit_property ascendanyd.service ActiveState || true)"
   enabled_state="$(systemctl is-enabled ascendanyd.service 2>/dev/null || true)"
-  if [[ "$validation_phase" == "staged" || "$validation_phase" == "activation" ]]; then
+  if [[ "$validation_phase" == "staged" || "$validation_phase" == "catalog" ||
+        "$validation_phase" == "activation" ]]; then
     if [[ "$active_state" != "inactive" ]]; then
       fail "$validation_phase phase requires ascendanyd.service to be inactive"
     else
@@ -933,26 +1064,44 @@ check_ascendanyd_phase_state() {
   fi
 }
 
-check_model_activation_unit_state() {
-  local unit="ascendany-model-activate.service"
+check_model_release_oneshot_unit_state() {
+  local unit="$1" capability="$2" require_success="$3"
   local active_state enabled_state
   active_state="$(unit_property "$unit" ActiveState || true)"
   enabled_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
   if [[ "$active_state" != inactive || "$enabled_state" != static ]]; then
-    fail "$unit must remain inactive and static outside its explicit one-shot activation window"
+    fail "$unit must remain inactive and static outside its explicit one-shot window"
     return
   fi
-  if activation_phase || production_phase; then
+  if [[ "$require_success" == 1 ]]; then
     if [[ "$(unit_property "$unit" Result || true)" != success ||
           "$(unit_property "$unit" ExecMainCode || true)" != exited ||
           "$(unit_property "$unit" ExecMainStatus || true)" != 0 ]]; then
-      fail "$unit has no successful completed result for the release-bound model activation"
+      fail "$unit has no successful completed result for the release-bound model $capability"
       return
     fi
-    pass "$unit has one successful explicit release-bound activation result"
+    pass "$unit has one successful explicit release-bound model $capability result"
   else
     pass "$unit is inactive and cannot be enabled for boot"
   fi
+}
+
+check_model_registration_unit_state() {
+  local require_success=0
+  if activation_phase || catalog_phase || production_phase; then
+    require_success=1
+  fi
+  check_model_release_oneshot_unit_state \
+    ascendany-model-register.service registration "$require_success"
+}
+
+check_model_activation_unit_state() {
+  local require_success=0
+  if activation_phase || production_phase; then
+    require_success=1
+  fi
+  check_model_release_oneshot_unit_state \
+    ascendany-model-activate.service activation "$require_success"
 }
 
 check_inactive_backup_timer() {
@@ -1012,7 +1161,7 @@ run_as_judge() {
 
 check_judge_runtime() {
   local unit="ascendany-judge@validation.service"
-  local no_new_privileges ambient bounding image locked_image env_file polkit_rule judge_uid judge_gid runtime_gid
+  local no_new_privileges ambient bounding compiler_image runtime_image locked_compiler locked_runtime env_file polkit_rule judge_uid judge_gid runtime_gid
   no_new_privileges="$(unit_property "$unit" NoNewPrivileges || true)"
   ambient="$(unit_property "$unit" AmbientCapabilities || true)"
   bounding="$(unit_property "$unit" CapabilityBoundingSet || true)"
@@ -1094,19 +1243,24 @@ check_judge_runtime() {
   fi
 
   env_file="/etc/ascendany/v2/judge.env"
-  image="$(grep -E '^ASCENDANY_JUDGE_CPP20_IMAGE=[a-z0-9][a-z0-9._:/-]{0,255}@sha256:[0-9a-f]{64}$' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
-  locked_image="$(jq -er '.image.leaf' /opt/ascendany/v2/config/judge-image-lock.json 2>/dev/null || true)"
-  if [[ -z "$image" ]]; then
-    fail "judge.env has no single digest-pinned C++20 image"
-  elif [[ "$image" != "$locked_image" ]]; then
-    fail "judge.env does not select the release-bound linux/amd64 leaf image"
+  compiler_image="$(grep -E '^ASCENDANY_JUDGE_COMPILER_IMAGE=[a-z0-9][a-z0-9._:/-]{0,255}@sha256:[0-9a-f]{64}$' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  runtime_image="$(grep -E '^ASCENDANY_JUDGE_RUNTIME_IMAGE=[a-z0-9][a-z0-9._:/-]{0,255}@sha256:[0-9a-f]{64}$' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  locked_compiler="$(jq -er '.compiler.identity' /opt/ascendany/v2/config/judge-image-lock.json 2>/dev/null || true)"
+  locked_runtime="$(jq -er '.runtime.identity' /opt/ascendany/v2/config/judge-image-lock.json 2>/dev/null || true)"
+  if [[ -z "$compiler_image" || -z "$runtime_image" ]]; then
+    fail "judge.env lacks one of its two digest-pinned images"
+  elif [[ "$compiler_image" != "$locked_compiler" || "$runtime_image" != "$locked_runtime" || "$compiler_image" == "$runtime_image" ]]; then
+    fail "judge.env does not select the two release-bound image identities"
   elif ! run_as_judge /usr/bin/podman --cgroup-manager=cgroupfs \
-      --runroot=/run/ascendany-judge-image-podman/containers image exists "$image"; then
-    fail "digest-pinned Judge image is not preloaded for ascendany-judge: $image"
+      --runroot=/run/ascendany-judge-image-podman/containers image exists "$compiler_image"; then
+    fail "digest-pinned Judge compiler image is not preloaded for ascendany-judge: $compiler_image"
+  elif ! run_as_judge /usr/bin/podman --cgroup-manager=cgroupfs \
+      --runroot=/run/ascendany-judge-image-podman/containers image exists "$runtime_image"; then
+    fail "digest-pinned Judge runtime image is not preloaded for ascendany-judge: $runtime_image"
   elif ! run_as_judge /opt/ascendany/v2/scripts/attest-judge-image.sh >/dev/null; then
-    fail "preloaded Judge image failed release-bound config and toolchain attestation"
+    fail "preloaded Judge images failed release-bound rootfs and static-execution attestation"
   else
-    pass "release-bound Judge image and compiler are attested for ascendany-judge"
+    pass "release-bound Judge compiler and empty runtime images are attested for ascendany-judge"
   fi
 }
 
@@ -1193,7 +1347,7 @@ check_credentials() {
   local unit="ascendanyd.service" credential_id
   local -a expected_ids=(
     db_password
-    jwt_signing_key
+    jwt_signing_private_key
     password_pepper
   )
   for credential_id in "${runtime_feedback_credential_ids[@]}"; do
@@ -1207,15 +1361,20 @@ check_credentials() {
   else
     check_unit_environment_files "$unit" /etc/ascendany/v2/ascendanyd.env
   fi
+  check_credential_source \
+    "$unit" jwt_signing_private_key \
+    /etc/ascendany/credentials/jwt_signing_private_key.cred || true
 
   if [[ "$ascendanyd_active" == "1" ]]; then
-    local active_credential="/run/credentials/${unit}/jwt_signing_key"
+    local active_credential="/run/credentials/${unit}/jwt_signing_private_key"
     if [[ ! -s "$active_credential" ]]; then
-      fail "active JWT credential is missing: $active_credential"
-    elif (( $(stat -c '%s' "$active_credential") < 32 )); then
-      fail "active JWT credential is shorter than 32 bytes"
+      fail "active JWT private-key credential is missing: $active_credential"
+    elif ! /usr/bin/openssl pkey -in "$active_credential" -noout -check >/dev/null 2>&1; then
+      fail "active JWT private-key credential is not a valid Ed25519 private key"
+    elif [[ "$(/usr/bin/openssl pkey -in "$active_credential" -text -noout 2>/dev/null | /usr/bin/sed -n '1p')" != 'ED25519 Private-Key:' ]]; then
+      fail "active JWT private-key credential uses a non-Ed25519 key"
     else
-      pass "active JWT credential exists and is at least 32 bytes"
+      pass "active JWT private-key credential is Ed25519"
     fi
   fi
 
@@ -1229,6 +1388,63 @@ check_credentials() {
       pass "active password pepper credential exists and is at least 32 bytes"
     fi
   fi
+}
+
+check_jwt_keypair_credentials() {
+  local private_source=/etc/ascendany/credentials/jwt_signing_private_key.cred
+  local public_source=/etc/ascendany/credentials/jwt_verification_public_key.cred
+  local private_raw_sha private_canonical_sha public_raw_sha public_canonical_sha
+  local private_type public_type derived_public configured_public
+
+  if ! private_raw_sha="$({
+      /usr/bin/systemd-creds --name=jwt_signing_private_key decrypt "$private_source" - 2>/dev/null
+    } | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')" ||
+     ! private_canonical_sha="$({
+      /usr/bin/systemd-creds --name=jwt_signing_private_key decrypt "$private_source" - 2>/dev/null
+    } | /usr/bin/openssl pkey -outform PEM 2>/dev/null | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')" ||
+     [[ ! "$private_raw_sha" =~ ^[0-9a-f]{64}$ || "$private_raw_sha" != "$private_canonical_sha" ]]; then
+    fail "JWT signing credential is not one canonical PKCS#8 Ed25519 private-key PEM"
+    return
+  fi
+  if ! private_type="$({
+      /usr/bin/systemd-creds --name=jwt_signing_private_key decrypt "$private_source" - 2>/dev/null
+    } | /usr/bin/openssl pkey -text -noout 2>/dev/null | /usr/bin/sed -n '1p')" ||
+     [[ "$private_type" != 'ED25519 Private-Key:' ]]; then
+    fail "JWT signing credential contains a non-Ed25519 private key"
+    return
+  fi
+  if ! derived_public="$({
+      /usr/bin/systemd-creds --name=jwt_signing_private_key decrypt "$private_source" - 2>/dev/null
+    } | /usr/bin/openssl pkey -pubout 2>/dev/null)" ||
+     [[ "$derived_public" != '-----BEGIN PUBLIC KEY-----'* ]]; then
+    fail "JWT signing credential cannot derive an Ed25519 public key"
+    return
+  fi
+  if ! public_raw_sha="$({
+      /usr/bin/systemd-creds --name=jwt_verification_public_key decrypt "$public_source" - 2>/dev/null
+    } | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')" ||
+     ! public_canonical_sha="$({
+      /usr/bin/systemd-creds --name=jwt_verification_public_key decrypt "$public_source" - 2>/dev/null
+    } | /usr/bin/openssl pkey -pubin -pubout -outform PEM 2>/dev/null | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')" ||
+     [[ ! "$public_raw_sha" =~ ^[0-9a-f]{64}$ || "$public_raw_sha" != "$public_canonical_sha" ]]; then
+    fail "JWT verification credential is not one canonical PKIX Ed25519 public-key PEM"
+    return
+  fi
+  if ! public_type="$({
+      /usr/bin/systemd-creds --name=jwt_verification_public_key decrypt "$public_source" - 2>/dev/null
+    } | /usr/bin/openssl pkey -pubin -text -noout 2>/dev/null | /usr/bin/sed -n '1p')" ||
+     [[ "$public_type" != 'ED25519 Public-Key:' ]]; then
+    fail "JWT verification credential contains a non-Ed25519 public key"
+    return
+  fi
+  if ! configured_public="$({
+      /usr/bin/systemd-creds --name=jwt_verification_public_key decrypt "$public_source" - 2>/dev/null
+    } | /usr/bin/openssl pkey -pubin -pubout 2>/dev/null)" ||
+     [[ "$configured_public" != "$derived_public" ]]; then
+    fail "JWT private signing credential and public verification credential do not form one Ed25519 keypair"
+    return
+  fi
+  pass "JWT Ed25519 signing and verification credentials are canonical and capability-separated"
 }
 
 check_admin_bootstrap_unit() {
@@ -1284,6 +1500,89 @@ check_admin_bootstrap_unit() {
   fi
 }
 
+check_catalog_publisher_config_contract() {
+  local path="${1:-$catalog_publisher_config_root/catalog-publish.env}"
+  local expected actual
+  expected="$(printf '%s\n' \
+    'ASCENDANY_DATABASE_URL=postgresql://ascendany_catalog_publisher_login@127.0.0.1:6432/ascendany_v2' \
+    'ASCENDANY_DATABASE_POOL_MODE=transaction' \
+    'ASCENDANY_DATABASE_SCHEMA_VERSION=7' \
+    'ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s' \
+    'ASCENDANY_DATABASE_HEALTH_TIMEOUT=3s' \
+    'ASCENDANY_AUTH_ISSUER=ascendany' \
+    'ASCENDANY_AUTH_AUDIENCE=ascendany-v2' \
+    'ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json' \
+    "ASCENDANY_RECOMMENDATION_MODEL_SHA256=$release_model_sha256" \
+    'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production' \
+    'ASCENDANY_KNOWLEDGE_CATALOG_PATH=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json' \
+    "ASCENDANY_KNOWLEDGE_CATALOG_SHA256=$release_catalog_sha256" \
+    'ASCENDANY_LOG_LEVEL=info')"
+  actual="$(sed '/^#/d; /^$/d' "$path" 2>/dev/null || true)"
+  if [[ ! "$release_model_sha256" =~ ^[0-9a-f]{64}$ ||
+        ! "$release_catalog_sha256" =~ ^[0-9a-f]{64}$ ||
+        "$actual" != "$expected" ]]; then
+    fail "catalog publisher environment differs from the exact release-bound stopped-runtime contract"
+  else
+    pass "catalog publisher environment exactly binds its DB role, model, and catalog contract"
+  fi
+}
+
+check_catalog_publisher_unit() {
+  local unit="ascendany-catalog-publish.service"
+  local request_source="$catalog_publication_request_source"
+  local access_token_source="$catalog_publication_access_token_source"
+  local rendered actual expected active_state enabled_state
+  local -a plaintext=() encrypted=()
+
+  if ! rendered="$(systemctl cat "$unit" 2>/dev/null)" || [[ -z "$rendered" ]]; then
+    fail "$unit configuration cannot be read"
+    return
+  fi
+  collect_effective_directives "$rendered" LoadCredential plaintext
+  collect_effective_directives "$rendered" LoadCredentialEncrypted encrypted
+  if (( ${#plaintext[@]} != 0 )); then
+    fail "$unit has an effective plaintext LoadCredential directive"
+  fi
+  actual="$(printf '%s\n' "${encrypted[@]}" | normalize_word_set)"
+  expected="$(printf '%s\n' \
+    'admin_access_token:/var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred' \
+    'catalog_publication_request:/var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred' \
+    'catalog_publisher_db_password:/etc/ascendany-catalog-publisher/credentials/catalog_publisher_db_password.cred' \
+    'jwt_verification_public_key:/etc/ascendany/credentials/jwt_verification_public_key.cred' |
+    normalize_word_set)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$unit encrypted credential declarations differ from the exact publisher contract"
+  else
+    pass "$unit encrypted credential declarations are exact"
+  fi
+  check_credential_source \
+    "$unit" catalog_publisher_db_password \
+    /etc/ascendany-catalog-publisher/credentials/catalog_publisher_db_password.cred || true
+  check_credential_source \
+    "$unit" jwt_verification_public_key \
+    /etc/ascendany/credentials/jwt_verification_public_key.cred || true
+
+  if [[ -e "$request_source" || -L "$request_source" ||
+        -e "$access_token_source" || -L "$access_token_source" ]]; then
+    fail "catalog publication request or access token remains outside the operator window"
+  else
+    pass "catalog publication request and access token are absent outside the operator window"
+  fi
+
+  active_state="$(unit_property "$unit" ActiveState || true)"
+  enabled_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+  if [[ "$active_state" != inactive || "$enabled_state" != static ]]; then
+    fail "$unit must remain inactive and static outside its explicit one-shot window"
+  elif { catalog_phase || production_phase || { forward_transition && activation_phase; }; } &&
+       [[ "$(unit_property "$unit" Result || true)" != success ||
+          "$(unit_property "$unit" ExecMainCode || true)" != exited ||
+          "$(unit_property "$unit" ExecMainStatus || true)" != 0 ]]; then
+    fail "$unit has no successful completed result after the required catalog publication"
+  else
+    pass "$unit is inactive and cannot be enabled for boot"
+  fi
+}
+
 check_active_ascendanyd_environment() {
   local pid="$1" environ_path="$2" environment_file="$3"
   local line name value entry generated_invalid
@@ -1304,7 +1603,7 @@ check_active_ascendanyd_environment() {
     name="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
     case "$name" in
-      LANG|PATH|USER|LOGNAME|HOME|SHELL|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MEMORY_PRESSURE_WATCH|MEMORY_PRESSURE_WRITE|CREDENTIALS_DIRECTORY|RUNTIME_DIRECTORY|STATE_DIRECTORY|LOGS_DIRECTORY|ASCENDANY_DATABASE_PASSWORD_FILE|ASCENDANY_JWT_SIGNING_KEY_FILE|ASCENDANY_PASSWORD_PEPPER_FILE|ASCENDANY_CREDENTIAL_FILE_REF_HEX_*)
+      LANG|PATH|USER|LOGNAME|HOME|SHELL|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_EXEC_PID|MEMORY_PRESSURE_WATCH|MEMORY_PRESSURE_WRITE|CREDENTIALS_DIRECTORY|RUNTIME_DIRECTORY|STATE_DIRECTORY|LOGS_DIRECTORY|ASCENDANY_DATABASE_PASSWORD_FILE|ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE|ASCENDANY_PASSWORD_PEPPER_FILE|ASCENDANY_CREDENTIAL_FILE_REF_HEX_*)
         fail "ascendanyd.env attempts to own reserved environment name $name"
         invalid=1
         continue
@@ -1327,7 +1626,7 @@ check_active_ascendanyd_environment() {
   expected[HOME]='/var/lib/ascendany'
   expected[SHELL]='/usr/sbin/nologin'
   expected[ASCENDANY_DATABASE_PASSWORD_FILE]='/run/credentials/ascendanyd.service/db_password'
-  expected[ASCENDANY_JWT_SIGNING_KEY_FILE]='/run/credentials/ascendanyd.service/jwt_signing_key'
+  expected[ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE]='/run/credentials/ascendanyd.service/jwt_signing_private_key'
   expected[ASCENDANY_PASSWORD_PEPPER_FILE]='/run/credentials/ascendanyd.service/password_pepper'
   for entry in "${runtime_feedback_bindings[@]}"; do
     name="${entry%%=*}"
@@ -1468,11 +1767,11 @@ check_active_ascendanyd_health() {
       (.checks.database | type == "object" and keys == ["status"] and .status == "pass") and
       (.checks.migrations | type == "object" and
         keys == ["currentVersion", "expectedVersion", "status"] and
-        .status == "pass" and .currentVersion == 6 and .expectedVersion == 6)
+        .status == "pass" and .currentVersion == 7 and .expectedVersion == 7)
     ' <<<"$readiness" >/dev/null 2>&1; then
-    fail "active ascendanyd readiness violates the schema-v6 closed response contract"
+    fail "active ascendanyd readiness violates the schema-v7 closed response contract"
   else
-    pass "active ascendanyd database and migration readiness are healthy at schema v6"
+    pass "active ascendanyd database and migration readiness are healthy at schema v7"
   fi
 }
 
@@ -1516,7 +1815,7 @@ check_release_payload() {
   local manifest="$release_root/release-manifest.json"
   local payload_failures_before="$failures"
   local relative path expected_sha expected_size expected_mode
-  local actual_sha actual_size actual_mode owner_group runtime_metadata runtime_capabilities
+  local actual_sha actual_size actual_mode owner_group runtime_metadata runtime_capabilities catalog_metadata
   local expected_writes_json
   local expected_build_time manifest_go_version manifest_goos manifest_goarch
   local manifest_goamd64 manifest_go_experiment manifest_go_fips manifest_cgo_enabled
@@ -1524,12 +1823,15 @@ check_release_payload() {
     bin/ascendanyd
     bin/ascendany-admin-bootstrap
     bin/ascendany-backup
+    bin/ascendany-catalog-publish
     bin/ascendany-judge
     bin/ascendany-lsp
     bin/ascendany-migrate
     bin/ascendany-model
     bin/ascendany-release-ops
     models/recommendation-model.json
+    models/recommendation-knowledge-catalog.json
+    operators/ascendany-production-initialize.mjs
     README.md
     OJ_JUDGE_CONTRACT.md
     LSP_CONTROL_CONTRACT.md
@@ -1542,10 +1844,13 @@ check_release_payload() {
     config/ascendanyd.env
     config/ascendanyd-read-only-smoke.env
     config/backup.env
+    config/catalog-publish.env
     config/cloudflared.yaml
     config/fedora-runtime-packages.json
     config/judge.env
+    config/judge-compiler-rootfs.inventory
     config/judge-image-lock.json
+    config/judge-images.Containerfile
     config/migrate.env
     config/pgbouncer-hba.conf
     config/pgbouncer.ini
@@ -1553,7 +1858,9 @@ check_release_payload() {
     config/postgresql-ident.conf
     config/restore.env
     systemd/ascendanyd.service
+    systemd/ascendany-model-register.service
     systemd/ascendany-model-activate.service
+    systemd/ascendany-catalog-publish.service
     systemd/ascendanyd.service.d/40-read-only-smoke.conf
     systemd/ascendany-admin-bootstrap.service
     systemd/ascendany-backup.service
@@ -1578,12 +1885,14 @@ check_release_payload() {
     scripts/judge-image-contract.sh
     scripts/preload-judge-image.sh
     scripts/provision-postgres-pgbouncer.sh
+    scripts/postgres-schema-fingerprint.sh
     scripts/validate-cloudflared.sh
     scripts/validate-production.sh
   )
   local -a required_directories=(
     bin
     models
+    operators
     config
     contracts
     contracts/openapi
@@ -1640,7 +1949,7 @@ check_release_payload() {
         (.goExperiment | type == "string" and test("^(none|[0-9A-Za-z_,.-]+)$")) and
         .gofips140 == "off" and
         .cgoEnabled == false) and
-      (.files | type == "array" and length == 59) and
+      (.files | type == "array" and length == 68) and
       (all(.files[];
         type == "object" and
         (keys == ["mode", "path", "sha256", "size"]) and
@@ -1707,10 +2016,45 @@ check_release_payload() {
       fail "release manifest omits required payload: $relative"
     elif [[ "$relative" == bin/* && ! -x "$release_root/$relative" ]]; then
       fail "release binary is not executable: $relative"
+    elif [[ "$relative" == operators/ascendany-production-initialize.mjs &&
+            "$(jq -r --arg path "$relative" '.files[] | select(.path == $path) | .mode' "$manifest")" != 0555 ]]; then
+      fail "production initialization operator must be immutable mode 0555"
     elif [[ "$relative" == "models/recommendation-model.json" ]]; then
       release_model_sha256="$(jq -r --arg path "$relative" '.files[] | select(.path == $path) | .sha256' "$manifest")"
+    elif [[ "$relative" == "models/recommendation-knowledge-catalog.json" ]]; then
+      release_catalog_sha256="$(jq -r --arg path "$relative" '.files[] | select(.path == $path) | .sha256' "$manifest")"
     fi
   done
+
+  if [[ ! "$release_catalog_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+     ! catalog_metadata="$(/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+       "$release_root/bin/ascendany-model" verify-catalog \
+       --catalog "$release_root/models/recommendation-knowledge-catalog.json" \
+       --catalog-sha256 "$release_catalog_sha256" \
+       --model "$release_root/models/recommendation-model.json" \
+       --model-sha256 "$release_model_sha256" \
+       --expected-purpose production)"; then
+    fail "release knowledge catalog failed canonical model-bound verification"
+  elif ! jq -e \
+      --arg catalogSHA "$release_catalog_sha256" \
+      --arg modelSHA "$release_model_sha256" \
+      --arg modelID "$(jq -r '.manifest.modelId' "$release_root/models/recommendation-model.json")" '
+        type == "object" and
+        (keys == [
+          "artifactMode", "artifactSizeBytes", "catalogSha256", "knowledgePointIds",
+          "modelArtifactSha256", "modelId", "problemAssignmentCount", "schema", "taxonomyId"
+        ]) and
+        .schema == "ascendany.knowledge_catalog.recommendation.v1" and
+        .catalogSha256 == $catalogSHA and .modelArtifactSha256 == $modelSHA and .modelId == $modelID and
+        .artifactMode == 420 and (.artifactSizeBytes | type == "number" and . > 0 and . <= 262144) and
+        (.taxonomyId | type == "string" and length > 0) and
+        (.knowledgePointIds | type == "array" and length > 0) and
+        (.problemAssignmentCount | type == "number" and floor == . and . >= 0)
+      ' <<<"$catalog_metadata" >/dev/null; then
+    fail "release knowledge catalog verifier returned noncanonical provenance"
+  else
+    pass "release knowledge catalog is canonical and binds the immutable inference model"
+  fi
 
   mapfile -t expected_directories < <(printf '%s\n' "${required_directories[@]}" | LC_ALL=C sort)
   mapfile -t actual_directories < <(find "$release_root" -mindepth 1 -type d -printf '%P\n' | LC_ALL=C sort)
@@ -1774,6 +2118,29 @@ check_release_payload() {
   fi
 }
 
+check_initialization_operator_runtime() {
+  [[ "$validation_phase" == staged ]] || return 0
+  local bundle="$release_root/operators/ascendany-production-initialize.mjs"
+  local resolved metadata installed_package
+  resolved="$(realpath -e -- "$initialization_node_binary" 2>/dev/null || true)"
+  metadata="$(stat -Lc '%u:%g:%a:%h' -- "$resolved" 2>/dev/null || true)"
+  installed_package="$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' \
+    "$resolved" 2>/dev/null || true)"
+  if [[ "$resolved" != "$initialization_node_binary" || ! -f "$resolved" || -L "$resolved" ||
+        "$metadata" != 0:0:755:1 ]] || ! check_root_owned_ancestry "$resolved" 1; then
+    fail "production initialization Node must be the canonical root-owned /usr/bin/node-22 binary"
+  elif [[ "$installed_package" != "$initialization_node_package" ||
+          "$(sha256sum -- "$resolved" | awk '{print $1}')" != "$initialization_node_sha256" ||
+          "$($resolved --version 2>/dev/null || true)" != "$initialization_node_version" ]]; then
+    fail "production initialization Node package, digest, or version differs from the pinned operator contract"
+  elif ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+      "$resolved" --check "$bundle" >/dev/null 2>&1; then
+    fail "manifest-bound production initialization operator is not valid pinned-Node JavaScript"
+  else
+    pass "pinned Node v22.22.2 parses the manifest-bound production initialization operator"
+  fi
+}
+
 check_installed_release_copy() {
   local relative="$1" installed="$2" preserve_mode="$3"
   local source="$release_root/$relative" source_mode installed_mode metadata owner group
@@ -1804,7 +2171,9 @@ check_installed_release_inputs() {
   local -a immutable_relatives=(
     systemd/ascendany-cloudflared.service
     systemd/ascendanyd.service
+    systemd/ascendany-model-register.service
     systemd/ascendany-model-activate.service
+    systemd/ascendany-catalog-publish.service
     systemd/ascendany-admin-bootstrap.service
     systemd/ascendany-backup.service
     systemd/ascendany-backup.timer
@@ -1821,7 +2190,9 @@ check_installed_release_inputs() {
   local -a immutable_targets=(
     /etc/systemd/system/ascendany-cloudflared.service
     /etc/systemd/system/ascendanyd.service
+    /etc/systemd/system/ascendany-model-register.service
     /etc/systemd/system/ascendany-model-activate.service
+    /etc/systemd/system/ascendany-catalog-publish.service
     /etc/systemd/system/ascendany-admin-bootstrap.service
     /etc/systemd/system/ascendany-backup.service
     /etc/systemd/system/ascendany-backup.timer
@@ -1840,6 +2211,7 @@ check_installed_release_inputs() {
     config/ascendanyd.env
     config/ascendanyd-read-only-smoke.env
     config/backup.env
+    config/catalog-publish.env
     config/judge.env
     config/migrate.env
     config/pgbouncer-hba.conf
@@ -1851,6 +2223,7 @@ check_installed_release_inputs() {
     /etc/ascendany/v2/ascendanyd.env
     /etc/ascendany/v2/ascendanyd-read-only-smoke.env
     /etc/ascendany/v2/backup.env
+    /etc/ascendany-catalog-publisher/catalog-publish.env
     /etc/ascendany/v2/judge.env
     /etc/ascendany/v2/migrate.env
     /opt/ascendany/infra/pgbouncer/pgbouncer-hba.conf
@@ -1932,6 +2305,199 @@ check_retired_runtime_boundary() {
     fail "retired API TCP port $retired_api_port must have no listener"
   else
     pass "retired API TCP port $retired_api_port is unused"
+  fi
+}
+
+check_exact_directory_entry_set() {
+  local path="$1" metadata="$2" label="$3" expected="$4" actual observed_metadata
+  if [[ ! -d "$path" || -L "$path" ]]; then
+    fail "$label is missing or is not a real directory"
+    return
+  fi
+  observed_metadata="$(stat -Lc '%U:%G:%a' -- "$path" 2>/dev/null || true)"
+  if [[ "$observed_metadata" != "$metadata" ]]; then
+    fail "$label metadata is $observed_metadata; expected $metadata"
+  fi
+  if ! actual="$(find "$path" -mindepth 1 -maxdepth 1 -printf '%f|%y\n' | LC_ALL=C sort)"; then
+    fail "$label entry inventory cannot be read"
+    return
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$label entry set differs from the closed generation-v2 namespace"
+  fi
+}
+
+check_retired_unit_mask() {
+  local unit="$1" mask="$systemd_system_root/$1" enabled active main_pid load_state
+  enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+  active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+  main_pid="$(unit_property "$unit" MainPID 2>/dev/null || true)"
+  load_state="$(unit_property "$unit" LoadState 2>/dev/null || true)"
+  if [[ "$enabled" != masked || "$active" != inactive || "$main_pid" != 0 || "$load_state" != masked ]]; then
+    fail "$unit must be persistently masked, inactive, process-free, and loaded only as a mask"
+  fi
+  if [[ ! -L "$mask" || "$(readlink -- "$mask" 2>/dev/null || true)" != /dev/null ||
+        "$(stat -c '%U:%G' -- "$mask" 2>/dev/null || true)" != root:root ]]; then
+    fail "$unit retirement mask must be one root-owned /etc systemd link to /dev/null"
+  fi
+  if [[ -e "$systemd_system_root/$unit.d" || -L "$systemd_system_root/$unit.d" ||
+        -e "$systemd_runtime_root/$unit" || -L "$systemd_runtime_root/$unit" ||
+        -e "$systemd_runtime_root/$unit.d" || -L "$systemd_runtime_root/$unit.d" ||
+        -e "$systemd_local_root/$unit" || -L "$systemd_local_root/$unit" ||
+        -e "$systemd_local_root/$unit.d" || -L "$systemd_local_root/$unit.d" ||
+        -e "$systemd_vendor_root/$unit" || -L "$systemd_vendor_root/$unit" ||
+        -e "$systemd_vendor_root/$unit.d" || -L "$systemd_vendor_root/$unit.d" ]]; then
+    fail "$unit retains a unit fragment or drop-in outside its permanent retirement mask"
+  fi
+}
+
+contains_retired_generation_reference() {
+  local value="$1" marker
+  local -a markers=(
+    "$production_namespace_root/Release"
+    "$production_namespace_root/.venv"
+    "$production_namespace_root/data"
+    "$retired_trainer_runtime_root"
+    "$retired_trainer_state_root"
+    "$production_namespace_root/v2/bin/ascendany-trainer-agent"
+  )
+  for marker in "${markers[@]}"; do
+    [[ "$value" != *"$marker"* ]] || return 0
+  done
+  return 1
+}
+
+check_retired_generation_processes() {
+  local process_path process_pid executable working_directory command_line maps reference fd target
+  local -a process_paths=() fd_paths=()
+  shopt -s nullglob
+  process_paths=("$retired_process_root"/[1-9]*)
+  shopt -u nullglob
+  for process_path in "${process_paths[@]}"; do
+    [[ -d "$process_path" ]] || continue
+    process_pid="${process_path##*/}"
+    if [[ "$retired_process_root" == /proc && "$process_pid" == "$BASHPID" ]]; then
+      continue
+    fi
+    executable="$(readlink -- "$process_path/exe" 2>/dev/null || true)"
+    working_directory="$(readlink -- "$process_path/cwd" 2>/dev/null || true)"
+    command_line="$(tr '\0' ' ' <"$process_path/cmdline" 2>/dev/null || true)"
+    maps="$(sed -n '1,$p' "$process_path/maps" 2>/dev/null || true)"
+    reference="$executable"$'\n'"$working_directory"$'\n'"$command_line"$'\n'"$maps"
+    if contains_retired_generation_reference "$reference"; then
+      fail "process $process_pid retains a retired Python/trainer generation reference"
+      continue
+    fi
+    fd_paths=()
+    shopt -s nullglob
+    fd_paths=("$process_path"/fd/*)
+    shopt -u nullglob
+    for fd in "${fd_paths[@]}"; do
+      target="$(readlink -- "$fd" 2>/dev/null || true)"
+      if contains_retired_generation_reference "$target"; then
+        fail "process $process_pid retains an open descriptor into the retired generation"
+        break
+      fi
+    done
+  done
+}
+
+check_retired_generation_closure() {
+  local failures_before="$failures" expected_credentials actual_containers passwd_entries group_entries
+  local -a credential_entries=(
+    backup_db_password.cred
+    cloudflare_tunnel_credentials.cred
+    jwt_signing_private_key.cred
+    jwt_verification_public_key.cred
+    migrator_db_password.cred
+    password_pepper.cred
+    pgbouncer_userlist.cred
+    restore_db_password.cred
+    runtime_db_password.cred
+  )
+  local credential_id path
+
+  check_retired_unit_mask "$retired_api_unit"
+  check_retired_unit_mask "$retired_trainer_unit"
+
+  check_exact_directory_entry_set \
+    "$production_namespace_root" root:root:755 \
+    '/opt/ascendany production namespace' \
+    $'.install-v2-release.lock|f\ninfra|d\nv2|d'
+  if [[ "$(stat -Lc '%U:%G:%a:%h' -- "$production_namespace_root/.install-v2-release.lock" 2>/dev/null || true)" != root:root:600:1 ]]; then
+    fail "generation-v2 installation lock metadata differs from root:root mode 0600 single-link"
+  fi
+  check_exact_directory_entry_set \
+    "$production_namespace_root/infra" root:root:755 \
+    '/opt/ascendany/infra production namespace' \
+    'pgbouncer|d'
+  check_exact_directory_entry_set \
+    "$configuration_namespace_root" root:root:755 \
+    '/etc/ascendany production namespace' \
+    $'credentials|d\nv2|d'
+  check_exact_directory_entry_set \
+    "$configuration_namespace_root/v2" root:ascendany-runtime:750 \
+    '/etc/ascendany/v2 configuration namespace' \
+    $'analytics.json|f\nascendanyd-read-only-smoke.env|f\nascendanyd.env|f\nbackup.env|f\njudge.env|f\nmigrate.env|f\nrestore.env|f'
+
+  for credential_id in "${runtime_feedback_credential_ids[@]}"; do
+    credential_entries+=("$credential_id.cred")
+  done
+  expected_credentials="$(printf '%s|f\n' "${credential_entries[@]}" | LC_ALL=C sort)"
+  check_exact_directory_entry_set \
+    "$configuration_namespace_root/credentials" root:root:700 \
+    '/etc/ascendany/credentials capability namespace' \
+    "$expected_credentials"
+  check_exact_directory_entry_set \
+    "$catalog_publisher_config_root" root:ascendany-catalog-publisher:750 \
+    '/etc/ascendany-catalog-publisher capability namespace' \
+    $'catalog-publish.env|f\ncredentials|d'
+  check_exact_directory_entry_set \
+    "$catalog_publisher_config_root/credentials" root:root:700 \
+    '/etc/ascendany-catalog-publisher/credentials capability namespace' \
+    'catalog_publisher_db_password.cred|f'
+  for path in \
+    "$catalog_publisher_config_root/credentials/catalog_publisher_db_password.cred"; do
+    if [[ ! -s "$path" || ! -f "$path" || -L "$path" ||
+          "$(stat -Lc '%U:%G:%a:%h' -- "$path" 2>/dev/null || true)" != root:root:400:1 ]]; then
+      fail "catalog publisher encrypted credential source violates the root-owned 0400 single-link contract: $path"
+    fi
+  done
+  if [[ ! -f "$catalog_publisher_config_root/catalog-publish.env" ||
+        -L "$catalog_publisher_config_root/catalog-publish.env" ||
+        "$(stat -Lc '%U:%G:%a:%h' -- "$catalog_publisher_config_root/catalog-publish.env" 2>/dev/null || true)" != root:ascendany-catalog-publisher:640:1 ]]; then
+    fail "catalog publisher configuration must be a root-owned publisher-readable 0640 single-link file"
+  fi
+
+  for path in \
+    "$retired_trainer_runtime_root" \
+    "$retired_trainer_state_root" \
+    "$retired_trainer_log_root"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      fail "retired trainer runtime/state path remains: $path"
+    fi
+  done
+
+  if ! passwd_entries="$(getent passwd)" || ! group_entries="$(getent group)"; then
+    fail "local account databases cannot be enumerated for trainer identity retirement"
+  else
+    if grep -Eq '^ascendany-trainer:' <<<"$passwd_entries"; then
+      fail "retired ascendany-trainer OS identity remains"
+    fi
+    if grep -Eq '^ascendany-trainer:' <<<"$group_entries"; then
+      fail "retired ascendany-trainer group remains"
+    fi
+  fi
+
+  if ! actual_containers="$(podman ps -a --format '{{.Names}}')"; then
+    fail "Podman container namespace cannot be enumerated for generation retirement"
+  elif grep -Eq '^(ascendany-cloudflared|ascendany-trainer($|-))' <<<"$actual_containers"; then
+    fail "a retired Cloudflared/trainer container remains in the production namespace"
+  fi
+
+  check_retired_generation_processes
+  if (( failures == failures_before )); then
+    pass "retired Python/trainer release, runtime, identity, unit, process, config, credential, and container closure is absent"
   fi
 }
 
@@ -2115,6 +2681,34 @@ postgres_admin_psql() {
         --username=postgres "$@"
 }
 
+check_postgres_schema_fingerprint() {
+  local helper="$release_root/scripts/postgres-schema-fingerprint.sh"
+  local failures_before="$failures" expected actual
+
+  if ! expected="$(/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+      "$helper" --expected-sha256)" || [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "release PostgreSQL schema helper has no canonical expected SHA-256"
+    return
+  fi
+  if ! actual="$(
+      /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "$helper" --emit-sql |
+        postgres_admin_psql --dbname=ascendany_v2 --tuples-only --no-align --quiet |
+        LC_ALL=C sort |
+        sha256sum |
+        awk '{print $1}'
+    )"; then
+    fail "PostgreSQL schema fingerprint query failed"
+    return
+  fi
+  if [[ ! "$actual" =~ ^[0-9a-f]{64}$ || "$actual" != "$expected" ]] ||
+     ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+       "$helper" --verify-sha256 "$actual"; then
+    fail "PostgreSQL schema fingerprint differs from the canonical schema-v7 contract"
+  elif (( failures == failures_before )); then
+    pass "PostgreSQL columns, constraints, indexes, triggers, and routines match the canonical schema-v7 fingerprint"
+  fi
+}
+
 database_fingerprint_sha256() {
   local scope="$1"
   case "$scope" in
@@ -2176,6 +2770,261 @@ SQL
   esac
 }
 
+expected_initial_table_names() {
+  cat <<'TABLES'
+achievement_rule_head
+achievement_rule_sets
+achievement_rules
+agent_note_revisions
+agent_notes
+agent_run_events
+agent_runs
+agent_tool_calls
+analytics_generation_events
+analytics_generation_snapshots
+analytics_generations
+analytics_head
+artifacts
+audit_events
+auth_accounts
+auth_enrollment_events
+auth_enrollment_grants
+auth_refresh_tokens
+auth_sessions
+chat_messages
+chat_threads
+configuration_items
+configuration_versions
+exam_snapshots
+feedback_attachments
+feedback_delivery_events
+feedback_delivery_jobs
+feedback_submissions
+import_job_events
+import_jobs
+knowledge_catalog_publication_authorizations
+knowledge_catalog_publications
+logical_exams
+oj_judge_job_events
+oj_judge_jobs
+oj_judge_results
+oj_problem_versions
+oj_problems
+oj_submissions
+pintia_actor_identifiers
+pintia_actors
+pintia_ranking_problem_results
+pintia_rankings
+pintia_snapshot_participants
+pintia_snapshot_problems
+pintia_snapshot_submissions
+pintia_submission_case_results
+pintia_submission_identities
+problem_analytics
+recommendation_model_activation_events
+recommendation_model_head
+recommendation_model_releases
+schema_migrations_v2
+student_analytics
+TABLES
+}
+
+expected_initial_sequence_names() {
+  cat <<'SEQUENCES'
+achievement_rule_sets_achievement_rule_set_id_seq
+agent_note_revisions_agent_note_revision_id_seq
+agent_notes_agent_note_id_seq
+agent_runs_agent_run_id_seq
+agent_tool_calls_agent_tool_call_id_seq
+analytics_generations_analytics_generation_id_seq
+artifacts_artifact_id_seq
+audit_events_audit_event_id_seq
+auth_accounts_account_id_seq
+auth_enrollment_events_enrollment_event_id_seq
+auth_enrollment_grants_enrollment_grant_id_seq
+auth_refresh_tokens_refresh_token_id_seq
+auth_sessions_session_id_seq
+chat_messages_chat_message_id_seq
+chat_threads_chat_thread_id_seq
+configuration_items_configuration_item_id_seq
+configuration_versions_configuration_version_id_seq
+exam_snapshots_snapshot_id_seq
+feedback_delivery_jobs_feedback_delivery_job_id_seq
+feedback_submissions_feedback_id_seq
+import_jobs_import_job_id_seq
+knowledge_catalog_publication_ids_seq
+logical_exams_exam_id_seq
+oj_judge_jobs_judge_job_id_seq
+oj_judge_results_judge_result_id_seq
+oj_problem_versions_oj_problem_version_id_seq
+oj_problems_oj_problem_id_seq
+oj_submissions_oj_submission_id_seq
+pintia_actors_actor_id_seq
+pintia_submission_identities_submission_identity_id_seq
+recommendation_model_release_ids_seq
+SEQUENCES
+}
+
+expected_initial_migration_rows() {
+  cat <<'MIGRATIONS'
+migration|1|fresh_schema|0cffdb00acefd37c049a654bad76d8fac79727ed7c54cc3fa9234d54964ce0cf
+migration|2|product_domains|1762304608ed3f93d62c01ad494a2b6110b07737cc652f38a2581392985fdd36
+migration|3|recommendation_catalog_contract|6fa4a81fbe3440fc4b149a5b77d6c3860031e285bafef50b5a881e8783f36267
+migration|4|achievement_rules|3242ddfbdee0911d961ebe0f46237f6e2b8a6e7c5e09cf1d94f6ae98c4caaccb
+migration|5|auto_analysis_once|40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17
+migration|6|inference_model_runtime|330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea
+migration|7|catalog_publication_provenance|a69c081d1b0eaa31df8490773d3feed355fdb4053925f84087552df9b5fc940b
+MIGRATIONS
+}
+
+expected_initial_achievement_rows() {
+  cat <<'ACHIEVEMENTS'
+achievement-set|1|1
+achievement-rule|1|accuracy_max|准确进阶|准确单维最高分达到 60 / 75 / 90。|accuracy_max|60|75|90|7
+achievement-rule|1|ai_dialogue_count|AI陪练|与 AI 成功对话次数达到 3 / 15 / 40 次。|ai_dialogue_count|3|15|40|5
+achievement-rule|1|best_positive_streak|稳定连涨|最佳连涨场次达到 2 / 4 / 6 场。|best_positive_streak|2|4|6|4
+achievement-rule|1|current_min_metric|全能王者|当前五维最低分达到 70 / 80 / 90。|current_min_metric|70|80|90|18
+achievement-rule|1|exam_count_first|初试锋芒|累计参赛次数达到 1 / 3 / 8 场。|exam_count|1|3|8|1
+achievement-rule|1|exam_count_veteran|久经赛场|累计参赛次数达到 5 / 12 / 20 场。|exam_count|5|12|20|2
+achievement-rule|1|flexibility_max|灵活进阶|灵活单维最高分达到 60 / 75 / 90。|flexibility_max|60|75|90|9
+achievement-rule|1|knowledge_max|知识进阶|知识单维最高分达到 60 / 75 / 90。|knowledge_max|60|75|90|6
+achievement-rule|1|max_of_exam_min_metric|均衡发展|单场五维最低分的历史最高值达到 55 / 65 / 75。|max_of_exam_min_metric|55|65|75|15
+achievement-rule|1|max_rating|评级起飞|历史最高 rating 达到 900 / 1000 / 1200。|max_rating|900|1000|1200|11
+achievement-rule|1|max_rating_delta|单场爆发|历史单场涨分达到 15 / 30 / 50。|max_rating_delta|15|30|50|12
+achievement-rule|1|positive_delta_count|首次上分|rating 正增长次数达到 1 / 3 / 8 次。|positive_delta_count|1|3|8|3
+achievement-rule|1|proficiency_max|熟练进阶|熟练单维最高分达到 60 / 75 / 90。|proficiency_max|60|75|90|10
+achievement-rule|1|quality_max|质量进阶|质量单维最高分达到 60 / 75 / 90。|quality_max|60|75|90|8
+achievement-rule|1|rank1_count|冠军时刻|总排名第 1 次数达到 1 / 2 / 3 次。|rank1_count|1|2|3|17
+achievement-rule|1|top10_count|前十常客|排名前十次数达到 1 / 3 / 6 次。|top10_count|1|3|6|13
+achievement-rule|1|top3_count|三甲选手|排名前三次数达到 1 / 2 / 4 次。|top3_count|1|2|4|14
+achievement-head|true|1|1
+ACHIEVEMENTS
+}
+
+initial_database_state_snapshot() {
+  postgres_admin_psql --dbname=ascendany_v2 --tuples-only --no-align <<'SQL'
+SELECT format(
+  'SELECT %L || count(*)::text FROM %I.%I;',
+  'table:' || table_name || '|', table_schema, table_name
+)
+FROM information_schema.tables
+WHERE table_schema = 'ascendany' AND table_type = 'BASE TABLE'
+ORDER BY table_name
+\gexec
+SELECT format(
+  'SELECT %L || last_value::text || ''|'' || is_called::text FROM %I.%I;',
+  'sequence:' || relation.relname || '|', namespace.nspname, relation.relname
+)
+FROM pg_class AS relation
+JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+WHERE namespace.nspname = 'ascendany' AND relation.relkind = 'S'
+ORDER BY relation.relname
+\gexec
+SELECT concat_ws('|', 'migration', version::text, name, sha256)
+FROM ascendany.schema_migrations_v2
+ORDER BY version;
+SELECT concat_ws(
+  '|', 'analytics-head', singleton::text,
+  COALESCE(current_generation_id::text, ''), head_revision::text
+)
+FROM ascendany.analytics_head;
+SELECT concat_ws('|', 'achievement-set', achievement_rule_set_id::text, version::text)
+FROM ascendany.achievement_rule_sets
+ORDER BY achievement_rule_set_id;
+SELECT concat_ws(
+  '|', 'achievement-rule', achievement_rule_set_id::text, achievement_code,
+  title, description, progress_key, bronze_target::text, silver_target::text,
+  gold_target::text, sort_order::text
+)
+FROM ascendany.achievement_rules
+ORDER BY achievement_code COLLATE "C";
+SELECT concat_ws(
+  '|', 'achievement-head', singleton::text, current_rule_set_id::text,
+  head_revision::text
+)
+FROM ascendany.achievement_rule_head;
+SQL
+}
+
+check_initial_database_state() {
+  initial_transition && [[ "$validation_phase" == staged || "$validation_phase" == smoke ||
+    "$validation_phase" == activation ]] || return 0
+  local failures_before="$failures" snapshot actual expected label count table sequence last_value is_called
+  local unknown migration_rows analytics_rows achievement_rows
+  local model_activated=0
+  activation_phase && model_activated=1
+  if ! snapshot="$(initial_database_state_snapshot)"; then
+    fail "initial fresh database inventory query failed"
+    return
+  fi
+  unknown="$(grep -Ev '^(table:|sequence:|migration\||analytics-head\||achievement-(set|rule|head)\|)' <<<"$snapshot" || true)"
+  if [[ -n "$unknown" ]]; then
+    fail "initial fresh database inventory contains an unclassified or malformed record"
+  fi
+
+  actual="$(sed -n 's/^table:\([^|]*\)|.*$/\1/p' <<<"$snapshot" | LC_ALL=C sort)"
+  expected="$(expected_initial_table_names)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "initial fresh database base-table set differs from the schema-v7 contract"
+  fi
+  while IFS='|' read -r label count; do
+    [[ -n "$label" ]] || continue
+    table="${label#table:}"
+    if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+      fail "initial fresh database has a noncanonical row count for $table"
+      continue
+    fi
+    case "$table" in
+      schema_migrations_v2) expected=7 ;;
+      achievement_rule_sets|achievement_rule_head|analytics_head) expected=1 ;;
+      achievement_rules) expected=17 ;;
+      recommendation_model_activation_events|recommendation_model_head|recommendation_model_releases)
+        expected="$model_activated"
+        ;;
+      *) expected=0 ;;
+    esac
+    if [[ "$count" != "$expected" ]]; then
+      fail "initial fresh database table $table has $count rows; expected $expected"
+    fi
+  done < <(grep '^table:' <<<"$snapshot" || true)
+
+  actual="$(sed -n 's/^sequence:\([^|]*\)|.*$/\1/p' <<<"$snapshot" | LC_ALL=C sort)"
+  expected="$(expected_initial_sequence_names)"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "initial fresh database sequence set differs from the schema-v7 contract"
+  fi
+  while IFS='|' read -r label last_value is_called; do
+    [[ -n "$label" ]] || continue
+    sequence="${label#sequence:}"
+    if [[ "$sequence" == achievement_rule_sets_achievement_rule_set_id_seq ]]; then
+      expected='1|true'
+    elif [[ "$sequence" == recommendation_model_release_ids_seq && "$model_activated" == 1 ]]; then
+      expected='1|true'
+    else
+      expected='1|false'
+    fi
+    if [[ "$last_value|$is_called" != "$expected" ]]; then
+      fail "initial fresh database sequence $sequence is $last_value/$is_called; expected ${expected//|//}"
+    fi
+  done < <(grep '^sequence:' <<<"$snapshot" || true)
+
+  migration_rows="$(grep '^migration|' <<<"$snapshot" || true)"
+  if [[ "$migration_rows" != "$(expected_initial_migration_rows)" ]]; then
+    fail "initial fresh database migration manifest differs from the embedded schema-v7 manifest"
+  fi
+  analytics_rows="$(grep '^analytics-head|' <<<"$snapshot" || true)"
+  if [[ "$analytics_rows" != 'analytics-head|true||0' ]]; then
+    fail "initial fresh database analytics singleton differs from the zero-head seed"
+  fi
+  achievement_rows="$(grep '^achievement-' <<<"$snapshot" || true)"
+  if [[ "$achievement_rows" != "$(expected_initial_achievement_rows)" ]]; then
+    fail "initial fresh database achievement seed rows differ from migration v4"
+  fi
+  if (( failures == failures_before )); then
+    pass "initial $validation_phase database exactly matches all 54 base tables, 32 sequences, migrations, permitted seeds, and phase-owned model state"
+  fi
+}
+
 check_forward_database_state() {
   local full_fingerprint business_fingerprint
   forward_transition || return 0
@@ -2193,8 +3042,9 @@ check_forward_database_state() {
   observed_forward_database_fingerprint="$full_fingerprint"
   observed_forward_business_fingerprint="$business_fingerprint"
   if [[ "$validation_phase" == staged ]]; then
-    [[ "$observed_forward_model_head_revision" =~ ^[1-9][0-9]*$ ]] || {
-      fail "forward staged capture lacks a retained model-head revision"
+    [[ "$observed_forward_model_head_revision" =~ ^[1-9][0-9]*$ &&
+       "$observed_forward_model_artifact_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+      fail "forward staged capture lacks a retained model-head revision or artifact digest"
       return
     }
     pass "forward staged capture bound every AscendAny base table and sequence"
@@ -2205,6 +3055,11 @@ check_forward_database_state() {
     else
       pass "forward read-only smoke preserved every AscendAny base table and sequence exactly"
     fi
+  elif catalog_phase && [[ "$full_fingerprint" == "$expected_forward_database_fingerprint" ||
+      "$business_fingerprint" == "$expected_forward_business_fingerprint" ]]; then
+    fail "forward catalog publication did not advance both the full and business database fingerprints"
+  elif catalog_phase; then
+    pass "forward catalog publication advanced stopped-runtime configuration/audit state while retaining the prior model head"
   elif activation_phase && [[ "$business_fingerprint" != "$expected_forward_business_fingerprint" ]]; then
     fail "forward activation changed retained business or durable-job database state"
   elif activation_phase && [[ "$full_fingerprint" == "$expected_forward_database_fingerprint" ]]; then
@@ -2253,6 +3108,42 @@ check_provisioning_terminal_state() {
   fi
 }
 
+postgres_container_generation_contract() {
+  jq -e \
+    --arg imageId "$postgres_image_id" \
+    --arg imageReference "$postgres_image_reference" \
+    --arg volume "$postgres_data_volume" '
+      type == "array" and length == 1 and
+      .[0].Image == $imageId and
+      .[0].Config.Image == $imageReference and
+      .[0].Config.Cmd == ["postgres", "-c", "password_encryption=scram-sha-256"] and
+      .[0].HostConfig.RestartPolicy == {Name: "always", MaximumRetryCount: 0} and
+      .[0].HostConfig.PortBindings == {"5432/tcp": [{HostIp: "127.0.0.1", HostPort: "5432"}]} and
+      (.[0].Mounts | length) == 1 and
+      .[0].Mounts[0].Type == "volume" and
+      .[0].Mounts[0].Name == $volume and
+      .[0].Mounts[0].Destination == "/var/lib/postgresql/data" and
+      .[0].Mounts[0].RW == true and
+      (.[0].Mounts[0].Options | sort) == ["nodev", "nosuid", "rbind"] and
+      (.[0].Config.Env | type) == "array" and
+      ((.[0].Config.Env | map(capture("^(?<key>[^=]+)=(?<value>.*)$")) |
+        map({key: .key, value: .value}) | from_entries) as $environment |
+      ($environment | keys) == [
+        "GOSU_VERSION", "HOME", "HOSTNAME", "LANG", "PATH", "PGDATA",
+        "PG_MAJOR", "PG_VERSION", "container"
+      ] and
+      $environment.GOSU_VERSION == "1.19" and
+      $environment.HOME == "/root" and
+      ($environment.HOSTNAME | test("^[0-9a-f]{12}$")) and
+      $environment.LANG == "en_US.utf8" and
+      $environment.PATH == "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/17/bin" and
+      $environment.PGDATA == "/var/lib/postgresql/data" and
+      $environment.PG_MAJOR == "17" and
+      $environment.PG_VERSION == "17.10-1.pgdg13+1" and
+      $environment.container == "podman")
+    ' >/dev/null
+}
+
 check_postgresql_access_contract() {
   local inspect_json network_json network_contract result relative source target expected_sha actual_sha
   local expected_size metadata file_mtime hba_mtime='' ident_mtime=''
@@ -2264,6 +3155,11 @@ check_postgresql_access_contract() {
   fi
   inspect_json="$(podman inspect ascendany-postgres 2>/dev/null || true)"
   network_json="$(podman network inspect "$postgres_network" 2>/dev/null || true)"
+  if ! postgres_container_generation_contract <<<"$inspect_json"; then
+    fail "PostgreSQL container image, command, restart, volume, port, or secret-free environment differs from the fresh generation contract"
+  else
+    pass "PostgreSQL runs from the pinned PG17 image with one volume and no retained bootstrap secret/proxy environment"
+  fi
   network_contract="$(jq -r \
     --arg network "$postgres_network" \
     --arg gateway "$postgres_gateway" \
@@ -2342,16 +3238,17 @@ SELECT
   ),
   (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'ascendany_v2') = 'ascendany_database_owner',
   (SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname !~ '^pg_') =
-    'ascendany_backup,ascendany_backup_login,ascendany_database_owner,ascendany_migrator,ascendany_migrator_login,ascendany_owner,ascendany_restore_login,ascendany_runtime,ascendanyd_login,postgres',
+    'ascendany_backup,ascendany_backup_login,ascendany_catalog_publisher,ascendany_catalog_publisher_login,ascendany_database_owner,ascendany_migrator,ascendany_migrator_login,ascendany_owner,ascendany_restore_login,ascendany_runtime,ascendanyd_login,postgres',
   (SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database) =
     'ascendany_v2,postgres,template0,template1',
   NOT EXISTS (SELECT 1 FROM pg_db_role_setting),
   NOT EXISTS (SELECT 1 FROM pg_replication_slots),
-  (SELECT count(*) = 4 AND count(DISTINCT rolpassword) = 4
+  (SELECT count(*) = 5 AND count(DISTINCT rolpassword) = 5
    FROM pg_authid
    WHERE rolname = ANY(ARRAY[
      'ascendanyd_login', 'ascendany_migrator_login',
-     'ascendany_backup_login', 'ascendany_restore_login'
+     'ascendany_backup_login', 'ascendany_restore_login',
+     'ascendany_catalog_publisher_login'
    ])
      AND rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$');
 SQL
@@ -2408,6 +3305,7 @@ check_backup_model_provenance() {
       --arg releasePurpose "$release_manifest_purpose" \
       --arg releaseModelSHA256 "$release_model_sha256" \
       --arg installedModelManifestSHA256 "$installed_model_manifest_sha" \
+      --arg catalogReceiptRoot "$restore_catalog_receipt_root" \
       --argjson installedModelSize "$installed_model_size" \
       --slurpfile evidence "$evidence_path" \
       --slurpfile model "$model_path" '
@@ -2417,13 +3315,26 @@ check_backup_model_provenance() {
           test("^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?Z$");
         . as $bundle |
         ($model | length == 1) and ($evidence | length == 1) and
-        (keys == ["artifacts", "backupId", "createdAt", "database", "schema"]) and
+        (keys == ["artifacts", "backupId", "catalogPublicationReceipts", "createdAt", "database", "schema"]) and
         .schema == "ascendany.backup.bundle.v2" and
         .backupId == $backupId and
         (.createdAt | utc_timestamp) and
         (.database | type == "object" and
-          keys == ["databaseName", "file", "migrations", "recommendationModel"]) and
+          keys == [
+            "databaseName", "file", "knowledgeCatalogPublicationIds",
+            "knowledgeCatalogPublications", "migrations", "recommendationModel"
+          ]) and
         .database.databaseName == "ascendany_v2" and
+        (.catalogPublicationReceipts | type == "object" and
+          keys == ["count", "entries", "file", "totalBytes"] and
+          (.count | type == "number" and floor == . and . > 0) and
+          (.totalBytes | type == "number" and floor == . and . > 0) and
+          (.file | type == "object" and keys == ["filename", "format", "sha256", "sizeBytes"] and
+            .filename == "catalog-receipts.tar.zst" and .format == "tar+zstd" and
+            (.sha256 | sha256) and (.sizeBytes | type == "number" and floor == . and . > 0)) and
+          (.entries | type == "array" and length == $bundle.catalogPublicationReceipts.count) and
+          ([.entries[].publicationId] == $bundle.database.knowledgeCatalogPublicationIds) and
+          ([.entries[].publicationId] == [$bundle.database.knowledgeCatalogPublications[].knowledgeCatalogPublicationId])) and
         (.database.recommendationModel | type == "object" and
           keys == [
             "activatedAt", "algorithm", "applicationBuildTime", "applicationCommit",
@@ -2489,7 +3400,7 @@ check_backup_model_provenance() {
           $binding.manifestSha256 == $installedModelManifestSHA256 and
           ($evidence[0] as $proof |
             ($proof | type == "object" and keys == [
-              "artifactCount", "backupId", "databaseName", "level", "manifestSHA256",
+              "artifactCount", "backupId", "catalogReceiptCount", "catalogReceiptRoot", "databaseName", "level", "manifestSHA256",
               "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion",
               "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId",
               "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit",
@@ -2498,8 +3409,12 @@ check_backup_model_provenance() {
             $proof.level == "INFO" and $proof.msg == "backup restore verified" and
             $proof.backupId == $backupId and $proof.manifestSHA256 == $manifestSHA256 and
             $proof.databaseName == "ascendany_v2_restore_verify" and
+            $proof.catalogReceiptRoot == $catalogReceiptRoot and
             $proof.releaseCommit == $releaseCommit and $proof.releaseVersion == $releaseVersion and
             $proof.artifactCount == $bundle.artifacts.count and
+            $proof.catalogReceiptCount == $bundle.catalogPublicationReceipts.count and
+            $proof.catalogReceiptCount == ($bundle.database.knowledgeCatalogPublicationIds | length) and
+            $proof.catalogReceiptCount == ($bundle.database.knowledgeCatalogPublications | length) and
             $proof.modelId == $binding.modelId and
             $proof.modelArtifactSHA256 == $binding.artifactSha256 and
             $proof.modelPurpose == $binding.modelPurpose and
@@ -2531,6 +3446,7 @@ check_retained_backup_model_provenance() {
   if ! expected="$(jq -er \
       --arg backupId "$backup_id" \
       --arg manifestSHA256 "$actual_manifest_sha" \
+      --arg catalogReceiptRoot "$restore_catalog_receipt_root" \
       --slurpfile evidence "$evidence_path" '
         def sha256: type == "string" and test("^[0-9a-f]{64}$");
         def utc_timestamp:
@@ -2541,12 +3457,25 @@ check_retained_backup_model_provenance() {
         $evidence[0] as $proof |
         select(
           ($evidence | length == 1) and
-          ($bundle | type == "object" and keys == ["artifacts", "backupId", "createdAt", "database", "schema"]) and
+          ($bundle | type == "object" and keys == ["artifacts", "backupId", "catalogPublicationReceipts", "createdAt", "database", "schema"]) and
           $bundle.schema == "ascendany.backup.bundle.v2" and $bundle.backupId == $backupId and
           ($bundle.createdAt | utc_timestamp) and
-          ($bundle.database | type == "object" and keys == ["databaseName", "file", "migrations", "recommendationModel"]) and
+          ($bundle.database | type == "object" and keys == [
+            "databaseName", "file", "knowledgeCatalogPublicationIds",
+            "knowledgeCatalogPublications", "migrations", "recommendationModel"
+          ]) and
           $bundle.database.databaseName == "ascendany_v2" and
-          ($bundle.database.migrations | type == "array" and length == 6 and .[-1].version == 6) and
+          ($bundle.database.migrations | type == "array" and length == 7 and .[-1].version == 7) and
+          ($bundle.catalogPublicationReceipts | type == "object" and
+            keys == ["count", "entries", "file", "totalBytes"] and
+            (.count | type == "number" and floor == . and . > 0) and
+            (.totalBytes | type == "number" and floor == . and . > 0) and
+            (.file | type == "object" and keys == ["filename", "format", "sha256", "sizeBytes"] and
+              .filename == "catalog-receipts.tar.zst" and .format == "tar+zstd" and
+              (.sha256 | sha256) and (.sizeBytes | type == "number" and floor == . and . > 0)) and
+            (.entries | type == "array" and length == $bundle.catalogPublicationReceipts.count) and
+            ([.entries[].publicationId] == $bundle.database.knowledgeCatalogPublicationIds) and
+            ([.entries[].publicationId] == [$bundle.database.knowledgeCatalogPublications[].knowledgeCatalogPublicationId])) and
           ($model | type == "object" and keys == [
             "activatedAt", "algorithm", "applicationBuildTime", "applicationCommit",
             "applicationVersion", "artifactMode", "artifactSha256", "artifactSizeBytes",
@@ -2591,7 +3520,7 @@ check_retained_backup_model_provenance() {
             .parameterSha256 == $model.parameterSha256 and
             .goldenVectorsSha256 == $model.goldenVectorsSha256) and
           ($proof | type == "object" and keys == [
-            "artifactCount", "backupId", "databaseName", "level", "manifestSHA256",
+            "artifactCount", "backupId", "catalogReceiptCount", "catalogReceiptRoot", "databaseName", "level", "manifestSHA256",
             "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion",
             "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId",
             "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit",
@@ -2600,6 +3529,7 @@ check_retained_backup_model_provenance() {
           $proof.level == "INFO" and $proof.msg == "backup restore verified" and
           $proof.backupId == $backupId and $proof.manifestSHA256 == $manifestSHA256 and
           $proof.databaseName == "ascendany_v2_restore_verify" and
+          $proof.catalogReceiptRoot == $catalogReceiptRoot and
           $proof.releaseCommit == $model.applicationCommit and
           $proof.releaseVersion == $model.applicationVersion and
           $proof.modelId == $model.modelId and
@@ -2613,6 +3543,9 @@ check_retained_backup_model_provenance() {
           $proof.modelKnowledgeCatalogSHA256 == $model.knowledgeCatalogSha256 and
           $proof.modelManifestSHA256 == $model.manifestSha256 and
           $proof.artifactCount == $bundle.artifacts.count and
+          $proof.catalogReceiptCount == $bundle.catalogPublicationReceipts.count and
+          $proof.catalogReceiptCount == ($bundle.database.knowledgeCatalogPublicationIds | length) and
+          $proof.catalogReceiptCount == ($bundle.database.knowledgeCatalogPublications | length) and
           ($proof.time | utc_timestamp)
         ) |
         [
@@ -2656,7 +3589,7 @@ SQL
 check_backup_schedule() {
   local timer="ascendany-backup.timer"
   local service="ascendany-backup.service"
-  local latest_backup latest_manifest evidence_time
+  local latest_backup latest_manifest evidence_time bundle_entries
   local evidence_epoch now_epoch evidence_parent manifest_epoch
   local next_elapse next_elapse_epoch service_started service_started_epoch service_exited service_exited_epoch
   local scratch_database_count restore_state provenance_valid=0
@@ -2707,6 +3640,11 @@ check_backup_schedule() {
     return
   fi
   latest_manifest="$backup_root/$latest_backup/manifest.json"
+  if ! bundle_entries="$(find "$backup_root/$latest_backup" -mindepth 1 -maxdepth 1 -printf '%f|%y\n' 2>/dev/null | LC_ALL=C sort)" ||
+     [[ "$bundle_entries" != $'artifacts.tar.zst|f\ncatalog-receipts.tar.zst|f\ndatabase.dump|f\nmanifest.json|f\nmanifest.sha256|f' ]]; then
+    fail "latest backup bundle differs from the exact five-file publication contract"
+    return
+  fi
   if [[ ! -d "$backup_root/$latest_backup" || -L "$backup_root/$latest_backup" ||
         "$(stat -Lc '%U:%G:%a' "$backup_root/$latest_backup" 2>/dev/null || true)" != "ascendany-backup:ascendany-backup-readers:750" ]] ||
      find "$backup_root/$latest_backup" -mindepth 1 -maxdepth 1 \
@@ -2719,13 +3657,13 @@ check_backup_schedule() {
       .schema == "ascendany.backup.bundle.v2" and
       .backupId == $id and
       .database.databaseName == "ascendany_v2" and
-      (.database.migrations | length == 6 and .[-1].version == 6)
+      (.database.migrations | length == 7 and .[-1].version == 7)
     ' "$latest_manifest" >/dev/null 2>&1; then
-    fail "latest backup manifest is missing, malformed, or not schema v6: $latest_backup"
+    fail "latest backup manifest is missing, malformed, or not schema v7: $latest_backup"
   elif ! runuser -u ascendany-backup -- env -i \
       PATH=/usr/bin:/bin \
       ASCENDANY_BACKUP_ROOT="$backup_root" \
-      ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+      ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_and_catalog_receipt_tar_zstd \
       ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
       ASCENDANY_BACKUP_COMMAND_TIMEOUT=2h \
       ASCENDANY_PG_DUMP_PATH=/usr/bin/pg_dump \
@@ -2734,7 +3672,7 @@ check_backup_schedule() {
       "$backup_binary" verify "$latest_backup" >/dev/null 2>&1; then
     fail "latest backup bundle failed live verification: $latest_backup"
   else
-    pass "latest schema-v6 backup passed live verification: $latest_backup"
+    pass "latest schema-v7 backup passed live verification: $latest_backup"
   fi
   if production_phase; then
     manifest_epoch="$(jq -er '.createdAt | fromdateiso8601' "$latest_manifest" 2>/dev/null || true)"
@@ -2775,7 +3713,7 @@ check_backup_schedule() {
     if [[ -z "$evidence_epoch" || "$evidence_epoch" -gt "$now_epoch" || $((now_epoch - evidence_epoch)) -gt 2678400 ]]; then
       fail "restore verification evidence is invalid or older than 31 days"
     else
-      pass "recent destructive restore verification evidence binds the latest schema-v6 backup"
+      pass "recent destructive restore verification evidence binds the latest schema-v7 backup"
     fi
   fi
 
@@ -2873,6 +3811,128 @@ check_artifact_root() {
   pass "artifact root is durable and external to the release: $artifact_root"
 }
 
+check_catalog_publisher_state_root() {
+  check_exact_directory_entry_set \
+    "$catalog_publisher_state_root" \
+    ascendany-catalog-publisher:ascendany-catalog-readers:750 \
+    'catalog publisher durable state root' \
+    $'pending|d\nreceipts|d'
+  if [[ ! -d "$catalog_receipt_root" || -L "$catalog_receipt_root" ||
+        "$(stat -Lc '%U:%G:%a' -- "$catalog_receipt_root" 2>/dev/null || true)" != ascendany-catalog-publisher:ascendany-catalog-readers:750 ]]; then
+    fail "catalog publisher receipt root must be a real publisher-owned reader-group mode 0750 directory"
+  else
+    pass "catalog publisher owns one isolated mode 0750 backup-readable receipt namespace"
+  fi
+  if [[ ! -d "$catalog_publisher_pending_root" || -L "$catalog_publisher_pending_root" ||
+        "$(stat -Lc '%U:%G:%a' -- "$catalog_publisher_pending_root" 2>/dev/null || true)" != root:root:700 ]]; then
+    fail "catalog publisher pending input root must be a real root-owned mode 0700 directory"
+  elif [[ -e "$catalog_publication_request_source" || -L "$catalog_publication_request_source" ||
+          -e "$catalog_publication_access_token_source" || -L "$catalog_publication_access_token_source" ]]; then
+    fail "catalog publisher pending request or access token remains outside the operator window"
+  else
+    pass "catalog publisher pending input root is empty outside the operator window"
+  fi
+}
+
+check_catalog_publisher_capabilities() {
+  local publisher_groups backup_groups reader_group members path unreadable=0
+  publisher_groups="$(id -nG ascendany-catalog-publisher 2>/dev/null | normalize_word_set)"
+  backup_groups="$(id -nG ascendany-backup 2>/dev/null | normalize_word_set)"
+  if [[ "$publisher_groups" != ascendany-catalog-publisher ]]; then
+    fail "catalog publisher must have no supplementary group capability"
+  else
+    pass "catalog publisher has only its primary capability group"
+  fi
+  if [[ "$backup_groups" != "$(printf '%s\n' \
+      ascendany \
+      ascendany-backup \
+      ascendany-backup-readers \
+      ascendany-catalog-readers | LC_ALL=C sort)" ]]; then
+    fail "backup identity supplementary groups differ from the exact artifact/catalog reader contract"
+  else
+    pass "backup identity has the exact artifact and catalog reader capabilities"
+  fi
+  reader_group="$(getent group ascendany-catalog-readers 2>/dev/null || true)"
+  members="${reader_group##*:}"
+  if [[ "$reader_group" != ascendany-catalog-readers:* || "$members" != ascendany-backup ]]; then
+    fail "catalog backup reader group must contain only ascendany-backup"
+  else
+    pass "catalog backup reader group has one exact member"
+  fi
+  if ! runuser -u ascendany-catalog-publisher -- test -w "$catalog_receipt_root" ||
+     ! runuser -u ascendany-backup -- test -x "$catalog_publisher_state_root" ||
+     ! runuser -u ascendany-backup -- test -x "$catalog_receipt_root" ||
+     runuser -u ascendany-backup -- test -w "$catalog_receipt_root" ||
+     runuser -u ascendany-catalog-publisher -- test -x "$catalog_publisher_pending_root" ||
+     runuser -u ascendany-backup -- test -x "$catalog_publisher_pending_root" ||
+     runuser -u ascendany -- test -x "$catalog_publisher_state_root" ||
+     runuser -u ascendany-restore -- test -x "$catalog_publisher_state_root"; then
+    fail "catalog publisher, backup reader, runtime, or restore live-state capability differs from the contract"
+    return
+  fi
+  while IFS= read -r path; do
+    if ! runuser -u ascendany-backup -- test -r "$path" ||
+       runuser -u ascendany-backup -- test -w "$path"; then
+      unreadable=1
+    fi
+  done < <(find "$catalog_receipt_root" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+  if (( unreadable != 0 )); then
+    fail "backup identity lacks read-only access to an immutable catalog receipt"
+  else
+    pass "backup has read-only access to every immutable catalog receipt"
+  fi
+}
+
+check_initial_empty_durable_state() {
+  initial_transition && [[ "$validation_phase" == staged || "$validation_phase" == smoke ||
+    "$validation_phase" == activation ]] || return 0
+  local failures_before="$failures" path metadata entry
+  for path in "$artifact_root/sha256" "$artifact_root/incoming" "$artifact_root/.locks"; do
+    if [[ ! -d "$path" || -L "$path" ]]; then
+      fail "initial durable namespace is missing a real directory: $path"
+    elif ! entry="$(find "$path" -mindepth 1 -print -quit)"; then
+      fail "initial durable namespace cannot be enumerated: $path"
+    elif [[ -n "$entry" ]]; then
+      fail "initial pre-catalog artifact namespace is not empty: $path"
+    fi
+  done
+
+  metadata="$(stat -Lc '%U:%G:%a' -- "$catalog_receipt_root" 2>/dev/null || true)"
+  if [[ ! -d "$catalog_receipt_root" || -L "$catalog_receipt_root" ||
+        "$metadata" != ascendany-catalog-publisher:ascendany-catalog-readers:750 ]]; then
+    fail "initial catalog publication receipt root must be a real publisher-owned reader-group mode 0750 directory"
+  elif ! entry="$(find "$catalog_receipt_root" -mindepth 1 -print -quit)"; then
+    fail "initial catalog publication receipt root cannot be enumerated"
+  elif [[ -n "$entry" ]]; then
+    fail "initial pre-catalog publication receipt root must be empty"
+  fi
+
+  metadata="$(stat -Lc '%U:%G:%a' -- "$backup_root" 2>/dev/null || true)"
+  if [[ ! -d "$backup_root" || -L "$backup_root" ||
+        "$metadata" != ascendany-backup:ascendany-backup-readers:750 ]]; then
+    fail "initial backup root must be a real ascendany-backup:ascendany-backup-readers mode 0750 directory"
+  elif ! entry="$(find "$backup_root" -mindepth 1 -print -quit)"; then
+    fail "initial backup root cannot be enumerated"
+  elif [[ -n "$entry" ]]; then
+    fail "initial pre-catalog backup root must be completely empty"
+  fi
+
+  metadata="$(stat -Lc '%U:%G:%a' -- "$acceptance_root" 2>/dev/null || true)"
+  if [[ ! -d "$acceptance_root" || -L "$acceptance_root" || "$metadata" != root:root:700 ]]; then
+    fail "initial acceptance root must be a real root:root mode 0700 directory"
+  elif ! entry="$(find "$acceptance_root" -mindepth 1 -print -quit)"; then
+    fail "initial acceptance root cannot be enumerated"
+  elif [[ -n "$entry" ]]; then
+    fail "initial pre-catalog acceptance root must contain no restore or prior-production evidence"
+  elif [[ -e "$restore_evidence" || -L "$restore_evidence" ]]; then
+    fail "initial pre-catalog restore verification evidence must be absent"
+  fi
+
+  if (( failures == failures_before )); then
+    pass "initial pre-catalog artifact, catalog receipt, backup, and restore-evidence namespaces are canonical and empty"
+  fi
+}
+
 run_runtime_psql() {
   /usr/bin/env -i \
     PATH=/usr/bin:/bin \
@@ -2933,7 +3993,8 @@ FROM ascendany.auth_accounts AS account"
     fail "administrator bootstrap database evidence is noncanonical"
     return
   fi
-  if initial_transition && ! production_phase; then
+  if initial_transition && [[ "$validation_phase" == staged || "$validation_phase" == smoke ||
+      "$validation_phase" == activation ]]; then
     if [[ "$admin_count:$active_admin_count:$canonical_admin_count:$bootstrap_audit_count:$canonical_bootstrap_audit_count" != "0:0:0:0:0" ]]; then
       fail "initial preactivation database must contain no administrator or bootstrap audit"
     else
@@ -2957,7 +4018,8 @@ check_database_role() {
     return
   fi
 
-  if [[ "$validation_phase" == "staged" || "$validation_phase" == "activation" ]]; then
+  if [[ "$validation_phase" == "staged" || "$validation_phase" == "catalog" ||
+        "$validation_phase" == "activation" ]]; then
     if [[ -z "${PGPASSFILE:-}" || ! -f "$PGPASSFILE" || -L "$PGPASSFILE" ||
           "$PGPASSFILE" != "$(realpath -m -- "$PGPASSFILE" 2>/dev/null || true)" ||
           "$PGPASSFILE" != "$(realpath -e -- "$PGPASSFILE" 2>/dev/null || true)" ||
@@ -3036,12 +4098,468 @@ check_database_role() {
   fi
 }
 
+check_catalog_publication_binding() {
+  if ! catalog_phase && ! production_phase &&
+     ! { forward_transition && activation_phase; }; then
+    return 0
+  fi
+
+  local failures_before="$failures"
+  local metadata entries filename node_type path canonical_receipt receipt_values
+  local publication_id authorization_id target_model_release_id catalog_sha model_artifact_sha model_id
+  local target_application_version target_application_commit target_application_build_time
+  local configuration_key configuration_id expected_configuration_head_revision
+  local configuration_head_revision configuration_version_id configuration_version_number
+  local analytics_generation_id analytics_head_revision input_manifest_sha
+  local current_model_head_revision current_model_artifact_sha published_account_id
+  local published_session_id published_at audit_event_id configuration_mutated
+  local database_match filesystem_ids database_ids
+  local target_model_id catalog_document_base64
+  local expected_prior_revision expected_prior_sha target_state target_count target_publication_id
+  local target_release_id target_prior_revision target_prior_sha target_configuration_head_revision
+  local target_consumption_count target_consumption_revision expected_consumption_count
+  local expected_consumption_revision activation_state active_head_revision activation_count
+  local activation_min_revision activation_max_revision activation_distinct_revision_count
+  local activation_invalid_count initial_publication_count publication_count
+  local unexpected_unconsumed_count expected_active_head_revision receipt_count=0
+  declare -A receipt_current_revision=()
+  declare -A receipt_current_sha=()
+  declare -A receipt_configuration_revision=()
+  declare -A receipt_catalog_sha=()
+  declare -A receipt_model_sha=()
+  declare -A receipt_model_id=()
+  declare -A receipt_target_release_id=()
+  declare -A receipt_target_version=()
+  declare -A receipt_target_commit=()
+  declare -A receipt_target_build_time=()
+
+  metadata="$(stat -Lc '%U:%G:%a' -- "$catalog_receipt_root" 2>/dev/null || true)"
+  if [[ ! -d "$catalog_receipt_root" || -L "$catalog_receipt_root" ||
+        "$metadata" != ascendany-catalog-publisher:ascendany-catalog-readers:750 ]]; then
+    fail "catalog publication receipt root must be a real publisher-owned reader-group mode 0750 directory"
+    return
+  fi
+  if ! entries="$(find "$catalog_receipt_root" -mindepth 1 -maxdepth 1 -printf '%f|%y\n' | LC_ALL=C sort -t '|' -k1,1n)"; then
+    fail "catalog publication receipt root cannot be enumerated"
+    return
+  fi
+  if [[ -z "$entries" ]]; then
+    fail "catalog publication receipt root is empty after the catalog commit point"
+    return
+  fi
+
+  canonical_receipt="$(mktemp)"
+  while IFS='|' read -r filename node_type; do
+    [[ -n "$filename" ]] || continue
+    path="$catalog_receipt_root/$filename"
+    if [[ "$node_type" != f || ! "$filename" =~ ^[1-9][0-9]*[.]json$ ||
+          "$(stat -Lc '%U:%G:%a:%h' -- "$path" 2>/dev/null || true)" != ascendany-catalog-publisher:ascendany-catalog-readers:640:1 ||
+          ! -s "$path" || "$(stat -Lc '%s' -- "$path" 2>/dev/null || true)" -gt 4096 ]]; then
+      fail "catalog publication receipt entry violates the immutable publication-ID file contract: $filename"
+      continue
+    fi
+    if ! jq -jScs 'if length == 1 then .[0] else empty end' -- "$path" >"$canonical_receipt" 2>/dev/null ||
+       ! cmp --silent -- "$path" "$canonical_receipt"; then
+      fail "catalog publication receipt is not exactly one canonical JSON object without trailing bytes: $filename"
+      continue
+    fi
+    if ! jq -e -s --arg publicationId "${filename%.json}" '
+        def positive_int64_string:
+          type == "string" and test("^[1-9][0-9]{0,18}$") and
+          (length < 19 or (length == 19 and . <= "9223372036854775807"));
+        def safe_positive_integer:
+          type == "number" and floor == . and . >= 1 and . <= 9007199254740991;
+        def safe_nonnegative_integer:
+          type == "number" and floor == . and . >= 0 and . <= 9007199254740991;
+        def sha256: type == "string" and test("^[0-9a-f]{64}$");
+        def uuid_v4:
+          type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+        length == 1 and (.[0] |
+          type == "object" and
+          keys == [
+            "analyticsGenerationId", "analyticsHeadRevision", "auditEventId", "authorizationId", "catalogSha256",
+            "configurationHeadRevision", "configurationId", "configurationKey", "configurationMutated",
+            "configurationVersionId", "configurationVersionNumber", "currentModelArtifactSha256",
+            "currentModelHeadRevision", "expectedConfigurationHeadRevision",
+            "inputManifestSha256", "knowledgeCatalogPublicationId", "modelArtifactSha256",
+            "modelId", "publishedAt", "publishedByAccountId", "publishedBySessionId", "schema",
+            "targetApplicationBuildTime", "targetApplicationCommit", "targetApplicationVersion",
+            "targetModelReleaseId"
+          ] and
+          .schema == "ascendany.knowledge_catalog.publication-receipt.v1" and
+          (.authorizationId | uuid_v4) and
+          (.knowledgeCatalogPublicationId | positive_int64_string) and
+          .knowledgeCatalogPublicationId == $publicationId and
+          (.targetModelReleaseId | positive_int64_string) and
+          (.catalogSha256 | sha256) and (.modelArtifactSha256 | sha256) and
+          (.modelId | uuid_v4) and
+          .configurationKey == "recommendation.catalog.active" and
+          (.configurationId | uuid_v4) and
+          (.expectedConfigurationHeadRevision | safe_nonnegative_integer) and
+          (.configurationHeadRevision | safe_positive_integer) and
+          (.configurationVersionId | positive_int64_string) and
+          (.configurationVersionNumber | safe_positive_integer) and
+          (.analyticsGenerationId | positive_int64_string) and
+          (.analyticsHeadRevision | safe_positive_integer) and
+          (.inputManifestSha256 | sha256) and
+          (.currentModelHeadRevision | safe_positive_integer) and
+          (.currentModelArtifactSha256 | sha256) and
+          (.targetApplicationVersion | type == "string" and length <= 128 and
+            test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)([.]((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$")) and
+          (.targetApplicationCommit | type == "string" and test("^[0-9a-f]{40}$")) and
+          (.targetApplicationBuildTime | type == "string" and
+            test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]{1,9})?Z$")) and
+          (.publishedByAccountId | uuid_v4) and (.publishedBySessionId | uuid_v4) and
+          (.publishedAt | type == "string" and
+            test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]{1,9})?Z$")) and
+          (.auditEventId | positive_int64_string) and (.configurationMutated | type == "boolean") and
+          .configurationHeadRevision ==
+            (.expectedConfigurationHeadRevision + (if .configurationMutated then 1 else 0 end))
+        )
+      ' -- "$path" >/dev/null 2>&1; then
+      fail "catalog publication receipt has a noncanonical or open schema: $filename"
+      continue
+    fi
+    receipt_values="$(jq -er -s '.[0] | [
+        .knowledgeCatalogPublicationId, .authorizationId, .targetModelReleaseId,
+        .catalogSha256, .modelArtifactSha256, .modelId,
+        .targetApplicationVersion, .targetApplicationCommit, .targetApplicationBuildTime,
+        .configurationKey, .configurationId, (.expectedConfigurationHeadRevision | tostring),
+        (.configurationHeadRevision | tostring), .configurationVersionId,
+        (.configurationVersionNumber | tostring), .analyticsGenerationId,
+        (.analyticsHeadRevision | tostring), .inputManifestSha256,
+        (.currentModelHeadRevision | tostring), .currentModelArtifactSha256,
+        .publishedByAccountId, .publishedBySessionId, .publishedAt, .auditEventId,
+        (.configurationMutated | tostring)
+      ] | @tsv' -- "$path")"
+    IFS=$'\t' read -r publication_id authorization_id target_model_release_id catalog_sha model_artifact_sha model_id \
+      target_application_version target_application_commit target_application_build_time \
+      configuration_key configuration_id expected_configuration_head_revision \
+      configuration_head_revision configuration_version_id configuration_version_number \
+      analytics_generation_id analytics_head_revision input_manifest_sha \
+      current_model_head_revision current_model_artifact_sha published_account_id \
+      published_session_id published_at audit_event_id configuration_mutated <<<"$receipt_values"
+    database_match="$(run_runtime_psql -A -t -v ON_ERROR_STOP=1 \
+      -v knowledge_catalog_publication_id="$publication_id" \
+      -v publication_authorization_id="$authorization_id" \
+      -v target_model_release_id="$target_model_release_id" \
+      -v catalog_sha="$catalog_sha" \
+      -v model_artifact_sha="$model_artifact_sha" \
+      -v model_id="$model_id" \
+      -v target_application_version="$target_application_version" \
+      -v target_application_commit="$target_application_commit" \
+      -v target_application_build_time="$target_application_build_time" \
+      -v configuration_id="$configuration_id" \
+      -v expected_configuration_head_revision="$expected_configuration_head_revision" \
+      -v configuration_head_revision="$configuration_head_revision" \
+      -v configuration_mutated="$configuration_mutated" \
+      -v configuration_version_id="$configuration_version_id" \
+      -v configuration_version_number="$configuration_version_number" \
+      -v analytics_generation_id="$analytics_generation_id" \
+      -v analytics_head_revision="$analytics_head_revision" \
+      -v input_manifest_sha="$input_manifest_sha" \
+      -v current_model_head_revision="$current_model_head_revision" \
+      -v current_model_artifact_sha="$current_model_artifact_sha" \
+      -v published_account_id="$published_account_id" \
+      -v published_session_id="$published_session_id" \
+      -v published_at="$published_at" \
+      -v audit_event_id="$audit_event_id" -c '
+/* ascendany-validator:catalog-publication-receipt */
+SELECT count(*)
+FROM ascendany.knowledge_catalog_publications AS publication
+JOIN ascendany.knowledge_catalog_publication_authorizations AS capability
+  ON capability.public_id = publication.publication_authorization_id
+ AND capability.consumed_publication_id = publication.knowledge_catalog_publication_id
+ AND capability.consumed_at = publication.published_at
+JOIN ascendany.recommendation_model_releases AS target_release
+  ON target_release.recommendation_model_release_id = publication.target_model_release_id
+ AND target_release.model_id = publication.target_model_id
+ AND target_release.artifact_sha256 = publication.target_model_artifact_sha256
+ AND target_release.knowledge_catalog_sha256 = publication.catalog_sha256
+JOIN ascendany.configuration_items AS item
+  ON item.configuration_item_id = publication.configuration_item_id
+ AND item.configuration_kind = '\''knowledge_catalog'\''
+JOIN ascendany.configuration_versions AS version
+  ON version.configuration_item_id = publication.configuration_item_id
+ AND version.configuration_version_id = publication.configuration_version_id
+ AND version.configuration_kind = '\''knowledge_catalog'\''
+JOIN ascendany.auth_accounts AS account
+  ON account.account_id = publication.published_by_account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.session_id = publication.published_by_session_id
+ AND session.account_id = publication.published_by_account_id
+JOIN ascendany.audit_events AS audit
+  ON audit.audit_event_id = publication.audit_event_id
+ AND audit.account_id = publication.published_by_account_id
+ AND audit.session_id = publication.published_by_session_id
+ AND audit.occurred_at = publication.published_at
+JOIN ascendany.analytics_generations AS generation
+  ON generation.analytics_generation_id = publication.analytics_generation_id
+ AND generation.status = '\''succeeded'\''
+ AND generation.input_manifest_sha256 = publication.input_manifest_sha256
+WHERE publication.knowledge_catalog_publication_id = :'\''knowledge_catalog_publication_id'\''::bigint
+  AND publication.publication_authorization_id = :'\''publication_authorization_id'\''::uuid
+  AND publication.target_model_release_id = :'\''target_model_release_id'\''::bigint
+  AND publication.catalog_sha256 = :'\''catalog_sha'\''
+  AND publication.target_model_artifact_sha256 = :'\''model_artifact_sha'\''
+  AND publication.target_model_id = :'\''model_id'\''::uuid
+  AND publication.target_application_version = :'\''target_application_version'\''
+  AND publication.target_application_commit = :'\''target_application_commit'\''
+  AND publication.target_application_build_time = :'\''target_application_build_time'\''
+  AND item.configuration_key = '\''recommendation.catalog.active'\''
+  AND item.public_id = :'\''configuration_id'\''::uuid
+  AND publication.expected_configuration_head_revision = :'\''expected_configuration_head_revision'\''::bigint
+  AND publication.configuration_head_revision = :'\''configuration_head_revision'\''::bigint
+  AND publication.configuration_mutated = :'\''configuration_mutated'\''::boolean
+  AND version.configuration_version_id = :'\''configuration_version_id'\''::bigint
+  AND version.version_number = :'\''configuration_version_number'\''::bigint
+  AND version.schema_id = '\''ascendany.knowledge_catalog.recommendation.v1'\''
+  AND version.document_sha256 = publication.catalog_sha256
+  AND version.credential_ref IS NULL
+  AND version.created_by_role = '\''admin'\''
+  AND publication.analytics_generation_id = :'\''analytics_generation_id'\''::bigint
+  AND publication.analytics_head_revision = :'\''analytics_head_revision'\''::bigint
+  AND publication.input_manifest_sha256 = :'\''input_manifest_sha'\''
+  AND publication.current_model_head_revision = :'\''current_model_head_revision'\''::bigint
+  AND publication.current_model_artifact_sha256 = :'\''current_model_artifact_sha'\''
+  AND account.public_id = :'\''published_account_id'\''::uuid
+  AND session.public_id = :'\''published_session_id'\''::uuid
+  AND publication.published_at = :'\''published_at'\''::timestamptz
+  AND publication.audit_event_id = :'\''audit_event_id'\''::bigint
+  AND (
+    NOT publication.configuration_mutated OR (
+      version.created_by_account_id = publication.published_by_account_id
+      AND version.created_by_session_id = publication.published_by_session_id
+      AND version.created_at = publication.published_at
+    )
+  )
+  AND audit.event_type = CASE
+    WHEN publication.configuration_mutated THEN '\''admin.configuration_version_created'\''
+    ELSE '\''admin.knowledge_catalog_release_bound'\''
+  END
+  AND audit.payload = jsonb_build_object(
+    '\''authorizationId'\'', publication.publication_authorization_id::text,
+    '\''configurationId'\'', item.public_id::text,
+    '\''key'\'', item.configuration_key,
+    '\''kind'\'', item.configuration_kind,
+    '\''versionNumber'\'', version.version_number,
+    '\''schemaId'\'', version.schema_id,
+    '\''documentSha256'\'', version.document_sha256,
+    '\''headRevision'\'', publication.configuration_head_revision,
+    '\''credentialRef'\'', version.credential_ref,
+    '\''expectedConfigurationHeadRevision'\'', publication.expected_configuration_head_revision,
+    '\''configurationMutated'\'', publication.configuration_mutated,
+    '\''analyticsGenerationId'\'', publication.analytics_generation_id::text,
+    '\''analyticsHeadRevision'\'', publication.analytics_head_revision,
+    '\''inputManifestSha256'\'', publication.input_manifest_sha256,
+    '\''currentModelHeadRevision'\'', publication.current_model_head_revision,
+    '\''currentModelArtifactSha256'\'', publication.current_model_artifact_sha256,
+    '\''targetApplicationVersion'\'', publication.target_application_version,
+    '\''targetApplicationCommit'\'', publication.target_application_commit,
+    '\''targetApplicationBuildTime'\'', publication.target_application_build_time,
+    '\''targetCatalogSha256'\'', publication.catalog_sha256,
+    '\''targetModelId'\'', publication.target_model_id::text,
+    '\''targetModelArtifactSha256'\'', publication.target_model_artifact_sha256,
+    '\''targetModelReleaseId'\'', publication.target_model_release_id::text
+  )')" || database_match=""
+    if [[ "$database_match" != 1 ]]; then
+      fail "catalog publication receipt does not match one exact immutable database publication: $filename"
+    fi
+    receipt_current_revision["$publication_id"]="$current_model_head_revision"
+    receipt_current_sha["$publication_id"]="$current_model_artifact_sha"
+    receipt_configuration_revision["$publication_id"]="$configuration_head_revision"
+    receipt_catalog_sha["$publication_id"]="$catalog_sha"
+    receipt_model_sha["$publication_id"]="$model_artifact_sha"
+    receipt_model_id["$publication_id"]="$model_id"
+    receipt_target_release_id["$publication_id"]="$target_model_release_id"
+    receipt_target_version["$publication_id"]="$target_application_version"
+    receipt_target_commit["$publication_id"]="$target_application_commit"
+    receipt_target_build_time["$publication_id"]="$target_application_build_time"
+    receipt_count=$((receipt_count + 1))
+  done <<<"$entries"
+  rm -f -- "$canonical_receipt"
+
+  filesystem_ids="$(printf '%s\n' "${!receipt_current_revision[@]}" | LC_ALL=C sort -n)"
+  database_ids="$(run_runtime_psql -A -t -v ON_ERROR_STOP=1 -c '
+/* ascendany-validator:catalog-publication-ids */
+SELECT knowledge_catalog_publication_id::text
+FROM ascendany.knowledge_catalog_publications
+ORDER BY knowledge_catalog_publication_id')" || database_ids=""
+  if [[ "$receipt_count" == 0 || "$filesystem_ids" != "$database_ids" ]]; then
+    fail "catalog receipt publication-ID set differs from the immutable database publication-ID set"
+    return
+  fi
+  target_model_id="$(jq -er '.manifest.modelId | select(type == "string")' "$release_root/models/recommendation-model.json" 2>/dev/null || true)"
+  catalog_document_base64="$(base64 -w0 -- "$release_root/models/recommendation-knowledge-catalog.json")"
+  if forward_transition; then
+    expected_prior_revision="$expected_forward_model_head_revision"
+    expected_prior_sha="$expected_forward_model_artifact_sha256"
+  else
+    expected_prior_revision="$observed_forward_model_head_revision"
+    expected_prior_sha="$observed_forward_model_artifact_sha256"
+  fi
+  if [[ ! "$expected_prior_revision" =~ ^[1-9][0-9]*$ ||
+        ! "$expected_prior_sha" =~ ^[0-9a-f]{64}$ ||
+        ! "$target_model_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]; then
+    fail "catalog publication target has no canonical prior model or release model identity"
+    return
+  fi
+  target_state="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 \
+    -v release_model_id="$target_model_id" \
+    -v release_model_sha="$release_model_sha256" \
+    -v release_catalog_sha="$release_catalog_sha256" \
+    -v release_version="$release_manifest_version" \
+    -v release_commit="$release_manifest_commit" \
+    -v release_build_time="$release_manifest_build_time" \
+    -v expected_prior_revision="$expected_prior_revision" \
+    -v expected_prior_sha="$expected_prior_sha" \
+    -v catalog_document_base64="$catalog_document_base64" -c '
+/* ascendany-validator:catalog-publication-target */
+SELECT count(*),
+       COALESCE(min(publication.knowledge_catalog_publication_id), 0),
+       COALESCE(min(publication.target_model_release_id), 0),
+       COALESCE(min(publication.current_model_head_revision), 0),
+       COALESCE(min(publication.current_model_artifact_sha256), '\'''\''),
+       COALESCE(min(publication.configuration_head_revision), 0),
+       count(activation.knowledge_catalog_publication_id),
+       COALESCE(min(activation.head_revision), 0)
+FROM ascendany.knowledge_catalog_publications AS publication
+JOIN ascendany.recommendation_model_releases AS target_release
+  ON target_release.recommendation_model_release_id = publication.target_model_release_id
+ AND target_release.model_id = publication.target_model_id
+ AND target_release.artifact_sha256 = publication.target_model_artifact_sha256
+ AND target_release.knowledge_catalog_sha256 = publication.catalog_sha256
+JOIN ascendany.configuration_items AS item
+  ON item.configuration_item_id = publication.configuration_item_id
+ AND item.active_version_id = publication.configuration_version_id
+ AND item.head_revision = publication.configuration_head_revision
+ AND item.configuration_key = '\''recommendation.catalog.active'\''
+ AND item.configuration_kind = '\''knowledge_catalog'\''
+JOIN ascendany.configuration_versions AS version
+  ON version.configuration_item_id = publication.configuration_item_id
+ AND version.configuration_version_id = publication.configuration_version_id
+ AND version.configuration_kind = '\''knowledge_catalog'\''
+ AND version.schema_id = '\''ascendany.knowledge_catalog.recommendation.v1'\''
+ AND version.document_sha256 = publication.catalog_sha256
+ AND version.document = convert_from(decode(:'\''catalog_document_base64'\'', '\''base64'\''), '\''UTF8'\'')::jsonb
+ AND version.credential_ref IS NULL
+LEFT JOIN ascendany.recommendation_model_activation_events AS activation
+  ON activation.knowledge_catalog_publication_id = publication.knowledge_catalog_publication_id
+WHERE publication.target_model_id = :'\''release_model_id'\''::uuid
+  AND publication.target_model_artifact_sha256 = :'\''release_model_sha'\''
+  AND publication.catalog_sha256 = :'\''release_catalog_sha'\''
+  AND publication.target_application_version = :'\''release_version'\''
+  AND publication.target_application_commit = :'\''release_commit'\''
+  AND publication.target_application_build_time = :'\''release_build_time'\''
+  AND publication.current_model_head_revision = :'\''expected_prior_revision'\''::bigint
+  AND publication.current_model_artifact_sha256 = :'\''expected_prior_sha'\''')" || target_state=""
+  IFS='|' read -r target_count target_publication_id target_release_id target_prior_revision target_prior_sha \
+    target_configuration_head_revision target_consumption_count target_consumption_revision <<<"$target_state"
+  if [[ "$target_count" != 1 || ! -v "receipt_current_revision[$target_publication_id]" ||
+        "${receipt_current_revision[$target_publication_id]:-}" != "$target_prior_revision" ||
+        "${receipt_current_sha[$target_publication_id]:-}" != "$target_prior_sha" ||
+        "${receipt_configuration_revision[$target_publication_id]:-}" != "$target_configuration_head_revision" ||
+        "${receipt_catalog_sha[$target_publication_id]:-}" != "$release_catalog_sha256" ||
+        "${receipt_model_sha[$target_publication_id]:-}" != "$release_model_sha256" ||
+        "${receipt_model_id[$target_publication_id]:-}" != "$target_model_id" ||
+        "${receipt_target_release_id[$target_publication_id]:-}" != "$target_release_id" ||
+        "${receipt_target_version[$target_publication_id]:-}" != "$release_manifest_version" ||
+        "${receipt_target_commit[$target_publication_id]:-}" != "$release_manifest_commit" ||
+        "${receipt_target_build_time[$target_publication_id]:-}" != "$release_manifest_build_time" ]]; then
+    fail "release model/catalog/application target does not resolve to exactly one receipt-backed active publication"
+    return
+  fi
+
+  expected_consumption_count=0
+  expected_consumption_revision=0
+  if { forward_transition && { activation_phase || production_phase; }; } ||
+     { initial_transition && production_phase; }; then
+    expected_consumption_count=1
+    expected_consumption_revision=$((expected_prior_revision + 1))
+  fi
+  if [[ "$target_consumption_count" != "$expected_consumption_count" ||
+        "$target_consumption_revision" != "$expected_consumption_revision" ]]; then
+    fail "target catalog publication consumption differs from the selected model activation phase"
+  fi
+
+  activation_state="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 \
+    -v target_publication_id="$target_publication_id" -c '
+/* ascendany-validator:catalog-publication-activation-state */
+WITH initial_publication AS (
+  SELECT publication.knowledge_catalog_publication_id
+  FROM ascendany.knowledge_catalog_publications AS publication
+  JOIN ascendany.recommendation_model_activation_events AS initial_activation
+    ON initial_activation.head_revision = 1
+   AND initial_activation.recommendation_model_release_id = publication.target_model_release_id
+   AND initial_activation.artifact_sha256 = publication.target_model_artifact_sha256
+   AND initial_activation.application_version = publication.target_application_version
+   AND initial_activation.application_commit = publication.target_application_commit
+   AND initial_activation.application_build_time = publication.target_application_build_time
+  WHERE publication.current_model_head_revision = 1
+    AND publication.current_model_artifact_sha256 = initial_activation.artifact_sha256
+), unexpected_unconsumed AS (
+  SELECT publication.knowledge_catalog_publication_id
+  FROM ascendany.knowledge_catalog_publications AS publication
+  WHERE publication.knowledge_catalog_publication_id <> :'\''target_publication_id'\''::bigint
+    AND NOT EXISTS (
+      SELECT 1 FROM initial_publication AS initial
+      WHERE initial.knowledge_catalog_publication_id = publication.knowledge_catalog_publication_id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM ascendany.recommendation_model_activation_events AS activation
+      WHERE activation.knowledge_catalog_publication_id = publication.knowledge_catalog_publication_id
+    )
+)
+SELECT (SELECT head_revision FROM ascendany.recommendation_model_head WHERE singleton),
+       (SELECT COALESCE(pending_catalog_publication_id::text, '\'''\'') FROM ascendany.recommendation_model_head WHERE singleton),
+       (SELECT count(*) FROM ascendany.recommendation_model_activation_events),
+       (SELECT COALESCE(min(head_revision), 0) FROM ascendany.recommendation_model_activation_events),
+       (SELECT COALESCE(max(head_revision), 0) FROM ascendany.recommendation_model_activation_events),
+       (SELECT count(DISTINCT head_revision) FROM ascendany.recommendation_model_activation_events),
+       (SELECT count(*) FROM ascendany.recommendation_model_activation_events
+         WHERE (head_revision = 1 AND knowledge_catalog_publication_id IS NOT NULL)
+            OR (head_revision > 1 AND knowledge_catalog_publication_id IS NULL)),
+       (SELECT count(*) FROM initial_publication),
+       (SELECT count(*) FROM ascendany.knowledge_catalog_publications),
+       (SELECT count(*) FROM unexpected_unconsumed)')" || activation_state=""
+  IFS='|' read -r active_head_revision pending_publication_id activation_count activation_min_revision \
+    activation_max_revision activation_distinct_revision_count activation_invalid_count \
+    initial_publication_count publication_count unexpected_unconsumed_count <<<"$activation_state"
+  if forward_transition && catalog_phase; then
+    expected_active_head_revision="$expected_prior_revision"
+  elif forward_transition; then
+    expected_active_head_revision=$((expected_prior_revision + 1))
+  elif catalog_phase; then
+    expected_active_head_revision="$expected_prior_revision"
+  else
+    expected_active_head_revision=$((expected_prior_revision + 1))
+  fi
+  if [[ "$active_head_revision" != "$expected_active_head_revision" ||
+        "$activation_count" != "$active_head_revision" ||
+        "$activation_min_revision" != 1 || "$activation_max_revision" != "$active_head_revision" ||
+        "$activation_distinct_revision_count" != "$active_head_revision" ||
+        "$activation_invalid_count" != 0 || "$initial_publication_count" != 1 ||
+        "$publication_count" != "$receipt_count" || "$unexpected_unconsumed_count" != 0 ]]; then
+    fail "catalog publications and model activation events violate the continuous one-publication-per-forward-activation state machine"
+  fi
+  if catalog_phase; then
+    if [[ "$pending_publication_id" != "$target_publication_id" ]]; then
+      fail "catalog phase model head does not reserve the exact target publication"
+    fi
+  elif [[ -n "$pending_publication_id" ]]; then
+    fail "activated model head retains a pending catalog publication"
+  fi
+  if (( failures == failures_before )); then
+    pass "every catalog publication has one canonical receipt, exact database/audit provenance, and deterministic activation ownership"
+  fi
+}
+
 check_recommendation_model_binding() {
   local model_path="$release_root/models/recommendation-model.json"
   local model_binary="$release_root/bin/ascendany-model"
   local model_id model_size result expected_next_revision=""
   local stored_model_id stored_sha stored_size stored_mode stored_schema stored_purpose stored_algorithm stored_contract
-  local stored_catalog_sha stored_revision event_sha event_version event_commit event_build_time
+  local stored_catalog_sha stored_revision pending_publication_id event_sha event_version event_commit event_build_time
   local catalog_kind_count catalog_key_count catalog_key catalog_kind catalog_head_revision
   local catalog_version_number catalog_schema catalog_document_sha catalog_credential_ref
 
@@ -3062,7 +4580,7 @@ check_recommendation_model_binding() {
   fi
   pass "release recommendation model is canonical and bound to its manifest SHA-256"
 
-  if initial_transition && [[ "$validation_phase" == staged ]]; then
+  if initial_fresh_phase; then
     if ! result="$(run_runtime_psql -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
 SELECT (SELECT count(*) FROM ascendany.recommendation_model_releases),
        (SELECT count(*) FROM ascendany.recommendation_model_head),
@@ -3090,6 +4608,7 @@ SELECT model.model_id::text,
        model.inference_contract,
        model.knowledge_catalog_sha256,
        head.head_revision,
+       COALESCE(head.pending_catalog_publication_id::text, ''),
        event.artifact_sha256,
        event.application_version,
        event.application_commit,
@@ -3117,17 +4636,38 @@ LEFT JOIN ascendany.configuration_versions AS catalog_version
 WHERE head.singleton
 SQL
   )"; then
-    fail "durable recommendation model binding query failed; schema v6 model activation is required"
+    fail "durable recommendation model binding query failed; schema v7 model activation is required"
     return
   fi
   IFS='|' read -r stored_model_id stored_sha stored_size stored_mode stored_schema stored_purpose stored_algorithm stored_contract \
-    stored_catalog_sha stored_revision event_sha event_version event_commit event_build_time \
+    stored_catalog_sha stored_revision pending_publication_id event_sha event_version event_commit event_build_time \
     catalog_kind_count catalog_key_count catalog_key catalog_kind catalog_head_revision \
     catalog_version_number catalog_schema catalog_document_sha catalog_credential_ref <<<"$result"
-  if initial_transition && [[ "$validation_phase" == activation || "$validation_phase" == smoke ]] &&
+  if catalog_phase; then
+    if [[ ! "$pending_publication_id" =~ ^[1-9][0-9]*$ ]]; then
+      fail "catalog phase model head has no canonical pending publication identity"
+      return
+    fi
+  elif [[ -n "$pending_publication_id" ]]; then
+    fail "non-catalog validation phase found a pending model-head publication"
+    return
+  fi
+  if initial_transition && [[ "$validation_phase" == activation ]] &&
      [[ "$catalog_kind_count:$catalog_key_count" == "0:0" &&
         -z "$catalog_key$catalog_kind$catalog_head_revision$catalog_version_number$catalog_schema$catalog_document_sha$catalog_credential_ref" ]]; then
     pass "initial activation records the release model before the isolated knowledge-catalog initialization window"
+  elif catalog_phase; then
+    if [[ "$catalog_kind_count:$catalog_key_count" != "1:1" ||
+          "$catalog_key" != "recommendation.catalog.active" || "$catalog_kind" != knowledge_catalog ||
+          ! "$catalog_head_revision" =~ ^[1-9][0-9]*$ ||
+          "$catalog_version_number" != "$catalog_head_revision" ||
+          "$catalog_schema" != "ascendany.knowledge_catalog.recommendation.v1" ||
+          -n "$catalog_credential_ref" || ! "$catalog_document_sha" =~ ^[0-9a-f]{64}$ ||
+          "$catalog_document_sha" != "$release_catalog_sha256" ]]; then
+      fail "catalog phase active knowledge catalog differs from the immutable release catalog"
+      return
+    fi
+    pass "catalog phase active knowledge catalog binds the immutable release catalog"
   else
     if [[ "$catalog_kind_count:$catalog_key_count" != "1:1" ||
           "$catalog_key" != "recommendation.catalog.active" || "$catalog_kind" != knowledge_catalog ||
@@ -3142,7 +4682,7 @@ SQL
     pass "one fixed active knowledge catalog binds the active recommendation model digest"
   fi
 
-  if forward_preactivation_phase; then
+  if forward_preactivation_phase || { forward_transition && catalog_phase; }; then
     if [[ ! "$stored_model_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ||
           ! "$stored_sha" =~ ^[0-9a-f]{64}$ || ! "$stored_size" =~ ^[1-9][0-9]*$ ||
           "$stored_mode" != 420 || "$stored_schema" != "ascendany.recommendation.inference-model.v1" ||
@@ -3161,8 +4701,11 @@ SQL
       return
     fi
     observed_forward_model_head_revision="$stored_revision"
-    if [[ "$validation_phase" == smoke && "$stored_revision" != "$expected_forward_model_head_revision" ]]; then
-      fail "forward smoke changed the retained recommendation model head revision"
+    observed_forward_model_artifact_sha256="$stored_sha"
+    if [[ ( "$validation_phase" == smoke || "$validation_phase" == catalog ) &&
+          ( "$stored_revision" != "$expected_forward_model_head_revision" ||
+            "$stored_sha" != "$expected_forward_model_artifact_sha256" ) ]]; then
+      fail "forward $validation_phase changed the retained recommendation model head or artifact"
       return
     fi
     pass "forward preactivation retains the prior internally consistent model head and activation"
@@ -3185,6 +4728,7 @@ SQL
     fail "active database recommendation model head differs from the immutable release model and activation event"
   else
     observed_forward_model_head_revision="$stored_revision"
+    observed_forward_model_artifact_sha256="$stored_sha"
     pass "active database recommendation model head binds the immutable release model and activation event"
   fi
 }
@@ -3230,7 +4774,8 @@ check_loopback_ports() {
       fail "required loopback TCP port is not listening: $required"
     fi
   done
-  if [[ ( "$validation_phase" == "staged" || "$validation_phase" == "activation" ) &&
+  if [[ ( "$validation_phase" == "staged" || "$validation_phase" == "catalog" ||
+          "$validation_phase" == "activation" ) &&
         -n "${seen[18000]:-}" ]]; then
     fail "$validation_phase phase requires v2 TCP port 18000 to be unused"
   fi
@@ -3242,7 +4787,7 @@ main() {
     printf 'Production validation failed with %d finding(s).\n' "$failures" >&2
     return 1
   fi
-  for command in systemctl realpath find stat psql ss grep id runuser jq curl sha256sum awk cmp date dirname sed sort tail tr mktemp chmod readlink podman; do
+  for command in systemctl realpath find stat psql ss grep getent id runuser jq curl sha256sum base64 awk cmp date dirname sed sort tail tr mktemp chmod readlink podman rpm; do
     require_command "$command" || true
   done
 
@@ -3252,13 +4797,17 @@ main() {
     printf 'Production validation stopped before executing release-owned code because release verification failed with %d finding(s).\n' "$failures" >&2
     return 1
   fi
+  check_initialization_operator_runtime
 
   check_cloudflared_connector
 
   check_system_manager_environment
   check_retired_runtime_boundary
+  check_retired_generation_closure
   check_unit_identity ascendanyd.service ascendany ascendany ascendany-runtime ascendany-lsp-control
+  check_unit_identity ascendany-model-register.service ascendany ascendany ascendany-runtime
   check_unit_identity ascendany-model-activate.service ascendany ascendany ascendany-runtime
+  check_unit_identity ascendany-catalog-publish.service ascendany-catalog-publisher ascendany-catalog-readers
   check_unit_identity ascendany-admin-bootstrap.service ascendany ascendany ascendany-runtime
   check_unit_identity ascendany-judge@validation.service ascendany-judge ascendany-judge ascendany-runtime
   check_unit_identity ascendany-lsp@validation.service ascendany-lsp ascendany-lsp ascendany-lsp-control
@@ -3268,6 +4817,7 @@ main() {
   check_all_unit_effective_shapes
 
   check_ascendanyd_phase_state
+  check_model_registration_unit_state
   check_model_activation_unit_state
 
   check_worker_isolation ascendany-judge@validation.service
@@ -3276,8 +4826,12 @@ main() {
   check_unit_environment_files ascendany-lsp@validation.service
   check_unit_credentials ascendany-backup.service backup_db_password
   check_unit_environment_files ascendany-backup.service /etc/ascendany/v2/backup.env
+  check_unit_credentials ascendany-model-register.service db_password
+  check_unit_environment_files ascendany-model-register.service /etc/ascendany/v2/ascendanyd.env
   check_unit_credentials ascendany-model-activate.service db_password
   check_unit_environment_files ascendany-model-activate.service /etc/ascendany/v2/ascendanyd.env
+  check_catalog_publisher_unit
+  check_unit_environment_files ascendany-catalog-publish.service /etc/ascendany-catalog-publisher/catalog-publish.env
   check_admin_bootstrap_unit
   check_unit_optional_environment_files ascendany-admin-bootstrap.service /etc/ascendany/v2/ascendanyd.env
   check_unit_credentials ascendany-migrate.service migrator_db_password
@@ -3287,17 +4841,25 @@ main() {
   check_lsp_runtime
   check_judge_runtime
   check_credentials
+  check_jwt_keypair_credentials
   check_ascendanyd_config_contract
+  check_catalog_publisher_config_contract
   check_active_ascendanyd_process
   check_active_ascendanyd_health
   check_installed_release_inputs
   check_provisioning_terminal_state
   check_pgbouncer_contract
   check_artifact_root
+  check_catalog_publisher_state_root
+  check_catalog_publisher_capabilities
+  check_initial_empty_durable_state
   check_database_role
   check_postgresql_access_contract
+  check_postgres_schema_fingerprint
+  check_initial_database_state
   check_admin_bootstrap_database
   check_recommendation_model_binding
+  check_catalog_publication_binding
   check_forward_database_state
   if production_phase; then
     check_backup_schedule
@@ -3314,10 +4876,11 @@ main() {
     return 1
   fi
 
-  if forward_transition && [[ "$validation_phase" == staged ]]; then
+  if forward_transition && [[ "$validation_phase" == staged || "$validation_phase" == catalog ]]; then
     printf 'ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256=%s\n' "$observed_forward_database_fingerprint"
     printf 'ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256=%s\n' "$observed_forward_business_fingerprint"
     printf 'ASCENDANY_FORWARD_MODEL_HEAD_REVISION=%s\n' "$observed_forward_model_head_revision"
+    printf 'ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256=%s\n' "$observed_forward_model_artifact_sha256"
   fi
   printf 'AscendAny %s %s validation passed.\n' "$deployment_transition" "$validation_phase"
 }

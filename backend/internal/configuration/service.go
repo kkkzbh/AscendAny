@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
+	"github.com/kkkzbh/AscendAny/backend/internal/releaseidentity"
 )
 
 var (
@@ -26,6 +27,66 @@ type Repository interface {
 	LoadItem(context.Context, ItemQuery) (Item, bool, error)
 	LoadVersions(context.Context, VersionsQuery) (VersionPage, bool, error)
 	StoreVersion(context.Context, CreateVersionCommand, string) (CreateVersionResult, error)
+	CreateCatalogPublicationAuthorization(context.Context, CreateCatalogPublicationAuthorizationCommand, string) (CatalogPublicationAuthorizationRecord, error)
+}
+
+func (service *Service) CreateCatalogPublicationAuthorization(
+	ctx context.Context,
+	command CreateCatalogPublicationAuthorizationCommand,
+) (CatalogPublicationAuthorizationResult, error) {
+	if ctx == nil || !sha256Pattern.MatchString(command.AccessTokenSHA256) ||
+		!validCatalogPublicationIntent(command.PublicationIntent) ||
+		!validUTCTime(command.Principal.ExpiresAt) {
+		return CatalogPublicationAuthorizationResult{}, configurationError(
+			ErrorInvalidQuery,
+			"validate catalog publication authorization",
+			errors.New("context, release intent, and access-token expiry are required"),
+		)
+	}
+	if err := validateAdminPrincipal(command.Principal); err != nil {
+		return CatalogPublicationAuthorizationResult{}, err
+	}
+	canonical, digest, err := canonicalDocument(command.Document)
+	if err != nil {
+		return CatalogPublicationAuthorizationResult{}, configurationError(ErrorInvalidQuery, "canonicalize catalog publication authorization document", err)
+	}
+	if subtle.ConstantTimeCompare([]byte(command.PublicationIntent.TargetCatalogSHA256), []byte(digest)) != 1 {
+		return CatalogPublicationAuthorizationResult{}, configurationError(
+			ErrorInvalidQuery,
+			"bind catalog publication authorization document",
+			errors.New("target catalog SHA-256 differs from the canonical document"),
+		)
+	}
+	if err := service.documentValidator.ValidateRecommendationDocument(
+		KindKnowledgeCatalog,
+		KnowledgeCatalogSchemaID,
+		canonical,
+	); err != nil {
+		return CatalogPublicationAuthorizationResult{}, configurationError(ErrorDocumentInvalid, "validate catalog publication authorization document", err)
+	}
+	command.Document = canonical
+	record, err := service.repository.CreateCatalogPublicationAuthorization(ctx, command, digest)
+	if err != nil {
+		return CatalogPublicationAuthorizationResult{}, err
+	}
+	canonicalRequest, canonicalRequestErr := CanonicalCatalogPublicationRequest(record.PublicationRequest)
+	parsedRequest, parseRequestErr := ParseCatalogPublicationRequest(canonicalRequest)
+	if !canonicalUUIDv4.MatchString(record.AuthorizationID) || !record.ExpiresAt.Equal(command.Principal.ExpiresAt) ||
+		!validUTCTime(record.ExpiresAt) || canonicalRequestErr != nil || parseRequestErr != nil ||
+		record.PublicationRequest.AuthorizationID != record.AuthorizationID ||
+		record.PublicationRequest.CatalogPublicationIntent != command.PublicationIntent ||
+		parsedRequest != record.PublicationRequest {
+		return CatalogPublicationAuthorizationResult{}, configurationError(
+			ErrorStoredDataInvalid,
+			"validate catalog publication authorization result",
+			errors.New("repository returned different immutable authorization provenance"),
+		)
+	}
+	return CatalogPublicationAuthorizationResult{
+		AuthorizationID:    record.AuthorizationID,
+		ExpiresAt:          record.ExpiresAt,
+		PublicationRequest: record.PublicationRequest,
+	}, nil
 }
 
 type RecommendationDocumentValidator interface {
@@ -101,6 +162,13 @@ func (service *Service) CreateVersion(ctx context.Context, command CreateVersion
 		return CreateVersionResult{}, configurationError(ErrorInvalidQuery, "validate configuration secret boundary", err)
 	}
 	if command.Kind == KindKnowledgeCatalog {
+		if subtle.ConstantTimeCompare([]byte(command.TargetCatalogSHA256), []byte(digest)) != 1 {
+			return CreateVersionResult{}, configurationError(
+				ErrorInvalidQuery,
+				"bind knowledge catalog document",
+				errors.New("target catalog SHA-256 differs from the canonical document"),
+			)
+		}
 		if err := service.documentValidator.ValidateRecommendationDocument(command.Kind, command.SchemaID, canonical); err != nil {
 			return CreateVersionResult{}, configurationError(ErrorDocumentInvalid, "validate recommendation configuration document", err)
 		}
@@ -165,17 +233,88 @@ func validateCreateCommand(ctx context.Context, command CreateVersionCommand) er
 }
 
 func validAnalyticsReviewExpectation(command CreateVersionCommand) bool {
-	valuesPresent := command.ExpectedAnalyticsGenerationID != nil ||
-		command.ExpectedAnalyticsHeadRevision != nil || command.ExpectedInputManifestSHA256 != nil
+	valuesPresent := command.PublicationAuthorizationID != "" || command.PublicationAccessTokenSHA256 != "" ||
+		len(command.PublicationAuthorizationRequest) != 0 || command.ExpectedAnalyticsGenerationID != nil ||
+		command.ExpectedAnalyticsHeadRevision != nil || command.ExpectedInputManifestSHA256 != nil ||
+		command.ExpectedCurrentModelHeadRevision != nil || command.ExpectedCurrentModelArtifactSHA256 != nil ||
+		command.TargetCatalogSHA256 != "" || command.TargetModelID != "" || command.TargetModelArtifactSHA256 != "" ||
+		command.TargetApplicationVersion != "" || command.TargetApplicationCommit != "" || command.TargetApplicationBuildTime != ""
 	if command.Kind != KindKnowledgeCatalog {
 		return !valuesPresent
 	}
 	if command.ExpectedAnalyticsGenerationID == nil || command.ExpectedAnalyticsHeadRevision == nil ||
-		command.ExpectedInputManifestSHA256 == nil || *command.ExpectedAnalyticsHeadRevision < 1 ||
-		!sha256Pattern.MatchString(*command.ExpectedInputManifestSHA256) {
+		command.ExpectedInputManifestSHA256 == nil || command.ExpectedCurrentModelHeadRevision == nil ||
+		command.ExpectedCurrentModelArtifactSHA256 == nil || *command.ExpectedCurrentModelHeadRevision < 1 ||
+		!sha256Pattern.MatchString(*command.ExpectedCurrentModelArtifactSHA256) ||
+		!canonicalUUIDv4.MatchString(command.PublicationAuthorizationID) ||
+		!sha256Pattern.MatchString(command.PublicationAccessTokenSHA256) ||
+		!catalogPublicationRequestMatchesCommand(command) ||
+		!sha256Pattern.MatchString(command.TargetCatalogSHA256) || !canonicalUUIDv4.MatchString(command.TargetModelID) ||
+		!sha256Pattern.MatchString(command.TargetModelArtifactSHA256) ||
+		!validApplicationIdentity(command.TargetApplicationVersion, command.TargetApplicationCommit, command.TargetApplicationBuildTime) {
 		return false
 	}
-	raw := *command.ExpectedAnalyticsGenerationID
+	return validAnalyticsReviewAnchors(
+		*command.ExpectedAnalyticsGenerationID,
+		*command.ExpectedAnalyticsHeadRevision,
+		*command.ExpectedInputManifestSHA256,
+	)
+}
+
+func validCatalogPublicationIntent(intent CatalogPublicationIntent) bool {
+	if intent.Schema != CatalogPublicationRequestSchema ||
+		ValidateKnowledgeCatalogPublicationExpectation(
+			intent.ExpectedConfigurationHeadRevision,
+			intent.ExpectedAnalyticsGenerationID,
+			intent.ExpectedAnalyticsHeadRevision,
+			intent.ExpectedInputManifestSHA256,
+			intent.ExpectedCurrentModelHeadRevision,
+			intent.ExpectedCurrentModelArtifactSHA256,
+		) != nil ||
+		!sha256Pattern.MatchString(intent.TargetCatalogSHA256) ||
+		!sha256Pattern.MatchString(intent.TargetModelArtifactSHA256) {
+		return false
+	}
+	return validApplicationIdentity(
+		intent.TargetApplicationVersion,
+		intent.TargetApplicationCommit,
+		intent.TargetApplicationBuildTime,
+	)
+}
+
+func catalogPublicationRequestMatchesCommand(command CreateVersionCommand) bool {
+	request, err := ParseCatalogPublicationRequest(command.PublicationAuthorizationRequest)
+	if err != nil || request.AuthorizationID != command.PublicationAuthorizationID {
+		return false
+	}
+	return request.CatalogPublicationIntent == (CatalogPublicationIntent{
+		Schema:                             CatalogPublicationRequestSchema,
+		ExpectedConfigurationHeadRevision:  command.ExpectedHeadRevision,
+		ExpectedAnalyticsGenerationID:      *command.ExpectedAnalyticsGenerationID,
+		ExpectedAnalyticsHeadRevision:      *command.ExpectedAnalyticsHeadRevision,
+		ExpectedInputManifestSHA256:        *command.ExpectedInputManifestSHA256,
+		ExpectedCurrentModelHeadRevision:   *command.ExpectedCurrentModelHeadRevision,
+		ExpectedCurrentModelArtifactSHA256: *command.ExpectedCurrentModelArtifactSHA256,
+		TargetCatalogSHA256:                command.TargetCatalogSHA256,
+		TargetModelArtifactSHA256:          command.TargetModelArtifactSHA256,
+		TargetApplicationVersion:           command.TargetApplicationVersion,
+		TargetApplicationCommit:            command.TargetApplicationCommit,
+		TargetApplicationBuildTime:         command.TargetApplicationBuildTime,
+	})
+}
+
+func validApplicationIdentity(version, commit, buildTime string) bool {
+	return releaseidentity.Validate(version, commit, buildTime) == nil
+}
+
+func validAnalyticsReviewAnchors(generationID string, headRevision int64, inputManifestSHA256 string) bool {
+	if headRevision < 1 || !sha256Pattern.MatchString(inputManifestSHA256) {
+		return false
+	}
+	return validPositiveInt64String(generationID)
+}
+
+func validPositiveInt64String(raw string) bool {
 	if raw == "" || raw[0] == '0' || len(raw) > 19 {
 		return false
 	}
@@ -186,6 +325,27 @@ func validAnalyticsReviewExpectation(command CreateVersionCommand) bool {
 	}
 	value, err := strconv.ParseInt(raw, 10, 64)
 	return err == nil && value > 0
+}
+
+// ValidateKnowledgeCatalogPublicationExpectation validates the complete CAS
+// and analytics-review anchors required by an offline catalog publication.
+func ValidateKnowledgeCatalogPublicationExpectation(
+	expectedConfigurationHeadRevision int64,
+	expectedAnalyticsGenerationID string,
+	expectedAnalyticsHeadRevision int64,
+	expectedInputManifestSHA256 string,
+	expectedCurrentModelHeadRevision int64,
+	expectedCurrentModelArtifactSHA256 string,
+) error {
+	if expectedConfigurationHeadRevision < 0 || expectedCurrentModelHeadRevision < 1 ||
+		!sha256Pattern.MatchString(expectedCurrentModelArtifactSHA256) || !validAnalyticsReviewAnchors(
+		expectedAnalyticsGenerationID,
+		expectedAnalyticsHeadRevision,
+		expectedInputManifestSHA256,
+	) {
+		return errors.New("catalog publication expectation is invalid")
+	}
+	return nil
 }
 
 func validateAdminPrincipal(principal auth.AccessPrincipal) error {

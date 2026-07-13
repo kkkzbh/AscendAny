@@ -30,6 +30,7 @@ readonly MIGRATOR_LOGIN="ascendany_migrator_login"
 readonly BACKUP_LOGIN="ascendany_backup_login"
 readonly RESTORE_LOGIN="ascendany_restore_login"
 readonly RUNTIME_LOGIN="ascendanyd_login"
+readonly CATALOG_PUBLISHER_LOGIN="ascendany_catalog_publisher_login"
 readonly BACKUP_RUNTIME_PATH="/run/ascendany-backup"
 
 usage() {
@@ -39,6 +40,8 @@ Usage:
     --confirm-reset drop-disposable-ascendany-v2-backup-restore \
     --recommendation-model /absolute/path/to/recommendation-model.json \
     --recommendation-model-sha256 64_lowercase_hex \
+    --recommendation-catalog /absolute/path/to/recommendation-knowledge-catalog.json \
+    --recommendation-catalog-sha256 64_lowercase_hex \
     [--snapshot /absolute/path/to/ascendany-pintia-snapshot-v2.json]
 
 The default input is the committed sanitized Pintia v2 fixture. --snapshot can
@@ -67,6 +70,8 @@ CONFIRMATION=""
 SNAPSHOT_PATH=""
 RECOMMENDATION_MODEL_PATH=""
 RECOMMENDATION_MODEL_SHA256=""
+RECOMMENDATION_CATALOG_PATH=""
+RECOMMENDATION_CATALOG_SHA256=""
 while (($# > 0)); do
   case "$1" in
     --confirm-reset)
@@ -92,6 +97,18 @@ while (($# > 0)); do
       RECOMMENDATION_MODEL_SHA256="$2"
       shift 2
       ;;
+    --recommendation-catalog)
+      (($# >= 2)) || fail '--recommendation-catalog requires a value'
+      [[ -z "${RECOMMENDATION_CATALOG_PATH}" ]] || fail '--recommendation-catalog may be specified only once'
+      RECOMMENDATION_CATALOG_PATH="$2"
+      shift 2
+      ;;
+    --recommendation-catalog-sha256)
+      (($# >= 2)) || fail '--recommendation-catalog-sha256 requires a value'
+      [[ -z "${RECOMMENDATION_CATALOG_SHA256}" ]] || fail '--recommendation-catalog-sha256 may be specified only once'
+      RECOMMENDATION_CATALOG_SHA256="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -109,6 +126,9 @@ done
 [[ -n "${RECOMMENDATION_MODEL_PATH}" ]] || fail '--recommendation-model is required'
 [[ "${RECOMMENDATION_MODEL_SHA256}" =~ ^[0-9a-f]{64}$ ]] ||
   fail '--recommendation-model-sha256 must be 64 lowercase hexadecimal characters'
+[[ -n "${RECOMMENDATION_CATALOG_PATH}" ]] || fail '--recommendation-catalog is required'
+[[ "${RECOMMENDATION_CATALOG_SHA256}" =~ ^[0-9a-f]{64}$ ]] ||
+  fail '--recommendation-catalog-sha256 must be 64 lowercase hexadecimal characters'
 [[ "${SNAPSHOT_PATH}" == /* && ! "${SNAPSHOT_PATH}" =~ [[:cntrl:]] ]] ||
   fail '--snapshot must be one absolute path without control characters'
 [[ -f "${SNAPSHOT_PATH}" && ! -L "${SNAPSHOT_PATH}" ]] ||
@@ -118,6 +138,10 @@ done
   fail '--recommendation-model must be one absolute path without control characters'
 [[ -f "${RECOMMENDATION_MODEL_PATH}" && ! -L "${RECOMMENDATION_MODEL_PATH}" && -r "${RECOMMENDATION_MODEL_PATH}" ]] ||
   fail '--recommendation-model must identify one readable regular non-symlink file'
+[[ "${RECOMMENDATION_CATALOG_PATH}" == /* && ! "${RECOMMENDATION_CATALOG_PATH}" =~ [[:cntrl:]] ]] ||
+  fail '--recommendation-catalog must be one absolute path without control characters'
+[[ -f "${RECOMMENDATION_CATALOG_PATH}" && ! -L "${RECOMMENDATION_CATALOG_PATH}" && -r "${RECOMMENDATION_CATALOG_PATH}" ]] ||
+  fail '--recommendation-catalog must identify one readable regular non-symlink file'
 [[ -f "${ROLE_BOOTSTRAP}" && -f "${ROLE_VERIFIER}" && -f "${PINTIA_SCHEMA}" ]] ||
   fail 'database role bootstrap, verifier, or Pintia schema is unavailable'
 
@@ -144,10 +168,21 @@ readonly PRIVATE_RUNTIME_ROOT="$(realpath -e -- "${XDG_RUNTIME_DIR}")"
   fail '--snapshot must already be canonical and have no symlink ancestry'
 [[ "$(realpath -e -- "${RECOMMENDATION_MODEL_PATH}")" == "${RECOMMENDATION_MODEL_PATH}" ]] ||
   fail '--recommendation-model must already be canonical and have no symlink ancestry'
+[[ "$(realpath -e -- "${RECOMMENDATION_CATALOG_PATH}")" == "${RECOMMENDATION_CATALOG_PATH}" ]] ||
+  fail '--recommendation-catalog must already be canonical and have no symlink ancestry'
 [[ "$(stat -Lc '%a:%h' -- "${RECOMMENDATION_MODEL_PATH}")" == "644:1" ]] ||
   fail '--recommendation-model must be one mode-0644 regular file with one hard link'
+[[ "$(stat -Lc '%a:%h' -- "${RECOMMENDATION_CATALOG_PATH}")" == "644:1" ]] ||
+  fail '--recommendation-catalog must be one mode-0644 regular file with one hard link'
 [[ "$(sha256sum -- "${RECOMMENDATION_MODEL_PATH}" | awk '{print $1}')" == "${RECOMMENDATION_MODEL_SHA256}" ]] ||
   fail 'recommendation model bytes differ from --recommendation-model-sha256'
+[[ "$(sha256sum -- "${RECOMMENDATION_CATALOG_PATH}" | awk '{print $1}')" == "${RECOMMENDATION_CATALOG_SHA256}" ]] ||
+  fail 'recommendation catalog bytes differ from --recommendation-catalog-sha256'
+[[ "$(jq -jSc . "${RECOMMENDATION_CATALOG_PATH}" | sha256sum | awk '{print $1}')" == "${RECOMMENDATION_CATALOG_SHA256}" ]] ||
+  fail 'recommendation catalog must be one canonical JSON object'
+[[ "$(jq -er '.manifest.knowledgeCatalogSha256' "${RECOMMENDATION_MODEL_PATH}")" == "${RECOMMENDATION_CATALOG_SHA256}" ]] ||
+  fail 'recommendation catalog digest differs from the model manifest trust anchor'
+readonly RECOMMENDATION_CATALOG_DOCUMENT="$(jq -jSc . "${RECOMMENDATION_CATALOG_PATH}")"
 readonly SNAPSHOT_OWNER="$(stat -Lc '%u' -- "${SNAPSHOT_PATH}")"
 readonly SNAPSHOT_MODE_TEXT="$(stat -Lc '%a' -- "${SNAPSHOT_PATH}")"
 readonly SNAPSHOT_MODE="$((8#${SNAPSHOT_MODE_TEXT}))"
@@ -177,6 +212,15 @@ jq -e --arg digest "${PINTIA_SCHEMA_SHA256}" '
 ' "${SNAPSHOT_PATH}" >/dev/null ||
   fail 'the Pintia snapshot identity does not match the authoritative v2 schema'
 readonly SOURCE_STORAGE_KEY="sha256/${SOURCE_SHA256:0:2}/${SOURCE_SHA256}"
+readonly REHEARSAL_DOMAIN_HASH="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+readonly REHEARSAL_ANALYTICS_MANIFEST="$(jq -jcn --arg domainHash "${REHEARSAL_DOMAIN_HASH}" '{
+  protocol: "analytics_input_manifest_v1",
+  baseAnalyticsGenerationId: null,
+  baseHeadRevision: 0,
+  target: {examId: 1, snapshotId: 1, examHeadRevision: 1},
+  snapshots: [{examId: 1, snapshotId: 1, domainHash: $domainHash}]
+}')"
+readonly REHEARSAL_ANALYTICS_MANIFEST_SHA256="$(printf '%s' "${REHEARSAL_ANALYTICS_MANIFEST}" | sha256sum | awk '{print $1}')"
 
 readonly WORK_ROOT_PREFIX="${PRIVATE_RUNTIME_ROOT}/ascendany-v2-backup-restore."
 WORK_ROOT=""
@@ -187,6 +231,7 @@ RUNTIME_PGPASS_FILE=""
 MIGRATOR_PASSWORD_FILE=""
 BACKUP_PASSWORD_FILE=""
 RESTORE_PASSWORD_FILE=""
+CATALOG_PUBLISHER_PASSWORD_FILE=""
 PASSWORD_PEPPER_FILE=""
 BOOTSTRAP_ADMIN_PASSWORD_FILE=""
 OPERATOR_PGPASS_FILE=""
@@ -222,7 +267,8 @@ cleanup() {
   for credential_path in \
     "${OPERATOR_PGPASS_FILE}" "${ADMIN_PASSWORD_FILE}" "${ADMIN_PGPASS_FILE}" \
     "${RUNTIME_PASSWORD_FILE}" "${RUNTIME_PGPASS_FILE}" "${MIGRATOR_PASSWORD_FILE}" "${BACKUP_PASSWORD_FILE}" \
-    "${RESTORE_PASSWORD_FILE}" "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}"; do
+    "${RESTORE_PASSWORD_FILE}" "${CATALOG_PUBLISHER_PASSWORD_FILE}" \
+    "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}"; do
     if [[ -n "${credential_path}" ]]; then
       rm -f -- "${credential_path}"
     fi
@@ -322,9 +368,12 @@ readonly BIN_DIR="${WORK_ROOT}/bin"
 readonly LOG_DIR="${WORK_ROOT}/logs"
 readonly CREDENTIAL_DIR="${WORK_ROOT}/credentials"
 readonly SOURCE_ARTIFACT_ROOT="${WORK_ROOT}/source-artifacts"
+readonly SOURCE_CATALOG_RECEIPT_ROOT="${WORK_ROOT}/source-catalog-receipts"
+readonly SOURCE_CATALOG_RECEIPT_PATH="${SOURCE_CATALOG_RECEIPT_ROOT}/1.json"
 readonly BACKUP_ROOT="${WORK_ROOT}/backups"
 readonly RESTORE_PARENT="${WORK_ROOT}/restore"
 readonly RESTORE_ARTIFACT_ROOT="${RESTORE_PARENT}/artifacts"
+readonly RESTORE_CATALOG_RECEIPT_ROOT="${RESTORE_PARENT}/catalog-receipts"
 readonly RUNTIME_PARENT="${WORK_ROOT}/runtime"
 readonly BACKUP_RUNTIME_ROOT="${RUNTIME_PARENT}/ascendany-backup"
 readonly OPERATOR_RUNTIME_ROOT="${RUNTIME_PARENT}/restore-operator"
@@ -339,6 +388,7 @@ readonly RUNTIME_PGPASS_FILE="${CREDENTIAL_DIR}/runtime.pgpass"
 readonly MIGRATOR_PASSWORD_FILE="${CREDENTIAL_DIR}/migrator-password"
 readonly BACKUP_PASSWORD_FILE="${CREDENTIAL_DIR}/backup-password"
 readonly RESTORE_PASSWORD_FILE="${CREDENTIAL_DIR}/restore-password"
+readonly CATALOG_PUBLISHER_PASSWORD_FILE="${CREDENTIAL_DIR}/catalog-publisher-password"
 readonly PASSWORD_PEPPER_FILE="${CREDENTIAL_DIR}/password-pepper"
 readonly ADMIN_BOOTSTRAP_CREDENTIAL_DIR="${CREDENTIAL_DIR}/admin-bootstrap"
 readonly BOOTSTRAP_ADMIN_PASSWORD_FILE="${ADMIN_BOOTSTRAP_CREDENTIAL_DIR}/admin_password"
@@ -363,6 +413,7 @@ install -d -m 0750 -- \
   "${SOURCE_ARTIFACT_ROOT}" \
   "${SOURCE_ARTIFACT_ROOT}/sha256" \
   "${SOURCE_ARTIFACT_ROOT}/sha256/${SOURCE_SHA256:0:2}" \
+  "${SOURCE_CATALOG_RECEIPT_ROOT}" \
   "${BACKUP_ROOT}"
 
 podman ps --all --format '{{.ID}}' | sort >"${BEFORE_CONTAINERS}"
@@ -399,6 +450,7 @@ readonly RUNTIME_PASSWORD="$(openssl rand -hex 24)"
 readonly MIGRATOR_PASSWORD="$(openssl rand -hex 24)"
 readonly BACKUP_PASSWORD="$(openssl rand -hex 24)"
 readonly RESTORE_PASSWORD="$(openssl rand -hex 24)"
+readonly CATALOG_PUBLISHER_PASSWORD="$(openssl rand -hex 24)"
 readonly PASSWORD_PEPPER="$(openssl rand -hex 32)"
 readonly BOOTSTRAP_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 
@@ -407,6 +459,7 @@ printf '%s' "${RUNTIME_PASSWORD}" >"${RUNTIME_PASSWORD_FILE}"
 printf '%s' "${MIGRATOR_PASSWORD}" >"${MIGRATOR_PASSWORD_FILE}"
 printf '%s' "${BACKUP_PASSWORD}" >"${BACKUP_PASSWORD_FILE}"
 printf '%s' "${RESTORE_PASSWORD}" >"${RESTORE_PASSWORD_FILE}"
+printf '%s' "${CATALOG_PUBLISHER_PASSWORD}" >"${CATALOG_PUBLISHER_PASSWORD_FILE}"
 printf '%s' "${PASSWORD_PEPPER}" >"${PASSWORD_PEPPER_FILE}"
 printf '%s' "${BOOTSTRAP_ADMIN_PASSWORD}" >"${BOOTSTRAP_ADMIN_PASSWORD_FILE}"
 printf '%s:5432:*:postgres:%s\n' "${DIRECT_HOST}" "${POSTGRES_ADMIN_PASSWORD}" >"${ADMIN_PGPASS_FILE}"
@@ -414,7 +467,7 @@ printf '%s:5432:%s:%s:%s\n' "${DIRECT_HOST}" "${SOURCE_DATABASE}" "${RUNTIME_LOG
 printf '%s:5432:*:%s:%s\n' "${DIRECT_HOST}" "${RESTORE_LOGIN}" "${RESTORE_PASSWORD}" >"${OPERATOR_PGPASS_FILE}"
 chmod 0600 -- "${ADMIN_PASSWORD_FILE}" "${ADMIN_PGPASS_FILE}" \
   "${RUNTIME_PASSWORD_FILE}" "${RUNTIME_PGPASS_FILE}" "${MIGRATOR_PASSWORD_FILE}" \
-  "${BACKUP_PASSWORD_FILE}" "${RESTORE_PASSWORD_FILE}" \
+  "${BACKUP_PASSWORD_FILE}" "${RESTORE_PASSWORD_FILE}" "${CATALOG_PUBLISHER_PASSWORD_FILE}" \
   "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}" \
   "${OPERATOR_PGPASS_FILE}"
 [[ "$(stat -Lc '%a:%u' -- "${OPERATOR_RUNTIME_ROOT}")" == "700:$(id -u)" ]] ||
@@ -513,9 +566,24 @@ assert_single_success_log() {
     type == "object" and
     .level == "INFO" and
     .msg == $message and
+    (if $message == "backup restore verified" then
+      keys == [
+        "artifactCount", "backupId", "catalogReceiptCount", "catalogReceiptRoot", "databaseName",
+        "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit",
+        "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256",
+        "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256",
+        "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"
+      ] and
+      (.databaseName | type == "string" and length > 0) and
+      (.catalogReceiptRoot | type == "string" and startswith("/"))
+    else
+      keys == [
+        "artifactCount", "backupId", "catalogReceiptCount", "level", "manifestSHA256", "msg", "time"
+      ]
+    end) and
     (.backupId | type == "string" and test("^backup-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$")) and
     (.manifestSHA256 | type == "string" and test("^[0-9a-f]{64}$")) and
-    .artifactCount == 1
+    .artifactCount == 1 and .catalogReceiptCount == 1
   ' "${log_path}" >/dev/null || fail "${expected_message} result violates the JSON evidence contract"
 }
 
@@ -632,6 +700,7 @@ ALTER ROLE ${RUNTIME_LOGIN} PASSWORD '${RUNTIME_PASSWORD}';
 ALTER ROLE ${MIGRATOR_LOGIN} PASSWORD '${MIGRATOR_PASSWORD}';
 ALTER ROLE ${BACKUP_LOGIN} PASSWORD '${BACKUP_PASSWORD}';
 ALTER ROLE ${RESTORE_LOGIN} PASSWORD '${RESTORE_PASSWORD}';
+ALTER ROLE ${CATALOG_PUBLISHER_LOGIN} PASSWORD '${CATALOG_PUBLISHER_PASSWORD}';
 SQL
 
 if ! /usr/bin/env -i \
@@ -642,7 +711,7 @@ if ! /usr/bin/env -i \
     ASCENDANY_DATABASE_ROLE="${SCHEMA_OWNER}" \
     ASCENDANY_DATABASE_SCHEMA=ascendany \
     ASCENDANY_MIGRATION_HISTORY_TABLE=ascendany.schema_migrations_v2 \
-    ASCENDANY_DATABASE_SCHEMA_VERSION=6 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
     ASCENDANY_MIGRATION_LOCK_TIMEOUT=30s \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
     "${MIGRATOR_BINARY}" up >/dev/null 2>"${LOG_DIR}/migrate.json"; then
@@ -700,7 +769,7 @@ run_admin_bootstrap() {
     ASCENDANY_DATABASE_URL="postgresql://${RUNTIME_LOGIN}@${DIRECT_HOST}:5432/${SOURCE_DATABASE}?sslmode=disable" \
     ASCENDANY_DATABASE_POOL_MODE=transaction \
     ASCENDANY_DATABASE_PASSWORD_FILE="${RUNTIME_PASSWORD_FILE}" \
-    ASCENDANY_DATABASE_SCHEMA_VERSION=6 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
     ASCENDANY_DATABASE_MAX_CONNECTIONS=1 \
     ASCENDANY_DATABASE_MIN_CONNECTIONS=0 \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
@@ -799,6 +868,426 @@ VALUES (
 );
 SQL
 
+# Seed one complete, immutable catalog publication graph. Backup v2 requires
+# every database publication to have one canonical durable receipt, so this
+# rehearsal exercises the same analytics, model, publication, and receipt
+# provenance closure as production.
+admin_psql "${SOURCE_DATABASE}" \
+  --set=admin_public_id="${BOOTSTRAP_ADMIN_ID}" \
+  --set=artifact_sha="${SOURCE_SHA256}" \
+  --set=pintia_schema_sha="${PINTIA_SCHEMA_SHA256}" \
+  --set=domain_hash="${REHEARSAL_DOMAIN_HASH}" \
+  --set=analytics_manifest="${REHEARSAL_ANALYTICS_MANIFEST}" \
+  --set=analytics_manifest_sha="${REHEARSAL_ANALYTICS_MANIFEST_SHA256}" \
+  --set=catalog_sha="${RECOMMENDATION_CATALOG_SHA256}" \
+  --set=catalog_document="${RECOMMENDATION_CATALOG_DOCUMENT}" >/dev/null <<'SQL'
+BEGIN;
+
+INSERT INTO ascendany.auth_sessions (
+    public_id, account_id, auth_revision, created_at, expires_at, last_seen_at
+)
+SELECT '66666666-6666-4666-8666-666666666666'::uuid,
+       account.account_id, account.auth_revision,
+       clock_timestamp(), clock_timestamp() + interval '1 day', clock_timestamp()
+FROM ascendany.auth_accounts AS account
+WHERE account.public_id = :'admin_public_id'::uuid;
+
+INSERT INTO ascendany.logical_exams (public_id, platform, source_exam_id)
+VALUES ('44444444-4444-4444-8444-444444444444'::uuid, 'pintia', 'backup-rehearsal');
+
+INSERT INTO ascendany.import_jobs (public_id, artifact_id, job_kind, status, stage)
+SELECT '22222222-2222-4222-8222-222222222222'::uuid,
+       artifact.artifact_id, 'pintia_snapshot_v2', 'queued', 'received'
+FROM ascendany.artifacts AS artifact
+WHERE artifact.sha256 = :'artifact_sha';
+
+UPDATE ascendany.import_jobs
+SET status = 'running', stage = 'validating', attempt_count = 1,
+    lease_owner = 'backup-rehearsal', lease_expires_at = clock_timestamp() + interval '1 hour',
+    started_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE public_id = '22222222-2222-4222-8222-222222222222'::uuid;
+
+UPDATE ascendany.import_jobs
+SET stage = 'importing', updated_at = clock_timestamp()
+WHERE public_id = '22222222-2222-4222-8222-222222222222'::uuid;
+
+INSERT INTO ascendany.exam_snapshots (
+    public_id, exam_id, snapshot_sequence, source_artifact_id, import_job_id,
+    contract_schema, contract_schema_sha256, domain_hash_protocol, domain_hash,
+    exporter_name, exporter_version, exported_at, title, source_url,
+    problems_source_count, problems_observed_count, problems_exported_count,
+    problems_pagination_exhausted, rankings_source_count, rankings_observed_count,
+    rankings_exported_count, rankings_pagination_exhausted, submissions_source_count,
+    submissions_observed_count, submissions_exported_count,
+    submissions_pagination_exhausted, participants_exported_count
+)
+SELECT '33333333-3333-4333-8333-333333333333'::uuid,
+       exam.exam_id, 1, artifact.artifact_id, job.import_job_id,
+       'ascendany.pintia.snapshot.v2', :'pintia_schema_sha',
+       'domain_hash_proto_v1', :'domain_hash',
+       'ascendany-pintia-exporter', 'backup-rehearsal', clock_timestamp(),
+       'Backup rehearsal', 'https://pintia.cn/problem-sets/backup-rehearsal',
+       1, 1, 1, true, 0, 0, 0, true, 0, 0, 0, true, 0
+FROM ascendany.logical_exams AS exam
+JOIN ascendany.import_jobs AS job
+  ON job.public_id = '22222222-2222-4222-8222-222222222222'::uuid
+JOIN ascendany.artifacts AS artifact ON artifact.artifact_id = job.artifact_id
+WHERE exam.public_id = '44444444-4444-4444-8444-444444444444'::uuid;
+
+INSERT INTO ascendany.pintia_snapshot_problems (
+    snapshot_id, problem_set_problem_id, problem_id, title, problem_type, max_score
+)
+SELECT snapshot.snapshot_id, 'problem-set-problem-1', 'problem-1',
+       'Backup rehearsal problem', 'PROGRAMMING', 100
+FROM ascendany.exam_snapshots AS snapshot
+WHERE snapshot.public_id = '33333333-3333-4333-8333-333333333333'::uuid;
+
+UPDATE ascendany.logical_exams AS exam
+SET active_snapshot_id = snapshot.snapshot_id, head_revision = 1,
+    updated_at = clock_timestamp()
+FROM ascendany.exam_snapshots AS snapshot
+WHERE exam.public_id = '44444444-4444-4444-8444-444444444444'::uuid
+  AND snapshot.exam_id = exam.exam_id;
+
+UPDATE ascendany.import_jobs AS job
+SET stage = 'analyzing', lease_owner = NULL, lease_expires_at = NULL,
+    updated_at = clock_timestamp()
+FROM ascendany.exam_snapshots AS snapshot
+WHERE job.public_id = '22222222-2222-4222-8222-222222222222'::uuid
+  AND snapshot.import_job_id = job.import_job_id;
+
+INSERT INTO ascendany.analytics_generations (
+    status, base_analytics_generation_id, base_head_revision,
+    target_exam_id, target_snapshot_id, target_exam_head_revision,
+    input_manifest, input_manifest_sha256, algorithm_version, config_sha256
+)
+SELECT 'queued', NULL, 0, exam.exam_id, snapshot.snapshot_id, 1,
+       :'analytics_manifest'::jsonb, :'analytics_manifest_sha',
+       'backup_rehearsal_v1', repeat('c', 64)
+FROM ascendany.logical_exams AS exam
+JOIN ascendany.exam_snapshots AS snapshot ON snapshot.exam_id = exam.exam_id
+WHERE exam.public_id = '44444444-4444-4444-8444-444444444444'::uuid
+  AND snapshot.public_id = '33333333-3333-4333-8333-333333333333'::uuid;
+
+INSERT INTO ascendany.analytics_generation_snapshots (
+    analytics_generation_id, exam_id, snapshot_id, domain_hash
+)
+SELECT generation.analytics_generation_id, snapshot.exam_id,
+       snapshot.snapshot_id, snapshot.domain_hash
+FROM ascendany.analytics_generations AS generation
+JOIN ascendany.exam_snapshots AS snapshot
+  ON snapshot.snapshot_id = generation.target_snapshot_id;
+
+UPDATE ascendany.analytics_generations
+SET status = 'running', attempt_count = 1, lease_owner = 'backup-rehearsal',
+    lease_expires_at = clock_timestamp() + interval '1 hour', started_at = clock_timestamp()
+WHERE input_manifest_sha256 = :'analytics_manifest_sha';
+
+UPDATE ascendany.analytics_generations
+SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+    finished_at = clock_timestamp()
+WHERE input_manifest_sha256 = :'analytics_manifest_sha';
+
+UPDATE ascendany.analytics_head AS head
+SET current_generation_id = generation.analytics_generation_id,
+    head_revision = 1, updated_at = clock_timestamp()
+FROM ascendany.analytics_generations AS generation
+WHERE head.singleton AND head.current_generation_id IS NULL AND head.head_revision = 0
+  AND generation.input_manifest_sha256 = :'analytics_manifest_sha';
+
+UPDATE ascendany.import_jobs AS job
+SET status = 'succeeded', stage = 'completed', snapshot_id = snapshot.snapshot_id,
+    finished_at = clock_timestamp(), updated_at = clock_timestamp()
+FROM ascendany.exam_snapshots AS snapshot
+WHERE job.public_id = '22222222-2222-4222-8222-222222222222'::uuid
+  AND job.status = 'running'
+  AND job.stage = 'analyzing'
+  AND job.snapshot_id IS NULL
+  AND snapshot.import_job_id = job.import_job_id;
+
+SELECT clock_timestamp() AS publication_moment \gset
+
+WITH actor AS MATERIALIZED (
+  SELECT account.account_id, account.auth_revision, session.session_id, session.expires_at
+  FROM ascendany.auth_accounts AS account
+  JOIN ascendany.auth_sessions AS session ON session.account_id = account.account_id
+  WHERE account.public_id = :'admin_public_id'::uuid
+    AND session.public_id = '66666666-6666-4666-8666-666666666666'::uuid
+), model AS MATERIALIZED (
+  SELECT release.recommendation_model_release_id, release.model_id,
+         release.artifact_sha256, release.knowledge_catalog_sha256,
+         head.head_revision, activation.application_version,
+         activation.application_commit, activation.application_build_time
+  FROM ascendany.recommendation_model_head AS head
+  JOIN ascendany.recommendation_model_releases AS release
+    ON release.recommendation_model_release_id = head.current_release_id
+  JOIN ascendany.recommendation_model_activation_events AS activation
+    ON activation.head_revision = head.head_revision
+   AND activation.recommendation_model_release_id = head.current_release_id
+  WHERE head.singleton
+), analytics AS MATERIALIZED (
+  SELECT head.current_generation_id, head.head_revision,
+         generation.input_manifest_sha256
+  FROM ascendany.analytics_head AS head
+  JOIN ascendany.analytics_generations AS generation
+    ON generation.analytics_generation_id = head.current_generation_id
+  WHERE head.singleton
+)
+INSERT INTO ascendany.knowledge_catalog_publication_authorizations (
+    public_id, access_jwt_id, access_token_sha256, request_canonical_json,
+    configuration_public_id, expected_configuration_head_revision,
+    expected_analytics_generation_id, expected_analytics_head_revision,
+    expected_input_manifest_sha256, expected_current_model_head_revision,
+    expected_current_model_artifact_sha256, catalog_schema_id, catalog_document,
+    catalog_sha256, target_model_release_id, target_model_id,
+    target_model_artifact_sha256, target_application_version,
+    target_application_commit, target_application_build_time,
+    authorized_account_id, authorized_session_id, authorized_auth_revision,
+    access_token_expires_at, authorized_at
+)
+SELECT '77777777-7777-4777-8777-777777777777'::uuid,
+       '88888888-8888-4888-8888-888888888888'::uuid, repeat('f', 64),
+       jsonb_build_object(
+         'schema', 'ascendany.knowledge_catalog.publication-request.v1',
+         'authorizationId', '77777777-7777-4777-8777-777777777777',
+         'expectedConfigurationHeadRevision', 0,
+         'expectedAnalyticsGenerationId', analytics.current_generation_id::text,
+         'expectedAnalyticsHeadRevision', analytics.head_revision,
+         'expectedInputManifestSha256', analytics.input_manifest_sha256,
+         'expectedCurrentModelHeadRevision', model.head_revision,
+         'expectedCurrentModelArtifactSha256', model.artifact_sha256,
+         'targetCatalogSha256', model.knowledge_catalog_sha256,
+         'targetModelArtifactSha256', model.artifact_sha256,
+         'targetApplicationVersion', model.application_version,
+         'targetApplicationCommit', model.application_commit,
+         'targetApplicationBuildTime', model.application_build_time
+       )::text,
+       '55555555-5555-4555-8555-555555555555'::uuid, 0,
+       analytics.current_generation_id, analytics.head_revision,
+       analytics.input_manifest_sha256, model.head_revision, model.artifact_sha256,
+       'ascendany.knowledge_catalog.recommendation.v1', :'catalog_document'::jsonb,
+       model.knowledge_catalog_sha256, model.recommendation_model_release_id,
+       model.model_id, model.artifact_sha256, model.application_version,
+       model.application_commit, model.application_build_time,
+       actor.account_id, actor.session_id, actor.auth_revision, actor.expires_at,
+       :'publication_moment'::timestamptz - interval '1 second'
+FROM actor CROSS JOIN model CROSS JOIN analytics;
+
+INSERT INTO ascendany.configuration_items (
+    public_id, configuration_key, configuration_kind, created_at, updated_at
+)
+VALUES (
+    '55555555-5555-4555-8555-555555555555'::uuid,
+    'recommendation.catalog.active', 'knowledge_catalog',
+    :'publication_moment'::timestamptz, :'publication_moment'::timestamptz
+);
+
+INSERT INTO ascendany.configuration_versions (
+    configuration_item_id, configuration_kind, version_number, schema_id,
+    document, document_sha256, credential_ref,
+    created_by_account_id, created_by_role, created_by_session_id, created_at
+)
+SELECT item.configuration_item_id, item.configuration_kind, 1,
+       'ascendany.knowledge_catalog.recommendation.v1',
+       :'catalog_document'::jsonb, :'catalog_sha', NULL,
+       account.account_id, 'admin', session.session_id, :'publication_moment'::timestamptz
+FROM ascendany.configuration_items AS item
+JOIN ascendany.auth_accounts AS account ON account.public_id = :'admin_public_id'::uuid
+JOIN ascendany.auth_sessions AS session
+  ON session.account_id = account.account_id
+ AND session.public_id = '66666666-6666-4666-8666-666666666666'::uuid
+WHERE item.configuration_key = 'recommendation.catalog.active';
+
+UPDATE ascendany.configuration_items AS item
+SET active_version_id = version.configuration_version_id,
+    head_revision = 1, updated_at = :'publication_moment'::timestamptz
+FROM ascendany.configuration_versions AS version
+WHERE item.configuration_key = 'recommendation.catalog.active'
+  AND version.configuration_item_id = item.configuration_item_id;
+
+WITH actor AS MATERIALIZED (
+  SELECT account.account_id, session.session_id
+  FROM ascendany.auth_accounts AS account
+  JOIN ascendany.auth_sessions AS session ON session.account_id = account.account_id
+  WHERE account.public_id = :'admin_public_id'::uuid
+    AND session.public_id = '66666666-6666-4666-8666-666666666666'::uuid
+), model AS MATERIALIZED (
+  SELECT release.recommendation_model_release_id, release.model_id,
+         release.artifact_sha256, release.knowledge_catalog_sha256,
+         head.head_revision, activation.application_version,
+         activation.application_commit, activation.application_build_time
+  FROM ascendany.recommendation_model_head AS head
+  JOIN ascendany.recommendation_model_releases AS release
+    ON release.recommendation_model_release_id = head.current_release_id
+  JOIN ascendany.recommendation_model_activation_events AS activation
+    ON activation.head_revision = head.head_revision
+   AND activation.recommendation_model_release_id = head.current_release_id
+  WHERE head.singleton
+), analytics AS MATERIALIZED (
+  SELECT head.current_generation_id, head.head_revision,
+         generation.input_manifest_sha256
+  FROM ascendany.analytics_head AS head
+  JOIN ascendany.analytics_generations AS generation
+    ON generation.analytics_generation_id = head.current_generation_id
+  WHERE head.singleton
+), configuration AS MATERIALIZED (
+  SELECT item.configuration_item_id, item.active_version_id
+  FROM ascendany.configuration_items AS item
+  WHERE item.configuration_key = 'recommendation.catalog.active'
+), publication_audit AS (
+  INSERT INTO ascendany.audit_events (account_id, session_id, event_type, occurred_at, payload)
+  SELECT actor.account_id, actor.session_id,
+         'admin.configuration_version_created', :'publication_moment'::timestamptz,
+         jsonb_build_object(
+           'authorizationId', '77777777-7777-4777-8777-777777777777',
+           'configurationId', '55555555-5555-4555-8555-555555555555',
+           'key', 'recommendation.catalog.active',
+           'kind', 'knowledge_catalog',
+           'versionNumber', 1,
+           'schemaId', 'ascendany.knowledge_catalog.recommendation.v1',
+           'documentSha256', model.knowledge_catalog_sha256,
+           'headRevision', 1,
+           'credentialRef', NULL,
+           'analyticsGenerationId', analytics.current_generation_id::text,
+           'analyticsHeadRevision', analytics.head_revision,
+           'inputManifestSha256', analytics.input_manifest_sha256,
+           'currentModelHeadRevision', model.head_revision,
+           'currentModelArtifactSha256', model.artifact_sha256,
+           'targetCatalogSha256', model.knowledge_catalog_sha256,
+           'targetModelId', model.model_id::text,
+           'targetModelArtifactSha256', model.artifact_sha256,
+           'targetModelReleaseId', model.recommendation_model_release_id::text,
+           'targetApplicationVersion', model.application_version,
+           'targetApplicationCommit', model.application_commit,
+           'targetApplicationBuildTime', model.application_build_time,
+           'expectedConfigurationHeadRevision', 0,
+           'configurationMutated', true
+         )
+  FROM actor CROSS JOIN model CROSS JOIN analytics
+  RETURNING audit_event_id, occurred_at
+)
+INSERT INTO ascendany.knowledge_catalog_publications (
+    publication_authorization_id, configuration_item_id, configuration_version_id,
+    expected_configuration_head_revision, configuration_head_revision,
+    configuration_mutated, catalog_sha256, target_model_release_id,
+    target_model_id, target_model_artifact_sha256,
+    target_application_version, target_application_commit, target_application_build_time,
+    analytics_generation_id, analytics_head_revision, input_manifest_sha256,
+    current_model_head_revision, current_model_artifact_sha256,
+    published_by_account_id, published_by_session_id, published_at, audit_event_id
+)
+SELECT '77777777-7777-4777-8777-777777777777'::uuid,
+       configuration.configuration_item_id, configuration.active_version_id,
+       0, 1, true, model.knowledge_catalog_sha256,
+       model.recommendation_model_release_id, model.model_id, model.artifact_sha256,
+       model.application_version, model.application_commit, model.application_build_time,
+       analytics.current_generation_id, analytics.head_revision, analytics.input_manifest_sha256,
+       model.head_revision, model.artifact_sha256,
+       actor.account_id, actor.session_id, :'publication_moment'::timestamptz,
+       publication_audit.audit_event_id
+FROM actor CROSS JOIN model CROSS JOIN analytics
+CROSS JOIN configuration CROSS JOIN publication_audit;
+
+UPDATE ascendany.knowledge_catalog_publication_authorizations AS capability
+SET consumed_publication_id = publication.knowledge_catalog_publication_id,
+    consumed_at = publication.published_at
+FROM ascendany.knowledge_catalog_publications AS publication
+WHERE capability.public_id = '77777777-7777-4777-8777-777777777777'::uuid
+  AND publication.publication_authorization_id = capability.public_id;
+
+COMMIT;
+SQL
+
+readonly SOURCE_CATALOG_RECEIPT_JSON="$(admin_psql "${SOURCE_DATABASE}" --tuples-only --no-align <<'SQL'
+SELECT jsonb_build_object(
+  'schema', 'ascendany.knowledge_catalog.publication-receipt.v1',
+  'authorizationId', publication.publication_authorization_id::text,
+  'knowledgeCatalogPublicationId', publication.knowledge_catalog_publication_id::text,
+  'targetModelReleaseId', publication.target_model_release_id::text,
+  'catalogSha256', publication.catalog_sha256,
+  'modelArtifactSha256', publication.target_model_artifact_sha256,
+  'modelId', publication.target_model_id::text,
+  'targetApplicationVersion', publication.target_application_version,
+  'targetApplicationCommit', publication.target_application_commit,
+  'targetApplicationBuildTime', publication.target_application_build_time,
+  'configurationKey', item.configuration_key,
+  'configurationId', item.public_id::text,
+  'expectedConfigurationHeadRevision', publication.expected_configuration_head_revision,
+  'configurationHeadRevision', publication.configuration_head_revision,
+  'configurationVersionId', publication.configuration_version_id::text,
+  'configurationVersionNumber', version.version_number,
+  'analyticsGenerationId', publication.analytics_generation_id::text,
+  'analyticsHeadRevision', publication.analytics_head_revision,
+  'inputManifestSha256', publication.input_manifest_sha256,
+  'currentModelHeadRevision', publication.current_model_head_revision,
+  'currentModelArtifactSha256', publication.current_model_artifact_sha256,
+  'publishedByAccountId', account.public_id::text,
+  'publishedBySessionId', session.public_id::text,
+  'publishedAt', to_char(publication.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') ||
+    CASE
+      WHEN rtrim(to_char(publication.published_at AT TIME ZONE 'UTC', 'US'), '0') = '' THEN ''
+      ELSE '.' || rtrim(to_char(publication.published_at AT TIME ZONE 'UTC', 'US'), '0')
+    END || 'Z',
+  'auditEventId', publication.audit_event_id::text,
+  'configurationMutated', publication.configuration_mutated
+)::text
+FROM ascendany.knowledge_catalog_publications AS publication
+JOIN ascendany.knowledge_catalog_publication_authorizations AS capability
+  ON capability.public_id = publication.publication_authorization_id
+ AND capability.consumed_publication_id = publication.knowledge_catalog_publication_id
+ AND capability.consumed_at = publication.published_at
+JOIN ascendany.configuration_items AS item
+  ON item.configuration_item_id = publication.configuration_item_id
+JOIN ascendany.configuration_versions AS version
+  ON version.configuration_version_id = publication.configuration_version_id
+JOIN ascendany.auth_accounts AS account
+  ON account.account_id = publication.published_by_account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.session_id = publication.published_by_session_id;
+SQL
+)"
+printf '%s' "${SOURCE_CATALOG_RECEIPT_JSON}" | jq -jSc . >"${SOURCE_CATALOG_RECEIPT_PATH}"
+chmod 0640 -- "${SOURCE_CATALOG_RECEIPT_PATH}"
+[[ "$(find "${SOURCE_CATALOG_RECEIPT_ROOT}" -mindepth 1 -maxdepth 1 -printf '%f|%y\n' | LC_ALL=C sort)" == '1.json|f' ]] ||
+  fail 'source catalog receipt entry set differs'
+[[ "$(stat -Lc '%a:%h' -- "${SOURCE_CATALOG_RECEIPT_PATH}")" == '640:1' ]] ||
+  fail 'source catalog receipt mode/link count differs'
+jq -e '
+  type == "object" and
+  (keys == [
+    "analyticsGenerationId",
+    "analyticsHeadRevision",
+    "auditEventId",
+    "authorizationId",
+    "catalogSha256",
+    "configurationHeadRevision",
+    "configurationId",
+    "configurationKey",
+    "configurationMutated",
+    "configurationVersionId",
+    "configurationVersionNumber",
+    "currentModelArtifactSha256",
+    "currentModelHeadRevision",
+    "expectedConfigurationHeadRevision",
+    "inputManifestSha256",
+    "knowledgeCatalogPublicationId",
+    "modelArtifactSha256",
+    "modelId",
+    "publishedAt",
+    "publishedByAccountId",
+    "publishedBySessionId",
+    "schema",
+    "targetApplicationBuildTime",
+    "targetApplicationCommit",
+    "targetApplicationVersion",
+    "targetModelReleaseId"
+  ]) and
+  .schema == "ascendany.knowledge_catalog.publication-receipt.v1" and
+  .authorizationId == "77777777-7777-4777-8777-777777777777" and
+  .knowledgeCatalogPublicationId == "1"
+' "${SOURCE_CATALOG_RECEIPT_PATH}" >/dev/null ||
+  fail 'source catalog receipt identity differs from the seeded publication'
+
 if ! run_with_private_runtime_root \
     "${BACKUP_RUNTIME_ROOT}" \
     "${BACKUP_RUNTIME_PATH}" \
@@ -809,9 +1298,10 @@ if ! run_with_private_runtime_root \
     ASCENDANY_DATABASE_URL="postgresql://${BACKUP_LOGIN}@${DIRECT_HOST}:5432/${SOURCE_DATABASE}?sslmode=disable" \
     ASCENDANY_DATABASE_PASSWORD_FILE="${BACKUP_PASSWORD_FILE}" \
     ASCENDANY_ARTIFACT_ROOT="${SOURCE_ARTIFACT_ROOT}" \
+    ASCENDANY_CATALOG_RECEIPT_ROOT="${SOURCE_CATALOG_RECEIPT_ROOT}" \
     ASCENDANY_BACKUP_ROOT="${BACKUP_ROOT}" \
     ASCENDANY_BACKUP_RUNTIME_ROOT="${BACKUP_RUNTIME_PATH}" \
-    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_and_catalog_receipt_tar_zstd \
     ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
     ASCENDANY_BACKUP_RETAIN_DAILY=1 \
     ASCENDANY_BACKUP_RETAIN_WEEKLY=0 \
@@ -838,7 +1328,7 @@ if ! /usr/bin/env -i \
     PATH=/usr/bin:/bin \
     LC_ALL=C \
     ASCENDANY_BACKUP_ROOT="${BACKUP_ROOT}" \
-    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_and_catalog_receipt_tar_zstd \
     ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
     ASCENDANY_BACKUP_COMMAND_TIMEOUT=30m \
     ASCENDANY_PG_DUMP_PATH=/usr/bin/pg_dump \
@@ -856,10 +1346,24 @@ assert_single_success_log "${VERIFY_LOG}" 'backup verified'
 [[ "$(stat -Lc '%a' -- "${BACKUP_ROOT}")" == "750" ]] || fail 'backup root mode is not 0750'
 [[ "$(stat -Lc '%a' -- "${BACKUP_ROOT}/${BACKUP_ID}")" == "750" ]] || fail 'bundle mode is not 0750'
 [[ "$(find "${BACKUP_ROOT}/${BACKUP_ID}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" == \
-  'artifacts.tar.zst database.dump manifest.json manifest.sha256 ' ]] || fail 'backup bundle entry set differs'
+  'artifacts.tar.zst catalog-receipts.tar.zst database.dump manifest.json manifest.sha256 ' ]] || fail 'backup bundle entry set differs'
 while IFS= read -r bundle_file; do
   [[ "$(stat -Lc '%a' -- "${bundle_file}")" == "640" ]] || fail 'backup bundle file mode is not 0640'
 done < <(find "${BACKUP_ROOT}/${BACKUP_ID}" -mindepth 1 -maxdepth 1 -type f -print | sort)
+jq -e '
+  .schema == "ascendany.backup.bundle.v2" and
+  (.catalogPublicationReceipts | type == "object" and
+    .count == 1 and (.entries | length == 1) and
+    .entries[0].publicationId == "1" and .entries[0].path == "1.json" and
+    .entries[0].mode == 416 and
+    .file.filename == "catalog-receipts.tar.zst" and .file.format == "tar+zstd") and
+  .database.knowledgeCatalogPublicationIds == ["1"] and
+  (.database.knowledgeCatalogPublications | length == 1) and
+  .database.knowledgeCatalogPublications[0].knowledgeCatalogPublicationId == "1" and
+  .database.knowledgeCatalogPublications[0].authorizationId ==
+    "77777777-7777-4777-8777-777777777777"
+' "${BACKUP_ROOT}/${BACKUP_ID}/manifest.json" >/dev/null ||
+  fail 'backup manifest catalog publication receipt closure differs'
 
 operator_psql --command="CREATE DATABASE ${SCRATCH_DATABASE} WITH OWNER ${SCHEMA_OWNER} TEMPLATE template0 ENCODING 'UTF8' ALLOW_CONNECTIONS false" >/dev/null
 owner_operator_psql --command="REVOKE ALL PRIVILEGES ON DATABASE ${SCRATCH_DATABASE} FROM PUBLIC" >/dev/null
@@ -874,11 +1378,12 @@ if ! run_with_private_runtime_root \
     PATH=/usr/bin:/bin \
     LC_ALL=C \
     ASCENDANY_BACKUP_ROOT="${BACKUP_ROOT}" \
-    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_and_catalog_receipt_tar_zstd \
     ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
     ASCENDANY_RESTORE_DATABASE_URL="postgresql://${RESTORE_LOGIN}@${DIRECT_HOST}:5432/${SCRATCH_DATABASE}?sslmode=disable" \
     ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE="${RESTORE_PASSWORD_FILE}" \
     ASCENDANY_RESTORE_ARTIFACT_ROOT="${RESTORE_ARTIFACT_ROOT}" \
+    ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT="${RESTORE_CATALOG_RECEIPT_ROOT}" \
     ASCENDANY_RESTORE_RUNTIME_ROOT="${RESTORE_RUNTIME_PATH}" \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
     ASCENDANY_BACKUP_COMMAND_TIMEOUT=30m \
@@ -897,6 +1402,8 @@ assert_single_success_log "${RESTORE_LOG}" 'backup restore verified'
 [[ "$(jq -er '.backupId' "${RESTORE_LOG}")" == "${BACKUP_ID}" ]] || fail 'restore backup ID changed'
 [[ "$(jq -er '.manifestSHA256' "${RESTORE_LOG}")" == "${MANIFEST_SHA256}" ]] ||
   fail 'restore manifest digest changed'
+[[ "$(jq -er '.catalogReceiptRoot' "${RESTORE_LOG}")" == "${RESTORE_CATALOG_RECEIPT_ROOT}" ]] ||
+  fail 'restore verifier reported an unexpected catalog receipt root'
 
 assert_scratch_contract
 assert_restored_full_role_contract
@@ -937,11 +1444,18 @@ SELECT
        AND audit.occurred_at = account.created_at)::text || '|' ||
     (SELECT count(*) FROM ascendany.recommendation_model_releases)::text || '|' ||
     (SELECT count(*) FROM ascendany.recommendation_model_activation_events)::text || '|' ||
-    (SELECT count(*) FROM ascendany.recommendation_model_head WHERE singleton)::text;
+    (SELECT count(*) FROM ascendany.recommendation_model_head WHERE singleton)::text || '|' ||
+    (SELECT count(*)
+     FROM ascendany.knowledge_catalog_publication_authorizations AS capability
+     JOIN ascendany.knowledge_catalog_publications AS publication
+       ON publication.publication_authorization_id = capability.public_id
+      AND capability.consumed_publication_id = publication.knowledge_catalog_publication_id
+      AND capability.consumed_at = publication.published_at)::text || '|' ||
+    (SELECT count(*) FROM ascendany.knowledge_catalog_publications)::text;
 SQL
 )"
-[[ "${RESTORED_DATABASE_SUMMARY}" == "6|1|1|1|1|1|1|1" ]] ||
-  fail 'restored migration, artifact, administrator, or model release state differs from the source manifest'
+[[ "${RESTORED_DATABASE_SUMMARY}" == "7|1|1|1|1|1|1|1|1|1" ]] ||
+  fail 'restored migration, artifact, administrator, model, authorization, or publication state differs from the source manifest'
 readonly RESTORED_MODEL_PROVENANCE="$(admin_psql "${SCRATCH_DATABASE}" --tuples-only --no-align <<'SQL'
 SELECT jsonb_build_object(
   'releases', (SELECT jsonb_agg(to_jsonb(release) ORDER BY release.recommendation_model_release_id)
@@ -966,6 +1480,15 @@ SQL
   fail 'restored artifact size changed'
 [[ "$(sha256sum -- "${RESTORE_ARTIFACT_ROOT}/${SOURCE_STORAGE_KEY}" | awk '{print $1}')" == "${SOURCE_SHA256}" ]] ||
   fail 'restored artifact digest changed'
+[[ -d "${RESTORE_CATALOG_RECEIPT_ROOT}" && ! -L "${RESTORE_CATALOG_RECEIPT_ROOT}" &&
+   "$(stat -Lc '%a' -- "${RESTORE_CATALOG_RECEIPT_ROOT}")" == "750" ]] ||
+  fail 'restored catalog receipt root mode is not 0750'
+[[ "$(find "${RESTORE_CATALOG_RECEIPT_ROOT}" -mindepth 1 -maxdepth 1 -printf '%f|%y\n' | LC_ALL=C sort)" == '1.json|f' ]] ||
+  fail 'restored catalog receipt entry set differs'
+[[ "$(stat -Lc '%a:%h' -- "${RESTORE_CATALOG_RECEIPT_ROOT}/1.json")" == "640:1" ]] ||
+  fail 'restored catalog receipt mode/link count differs'
+cmp --silent -- "${SOURCE_CATALOG_RECEIPT_PATH}" "${RESTORE_CATALOG_RECEIPT_ROOT}/1.json" ||
+  fail 'restored catalog receipt bytes differ from the source publication receipt'
 [[ -z "$(find "${RESTORE_PARENT}" -mindepth 1 -maxdepth 1 \
   \( -name '.restore-*' -o -name '.restore-pgpass-*' \) -print)" ]] ||
   fail 'restore verifier left staging or private pgpass paths behind'
@@ -974,10 +1497,14 @@ SQL
 # SET ROLE to the schema owner to disable and drop its scratch database.
 owner_operator_psql --command="ALTER DATABASE ${SCRATCH_DATABASE} WITH ALLOW_CONNECTIONS false" >/dev/null
 owner_operator_psql --command="DROP DATABASE ${SCRATCH_DATABASE} WITH (FORCE)" >/dev/null
-rm -rf --one-file-system -- "${RESTORE_ARTIFACT_ROOT}" "${RESTORE_PARENT}/.restore-${BACKUP_ID}"
+rm -rf --one-file-system -- \
+  "${RESTORE_ARTIFACT_ROOT}" \
+  "${RESTORE_CATALOG_RECEIPT_ROOT}" \
+  "${RESTORE_PARENT}/.restore-${BACKUP_ID}" \
+  "${RESTORE_PARENT}/.restore-catalog-receipts-${BACKUP_ID}"
 rm -f -- "${OPERATOR_PGPASS_FILE}" "${RUNTIME_PASSWORD_FILE}" "${RUNTIME_PGPASS_FILE}" \
   "${MIGRATOR_PASSWORD_FILE}" "${BACKUP_PASSWORD_FILE}" "${RESTORE_PASSWORD_FILE}" \
-  "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}"
+  "${CATALOG_PUBLISHER_PASSWORD_FILE}" "${PASSWORD_PEPPER_FILE}" "${BOOTSTRAP_ADMIN_PASSWORD_FILE}"
 rmdir -- "${ADMIN_BOOTSTRAP_CREDENTIAL_DIR}"
 rmdir -- "${RESTORE_RUNTIME_ROOT}" "${OPERATOR_RUNTIME_ROOT}" "${RUNTIME_PARENT}"
 
@@ -1003,7 +1530,7 @@ JOIN pg_roles AS owner ON owner.oid = database.datdba
 WHERE database.datname = '${SOURCE_DATABASE}'")"
 [[ "${SOURCE_OWNER}" == "${DATABASE_OWNER}" ]] || fail 'source database owner isolation changed'
 
-printf 'BACKUP_RESTORE_REHEARSAL_RESULT postgres_major=17 backup_commands=3 artifact_count=1 source_bytes=%s migrations=6 model_releases=1 model_activations=1 model_head_exact=true model_provenance_exact=true admin_bootstrap_exact=true second_admin_bootstrap_rejected=true restored_admin_bootstrap_exact=true scratch_owner=%s scratch_acl_exact=true restored_full_role_verifier=true xtrace_disabled_before_secrets=true repeated_role_bootstrap_verified=true scratch_cleanup=%s restore_credentials_removed=%s preexisting_containers=%s preexisting_pods=%s\n' \
+printf 'BACKUP_RESTORE_REHEARSAL_RESULT postgres_major=17 backup_commands=3 artifact_count=1 catalog_publication_count=1 catalog_receipt_count=1 bundle_files=5 source_bytes=%s migrations=7 model_releases=1 model_activations=1 model_head_exact=true model_provenance_exact=true admin_bootstrap_exact=true second_admin_bootstrap_rejected=true restored_admin_bootstrap_exact=true scratch_owner=%s scratch_acl_exact=true restored_full_role_verifier=true xtrace_disabled_before_secrets=true repeated_role_bootstrap_verified=true scratch_cleanup=%s restore_credentials_removed=%s preexisting_containers=%s preexisting_pods=%s\n' \
   "${SOURCE_SIZE}" \
   "${SCHEMA_OWNER}" \
   "$([[ "${SCRATCH_CLEANED}" == "1" ]] && printf true || printf false)" \

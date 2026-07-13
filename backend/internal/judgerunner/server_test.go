@@ -23,7 +23,11 @@ func TestServeOneCancellationClosesListenerAndUnlinksSocket(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runner, err := New(&fakeEngine{}, DefaultConfig(jobID, filepath.Join(workParent, jobID)))
+	runner, err := New(
+		&fakeEngine{identity: testCompilerImage},
+		&fakeEngine{identity: testRuntimeImage},
+		DefaultConfig(jobID, filepath.Join(workParent, jobID)),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

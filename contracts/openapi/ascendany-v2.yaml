@@ -689,14 +689,11 @@ paths:
         must be an object, is canonicalized before hashing, and may contain at
         most 262144 UTF-8 bytes before canonicalization. model_connection and
         feedback_delivery credentials are referenced only through credentialRef;
-        credential-bearing document fields are rejected. Recommendation
-        knowledge-catalog requests carry the exact analytics generation, head
-        revision, and input-manifest SHA-256 returned by review-context. The
-        server locks that analytics head, rebuilds authoritative problem facts,
-        requires exact assignment coverage, and activates the configuration in
-        the same transaction. A replay of the active immutable document returns
-        idempotent=true without creating a version only while that review
-        provenance remains current.
+        credential-bearing document fields are rejected. knowledge_catalog is
+        release-owned and is rejected by this online endpoint; it is published
+        only by the stopped-runtime release operator. A replay of the active
+        immutable generic document returns idempotent=true without creating a
+        version.
       security:
         - bearerAuth: []
       requestBody:
@@ -815,6 +812,56 @@ paths:
           $ref: "#/components/responses/RequestTimeout"
         "409":
           $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+  /api/v2/admin/recommendation/catalog-publication-authorizations:
+    post:
+      operationId: authorizeKnowledgeCatalogPublication
+      summary: Authorize one exact stopped-runtime knowledge-catalog publication.
+      description: >-
+        Requires an active admin access token and enabled writes. The server
+        canonicalizes and validates the complete knowledge-catalog document,
+        verifies the current configuration, analytics, model, and target
+        release preconditions in one transaction, and persists one immutable
+        single-use authorization. The authorization expires exactly with the
+        access token that created it. The returned publicationRequest contains
+        the supplied 12-field intent plus its server-generated UUIDv4 and is
+        the only request accepted by the stopped-runtime publisher.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogPublicationAuthorizationRequest"
+      responses:
+        "201":
+          description: One immutable catalog publication authorization was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogPublicationAuthorizationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "408":
+          $ref: "#/components/responses/RequestTimeout"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "503":
@@ -3996,9 +4043,7 @@ components:
               minimum: 2
             - type: "null"
     CreateConfigurationVersionRequest:
-      oneOf:
-        - $ref: "#/components/schemas/CreateGenericConfigurationVersionRequest"
-        - $ref: "#/components/schemas/CreateRecommendationKnowledgeCatalogVersionRequest"
+      $ref: "#/components/schemas/CreateGenericConfigurationVersionRequest"
     CreateGenericConfigurationVersionRequest:
       type: object
       additionalProperties: false
@@ -4009,7 +4054,7 @@ components:
             - $ref: "#/components/schemas/ConfigurationKey"
             - not:
                 const: recommendation.catalog.active
-          description: recommendation.catalog.active is reserved exclusively for knowledge_catalog.
+          description: recommendation.catalog.active is reserved for the stopped-runtime release operator.
         kind:
           type: string
           enum: [prompt, model_connection, feedback_policy, feedback_delivery]
@@ -4029,43 +4074,6 @@ components:
           oneOf:
             - $ref: "#/components/schemas/ConfigurationKey"
             - type: "null"
-    CreateRecommendationKnowledgeCatalogVersionRequest:
-      type: object
-      additionalProperties: false
-      required:
-        - key
-        - kind
-        - expectedHeadRevision
-        - expectedAnalyticsGenerationId
-        - expectedAnalyticsHeadRevision
-        - expectedInputManifestSha256
-        - schemaId
-        - document
-        - credentialRef
-      properties:
-        key:
-          const: recommendation.catalog.active
-        kind:
-          const: knowledge_catalog
-        expectedHeadRevision:
-          type: integer
-          format: int64
-          minimum: 0
-        expectedAnalyticsGenerationId:
-          $ref: "#/components/schemas/CanonicalPositiveInt64String"
-        expectedAnalyticsHeadRevision:
-          type: integer
-          format: int64
-          minimum: 1
-        expectedInputManifestSha256:
-          type: string
-          pattern: "^[0-9a-f]{64}$"
-        schemaId:
-          const: ascendany.knowledge_catalog.recommendation.v1
-        document:
-          $ref: "#/components/schemas/RecommendationKnowledgeCatalogV1"
-        credentialRef:
-          type: "null"
     CreateConfigurationVersionResult:
       type: object
       additionalProperties: false
@@ -4117,6 +4125,95 @@ components:
           type: integer
           format: int64
           minimum: 0
+    CatalogPublicationIntent:
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - expectedConfigurationHeadRevision
+        - expectedAnalyticsGenerationId
+        - expectedAnalyticsHeadRevision
+        - expectedInputManifestSha256
+        - expectedCurrentModelHeadRevision
+        - expectedCurrentModelArtifactSha256
+        - targetCatalogSha256
+        - targetModelArtifactSha256
+        - targetApplicationVersion
+        - targetApplicationCommit
+        - targetApplicationBuildTime
+      properties:
+        schema:
+          const: ascendany.knowledge_catalog.publication-request.v1
+        expectedConfigurationHeadRevision:
+          type: integer
+          format: int64
+          minimum: 0
+        expectedAnalyticsGenerationId:
+          $ref: "#/components/schemas/CanonicalPositiveInt64String"
+        expectedAnalyticsHeadRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        expectedInputManifestSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        expectedCurrentModelHeadRevision:
+          type: integer
+          format: int64
+          minimum: 1
+        expectedCurrentModelArtifactSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        targetCatalogSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        targetModelArtifactSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        targetApplicationVersion:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        targetApplicationCommit:
+          type: string
+          pattern: "^[0-9a-f]{40}$"
+        targetApplicationBuildTime:
+          type: string
+          format: date-time
+          maxLength: 128
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{0,8}[1-9])?Z$"
+    CatalogPublicationAuthorizationRequest:
+      type: object
+      additionalProperties: false
+      required: [publicationIntent, document]
+      properties:
+        publicationIntent:
+          $ref: "#/components/schemas/CatalogPublicationIntent"
+        document:
+          $ref: "#/components/schemas/RecommendationKnowledgeCatalogV1"
+    AuthorizedCatalogPublicationRequest:
+      allOf:
+        - $ref: "#/components/schemas/CatalogPublicationIntent"
+        - type: object
+          required: [authorizationId]
+          properties:
+            authorizationId:
+              $ref: "#/components/schemas/CanonicalUUIDv4"
+      unevaluatedProperties: false
+    CatalogPublicationAuthorizationResult:
+      type: object
+      additionalProperties: false
+      required: [authorizationId, expiresAt, publicationRequest]
+      properties:
+        authorizationId:
+          $ref: "#/components/schemas/CanonicalUUIDv4"
+        expiresAt:
+          type: string
+          format: date-time
+          description: Exact expiry of the administrator access token that created this authorization.
+        publicationRequest:
+          $ref: "#/components/schemas/AuthorizedCatalogPublicationRequest"
     RecommendationKnowledgeCatalogV1:
       type: object
       additionalProperties: false

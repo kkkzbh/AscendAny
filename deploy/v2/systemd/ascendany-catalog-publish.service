@@ -1,0 +1,85 @@
+[Unit]
+Description=Publish the release-bound AscendAny knowledge catalog
+Documentation=file:/opt/ascendany/v2/README.md
+Wants=network-online.target
+Requires=ascendany-model-register.service
+After=network-online.target ascendany-migrate.service ascendany-model-register.service
+Before=ascendanyd.service
+Conflicts=ascendanyd.service
+AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-catalog-publish
+AssertPathExists=/opt/ascendany/v2/models/recommendation-model.json
+AssertPathExists=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json
+AssertPathExists=/etc/ascendany-catalog-publisher/catalog-publish.env
+AssertPathIsDirectory=/var/lib/ascendany-catalog-publisher/receipts
+AssertPathIsDirectory=/var/lib/ascendany-catalog-publisher/pending
+AssertPathExists=/var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred
+AssertPathExists=/var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred
+
+[Service]
+Type=oneshot
+User=ascendany-catalog-publisher
+Group=ascendany-catalog-readers
+WorkingDirectory=/var/lib/ascendany-catalog-publisher
+UMask=0027
+
+# Root persists the encrypted immutable request and short-lived administrator
+# access token until the stopped-runtime publication transaction succeeds.
+LoadCredentialEncrypted=catalog_publisher_db_password:/etc/ascendany-catalog-publisher/credentials/catalog_publisher_db_password.cred
+LoadCredentialEncrypted=jwt_verification_public_key:/etc/ascendany/credentials/jwt_verification_public_key.cred
+LoadCredentialEncrypted=catalog_publication_request:/var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred
+LoadCredentialEncrypted=admin_access_token:/var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred
+EnvironmentFile=/etc/ascendany-catalog-publisher/catalog-publish.env
+Environment=SHELL=/usr/sbin/nologin
+Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/catalog_publisher_db_password
+Environment=ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE=%d/jwt_verification_public_key
+ExecStartPre=+/usr/bin/test -x /opt/ascendany/v2/bin/ascendany-catalog-publish
+ExecStartPre=+/usr/bin/test -r /etc/ascendany-catalog-publisher/catalog-publish.env
+ExecStartPre=+/usr/bin/test -f /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred
+ExecStartPre=+/usr/bin/test ! -L /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred
+ExecStartPre=+/usr/bin/test -s /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred
+ExecStartPre=+/usr/bin/test -f /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred
+ExecStartPre=+/usr/bin/test ! -L /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred
+ExecStartPre=+/usr/bin/test -s /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred
+ExecStartPre=/usr/bin/test -s %d/catalog_publisher_db_password
+ExecStartPre=/usr/bin/test -s %d/jwt_verification_public_key
+ExecStartPre=/usr/bin/test -s %d/catalog_publication_request
+ExecStartPre=/usr/bin/test -s %d/admin_access_token
+ExecStart=/opt/ascendany/v2/bin/ascendany-catalog-publish publish
+ExecStartPost=/usr/bin/test -d /var/lib/ascendany-catalog-publisher/receipts
+ExecStartPost=+/usr/bin/rm -f -- /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred
+TimeoutStartSec=90s
+TimeoutStopFailureMode=abort
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+DevicePolicy=closed
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.88.0.2/32
+ReadOnlyPaths=/etc/ascendany-catalog-publisher
+ReadWritePaths=/var/lib/ascendany-catalog-publisher/receipts /var/lib/ascendany-catalog-publisher/pending
+InaccessiblePaths=/etc/ascendany/v2 /etc/ascendany/credentials /opt/ascendany/Release /var/lib/ascendany /var/backups/ascendany

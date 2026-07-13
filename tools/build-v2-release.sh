@@ -28,7 +28,7 @@ set -Eeuo pipefail
 export LC_ALL=C
 
 usage() {
-  printf 'usage: %s --version SEMVER --commit 40_HEX --source-date-epoch SECONDS --go-path /canonical/go --go-version GOVERSION --goos linux --goarch amd64 --goamd64 v1 --release-purpose production|acceptance_test --recommendation-model /protected/absolute/canonical.json --recommendation-model-sha256 64_HEX --output /absolute/path\n' "$0" >&2
+  printf 'usage: %s --version SEMVER --commit 40_HEX --source-date-epoch SECONDS --go-path /canonical/go --go-version GOVERSION --goos linux --goarch amd64 --goamd64 v1 --release-purpose production|acceptance_test --recommendation-model /protected/absolute/canonical.json --recommendation-model-sha256 64_HEX --knowledge-catalog /protected/absolute/canonical.json --knowledge-catalog-sha256 64_HEX --output /absolute/path\n' "$0" >&2
 }
 
 validate_protected_directory_ancestry() {
@@ -82,6 +82,8 @@ goamd64=""
 release_purpose=""
 recommendation_model=""
 recommendation_model_sha256=""
+knowledge_catalog=""
+knowledge_catalog_sha256=""
 output=""
 release_home="${HOME:-}"
 
@@ -92,6 +94,8 @@ fi
 builder_path="$script_source"
 script_root="$(cd -- "${script_source%/*}" && pwd -P)"
 repository_root="$(cd -- "$script_root/.." && pwd -P)"
+readonly esbuild_version='0.25.12'
+readonly esbuild_binary="$repository_root/node_modules/.pnpm/esbuild@${esbuild_version}/node_modules/esbuild/bin/esbuild"
 unset script_source
 
 validate_go_binary() {
@@ -117,6 +121,33 @@ validate_go_binary() {
     exit 2
   fi
   validate_protected_file_ancestry 'Go tool path' "$go_binary"
+}
+
+validate_esbuild_binary() {
+  local owner mode actual_version
+
+  if [[ ! -f "$esbuild_binary" || -L "$esbuild_binary" || ! -x "$esbuild_binary" ||
+        "$esbuild_binary" != "$(/usr/bin/realpath -e -- "$esbuild_binary")" ]]; then
+    printf 'workspace esbuild must be the explicit canonical pinned executable regular file\n' >&2
+    exit 2
+  fi
+  owner="$(/usr/bin/stat -Lc '%u' -- "$esbuild_binary")"
+  mode="$((8#$(/usr/bin/stat -Lc '%a' -- "$esbuild_binary")))"
+  if [[ "$owner" != 0 && "$owner" != "$EUID" ]] || (( (mode & 8#022) != 0 )); then
+    printf 'workspace esbuild must be root/release-user owned and immutable to group/other\n' >&2
+    exit 2
+  fi
+  validate_protected_file_ancestry 'workspace esbuild path' "$esbuild_binary"
+  actual_version="$(
+    /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "$esbuild_binary" --version
+  )" || {
+    printf 'workspace esbuild version cannot be read\n' >&2
+    exit 2
+  }
+  if [[ "$actual_version" != "$esbuild_version" ]]; then
+    printf 'workspace esbuild is %s; the release requires %s\n' "$actual_version" "$esbuild_version" >&2
+    exit 2
+  fi
 }
 
 validate_recommendation_model_source() {
@@ -146,6 +177,37 @@ validate_recommendation_model_source() {
   actual_sha="$(/usr/bin/sha256sum -- "$recommendation_model" | /usr/bin/awk '{print $1}')"
   if [[ "$actual_sha" != "$recommendation_model_sha256" ]]; then
     printf 'recommendation model digest differs from --recommendation-model-sha256\n' >&2
+    exit 2
+  fi
+}
+
+validate_knowledge_catalog_source() {
+  local metadata owner mode_text mode size links actual_sha
+
+  if [[ ! "$knowledge_catalog" =~ ^/[0-9A-Za-z_./:+-]+$ ||
+        ! -f "$knowledge_catalog" || -L "$knowledge_catalog" ]]; then
+    printf 'knowledge catalog must name an explicit absolute regular file\n' >&2
+    exit 2
+  fi
+  if [[ "$knowledge_catalog" != "$(/usr/bin/realpath -e -- "$knowledge_catalog")" ]]; then
+    printf 'knowledge catalog path must be canonical and have no symlink ancestry\n' >&2
+    exit 2
+  fi
+  metadata="$(/usr/bin/stat -Lc '%u:%a:%s:%h' -- "$knowledge_catalog")"
+  IFS=: read -r owner mode_text size links <<<"$metadata"
+  mode="$((8#$mode_text))"
+  if [[ "$owner" != 0 && "$owner" != "$EUID" ]] || (( (mode & 8#022) != 0 )); then
+    printf 'knowledge catalog must be root/release-user owned and immutable to group/other\n' >&2
+    exit 2
+  fi
+  if [[ "$links" != 1 || ! "$size" =~ ^[1-9][0-9]*$ || "$size" -gt 16777216 ]]; then
+    printf 'knowledge catalog must be one single-link file between 1 and 16777216 bytes\n' >&2
+    exit 2
+  fi
+  validate_protected_file_ancestry 'knowledge catalog path' "$knowledge_catalog"
+  actual_sha="$(/usr/bin/sha256sum -- "$knowledge_catalog" | /usr/bin/awk '{print $1}')"
+  if [[ "$actual_sha" != "$knowledge_catalog_sha256" ]]; then
+    printf 'knowledge catalog digest differs from --knowledge-catalog-sha256\n' >&2
     exit 2
   fi
 }
@@ -384,6 +446,16 @@ while (( $# > 0 )); do
       recommendation_model_sha256="$2"
       shift 2
       ;;
+    --knowledge-catalog)
+      (( $# >= 2 )) || { usage; exit 2; }
+      knowledge_catalog="$2"
+      shift 2
+      ;;
+    --knowledge-catalog-sha256)
+      (( $# >= 2 )) || { usage; exit 2; }
+      knowledge_catalog_sha256="$2"
+      shift 2
+      ;;
     --output)
       (( $# >= 2 )) || { usage; exit 2; }
       output="$2"
@@ -409,6 +481,7 @@ done
 unset command
 
 validate_go_binary
+validate_esbuild_binary
 if [[ "$release_home" != /* || ! -d "$release_home" || -L "$release_home" ||
       "$release_home" != "$(/usr/bin/realpath -e -- "$release_home")" ||
       "$(/usr/bin/stat -Lc '%u' -- "$release_home")" != "$EUID" ]]; then
@@ -451,6 +524,11 @@ if [[ ! "$recommendation_model_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   exit 2
 fi
 validate_recommendation_model_source
+if [[ ! "$knowledge_catalog_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  printf 'knowledge catalog SHA-256 must be exactly 64 lowercase hexadecimal characters\n' >&2
+  exit 2
+fi
+validate_knowledge_catalog_source
 if [[ "$output" != /* || "$output" != "$(realpath -m -- "$output")" ]]; then
   printf 'output must be a clean absolute path\n' >&2
   exit 2
@@ -541,6 +619,15 @@ if [[ "$(/usr/bin/stat -Lc '%d:%i:%u:%a:%s:%h' -- "$recommendation_model")" != "
       "$(/usr/bin/sha256sum -- "$recommendation_model" | /usr/bin/awk '{print $1}')" != "$recommendation_model_sha256" ||
       "$(/usr/bin/sha256sum -- "$captured_recommendation_model" | /usr/bin/awk '{print $1}')" != "$recommendation_model_sha256" ]]; then
   printf 'recommendation model changed while it was captured\n' >&2
+  exit 1
+fi
+readonly knowledge_catalog_source_identity="$(/usr/bin/stat -Lc '%d:%i:%u:%a:%s:%h' -- "$knowledge_catalog")"
+captured_knowledge_catalog="$workspace/recommendation-knowledge-catalog.json"
+/usr/bin/install -m 0600 -- "$knowledge_catalog" "$captured_knowledge_catalog"
+if [[ "$(/usr/bin/stat -Lc '%d:%i:%u:%a:%s:%h' -- "$knowledge_catalog")" != "$knowledge_catalog_source_identity" ||
+      "$(/usr/bin/sha256sum -- "$knowledge_catalog" | /usr/bin/awk '{print $1}')" != "$knowledge_catalog_sha256" ||
+      "$(/usr/bin/sha256sum -- "$captured_knowledge_catalog" | /usr/bin/awk '{print $1}')" != "$knowledge_catalog_sha256" ]]; then
+  printf 'knowledge catalog changed while it was captured\n' >&2
   exit 1
 fi
 env -i \
@@ -637,6 +724,7 @@ readonly -a binaries=(
   ascendanyd
   ascendany-admin-bootstrap
   ascendany-backup
+  ascendany-catalog-publish
   ascendany-judge
   ascendany-lsp
   ascendany-migrate
@@ -650,6 +738,8 @@ for binary in "${binaries[@]}"; do
 done
 payload_paths+=(
   models/recommendation-model.json
+  models/recommendation-knowledge-catalog.json
+  operators/ascendany-production-initialize.mjs
   README.md
   OJ_JUDGE_CONTRACT.md
   LSP_CONTROL_CONTRACT.md
@@ -662,10 +752,13 @@ payload_paths+=(
   config/ascendanyd.env
   config/ascendanyd-read-only-smoke.env
   config/backup.env
+  config/catalog-publish.env
   config/cloudflared.yaml
   config/fedora-runtime-packages.json
   config/judge.env
+  config/judge-compiler-rootfs.inventory
   config/judge-image-lock.json
+  config/judge-images.Containerfile
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
@@ -673,7 +766,9 @@ payload_paths+=(
   config/postgresql-ident.conf
   config/restore.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-register.service
   systemd/ascendany-model-activate.service
+  systemd/ascendany-catalog-publish.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -698,18 +793,20 @@ payload_paths+=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
+  scripts/postgres-schema-fingerprint.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
 )
 readonly -a payload_paths
-if [[ "${#payload_paths[@]}" != "59" ]]; then
-  printf 'release payload path contract must contain exactly 59 entries\n' >&2
+if [[ "${#payload_paths[@]}" != "68" ]]; then
+  printf 'release payload path contract must contain exactly 68 entries\n' >&2
   exit 1
 fi
 
 readonly -a payload_directories=(
   bin
   models
+  operators
   contracts
   contracts/openapi
   contracts/pintia
@@ -738,10 +835,13 @@ readonly -a copy_sources=(
   deploy/v2/config/ascendanyd.env.example
   deploy/v2/config/ascendanyd-read-only-smoke.env.example
   deploy/v2/config/backup.env.example
+  deploy/v2/config/catalog-publish.env.example
   deploy/v2/config/cloudflared.yaml
   deploy/v2/config/fedora-runtime-packages.json
   deploy/v2/config/judge.env.example
+  deploy/v2/config/judge-compiler-rootfs.inventory
   deploy/v2/config/judge-image-lock.json
+  deploy/v2/config/judge-images.Containerfile
   deploy/v2/config/migrate.env.example
   deploy/v2/config/pgbouncer-hba.conf
   deploy/v2/config/pgbouncer.ini
@@ -749,7 +849,9 @@ readonly -a copy_sources=(
   deploy/v2/config/postgresql-ident.conf
   deploy/v2/config/restore.env.example
   deploy/v2/systemd/ascendanyd.service
+  deploy/v2/systemd/ascendany-model-register.service
   deploy/v2/systemd/ascendany-model-activate.service
+  deploy/v2/systemd/ascendany-catalog-publish.service
   deploy/v2/systemd/ascendanyd.service.d/40-read-only-smoke.conf
   deploy/v2/systemd/ascendany-admin-bootstrap.service
   deploy/v2/systemd/ascendany-backup.service
@@ -774,6 +876,7 @@ readonly -a copy_sources=(
   deploy/v2/scripts/acquire-pgbouncer-rpm.sh
   deploy/v2/scripts/attest-pgbouncer-rpm.sh
   deploy/v2/scripts/provision-postgres-pgbouncer.sh
+  deploy/v2/scripts/postgres-schema-fingerprint.sh
   deploy/v2/scripts/validate-cloudflared.sh
   deploy/v2/scripts/validate-production.sh
 )
@@ -790,10 +893,13 @@ readonly -a copy_targets=(
   config/ascendanyd.env
   config/ascendanyd-read-only-smoke.env
   config/backup.env
+  config/catalog-publish.env
   config/cloudflared.yaml
   config/fedora-runtime-packages.json
   config/judge.env
+  config/judge-compiler-rootfs.inventory
   config/judge-image-lock.json
+  config/judge-images.Containerfile
   config/migrate.env
   config/pgbouncer-hba.conf
   config/pgbouncer.ini
@@ -801,7 +907,9 @@ readonly -a copy_targets=(
   config/postgresql-ident.conf
   config/restore.env
   systemd/ascendanyd.service
+  systemd/ascendany-model-register.service
   systemd/ascendany-model-activate.service
+  systemd/ascendany-catalog-publish.service
   systemd/ascendanyd.service.d/40-read-only-smoke.conf
   systemd/ascendany-admin-bootstrap.service
   systemd/ascendany-backup.service
@@ -826,6 +934,7 @@ readonly -a copy_targets=(
   scripts/acquire-pgbouncer-rpm.sh
   scripts/attest-pgbouncer-rpm.sh
   scripts/provision-postgres-pgbouncer.sh
+  scripts/postgres-schema-fingerprint.sh
   scripts/validate-cloudflared.sh
   scripts/validate-production.sh
 )
@@ -837,6 +946,7 @@ fi
 install -d -m 0755 \
   "$staging/bin" \
   "$staging/models" \
+  "$staging/operators" \
   "$staging/contracts/openapi" \
   "$staging/contracts/pintia" \
   "$staging/db/roles" \
@@ -890,15 +1000,55 @@ readonly linker_flags="-s -w -buildid= -X ${version_package}.Version=${version} 
   done
 )
 
+if ! /usr/bin/jq -e --arg version "$esbuild_version" \
+  '.devDependencies.esbuild == $version' \
+  "$source_root/packages/sdk/package.json" >/dev/null; then
+  printf 'reviewed SDK workspace must pin esbuild %s exactly\n' "$esbuild_version" >&2
+  exit 1
+fi
+(
+  cd "$source_root"
+  /usr/bin/env -i \
+    PATH=/usr/bin:/bin \
+    HOME="$release_home" \
+    LC_ALL=C \
+    "$esbuild_binary" \
+      tools/v2-production-initialization-client.ts \
+      --bundle \
+      --platform=node \
+      --format=esm \
+      --target=node22.22 \
+      --packages=bundle \
+      --tree-shaking=true \
+      --charset=utf8 \
+      --legal-comments=none \
+      --log-level=error \
+      --outfile="$staging/operators/ascendany-production-initialize.mjs"
+)
+assert_output_parent_identity 'publishing production initialization bundle'
+/usr/bin/chmod 0555 -- "$staging/operators/ascendany-production-initialize.mjs"
+
 /usr/bin/install -m 0644 -- \
   "$captured_recommendation_model" \
   "$staging/models/recommendation-model.json"
+/usr/bin/install -m 0644 -- \
+  "$captured_knowledge_catalog" \
+  "$staging/models/recommendation-knowledge-catalog.json"
 /usr/bin/env -i \
   PATH=/usr/bin:/bin \
   LC_ALL=C \
   "$staging/bin/ascendany-model" verify \
     --model "$staging/models/recommendation-model.json" \
     --sha256 "$recommendation_model_sha256" \
+    --expected-purpose "$release_purpose"
+/usr/bin/env -i \
+  PATH=/usr/bin:/bin \
+  LC_ALL=C \
+  "$staging/bin/ascendany-model" verify-catalog \
+    --catalog "$staging/models/recommendation-knowledge-catalog.json" \
+    --catalog-sha256 "$knowledge_catalog_sha256" \
+    --model "$staging/models/recommendation-model.json" \
+    --model-sha256 "$recommendation_model_sha256" \
     --expected-purpose "$release_purpose"
 
 for index in "${!copy_sources[@]}"; do
@@ -911,27 +1061,27 @@ for index in "${!copy_sources[@]}"; do
     "$staging/${copy_targets[$index]}"
 done
 unset index mode
-if [[ "$(/usr/bin/grep -Fxc 'ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__' "$staging/config/ascendanyd.env")" != 1 ]]; then
-  printf 'ascendanyd configuration must contain one recommendation model digest marker\n' >&2
-  exit 1
-fi
-/usr/bin/sed -i \
-  "s/^ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__$/ASCENDANY_RECOMMENDATION_MODEL_SHA256=$recommendation_model_sha256/" \
-  "$staging/config/ascendanyd.env"
-if [[ "$(/usr/bin/grep -Fxc 'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__' "$staging/config/ascendanyd.env")" != 1 ]]; then
-  printf 'ascendanyd configuration must contain one recommendation model purpose marker\n' >&2
-  exit 1
-fi
-/usr/bin/sed -i \
-  "s/^ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__$/ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=$release_purpose/" \
-  "$staging/config/ascendanyd.env"
+for release_config in "$staging/config/ascendanyd.env" "$staging/config/catalog-publish.env"; do
+  if [[ "$(/usr/bin/grep -Fxc 'ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__' "$release_config")" != 1 ||
+        "$(/usr/bin/grep -Fxc 'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__' "$release_config")" != 1 ||
+        "$(/usr/bin/grep -Fxc 'ASCENDANY_KNOWLEDGE_CATALOG_SHA256=__ASCENDANY_KNOWLEDGE_CATALOG_SHA256__' "$release_config")" != 1 ]]; then
+    printf 'release configuration must contain one model/catalog marker of each kind: %s\n' "$release_config" >&2
+    exit 1
+  fi
+  /usr/bin/sed -i \
+    -e "s/^ASCENDANY_RECOMMENDATION_MODEL_SHA256=__ASCENDANY_RECOMMENDATION_MODEL_SHA256__$/ASCENDANY_RECOMMENDATION_MODEL_SHA256=$recommendation_model_sha256/" \
+    -e "s/^ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=__ASCENDANY_RECOMMENDATION_MODEL_PURPOSE__$/ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=$release_purpose/" \
+    -e "s/^ASCENDANY_KNOWLEDGE_CATALOG_SHA256=__ASCENDANY_KNOWLEDGE_CATALOG_SHA256__$/ASCENDANY_KNOWLEDGE_CATALOG_SHA256=$knowledge_catalog_sha256/" \
+    "$release_config"
+done
+unset release_config
 
 expected_payload_paths="$workspace/expected-payload-paths"
 actual_payload_paths="$workspace/actual-payload-paths"
 printf '%s\n' "${payload_paths[@]}" | sort >"$expected_payload_paths"
 find "$staging" -mindepth 1 ! -type d -printf '%P\n' | sort >"$actual_payload_paths"
 if ! diff -u "$expected_payload_paths" "$actual_payload_paths"; then
-  printf 'staged release payload differs from the exact 59-path contract\n' >&2
+  printf 'staged release payload differs from the exact 68-path contract\n' >&2
   exit 1
 fi
 for relative in "${payload_paths[@]}"; do

@@ -24,7 +24,8 @@ type options struct {
 	allowedUID     uint32
 	podmanBinary   string
 	hooksDirectory string
-	containerImage string
+	compilerImage  string
+	runtimeImage   string
 	cgroupRoot     string
 	acceptTimeout  time.Duration
 	sessionTimeout time.Duration
@@ -50,12 +51,16 @@ func run(ctx context.Context, arguments []string, lookup func(string) (uint32, e
 	if err := judgerunner.PrepareDelegatedCgroup(parsed.cgroupRoot); err != nil {
 		return fmt.Errorf("prepare delegated cgroup: %w", err)
 	}
-	engine, err := judgerunner.NewPodmanEngine(parsed.podmanBinary, parsed.containerImage, parsed.hooksDirectory)
+	compilerEngine, err := judgerunner.NewPodmanEngine(parsed.podmanBinary, parsed.compilerImage, parsed.hooksDirectory)
 	if err != nil {
-		return fmt.Errorf("configure Podman engine: %w", err)
+		return fmt.Errorf("configure compiler Podman engine: %w", err)
+	}
+	runtimeEngine, err := judgerunner.NewPodmanEngine(parsed.podmanBinary, parsed.runtimeImage, parsed.hooksDirectory)
+	if err != nil {
+		return fmt.Errorf("configure runtime Podman engine: %w", err)
 	}
 	runnerConfig := judgerunner.DefaultConfig(parsed.jobID, parsed.workRoot)
-	runner, err := judgerunner.New(engine, runnerConfig)
+	runner, err := judgerunner.New(compilerEngine, runtimeEngine, runnerConfig)
 	if err != nil {
 		return fmt.Errorf("configure judge runner: %w", err)
 	}
@@ -86,7 +91,8 @@ func parseOptions(arguments []string, lookup func(string) (uint32, error)) (opti
 	set.StringVar(&allowedUser, "allowed-client-user", "", "ascendanyd OS user")
 	set.StringVar(&parsed.podmanBinary, "podman-binary", "/usr/bin/podman", "absolute Podman binary path")
 	set.StringVar(&parsed.hooksDirectory, "hooks-directory", "/var/empty", "root-owned empty OCI hooks directory")
-	set.StringVar(&parsed.containerImage, "container-image", "", "digest-pinned C++20 image")
+	set.StringVar(&parsed.compilerImage, "compiler-image", "", "digest-pinned reviewed C++20 compiler image")
+	set.StringVar(&parsed.runtimeImage, "runtime-image", "", "digest-pinned empty execution image")
 	set.StringVar(&parsed.cgroupRoot, "delegated-cgroup-root", "", "private delegated cgroup v2 root")
 	set.DurationVar(&parsed.acceptTimeout, "accept-timeout", 30*time.Second, "Unix client accept timeout")
 	set.DurationVar(&parsed.sessionTimeout, "session-timeout", 30*time.Minute, "whole-job hard timeout")

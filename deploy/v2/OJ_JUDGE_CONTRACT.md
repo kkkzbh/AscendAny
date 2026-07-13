@@ -1,7 +1,8 @@
-# OJ judge v1 execution contract
+# OJ judge v2 execution contract
 
 This document is the closed production contract between `ascendanyd`, one
-`ascendany-judge@<job-id>.service` instance, and the C++20 container.
+`ascendany-judge@<job-id>.service` instance, the C++20 compiler image, and the
+empty execution image.
 
 ## Ownership and control flow
 
@@ -74,11 +75,23 @@ the manifest cannot provide filesystem paths. Directories, symlinks, hardlinks,
 device nodes, traversal, duplicate members, undeclared members, noncanonical
 JSON and trailing archive data are rejected before compilation.
 
-## Container boundary
+## Two-image container boundary
 
-The configured image reference contains an immutable `sha256` digest and is
-preloaded for the `ascendany-judge` rootless Podman identity. Every compile and
-run uses `--pull=never`, `--network=none`, a read-only image, no capabilities,
+The compiler and runtime references contain distinct immutable `sha256`
+digests and are preloaded for the `ascendany-judge` rootless Podman identity.
+The compiler is the reviewed Alpine 3.23.5 rootfs with exact
+`g++-15.2.0-r2`; its release-bound inventory records every path, type, mode,
+symlink target hash, and regular-file hash. The runtime is an exact empty
+`scratch` rootfs. Python, trainer, CUDA, accelerator runtime, shell, libc, and
+compiler files cannot enter execution.
+
+Compilation always supplies `-static`. The Go runner parses the resulting ELF
+and requires Linux/amd64 `ET_EXEC`, a nonzero entry point, at least one
+`PT_LOAD` segment, and no `PT_INTERP` or `PT_DYNAMIC`. The resulting regular
+executable is copied into a distinct execution directory and is the only file
+mounted into the empty runtime image.
+
+Every compile and run uses `--pull=never`, `--network=none`, a read-only image, no capabilities,
 `no-new-privileges`, private PID/IPC/UTS/cgroup namespaces, an exact PID limit,
 memory plus no-swap limit, CPU quota, bounded no-exec tmpfs, and hard combined
 stdout/stderr capture. The explicit rootless `--userns=host` mapping maps
@@ -116,9 +129,13 @@ and `/var/tmp`. `RemoveIPC` remains disabled to preserve Podman's shared,
 SELinux-labelled image-store lock; container argv still fixes `--ipc=none`.
 
 Compilation mounts only the private compile directory read-write. Execution
-copies the resulting regular executable into a separate directory and mounts
-that directory read-only. Test input is sent over stdin. Expected output and
-all other cases remain outside the container mount.
+mounts only its copied executable directory read-only. Test input is sent over
+stdin. Expected output and all other cases remain outside the container mount.
+
+Each result binds the canonical closed manifest
+`ascendany.oj.execution-manifest.v2`, containing `compilerImage`,
+`runtimeImage`, `mode`, `checker`, and the ordered case evidence. Both image
+identities therefore participate in the execution provenance hash.
 
 `timeout`, `memory`, `output`, compile, runtime and wrong-answer outcomes are
 explicit verdicts. Container startup/supervision failures are classified as

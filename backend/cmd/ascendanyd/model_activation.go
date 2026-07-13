@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 
+	"github.com/kkkzbh/AscendAny/backend/internal/catalogartifact"
 	"github.com/kkkzbh/AscendAny/backend/internal/config"
 	"github.com/kkkzbh/AscendAny/backend/internal/database"
 	"github.com/kkkzbh/AscendAny/backend/internal/health"
@@ -17,11 +18,35 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/version"
 )
 
+type modelReleaseOperation string
+
+const (
+	modelReleaseRegistration modelReleaseOperation = "registration"
+	modelReleaseActivation   modelReleaseOperation = "activation"
+)
+
+func runModelRegistration(lookup config.LookupEnv, readFile config.ReadFile, stderr io.Writer) int {
+	return runModelReleaseOperation(lookup, readFile, stderr, modelReleaseRegistration)
+}
+
 func runModelActivation(lookup config.LookupEnv, readFile config.ReadFile, stderr io.Writer) int {
+	return runModelReleaseOperation(lookup, readFile, stderr, modelReleaseActivation)
+}
+
+func runModelReleaseOperation(
+	lookup config.LookupEnv,
+	readFile config.ReadFile,
+	stderr io.Writer,
+	operation modelReleaseOperation,
+) int {
 	bootstrapLogger, _ := logging.New(stderr, "info")
+	if operation != modelReleaseRegistration && operation != modelReleaseActivation {
+		bootstrapLogger.Error("model release operation rejected", "operation", operation)
+		return 1
+	}
 	configuration, err := config.LoadModelActivation(lookup, readFile)
 	if err != nil {
-		bootstrapLogger.Error("model activation configuration rejected", "error", err)
+		bootstrapLogger.Error("model release operation configuration rejected", "operation", operation, "error", err)
 		return 1
 	}
 	if configuration.Database.ExpectedSchemaVersion != migrate.CurrentVersion() {
@@ -40,7 +65,7 @@ func runModelActivation(lookup config.LookupEnv, readFile config.ReadFile, stder
 	slog.SetDefault(logger)
 	isolationListener, err := net.Listen("tcp", "127.0.0.1:18000")
 	if err != nil {
-		logger.Error("model activation requires exclusive ownership of the production HTTP address", "error", err)
+		logger.Error("model release operation requires exclusive ownership of the production HTTP address", "operation", operation, "error", err)
 		return 1
 	}
 	defer isolationListener.Close()
@@ -55,6 +80,14 @@ func runModelActivation(lookup config.LookupEnv, readFile config.ReadFile, stder
 	}
 	if err := recommendation.ValidateInferenceModel(loaded.Model, configuration.Recommendation.ModelPurpose); err != nil {
 		logger.Error("recommendation model feature contract rejected", "error", err)
+		return 1
+	}
+	if _, err := catalogartifact.Load(
+		configuration.Recommendation.CatalogPath,
+		configuration.Recommendation.CatalogSHA256,
+		loaded.Model.Manifest(),
+	); err != nil {
+		logger.Error("knowledge catalog release artifact rejected", "error", err)
 		return 1
 	}
 
@@ -97,7 +130,7 @@ func runModelActivation(lookup config.LookupEnv, readFile config.ReadFile, stder
 		configuration.Database.HealthTimeout,
 	)
 	if report := readiness.Check(ctx); report.Status != health.StatusReady {
-		logger.Error("database readiness rejected before model activation", "report", report)
+		logger.Error("database readiness rejected before model release operation", "operation", operation, "report", report)
 		return 1
 	}
 
@@ -106,18 +139,24 @@ func runModelActivation(lookup config.LookupEnv, readFile config.ReadFile, stder
 		logger.Error("recommendation model release repository initialization failed", "error", err)
 		return 1
 	}
-	application := version.Current()
-	binding, err := repository.Bind(ctx, loaded, modelrelease.ApplicationIdentity{
-		Version:   application.Version,
-		Commit:    application.Commit,
-		BuildTime: application.BuildTime,
-	})
+	var binding modelrelease.Binding
+	if operation == modelReleaseRegistration {
+		binding, err = repository.Register(ctx, loaded)
+	} else {
+		application := version.Current()
+		binding, err = repository.Bind(ctx, loaded, modelrelease.ApplicationIdentity{
+			Version:   application.Version,
+			Commit:    application.Commit,
+			BuildTime: application.BuildTime,
+		})
+	}
 	if err != nil {
-		logger.Error("recommendation model activation failed", "error", err)
+		logger.Error("recommendation model release operation failed", "operation", operation, "error", err)
 		return 1
 	}
 	logger.Info(
-		"recommendation model activation complete",
+		"recommendation model release operation complete",
+		"operation", operation,
 		"releaseId", binding.ReleaseID,
 		"headRevision", binding.HeadRevision,
 		"activated", binding.Activated,

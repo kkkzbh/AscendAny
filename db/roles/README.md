@@ -1,7 +1,7 @@
 # PostgreSQL v2 role boundary
 
 `001_v2_roles.sql` owns the complete PostgreSQL 17 role and ACL contract for
-`ascendany_v2`. It creates five `NOLOGIN` capability roles and four passwordless
+`ascendany_v2`. It creates six `NOLOGIN` capability roles and five passwordless
 login principals:
 
 | Capability | Login principal | Scope |
@@ -11,6 +11,7 @@ login principals:
 | `ascendany_runtime` | `ascendanyd_login` | Reviewed DML and sequence access through PgBouncer. No DDL. |
 | `ascendany_migrator` | `ascendany_migrator_login` | Explicit `SET ROLE ascendany_owner` bridge for embedded migrations. |
 | `ascendany_backup` | `ascendany_backup_login` | Read-only direct PostgreSQL access for `pg_dump`. |
+| `ascendany_catalog_publisher` | `ascendany_catalog_publisher_login` | Stopped-runtime catalog publication through PgBouncer. It has readiness-only migration-history access, no direct catalog DML, and can execute only the `SECURITY DEFINER` function `ascendany.publish_authorized_knowledge_catalog(uuid, text, text)`. |
 | `ascendany_owner` | `ascendany_restore_login` | Explicit `SET ROLE` during restore into a scratch database. |
 
 `ascendany_restore_login` is the only managed role with `CREATEDB`. That flag
@@ -33,7 +34,7 @@ of the cluster's PUBLIC policy. This gives the restore operator a deterministic
 place to create and drop its isolated scratch database while preserving zero
 access to `ascendany_v2`.
 
-The five membership edges include exact PostgreSQL 17 `ADMIN`, `INHERIT`, and
+The six membership edges include exact PostgreSQL 17 `ADMIN`, `INHERIT`, and
 `SET` options. The bootstrap deletes every other edge touching a managed role,
 resets every managed `rolconfig`, closes all direct database/schema/relation/
 column/sequence/routine/type/default ACL drift, and reconstructs the minimum
@@ -45,7 +46,7 @@ bootstrap before and after the embedded schema migrations. The first pass
 creates roles and owner default privileges. The second pass closes concrete
 ACLs, including PostgreSQL table row types, which do not accept default type
 ACLs. An idempotent rerun is accepted only for an empty schema or the exact
-embedded schema-v6 migration history. A non-empty unknown schema fails
+embedded schema-v7 migration history. A non-empty unknown schema fails
 directly.
 
 ```bash
@@ -57,8 +58,11 @@ psql -X -v ON_ERROR_STOP=1 --dbname=ascendany_v2 -f db/roles/001_v2_roles.sql
 psql -X -v ON_ERROR_STOP=1 --dbname=ascendany_v2 -f db/roles/verify_v2_roles.sql
 ```
 
-The application connection uses `ascendanyd_login` on PgBouncer port `6432`.
+The application and stopped catalog publisher connections use their distinct
+login principals on PgBouncer port `6432`.
 Migration, backup, and restore administration use direct PostgreSQL port
 `5432`. `verify_v2_roles.sql` compares catalog rows and ACL entries with exact
 sets, including database ownership, both schemas, every managed membership
-option, owner-only routines, closed type usage, and five default-ACL rows.
+option, the publisher's readiness-only migration-history access, zero direct
+publisher catalog DML, the single publisher-executable `SECURITY DEFINER`
+publication function, closed type usage, and five default-ACL rows.

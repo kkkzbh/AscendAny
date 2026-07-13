@@ -19,6 +19,7 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/administration"
 	"github.com/kkkzbh/AscendAny/backend/internal/agentnotes"
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
+	"github.com/kkkzbh/AscendAny/backend/internal/catalogartifact"
 	"github.com/kkkzbh/AscendAny/backend/internal/chatagent"
 	"github.com/kkkzbh/AscendAny/backend/internal/config"
 	configurationdomain "github.com/kkkzbh/AscendAny/backend/internal/configuration"
@@ -55,8 +56,11 @@ func main() {
 func run(args []string) int {
 	bootstrapLogger, _ := logging.New(os.Stderr, "info")
 	if err := validateCommand(args); err != nil {
-		bootstrapLogger.Error("command rejected", "usage", "ascendanyd serve|activate-model")
+		bootstrapLogger.Error("command rejected", "usage", "ascendanyd serve|register-model|activate-model")
 		return 2
+	}
+	if args[0] == "register-model" {
+		return runModelRegistration(os.LookupEnv, os.ReadFile, os.Stderr)
 	}
 	if args[0] == "activate-model" {
 		return runModelActivation(os.LookupEnv, os.ReadFile, os.Stderr)
@@ -95,6 +99,14 @@ func run(args []string) int {
 		configuration.Recommendation.ModelPurpose,
 	); err != nil {
 		logger.Error("recommendation model feature contract rejected", "error", err)
+		return 1
+	}
+	if _, err := catalogartifact.Load(
+		configuration.Recommendation.CatalogPath,
+		configuration.Recommendation.CatalogSHA256,
+		loadedRecommendationModel.Model.Manifest(),
+	); err != nil {
+		logger.Error("knowledge catalog release artifact rejected", "error", err)
 		return 1
 	}
 
@@ -146,7 +158,7 @@ func run(args []string) int {
 	authService, err := auth.NewService(authRepository, auth.ProductionConfig(
 		configuration.Auth.Issuer,
 		configuration.Auth.Audience,
-		[]byte(configuration.Auth.JWTSigningKey),
+		configuration.Auth.JWTSigningPrivateKey,
 		[]byte(configuration.Auth.PasswordPepper),
 		configuration.Auth.AccessTTL,
 		configuration.Auth.RefreshTTL,
@@ -733,8 +745,8 @@ func productionOJPolicy(configuration config.Config) oj.Policy {
 }
 
 func validateCommand(args []string) error {
-	if len(args) != 1 || args[0] != "serve" && args[0] != "activate-model" {
-		return errors.New("usage: ascendanyd serve|activate-model")
+	if len(args) != 1 || args[0] != "serve" && args[0] != "register-model" && args[0] != "activate-model" {
+		return errors.New("usage: ascendanyd serve|register-model|activate-model")
 	}
 	return nil
 }

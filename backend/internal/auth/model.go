@@ -76,6 +76,7 @@ type AccessPrincipal struct {
 	Role         Role
 	AuthRevision int64
 	JWTID        string
+	ExpiresAt    time.Time
 }
 
 // AuthenticatedAccount binds the database-authoritative account row to the

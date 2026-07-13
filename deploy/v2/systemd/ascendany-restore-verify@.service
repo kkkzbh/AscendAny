@@ -3,10 +3,13 @@ Description=Destructively verify AscendAny backup %i in an isolated scratch data
 Documentation=file:/opt/ascendany/v2/README.md
 Wants=network-online.target
 After=network-online.target
+RequiresMountsFor=/var/backups/ascendany /var/lib/ascendany-restore /var/lib/ascendany-acceptance
 AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-backup
 AssertFileIsExecutable=/opt/ascendany/v2/scripts/restore-verify-operator.sh
 AssertFileIsExecutable=/opt/ascendany/v2/scripts/publish-restore-evidence.sh
 AssertPathExists=/etc/ascendany/v2/restore.env
+AssertPathIsDirectory=/var/backups/ascendany
+AssertPathIsDirectory=/var/lib/ascendany-restore
 
 [Service]
 Type=oneshot
@@ -29,6 +32,7 @@ TimeoutStartSec=2h5m
 
 RuntimeDirectory=ascendany-restore-verify-%i
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
 
 NoNewPrivileges=yes
 CapabilityBoundingSet=
@@ -62,4 +66,4 @@ IPAddressAllow=localhost
 IPAddressAllow=10.88.0.2/32
 ReadOnlyPaths=/etc/ascendany/v2 /var/backups/ascendany
 ReadWritePaths=/var/lib/ascendany-restore /var/lib/ascendany-acceptance /run/ascendany-restore-operator /run/ascendany-restore-verify-%i
-InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany/artifacts
+InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany/artifacts /var/lib/ascendany-catalog-publisher

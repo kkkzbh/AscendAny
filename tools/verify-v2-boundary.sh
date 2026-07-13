@@ -179,6 +179,21 @@ require_no_rg_match \
   'ascendany[.]pintia[.](unit|snapshot)[.]v1' \
   "${production_roots[@]}"
 
+# The reviewed online path authorizes one immutable publication intent through
+# catalog-publication-authorizations. Catalog mutation packages, shared-secret
+# authorization, direct catalog write endpoints, and receipt v2 remain retired.
+require_no_rg_match \
+  'legacy or generic catalog mutation contract scan' \
+  'production retains a legacy or generic knowledge-catalog mutation path' \
+  -n \
+  --glob '!tools/verify-v2-boundary.sh' \
+  --glob '!tools/tests/verify-v2-boundary-fixture.sh' \
+  --glob '!**/*_test.go' \
+  --glob '!**/*.test.ts' \
+  --glob '!**/*.test.tsx' \
+  'catalogauthorization|secretSha256|knowledge_catalog_publication_authorization_id|publication-receipt[.]v2|[Cc]reateKnowledgeCatalogVersion|[Uu]pdateKnowledgeCatalog|[Mm]utateKnowledgeCatalog|/api/v2/admin/recommendation/knowledge-catalog(["'\''`]|$)' \
+  backend apps packages contracts deploy/v2 tools
+
 require_no_rg_match \
   'retired Python systemd runtime scan' \
   'a v2 systemd unit references the retired Python online runtime' \
@@ -307,8 +322,12 @@ require_no_rg_match \
   '(postgres(ql)?|mysql)://[^/@[:space:]]+:[^/@[:space:]]+@' \
   .
 
+# Host-process ownership is closed to these reviewed modules. The two backup
+# archive owners invoke the configured absolute zstd binary; process.go owns
+# the configured PostgreSQL tools. Every additional execution site fails.
 approved_go_exec_sites=(
   backend/internal/backup/archive.go
+  backend/internal/backup/catalog_receipts.go
   backend/internal/backup/process.go
   backend/internal/judgeexecutor/systemd.go
   backend/internal/judgerunner/podman.go

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
-  consumeEnrollmentClaim,
   createClient,
-  createConfigurationVersion,
   createPintiaImport,
   getCapabilities,
+  getConfiguration,
   getExamAnalysisGeneration,
   getImportJob,
   getLiveness,
@@ -15,7 +15,6 @@ import {
   getSelfStudentAnalytics,
   getStudentLeaderboard,
   getVersion,
-  issueEnrollmentClaim,
   listAuditEvents,
   listExams,
   listManagedStudents,
@@ -184,7 +183,7 @@ async function waitForImport(
     if (terminalImportStatuses.has(job.status)) {
       return job;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
   }
   throw new Error("import job did not reach a terminal state before the deadline");
 }
@@ -202,7 +201,7 @@ async function waitForAnalytics(
     if (terminalAnalyticsStatuses.has(generation.status)) {
       return generation;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
   }
   throw new Error("analytics generation did not reach a terminal state before the deadline");
 }
@@ -236,6 +235,7 @@ async function main(): Promise<void> {
   }
   const catalogPath = requiredEnvironment("ASCENDANY_E2E_KNOWLEDGE_CATALOG_PATH");
   const expectedCatalogSHA256 = requiredEnvironment("ASCENDANY_E2E_EXPECTED_CATALOG_SHA256");
+  const studentCredentialDirectory = requiredEnvironment("ASCENDANY_E2E_STUDENT_CREDENTIAL_DIRECTORY");
 
   const snapshotBytes = await readFile(snapshotPath);
   const catalogDocument = parseCanonicalCatalog(
@@ -267,7 +267,19 @@ async function main(): Promise<void> {
   if (studentNumbers.length === 0 || new Set(studentNumbers).size !== studentNumbers.length) {
     throw new Error("exporter E2E snapshot must contain unique enrollable student identities");
   }
-  const [studentNumber] = studentNumbers;
+  const [studentUsername, studentPassword, studentNumber] = await Promise.all([
+    readFile(join(studentCredentialDirectory, "username"), "utf8"),
+    readFile(join(studentCredentialDirectory, "password"), "utf8"),
+    readFile(join(studentCredentialDirectory, "student_number"), "utf8"),
+  ]);
+  if (
+    !/^[a-z0-9_]{3,32}$/u.test(studentUsername)
+    || studentPassword.length < 12
+    || studentPassword.trim() !== studentPassword
+    || !studentNumbers.includes(studentNumber)
+  ) {
+    throw new Error("acceptance student credentials differ from the exporter fixture identity set");
+  }
 
   const publicClient = authenticatedClient(baseUrl, origin);
   const liveness = assertAPIResult("liveness", await getLiveness({ client: publicClient }));
@@ -426,32 +438,21 @@ async function main(): Promise<void> {
   }
 
   const catalogPublication = assertAPIResult(
-    "publish recommendation knowledge catalog",
-    await createConfigurationVersion({
+    "read stopped-runtime recommendation knowledge catalog",
+    await getConfiguration({
       client: adminClient,
-      body: {
-        key: "recommendation.catalog.active",
-        kind: "knowledge_catalog",
-        expectedHeadRevision: 0,
-        expectedAnalyticsGenerationId: reviewContext.analyticsGenerationId,
-        expectedAnalyticsHeadRevision: reviewContext.analyticsHeadRevision,
-        expectedInputManifestSha256: reviewContext.inputManifestSha256,
-        schemaId: "ascendany.knowledge_catalog.recommendation.v1",
-        document: catalogDocument,
-        credentialRef: null,
-      },
+      path: { key: "recommendation.catalog.active" },
     }),
   );
   if (
-    catalogPublication.idempotent
-    || catalogPublication.item.kind !== "knowledge_catalog"
-    || catalogPublication.item.headRevision !== 1
-    || catalogPublication.item.activeVersion?.number !== 1
-    || catalogPublication.item.activeVersion.schemaId
+    catalogPublication.kind !== "knowledge_catalog"
+    || catalogPublication.headRevision !== 1
+    || catalogPublication.activeVersion?.number !== 1
+    || catalogPublication.activeVersion.schemaId
       !== "ascendany.knowledge_catalog.recommendation.v1"
-    || catalogPublication.item.activeVersion.documentSha256 !== expectedCatalogSHA256
+    || catalogPublication.activeVersion.documentSha256 !== expectedCatalogSHA256
   ) {
-    throw new Error("knowledge catalog publication provenance is noncanonical");
+    throw new Error("stopped-runtime knowledge catalog publication is noncanonical");
   }
 
   const managedStudents = assertAPIResult(
@@ -461,28 +462,20 @@ async function main(): Promise<void> {
   const managedStudent = managedStudents.items.find((candidate) => (
     candidate.studentNumber === studentNumber
   ));
-  if (managedStudent === undefined || managedStudent.account !== null) {
-    throw new Error("imported student identity is unavailable for enrollment");
+  if (
+    managedStudent === undefined
+    || managedStudent.account === null
+    || managedStudent.account.username !== studentUsername
+    || managedStudent.account.disabledAt !== null
+  ) {
+    throw new Error("persistent acceptance student binding is unavailable");
   }
 
-  const issued = assertAPIResult(
-    "issue enrollment",
-    await issueEnrollmentClaim({
-      client: adminClient,
-      body: {
-        username: "e2estudent01",
-        displayName: "E2E Student",
-        studentNumber,
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      },
-    }),
-  );
-  const studentPassword = "e2e-student-password-2026";
   const studentSession = assertAPIResult<AuthSession>(
-    "consume enrollment",
-    await consumeEnrollmentClaim({
+    "persistent acceptance student login",
+    await loginAccount({
       client: publicClient,
-      body: { token: issued.token, password: studentPassword },
+      body: { username: studentUsername, password: studentPassword },
     }),
   );
   if (
@@ -491,14 +484,6 @@ async function main(): Promise<void> {
   ) {
     throw new Error("enrollment did not create the expected student binding");
   }
-  const replayClaim = await consumeEnrollmentClaim({
-    client: publicClient,
-    body: { token: issued.token, password: studentPassword },
-  });
-  if (replayClaim.data !== undefined || replayClaim.response?.status !== 401) {
-    throw new Error("consumed enrollment token was accepted more than once");
-  }
-
   const studentClient = authenticatedClient(baseUrl, origin, studentSession.accessToken);
   const analytics = assertAPIResult(
     "student analytics",
@@ -573,10 +558,10 @@ async function main(): Promise<void> {
     snapshotSequence: exam.snapshotSequence,
     analyticsStatus: generation.status,
     recommendationReviewContextVerified: true,
-    enrollmentSingleUse: true,
+    acceptanceAccountReused: true,
     studentAnalyticsState: analytics.state,
     leaderboardState: leaderboard.state,
-    knowledgeCatalogPublished: true,
+    knowledgeCatalogVerified: true,
     knowledgeCatalogSha256: expectedCatalogSHA256,
     recommendationState: recommendation.state,
     recommendationResultSchema: recommendation.result.schema,

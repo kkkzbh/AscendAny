@@ -81,7 +81,7 @@ for required in \
   'PostgreSQL DBA, durability, role or database entry state is not fresh' \
   'CREATE DATABASE ascendany_v2 OWNER ascendany_database_owner TEMPLATE template0;' \
   'COMMENT ON ROLE postgres IS '\''ascendany.postgres.dba.v2'\'';' \
-  'WHERE rolname = '\''ascendanyd_login'\''' \
+  'WHERE rolname = ANY(ARRAY['\''ascendanyd_login'\'', '\''ascendany_catalog_publisher_login'\''])' \
   'install_postgres_access_files' \
   'verify_pool_once' \
   'schema=ascendany.postgres-pgbouncer.provision.v2' \
@@ -98,7 +98,7 @@ mapfile -t pool_databases < <(sed -n '/^\[databases\]$/,/^$/p' "$POOL_CONFIG" |
 
 mapfile -t pool_hba_rules < <(sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d' "$POOL_HBA")
 [[ "${#pool_hba_rules[@]}" == 2 &&
-   "${pool_hba_rules[0]}" == 'host ascendany_v2 ascendanyd_login 127.0.0.1/32 scram-sha-256' &&
+   "${pool_hba_rules[0]}" == 'host ascendany_v2 ascendanyd_login,ascendany_catalog_publisher_login 127.0.0.1/32 scram-sha-256' &&
    "${pool_hba_rules[1]}" == 'host all all 0.0.0.0/0 reject' ]] ||
   fail 'PgBouncer client HBA is not the exact v2 runtime/catch-all closure'
 
@@ -109,7 +109,7 @@ expected_postgres_hba=(
   'local all all reject'
   'host replication all 0.0.0.0/0 reject'
   'host replication all ::/0 reject'
-  'host ascendany_v2 ascendanyd_login,ascendany_migrator_login,ascendany_backup_login 10.88.0.1/32 scram-sha-256'
+  'host ascendany_v2 ascendanyd_login,ascendany_migrator_login,ascendany_backup_login,ascendany_catalog_publisher_login 10.88.0.1/32 scram-sha-256'
   'host postgres,ascendany_v2_restore_verify ascendany_restore_login 10.88.0.1/32 scram-sha-256'
   'host all all 10.88.0.1/32 reject'
   'host all all 0.0.0.0/0 reject'
@@ -140,9 +140,9 @@ for inventory in "$BUILDER" "$INSTALLER" "$VALIDATOR"; do
     fail "release inventory retains an obsolete transition file: ${inventory#$REPOSITORY_ROOT/}"
   fi
 done
-require_literal "$BUILDER" 'release payload path contract must contain exactly 58 entries'
-require_literal "$BUILDER" 'staged release payload differs from the exact 58-path contract'
-require_literal "$README" 'manifest-closed payload contains 58 files'
+require_literal "$BUILDER" 'release payload path contract must contain exactly 68 entries'
+require_literal "$BUILDER" 'staged release payload differs from the exact 68-path contract'
+require_literal "$README" 'manifest-closed payload contains 68 files'
 require_literal "$VALIDATOR" 'schema=ascendany.postgres-pgbouncer.provision.v2'
 require_literal "$VALIDATOR" '--username=postgres'
 

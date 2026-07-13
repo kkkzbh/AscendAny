@@ -74,15 +74,15 @@ SELECT (SELECT count(*) FROM ascendany.auth_accounts),
 		t.Fatal(err)
 	}
 	service, err := NewService(repository, ServiceConfig{
-		Issuer:         "ascendany",
-		Audience:       "ascendany-v2",
-		JWTKey:         []byte("0123456789abcdef0123456789abcdef"),
-		PasswordPepper: []byte("abcdef0123456789abcdef0123456789"),
-		AccessTTL:      15 * time.Minute,
-		RefreshTTL:     24 * time.Hour,
-		Clock:          fixedClock{now: now},
-		Random:         rand.Reader,
-		passwordWork:   passwordWork,
+		Issuer:               "ascendany",
+		Audience:             "ascendany-v2",
+		JWTSigningPrivateKey: testEd25519PrivateKey(0x31),
+		PasswordPepper:       []byte("abcdef0123456789abcdef0123456789"),
+		AccessTTL:            15 * time.Minute,
+		RefreshTTL:           24 * time.Hour,
+		Clock:                fixedClock{now: now},
+		Random:               rand.Reader,
+		passwordWork:         passwordWork,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -330,15 +330,15 @@ WHERE enrollment.public_id = $1::uuid
 	}
 
 	realTimeService, err := NewService(repository, ServiceConfig{
-		Issuer:         "ascendany",
-		Audience:       "ascendany-v2",
-		JWTKey:         []byte("0123456789abcdef0123456789abcdef"),
-		PasswordPepper: []byte("abcdef0123456789abcdef0123456789"),
-		AccessTTL:      15 * time.Minute,
-		RefreshTTL:     24 * time.Hour,
-		Clock:          systemClock{},
-		Random:         rand.Reader,
-		passwordWork:   passwordWork,
+		Issuer:               "ascendany",
+		Audience:             "ascendany-v2",
+		JWTSigningPrivateKey: testEd25519PrivateKey(0x31),
+		PasswordPepper:       []byte("abcdef0123456789abcdef0123456789"),
+		AccessTTL:            15 * time.Minute,
+		RefreshTTL:           24 * time.Hour,
+		Clock:                systemClock{},
+		Random:               rand.Reader,
+		passwordWork:         passwordWork,
 	})
 	if err != nil {
 		t.Fatal(err)

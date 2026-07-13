@@ -132,11 +132,15 @@ func NewDefaultRateLimiter() (*FixedWindowRateLimiter, error) {
 		"admin.configurations.create-version":     {Requests: 30, Window: time.Minute},
 		"admin.model-connections.test":            {Requests: 10, Window: 15 * time.Minute},
 		"admin.recommendation.review-context.get": {Requests: 60, Window: time.Minute},
-		"feedback.submit":                         {Requests: 30, Window: time.Minute},
-		"imports.create":                          {Requests: 10, Window: 15 * time.Minute},
-		"imports.list":                            {Requests: 120, Window: time.Minute},
-		"imports.get":                             {Requests: 120, Window: time.Minute},
-		"imports.events":                          {Requests: 30, Window: time.Minute},
+		"admin.recommendation.catalog-publication-authorizations.create": {
+			Requests: 5,
+			Window:   15 * time.Minute,
+		},
+		"feedback.submit": {Requests: 30, Window: time.Minute},
+		"imports.create":  {Requests: 10, Window: 15 * time.Minute},
+		"imports.list":    {Requests: 120, Window: time.Minute},
+		"imports.get":     {Requests: 120, Window: time.Minute},
+		"imports.events":  {Requests: 30, Window: time.Minute},
 	}, 8192)
 }
 

@@ -1,11 +1,8 @@
 import {
-  createConfigurationVersion,
   getConfiguration,
   getRecommendationReviewContext,
   type ApiError,
   type ConfigurationItem,
-  type CreateConfigurationVersionResult,
-  type CreateRecommendationKnowledgeCatalogVersionRequest,
   type RecommendationReviewContext,
 } from "@ascendany/sdk";
 import { browserSession, v2Client } from "./v2Client";
@@ -64,10 +61,4 @@ export function loadRecommendationKnowledgeCatalog(key: string): Promise<Configu
     client: v2Client,
     path: { key },
   }));
-}
-
-export function publishRecommendationKnowledgeCatalog(
-  body: CreateRecommendationKnowledgeCatalogVersionRequest,
-): Promise<CreateConfigurationVersionResult> {
-  return authenticated<CreateConfigurationVersionResult>(() => createConfigurationVersion({ client: v2Client, body }));
 }

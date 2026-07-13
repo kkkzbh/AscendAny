@@ -80,6 +80,17 @@ func LoadModelActivation(lookup LookupEnv, readFile ReadFile) (ModelActivationCo
 	if err != nil {
 		return ModelActivationConfig{}, fmt.Errorf("ASCENDANY_RECOMMENDATION_MODEL_PURPOSE: %w", err)
 	}
+	catalogPath, err := requiredTrimmed(lookup, "ASCENDANY_KNOWLEDGE_CATALOG_PATH")
+	if err != nil {
+		return ModelActivationConfig{}, err
+	}
+	if err := validateAbsoluteFilePath(catalogPath); err != nil {
+		return ModelActivationConfig{}, fmt.Errorf("ASCENDANY_KNOWLEDGE_CATALOG_PATH: %w", err)
+	}
+	catalogSHA256, err := requiredLowercaseSHA256(lookup, "ASCENDANY_KNOWLEDGE_CATALOG_SHA256")
+	if err != nil {
+		return ModelActivationConfig{}, err
+	}
 
 	logLevel := strings.ToLower(optionalTrimmed(lookup, "ASCENDANY_LOG_LEVEL", "info"))
 	if !isValidLogLevel(logLevel) {
@@ -99,9 +110,11 @@ func LoadModelActivation(lookup LookupEnv, readFile ReadFile) (ModelActivationCo
 			HealthTimeout:         healthTimeout,
 		},
 		Recommendation: RecommendationConfig{
-			ModelPath:    modelPath,
-			ModelSHA256:  modelSHA256,
-			ModelPurpose: modelPurpose,
+			ModelPath:     modelPath,
+			ModelSHA256:   modelSHA256,
+			ModelPurpose:  modelPurpose,
+			CatalogPath:   catalogPath,
+			CatalogSHA256: catalogSHA256,
 		},
 		Log: LogConfig{Level: logLevel},
 	}, nil

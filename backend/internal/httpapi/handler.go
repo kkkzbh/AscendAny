@@ -94,6 +94,7 @@ type ConfigurationService interface {
 	Get(context.Context, string, string) (configuration.Item, bool, error)
 	ListVersions(context.Context, string, string, *int64, int) (configuration.VersionPage, bool, error)
 	CreateVersion(context.Context, string, configuration.CreateVersionInput) (configuration.CreateVersionResult, error)
+	AuthorizeKnowledgeCatalogPublication(context.Context, string, configuration.CatalogPublicationAuthorizationInput) (configuration.CatalogPublicationAuthorizationResult, error)
 }
 
 type ModelProbeService interface {

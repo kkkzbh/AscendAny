@@ -158,7 +158,7 @@ describe("ConfigurationPage", () => {
     fireEvent.change(inputs[0]!, { target: { value: "recommendation.catalog.active" } });
     fireEvent.click(screen.getByRole("button", { name: "发布 immutable version" }));
 
-    expect(await screen.findByText("recommendation.catalog.active 仅由推荐知识目录页面维护。")).toBeInTheDocument();
+    expect(await screen.findByText("recommendation.catalog.active 仅由停机发布流程写入。")).toBeInTheDocument();
     expect(api.putConfigurationVersion).not.toHaveBeenCalled();
   });
 

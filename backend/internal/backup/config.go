@@ -13,7 +13,7 @@ import (
 
 const (
 	BundleSchema             = "ascendany.backup.bundle.v2"
-	BackupFormat             = "pg_custom_plus_artifact_tar_zstd"
+	BackupFormat             = "pg_custom_plus_artifact_and_catalog_receipt_tar_zstd"
 	ManifestHashAlgorithm    = "sha256"
 	SourceDatabaseName       = "ascendany_v2"
 	SourceDatabaseLogin      = "ascendany_backup_login"
@@ -37,16 +37,17 @@ type ToolConfig struct {
 }
 
 type CreateConfig struct {
-	DatabaseURL      string
-	DatabasePassword string
-	ArtifactRoot     string
-	BackupRoot       string
-	RuntimeRoot      string
-	RetainDaily      int
-	RetainWeekly     int
-	ConnectTimeout   time.Duration
-	CommandTimeout   time.Duration
-	Tools            ToolConfig
+	DatabaseURL        string
+	DatabasePassword   string
+	ArtifactRoot       string
+	CatalogReceiptRoot string
+	BackupRoot         string
+	RuntimeRoot        string
+	RetainDaily        int
+	RetainWeekly       int
+	ConnectTimeout     time.Duration
+	CommandTimeout     time.Duration
+	Tools              ToolConfig
 }
 
 type VerifyConfig struct {
@@ -56,14 +57,15 @@ type VerifyConfig struct {
 }
 
 type RestoreConfig struct {
-	BackupRoot       string
-	ArtifactRoot     string
-	RuntimeRoot      string
-	DatabaseURL      string
-	DatabasePassword string
-	ConnectTimeout   time.Duration
-	CommandTimeout   time.Duration
-	Tools            ToolConfig
+	BackupRoot         string
+	ArtifactRoot       string
+	CatalogReceiptRoot string
+	RuntimeRoot        string
+	DatabaseURL        string
+	DatabasePassword   string
+	ConnectTimeout     time.Duration
+	CommandTimeout     time.Duration
+	Tools              ToolConfig
 }
 
 func LoadCreateConfig(lookup LookupEnv, readFile ReadFile) (CreateConfig, error) {
@@ -88,12 +90,17 @@ func LoadCreateConfig(lookup LookupEnv, readFile ReadFile) (CreateConfig, error)
 	if err != nil {
 		return CreateConfig{}, err
 	}
+	catalogReceiptRoot, err := requiredAbsoluteDirectoryPath(lookup, "ASCENDANY_CATALOG_RECEIPT_ROOT")
+	if err != nil {
+		return CreateConfig{}, err
+	}
 	backupRoot, err := requiredAbsoluteDirectoryPath(lookup, "ASCENDANY_BACKUP_ROOT")
 	if err != nil {
 		return CreateConfig{}, err
 	}
-	if pathsOverlap(artifactRoot, backupRoot) {
-		return CreateConfig{}, errors.New("ASCENDANY_ARTIFACT_ROOT and ASCENDANY_BACKUP_ROOT must be disjoint")
+	if pathsOverlap(artifactRoot, catalogReceiptRoot) || pathsOverlap(artifactRoot, backupRoot) ||
+		pathsOverlap(catalogReceiptRoot, backupRoot) {
+		return CreateConfig{}, errors.New("ASCENDANY_ARTIFACT_ROOT, ASCENDANY_CATALOG_RECEIPT_ROOT, and ASCENDANY_BACKUP_ROOT must be disjoint")
 	}
 	runtimeRoot, err := required(lookup, "ASCENDANY_BACKUP_RUNTIME_ROOT")
 	if err != nil {
@@ -102,7 +109,7 @@ func LoadCreateConfig(lookup LookupEnv, readFile ReadFile) (CreateConfig, error)
 	if runtimeRoot != BackupRuntimeRoot {
 		return CreateConfig{}, fmt.Errorf("ASCENDANY_BACKUP_RUNTIME_ROOT must be exactly %s", BackupRuntimeRoot)
 	}
-	if pathsOverlap(runtimeRoot, artifactRoot) || pathsOverlap(runtimeRoot, backupRoot) {
+	if pathsOverlap(runtimeRoot, artifactRoot) || pathsOverlap(runtimeRoot, catalogReceiptRoot) || pathsOverlap(runtimeRoot, backupRoot) {
 		return CreateConfig{}, errors.New("ASCENDANY_BACKUP_RUNTIME_ROOT must be disjoint from durable roots")
 	}
 	if err := requireExact(lookup, "ASCENDANY_BACKUP_FORMAT", BackupFormat); err != nil {
@@ -135,16 +142,17 @@ func LoadCreateConfig(lookup LookupEnv, readFile ReadFile) (CreateConfig, error)
 		return CreateConfig{}, err
 	}
 	return CreateConfig{
-		DatabaseURL:      databaseURL,
-		DatabasePassword: password,
-		ArtifactRoot:     artifactRoot,
-		BackupRoot:       backupRoot,
-		RuntimeRoot:      runtimeRoot,
-		RetainDaily:      retainDaily,
-		RetainWeekly:     retainWeekly,
-		ConnectTimeout:   connectTimeout,
-		CommandTimeout:   commandTimeout,
-		Tools:            tools,
+		DatabaseURL:        databaseURL,
+		DatabasePassword:   password,
+		ArtifactRoot:       artifactRoot,
+		CatalogReceiptRoot: catalogReceiptRoot,
+		BackupRoot:         backupRoot,
+		RuntimeRoot:        runtimeRoot,
+		RetainDaily:        retainDaily,
+		RetainWeekly:       retainWeekly,
+		ConnectTimeout:     connectTimeout,
+		CommandTimeout:     commandTimeout,
+		Tools:              tools,
 	}, nil
 }
 
@@ -191,6 +199,13 @@ func LoadRestoreConfig(lookup LookupEnv, readFile ReadFile) (RestoreConfig, erro
 	if pathsOverlap(verify.BackupRoot, artifactRoot) {
 		return RestoreConfig{}, errors.New("ASCENDANY_BACKUP_ROOT and ASCENDANY_RESTORE_ARTIFACT_ROOT must be disjoint")
 	}
+	catalogReceiptRoot, err := requiredAbsoluteDirectoryPath(lookup, "ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT")
+	if err != nil {
+		return RestoreConfig{}, err
+	}
+	if pathsOverlap(verify.BackupRoot, catalogReceiptRoot) || pathsOverlap(artifactRoot, catalogReceiptRoot) {
+		return RestoreConfig{}, errors.New("backup, restore artifact, and restore catalog receipt roots must be disjoint")
+	}
 	runtimeRoot, err := requiredAbsoluteDirectoryPath(lookup, "ASCENDANY_RESTORE_RUNTIME_ROOT")
 	if err != nil {
 		return RestoreConfig{}, err
@@ -202,7 +217,8 @@ func LoadRestoreConfig(lookup LookupEnv, readFile ReadFile) (RestoreConfig, erro
 			RestoreRuntimeRootPrefix,
 		)
 	}
-	if pathsOverlap(runtimeRoot, verify.BackupRoot) || pathsOverlap(runtimeRoot, artifactRoot) {
+	if pathsOverlap(runtimeRoot, verify.BackupRoot) || pathsOverlap(runtimeRoot, artifactRoot) ||
+		pathsOverlap(runtimeRoot, catalogReceiptRoot) {
 		return RestoreConfig{}, errors.New("ASCENDANY_RESTORE_RUNTIME_ROOT must be disjoint from durable roots")
 	}
 	databaseURL, err := required(lookup, "ASCENDANY_RESTORE_DATABASE_URL")
@@ -221,14 +237,15 @@ func LoadRestoreConfig(lookup LookupEnv, readFile ReadFile) (RestoreConfig, erro
 		return RestoreConfig{}, err
 	}
 	return RestoreConfig{
-		BackupRoot:       verify.BackupRoot,
-		ArtifactRoot:     artifactRoot,
-		RuntimeRoot:      runtimeRoot,
-		DatabaseURL:      databaseURL,
-		DatabasePassword: password,
-		ConnectTimeout:   connectTimeout,
-		CommandTimeout:   verify.CommandTimeout,
-		Tools:            verify.Tools,
+		BackupRoot:         verify.BackupRoot,
+		ArtifactRoot:       artifactRoot,
+		CatalogReceiptRoot: catalogReceiptRoot,
+		RuntimeRoot:        runtimeRoot,
+		DatabaseURL:        databaseURL,
+		DatabasePassword:   password,
+		ConnectTimeout:     connectTimeout,
+		CommandTimeout:     verify.CommandTimeout,
+		Tools:              verify.Tools,
 	}, nil
 }
 

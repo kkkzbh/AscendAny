@@ -3,20 +3,21 @@ Description=AscendAny v2 database and artifact backup
 Documentation=file:/opt/ascendany/v2/README.md
 Wants=network-online.target
 After=network-online.target
-RequiresMountsFor=/var/lib/ascendany/artifacts /var/backups/ascendany
+RequiresMountsFor=/var/lib/ascendany/artifacts /var/lib/ascendany-catalog-publisher/receipts /var/backups/ascendany
 AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-backup
 AssertPathExists=/etc/ascendany/v2/backup.env
+AssertPathIsDirectory=/var/lib/ascendany-catalog-publisher/receipts
 
 [Service]
 Type=oneshot
 User=ascendany-backup
 Group=ascendany-backup-readers
-SupplementaryGroups=ascendany
+SupplementaryGroups=ascendany ascendany-catalog-readers
 WorkingDirectory=/var/backups/ascendany
 UMask=0077
 
-# Binary contract: create emits a PostgreSQL custom-format dump, a
-# checksummed artifact snapshot, and one manifest that binds both generations.
+# Binary contract: create emits a PostgreSQL custom-format dump, checksummed
+# artifact and catalog-publication-receipt snapshots, and one binding manifest.
 LoadCredentialEncrypted=backup_db_password:/etc/ascendany/credentials/backup_db_password.cred
 EnvironmentFile=/etc/ascendany/v2/backup.env
 Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/backup_db_password
@@ -64,6 +65,6 @@ SystemCallErrorNumber=EPERM
 IPAddressDeny=any
 IPAddressAllow=localhost
 IPAddressAllow=10.88.0.2/32
-ReadOnlyPaths=/etc/ascendany/v2 /var/lib/ascendany/artifacts
+ReadOnlyPaths=/etc/ascendany/v2 /var/lib/ascendany/artifacts /var/lib/ascendany-catalog-publisher/receipts
 ReadWritePaths=/var/backups/ascendany /run/ascendany-backup
 InaccessiblePaths=/opt/ascendany/Release

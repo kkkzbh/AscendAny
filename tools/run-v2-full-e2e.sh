@@ -31,11 +31,13 @@ readonly SOURCE_DATABASE='ascendany_v2'
 readonly SCRATCH_DATABASE='ascendany_v2_restore_verify'
 readonly SCHEMA_OWNER='ascendany_owner'
 readonly RUNTIME_LOGIN='ascendanyd_login'
+readonly CATALOG_PUBLISHER_LOGIN='ascendany_catalog_publisher_login'
 readonly MIGRATOR_LOGIN='ascendany_migrator_login'
 readonly BACKUP_LOGIN='ascendany_backup_login'
 readonly RESTORE_LOGIN='ascendany_restore_login'
 readonly RELEASE_PURPOSE='acceptance_test'
 readonly EXPECTED_ARTIFACT_COUNT=3
+readonly EXPECTED_CATALOG_RECEIPT_COUNT=1
 
 usage() {
   /usr/bin/printf '%s\n' \
@@ -191,10 +193,11 @@ jq -e --arg catalog_sha256 "${KNOWLEDGE_CATALOG_SHA256}" '
   .manifest.knowledgeCatalogSha256 == $catalog_sha256
 ' "${RECOMMENDATION_MODEL}" >/dev/null ||
   fail 'recommendation model must be acceptance-only and bind the supplied knowledge catalog SHA-256'
+readonly RECOMMENDATION_MODEL_ID="$(jq -er '.manifest.modelId | select(type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"))' "${RECOMMENDATION_MODEL}")"
 
-for command_name in awk bwrap cmp curl diff dirname env find git grep id install jq mktemp mv node \
-  openssl pg_dump pg_isready pg_restore pgbouncer pnpm podman psql realpath sed sha256sum \
-  sort ss stat tr wc zstd; do
+for command_name in awk bwrap cmp curl date diff dirname env find git grep id install jq ln mktemp mv \
+  od openssl pg_dump pg_isready pg_restore pgbouncer pnpm podman psql realpath sed sha256sum \
+  sort ss stat tail tr wc zstd; do
   command -v "${command_name}" >/dev/null 2>&1 ||
     fail "required command is unavailable: ${command_name}"
 done
@@ -242,21 +245,23 @@ readonly EXPECTED_PGBOUNCER_GROUP
 grep -Fqx 'ID=fedora' /etc/os-release && grep -Fqx 'VERSION_ID=44' /etc/os-release ||
   fail 'full E2E native PgBouncer host must be Fedora 44'
 
-readonly NODE_BINARY="$(realpath -e -- "$(command -v node)")"
+readonly NODE_BINARY=/usr/bin/node-22
 readonly PNPM_LAUNCHER="$(command -v pnpm)"
 readonly PNPM_BINARY="$(realpath -e -- "${PNPM_LAUNCHER}")"
-[[ -f "${NODE_BINARY}" && ! -L "${NODE_BINARY}" && -x "${NODE_BINARY}" ]] ||
-  fail 'Node must resolve to one executable regular file'
+[[ -f "${NODE_BINARY}" && ! -L "${NODE_BINARY}" && -x "${NODE_BINARY}" &&
+   "$(stat -Lc '%U:%G:%a:%h' -- "${NODE_BINARY}")" == root:root:755:1 &&
+   "$(sha256sum -- "${NODE_BINARY}" | awk '{print $1}')" == 7ed75caca3ed639ebde926277e43ed04c67de55bfece9d56bd752159d96368f0 &&
+   "$(/usr/bin/rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "${NODE_BINARY}")" == nodejs22-22.22.2-3.fc44.x86_64 ]] ||
+  fail 'Node operator runtime differs from the reviewed Fedora 44 executable'
 [[ -f "${PNPM_BINARY}" && ! -L "${PNPM_BINARY}" && -x "${PNPM_BINARY}" ]] ||
   fail 'pnpm must resolve to one executable regular file'
 [[ "${PNPM_LAUNCHER}" == /* && -x "${PNPM_LAUNCHER}" &&
    "$(realpath -e -- "${PNPM_LAUNCHER}")" == "${PNPM_BINARY}" &&
    "$(realpath -e -- "$(dirname -- "${PNPM_LAUNCHER}")")" == "$(dirname -- "${PNPM_LAUNCHER}")" ]] ||
   fail 'pnpm launcher must have one canonical directory and the reviewed target identity'
-[[ "$("${NODE_BINARY}" --version)" =~ ^v22\. ]] || fail 'full E2E requires Node.js 22'
-[[ "$(PATH="$(dirname -- "${NODE_BINARY}"):/usr/bin:/bin" "${PNPM_BINARY}" --version)" == 9.15.4 ]] ||
+[[ "$("${NODE_BINARY}" --version)" == v22.22.2 ]] || fail 'full E2E requires Node.js 22.22.2'
+[[ "$("${NODE_BINARY}" "${PNPM_BINARY}" --version)" == 9.15.4 ]] ||
   fail 'full E2E requires pnpm 9.15.4'
-readonly TOOL_PATH="$(dirname -- "${NODE_BINARY}"):$(dirname -- "${PNPM_LAUNCHER}"):$(dirname -- "${PNPM_BINARY}"):/usr/local/bin:/usr/bin:/bin"
 
 [[ -x "${RELEASE_BUILDER}" && -x "${INSTALLER_SOURCE}" ]] ||
   fail 'release builder or installer is unavailable/executable mode is wrong'
@@ -281,8 +286,12 @@ readonly GO_EXPERIMENT="$(/usr/bin/env -i PATH=/usr/bin:/bin HOME="${HOME}" GOTO
   fail 'Go experiment set is noncanonical'
 readonly SOURCE_DATE_EPOCH="$(git -C "${REPOSITORY_ROOT}" show -s --format=%ct "${REQUESTED_COMMIT}")"
 [[ "${SOURCE_DATE_EPOCH}" =~ ^[0-9]+$ ]] || fail 'commit timestamp is noncanonical'
+readonly TARGET_APPLICATION_BUILD_TIME="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%FT%TZ)"
+[[ "${TARGET_APPLICATION_BUILD_TIME}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+  fail 'target application build time is noncanonical'
 
 readonly WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ascendany-v2-full-e2e.XXXXXX")"
+readonly NODE_TOOL_ROOT="${WORK_ROOT}/node-tools"
 readonly LOG_ROOT="${WORK_ROOT}/logs"
 readonly CREDENTIAL_ROOT="${WORK_ROOT}/credentials"
 readonly INPUT_ROOT="${WORK_ROOT}/inputs"
@@ -295,6 +304,7 @@ readonly ARTIFACT_ROOT="${WORK_ROOT}/artifacts"
 readonly BACKUP_ROOT="${WORK_ROOT}/backups"
 readonly RESTORE_PARENT="${WORK_ROOT}/restore"
 readonly RESTORE_ARTIFACT_ROOT="${RESTORE_PARENT}/artifacts"
+readonly RESTORE_CATALOG_RECEIPT_ROOT="${RESTORE_PARENT}/catalog-receipts"
 readonly RUNTIME_PARENT="${WORK_ROOT}/runtime"
 readonly BACKUP_RUNTIME_ROOT="${RUNTIME_PARENT}/ascendany-backup"
 readonly SOURCE_FINGERPRINT="${WORK_ROOT}/source-database.fingerprint"
@@ -307,11 +317,13 @@ readonly RESTORED_MODEL_PROVENANCE="${WORK_ROOT}/restored-model-provenance.json"
 readonly POSTGRES_PASSWORD_FILE="${CREDENTIAL_ROOT}/postgres-password"
 readonly ADMIN_PGPASS_FILE="${CREDENTIAL_ROOT}/postgres.pgpass"
 readonly RUNTIME_PASSWORD_FILE="${CREDENTIAL_ROOT}/runtime-password"
+readonly CATALOG_PUBLISHER_PASSWORD_FILE="${CREDENTIAL_ROOT}/catalog-publisher-password"
 readonly MIGRATOR_PASSWORD_FILE="${CREDENTIAL_ROOT}/migrator-password"
 readonly BACKUP_PASSWORD_FILE="${CREDENTIAL_ROOT}/backup-password"
 readonly RESTORE_PASSWORD_FILE="${CREDENTIAL_ROOT}/restore-password"
 readonly PASSWORD_PEPPER_FILE="${CREDENTIAL_ROOT}/password-pepper"
-readonly JWT_SIGNING_KEY_FILE="${CREDENTIAL_ROOT}/jwt-signing-key"
+readonly JWT_SIGNING_PRIVATE_KEY_FILE="${CREDENTIAL_ROOT}/jwt-signing-private-key.pem"
+readonly JWT_VERIFICATION_PUBLIC_KEY_FILE="${CREDENTIAL_ROOT}/jwt-verification-public-key.pem"
 readonly ADMIN_BOOTSTRAP_CREDENTIAL_ROOT="${CREDENTIAL_ROOT}/admin-bootstrap"
 readonly ADMIN_PASSWORD_FILE="${ADMIN_BOOTSTRAP_CREDENTIAL_ROOT}/admin_password"
 readonly PGBOUNCER_CONFIG_ROOT="${WORK_ROOT}/pgbouncer"
@@ -327,15 +339,29 @@ readonly EXPORTER_FIXTURE_BUNDLE="${WORK_ROOT}/v2-full-e2e-exporter-fixture.mjs"
 readonly GENERATED_SNAPSHOT_PATH="${WORK_ROOT}/ascendany-pintia-exporter-snapshot-v2.json"
 readonly EXPORTER_FIXTURE_RESULT="${LOG_ROOT}/exporter-fixture-result.json"
 readonly CLIENT_RESULT="${LOG_ROOT}/client-result.json"
+readonly INITIALIZATION_PREPARE_RESULT="${LOG_ROOT}/initialization-prepare-result.json"
+readonly INITIALIZATION_VERIFY_RESULT="${LOG_ROOT}/initialization-verify-result.json"
+readonly CATALOG_CREDENTIAL_DIRECTORY="${CREDENTIAL_ROOT}/catalog-publication"
+readonly CATALOG_RUNTIME_CREDENTIAL_DIRECTORY="${CREDENTIAL_ROOT}/catalog-publication-runtime"
+readonly STUDENT_CREDENTIAL_DIRECTORY="${CREDENTIAL_ROOT}/acceptance-student"
+readonly CATALOG_PUBLISHER_STATE_ROOT="${WORK_ROOT}/catalog-publisher-state"
 readonly APP_RESULT="${LOG_ROOT}/app-result.json"
 readonly CREATE_LOG="${LOG_ROOT}/backup-create.json"
 readonly VERIFY_LOG="${LOG_ROOT}/backup-verify.json"
 readonly RESTORE_LOG="${LOG_ROOT}/backup-restore.json"
 
-mkdir -m 0700 -- "${LOG_ROOT}" "${CREDENTIAL_ROOT}" "${ADMIN_BOOTSTRAP_CREDENTIAL_ROOT}" \
+mkdir -m 0700 -- "${NODE_TOOL_ROOT}" "${LOG_ROOT}" "${CREDENTIAL_ROOT}" "${ADMIN_BOOTSTRAP_CREDENTIAL_ROOT}" \
+  "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}" \
   "${INPUT_ROOT}" "${WORK_ROOT}/release" \
   "${REJECT_INSTALL_OPT_ROOT}" "${INSTALL_OPT_ROOT}" "${ARTIFACT_ROOT}" "${BACKUP_ROOT}" "${RESTORE_PARENT}" \
-  "${RUNTIME_PARENT}" "${BACKUP_RUNTIME_ROOT}" "${PGBOUNCER_CONFIG_ROOT}"
+  "${RUNTIME_PARENT}" "${BACKUP_RUNTIME_ROOT}" "${PGBOUNCER_CONFIG_ROOT}" "${CATALOG_PUBLISHER_STATE_ROOT}"
+ln -s -- "${NODE_BINARY}" "${NODE_TOOL_ROOT}/node"
+ln -s -- "${PNPM_BINARY}" "${NODE_TOOL_ROOT}/pnpm"
+[[ "$(realpath -e -- "${NODE_TOOL_ROOT}/node")" == "${NODE_BINARY}" &&
+   "$(realpath -e -- "${NODE_TOOL_ROOT}/pnpm")" == "${PNPM_BINARY}" &&
+   "$(stat -Lc '%a' -- "${NODE_TOOL_ROOT}")" == 700 ]] ||
+  fail 'private Node tool binding differs from the reviewed Node and pnpm executables'
+readonly TOOL_PATH="${NODE_TOOL_ROOT}:/usr/local/bin:/usr/bin:/bin"
 chmod 0750 -- "${ARTIFACT_ROOT}" "${BACKUP_ROOT}"
 chmod 0755 -- "${REJECT_INSTALL_OPT_ROOT}" "${INSTALL_OPT_ROOT}"
 install -m 0755 -- "${INSTALLER_SOURCE}" "${INSTALL_BOOTSTRAP}"
@@ -434,6 +460,8 @@ trap 'exit 143' TERM
   --release-purpose "${RELEASE_PURPOSE}" \
   --recommendation-model "${RECOMMENDATION_MODEL}" \
   --recommendation-model-sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+  --knowledge-catalog "${KNOWLEDGE_CATALOG}" \
+  --knowledge-catalog-sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
   --output "${RELEASE_OUTPUT}" \
   >"${LOG_ROOT}/release-builder.log"
 
@@ -476,7 +504,7 @@ jq -e \
       test("(^|/)\\.\\.?(/|$)") == false) and
     (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
     (.size | type == "number" and . > 0 and floor == .) and
-    (.mode | type == "string" and test("^0(644|755)$")))
+    (.mode | type == "string" and test("^0(555|644|755)$")))
 ' "${RELEASE_MANIFEST}" >/dev/null || fail 'release manifest violates the reviewed v2 contract'
 while IFS=$'\t' read -r relative expected_digest expected_size expected_mode; do
   payload="${RELEASE_OUTPUT}/${relative}"
@@ -532,6 +560,7 @@ run_release_installer "${INSTALL_OPT_ROOT}" \
 unset -f run_release_installer
 
 readonly INSTALLED_RELEASE="${INSTALL_OPT_ROOT}/ascendany/v2"
+readonly INITIALIZATION_CLIENT_BUNDLE="${INSTALLED_RELEASE}/operators/ascendany-production-initialize.mjs"
 [[ -f "${INSTALLED_RELEASE}/release-manifest.json" &&
    ! -L "${INSTALLED_RELEASE}/release-manifest.json" &&
    "$(stat -Lc '%a:%h' -- "${INSTALLED_RELEASE}/release-manifest.json")" == 644:1 ]] ||
@@ -561,32 +590,39 @@ while IFS=$'\t' read -r relative expected_digest expected_size expected_mode; do
     fail "installed entry mode differs: ${relative}"
 done < <(jq -r '.files[] | [.path, .sha256, (.size | tostring), .mode] | @tsv' "${RELEASE_MANIFEST}")
 unset relative expected_digest expected_size expected_mode payload
-for binary in ascendanyd ascendany-admin-bootstrap ascendany-backup ascendany-migrate; do
+for binary in ascendanyd ascendany-admin-bootstrap ascendany-backup ascendany-catalog-publish ascendany-migrate; do
   [[ -x "${INSTALLED_RELEASE}/bin/${binary}" ]] || fail "installed binary is unavailable: ${binary}"
 done
 unset binary
+[[ -f "${INITIALIZATION_CLIENT_BUNDLE}" && ! -L "${INITIALIZATION_CLIENT_BUNDLE}" &&
+   -x "${INITIALIZATION_CLIENT_BUNDLE}" &&
+   "$(stat -Lc '%a:%h' -- "${INITIALIZATION_CLIENT_BUNDLE}")" == 555:1 ]] ||
+  fail 'installed production initialization client is unavailable or noncanonical'
+"${NODE_BINARY}" --check "${INITIALIZATION_CLIENT_BUNDLE}" >/dev/null ||
+  fail 'installed production initialization client is not valid Node.js 22 syntax'
 
 /usr/bin/printf '%s\n' 'Checking generated SDK and building all first-party TypeScript applications'
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk check >"${LOG_ROOT}/sdk-check.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/pintia-exporter check >"${LOG_ROOT}/pintia-exporter-check.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" public-assets:check >"${LOG_ROOT}/public-assets-check.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/site build >"${LOG_ROOT}/site-build.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/web check >"${LOG_ROOT}/web-check.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/import-console check >"${LOG_ROOT}/import-console-check.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/mobile check >"${LOG_ROOT}/mobile-check.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/desktop test >"${LOG_ROOT}/desktop-test.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/desktop build >"${LOG_ROOT}/desktop-build.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk exec tsc \
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk check >"${LOG_ROOT}/sdk-check.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/pintia-exporter check >"${LOG_ROOT}/pintia-exporter-check.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" public-assets:check >"${LOG_ROOT}/public-assets-check.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/site build >"${LOG_ROOT}/site-build.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/web check >"${LOG_ROOT}/web-check.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/import-console check >"${LOG_ROOT}/import-console-check.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/mobile check >"${LOG_ROOT}/mobile-check.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/desktop test >"${LOG_ROOT}/desktop-test.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/desktop build >"${LOG_ROOT}/desktop-build.log"
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk exec tsc \
   --noEmit --strict --target ES2022 --module ESNext --moduleResolution Bundler \
   --lib ES2022,DOM --types node --allowImportingTsExtensions \
   "${REPOSITORY_ROOT}/tools/v2-full-e2e-client.ts" \
   "${REPOSITORY_ROOT}/tools/v2-full-e2e-exporter-fixture.ts" \
+  "${REPOSITORY_ROOT}/tools/v2-production-initialization-client.ts" \
   >"${LOG_ROOT}/client-typecheck.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk exec esbuild \
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk exec esbuild \
   "${REPOSITORY_ROOT}/tools/v2-full-e2e-client.ts" \
   --bundle --platform=node --format=esm --target=node22 --outfile="${CLIENT_BUNDLE}" \
   >"${LOG_ROOT}/client-build.log"
-PATH="${TOOL_PATH}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk exec esbuild \
+PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk exec esbuild \
   "${REPOSITORY_ROOT}/tools/v2-full-e2e-exporter-fixture.ts" \
   --bundle --platform=node --format=esm --target=node22 --outfile="${EXPORTER_FIXTURE_BUNDLE}" \
   >"${LOG_ROOT}/exporter-fixture-build.log"
@@ -601,32 +637,39 @@ jq -e '
 [[ -f "${GENERATED_SNAPSHOT_PATH}" && ! -L "${GENERATED_SNAPSHOT_PATH}" &&
    "$(stat -Lc '%a' "${GENERATED_SNAPSHOT_PATH}")" == 600 ]] ||
   fail 'Pintia exporter E2E snapshot file contract is invalid'
+ACCEPTANCE_STUDENT_NUMBER="$(jq -er '[.participants[].studentNumber | select(type == "string")] | sort | first' "${GENERATED_SNAPSHOT_PATH}")" ||
+  fail 'Pintia exporter E2E snapshot lacks an explicit acceptance student identity'
+readonly ACCEPTANCE_STUDENT_NUMBER
 [[ "$(git -C "${REPOSITORY_ROOT}" rev-parse HEAD)" == "${REQUESTED_COMMIT}" &&
    -z "$(git -C "${REPOSITORY_ROOT}" status --porcelain=v1 --untracked-files=all)" ]] ||
   fail 'TypeScript checks or builds mutated the reviewed checkout'
 
 readonly POSTGRES_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 readonly RUNTIME_PASSWORD="$(openssl rand -hex 24)"
+readonly CATALOG_PUBLISHER_PASSWORD="$(openssl rand -hex 24)"
 readonly MIGRATOR_PASSWORD="$(openssl rand -hex 24)"
 readonly BACKUP_PASSWORD="$(openssl rand -hex 24)"
 readonly RESTORE_PASSWORD="$(openssl rand -hex 24)"
 readonly PASSWORD_PEPPER="$(openssl rand -hex 32)"
-readonly JWT_SIGNING_KEY="$(openssl rand -hex 48)"
 readonly ADMIN_PASSWORD="$(openssl rand -hex 24)"
 
 printf '%s' "${POSTGRES_ADMIN_PASSWORD}" >"${POSTGRES_PASSWORD_FILE}"
 printf '%s' "${RUNTIME_PASSWORD}" >"${RUNTIME_PASSWORD_FILE}"
+printf '%s' "${CATALOG_PUBLISHER_PASSWORD}" >"${CATALOG_PUBLISHER_PASSWORD_FILE}"
 printf '%s' "${MIGRATOR_PASSWORD}" >"${MIGRATOR_PASSWORD_FILE}"
 printf '%s' "${BACKUP_PASSWORD}" >"${BACKUP_PASSWORD_FILE}"
 printf '%s' "${RESTORE_PASSWORD}" >"${RESTORE_PASSWORD_FILE}"
 printf '%s' "${PASSWORD_PEPPER}" >"${PASSWORD_PEPPER_FILE}"
-printf '%s' "${JWT_SIGNING_KEY}" >"${JWT_SIGNING_KEY_FILE}"
+openssl genpkey -algorithm ED25519 -out "${JWT_SIGNING_PRIVATE_KEY_FILE}"
+openssl pkey -in "${JWT_SIGNING_PRIVATE_KEY_FILE}" -pubout -out "${JWT_VERIFICATION_PUBLIC_KEY_FILE}"
 printf '%s' "${ADMIN_PASSWORD}" >"${ADMIN_PASSWORD_FILE}"
 printf '%s:5432:*:postgres:%s\n' "${DIRECT_HOST}" "${POSTGRES_ADMIN_PASSWORD}" >"${ADMIN_PGPASS_FILE}"
 chmod 0600 -- \
   "${POSTGRES_PASSWORD_FILE}" "${ADMIN_PGPASS_FILE}" "${RUNTIME_PASSWORD_FILE}" \
+  "${CATALOG_PUBLISHER_PASSWORD_FILE}" \
   "${MIGRATOR_PASSWORD_FILE}" "${BACKUP_PASSWORD_FILE}" "${RESTORE_PASSWORD_FILE}" \
-  "${PASSWORD_PEPPER_FILE}" "${JWT_SIGNING_KEY_FILE}" "${ADMIN_PASSWORD_FILE}"
+  "${PASSWORD_PEPPER_FILE}" "${JWT_SIGNING_PRIVATE_KEY_FILE}" \
+  "${JWT_VERIFICATION_PUBLIC_KEY_FILE}" "${ADMIN_PASSWORD_FILE}"
 [[ "$(stat -Lc '%a' -- "${ADMIN_BOOTSTRAP_CREDENTIAL_ROOT}")" == 700 ]] ||
   fail 'administrator bootstrap credential directory mode drifted'
 
@@ -708,11 +751,28 @@ assert_single_backup_log() {
   local file="$1"
   local message="$2"
   [[ "$(wc -l <"${file}" | tr -d ' ')" == 1 ]] || fail "${message} must emit exactly one JSON line"
-  jq -e --arg message "${message}" --argjson artifact_count "${EXPECTED_ARTIFACT_COUNT}" '
+  jq -e --arg message "${message}" \
+    --argjson artifact_count "${EXPECTED_ARTIFACT_COUNT}" \
+    --argjson catalog_receipt_count "${EXPECTED_CATALOG_RECEIPT_COUNT}" '
     type == "object" and .level == "INFO" and .msg == $message and
+    (if $message == "backup restore verified" then
+      keys == [
+        "artifactCount", "backupId", "catalogReceiptCount", "catalogReceiptRoot", "databaseName",
+        "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit",
+        "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256",
+        "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256",
+        "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"
+      ] and
+      (.databaseName | type == "string" and length > 0) and
+      (.catalogReceiptRoot | type == "string" and startswith("/"))
+    else
+      keys == [
+        "artifactCount", "backupId", "catalogReceiptCount", "level", "manifestSHA256", "msg", "time"
+      ]
+    end) and
     (.backupId | type == "string" and test("^backup-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$")) and
     (.manifestSHA256 | type == "string" and test("^[0-9a-f]{64}$")) and
-    .artifactCount == $artifact_count
+    .artifactCount == $artifact_count and .catalogReceiptCount == $catalog_receipt_count
   ' "${file}" >/dev/null || fail "${message} evidence contract failed"
 }
 
@@ -753,6 +813,7 @@ WITH counts AS (
     (SELECT count(*) FROM ascendany.recommendation_model_releases) AS model_release_count,
     (SELECT count(*) FROM ascendany.recommendation_model_head) AS model_head_count,
     (SELECT count(*) FROM ascendany.recommendation_model_activation_events) AS activation_count,
+    (SELECT count(*) FROM ascendany.knowledge_catalog_publications) AS catalog_publication_count,
     (
       SELECT count(*)
       FROM ascendany.recommendation_model_head AS head
@@ -786,6 +847,56 @@ WITH counts AS (
     ON version.configuration_item_id = item.configuration_item_id
    AND version.configuration_version_id = item.active_version_id
   WHERE item.configuration_kind = 'knowledge_catalog'
+), catalog_publication AS (
+  SELECT
+    publication.publication_authorization_id::text AS authorization_id,
+    publication.knowledge_catalog_publication_id::text AS knowledge_catalog_publication_id,
+    publication.target_model_release_id::text AS target_model_release_id,
+    publication.catalog_sha256,
+    publication.target_model_artifact_sha256,
+    publication.target_model_id::text AS target_model_id,
+    item.configuration_key,
+    item.public_id::text AS configuration_id,
+    publication.expected_configuration_head_revision,
+    publication.configuration_head_revision,
+    publication.configuration_mutated,
+    publication.configuration_version_id::text AS configuration_version_id,
+    version.version_number AS configuration_version_number,
+    publication.analytics_generation_id::text AS analytics_generation_id,
+    publication.analytics_head_revision,
+    publication.input_manifest_sha256,
+    publication.current_model_head_revision,
+    publication.current_model_artifact_sha256,
+    publication.target_application_version,
+    publication.target_application_commit,
+    publication.target_application_build_time,
+    account.public_id::text AS published_by_account_id,
+    session.public_id::text AS published_by_session_id,
+    to_char(publication.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') ||
+      CASE
+        WHEN rtrim(to_char(publication.published_at AT TIME ZONE 'UTC', 'US'), '0') = '' THEN ''
+        ELSE '.' || rtrim(to_char(publication.published_at AT TIME ZONE 'UTC', 'US'), '0')
+      END || 'Z' AS published_at,
+    publication.audit_event_id::text AS audit_event_id,
+    audit.event_type,
+    audit.payload
+  FROM ascendany.knowledge_catalog_publications AS publication
+  JOIN ascendany.knowledge_catalog_publication_authorizations AS capability
+    ON capability.public_id = publication.publication_authorization_id
+   AND capability.consumed_publication_id = publication.knowledge_catalog_publication_id
+   AND capability.consumed_at = publication.published_at
+  JOIN ascendany.configuration_items AS item
+    ON item.configuration_item_id = publication.configuration_item_id
+  JOIN ascendany.configuration_versions AS version
+    ON version.configuration_version_id = publication.configuration_version_id
+   AND version.configuration_item_id = publication.configuration_item_id
+  JOIN ascendany.auth_accounts AS account
+    ON account.account_id = publication.published_by_account_id
+  JOIN ascendany.auth_sessions AS session
+    ON session.session_id = publication.published_by_session_id
+   AND session.account_id = publication.published_by_account_id
+  JOIN ascendany.audit_events AS audit
+    ON audit.audit_event_id = publication.audit_event_id
 ), current_model AS (
   SELECT
     release.recommendation_model_release_id AS release_id,
@@ -831,6 +942,7 @@ SELECT jsonb_build_object(
   'modelReleaseCount', counts.model_release_count,
   'modelHeadCount', counts.model_head_count,
   'activationCount', counts.activation_count,
+  'catalogPublicationCount', counts.catalog_publication_count,
   'currentActivationCount', counts.current_activation_count,
   'activeCatalogCount', counts.active_catalog_count,
   'catalog', (
@@ -844,6 +956,41 @@ SELECT jsonb_build_object(
       'credentialRef', credential_ref
     )
     FROM active_catalog
+  ),
+  'catalogPublication', (
+    SELECT jsonb_build_object(
+      'schema', 'ascendany.knowledge_catalog.publication-receipt.v1',
+      'authorizationId', authorization_id,
+      'knowledgeCatalogPublicationId', knowledge_catalog_publication_id,
+      'targetModelReleaseId', target_model_release_id,
+      'catalogSha256', catalog_sha256,
+      'modelArtifactSha256', target_model_artifact_sha256,
+      'modelId', target_model_id,
+      'configurationKey', configuration_key,
+      'configurationId', configuration_id,
+      'expectedConfigurationHeadRevision', expected_configuration_head_revision,
+      'configurationHeadRevision', configuration_head_revision,
+      'configurationVersionId', configuration_version_id,
+      'configurationVersionNumber', configuration_version_number,
+      'analyticsGenerationId', analytics_generation_id,
+      'analyticsHeadRevision', analytics_head_revision,
+      'inputManifestSha256', input_manifest_sha256,
+      'currentModelHeadRevision', current_model_head_revision,
+      'currentModelArtifactSha256', current_model_artifact_sha256,
+      'targetApplicationVersion', target_application_version,
+      'targetApplicationCommit', target_application_commit,
+      'targetApplicationBuildTime', target_application_build_time,
+      'publishedByAccountId', published_by_account_id,
+      'publishedBySessionId', published_by_session_id,
+      'publishedAt', published_at,
+      'auditEventId', audit_event_id,
+      'configurationMutated', configuration_mutated
+    )
+    FROM catalog_publication
+  ),
+  'catalogPublicationAudit', (
+    SELECT jsonb_build_object('type', event_type, 'payload', payload)
+    FROM catalog_publication
   ),
   'model', (
     SELECT jsonb_build_object(
@@ -898,16 +1045,47 @@ assert_database_model_state() {
   [[ "$(wc -l <"${output}" | tr -d ' ')" == 1 ]] ||
     fail "${database} model-state query did not return exactly one row"
   jq -e \
+    --slurpfile receipt "${CATALOG_PUBLICATION_RECEIPT_PATH}" \
     --arg artifact_sha256 "${RECOMMENDATION_MODEL_SHA256}" \
     --arg catalog_sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
     --arg model_purpose "${RELEASE_PURPOSE}" \
     --arg application_version "${VERSION}" \
     --arg application_commit "${REQUESTED_COMMIT}" \
     --arg application_build_time "${expected_build_time}" '
-      .schemaMigrationCount == 6 and .schemaMigrationMax == 6 and
+      .schemaMigrationCount == 7 and .schemaMigrationMax == 7 and
+      ($receipt | length) == 1 and
       .modelReleaseCount == 1 and .modelHeadCount == 1 and
-      .activationCount >= 1 and .currentActivationCount == 1 and
-      .activeCatalogCount == 1 and
+      .activationCount == 2 and .currentActivationCount == 1 and
+      .activeCatalogCount == 1 and .catalogPublicationCount == 1 and
+      .catalogPublication == $receipt[0] and
+      .catalogPublication.configurationMutated == true and
+      .catalogPublication.targetModelReleaseId == (.binding.releaseId | tostring) and
+      .catalogPublicationAudit.type == "admin.configuration_version_created" and
+      .catalogPublicationAudit.payload == {
+        "authorizationId": $receipt[0].authorizationId,
+        "configurationId": $receipt[0].configurationId,
+        "key": $receipt[0].configurationKey,
+        "kind": "knowledge_catalog",
+        "versionNumber": $receipt[0].configurationVersionNumber,
+        "schemaId": "ascendany.knowledge_catalog.recommendation.v1",
+        "documentSha256": $receipt[0].catalogSha256,
+        "headRevision": $receipt[0].configurationHeadRevision,
+        "credentialRef": null,
+        "expectedConfigurationHeadRevision": $receipt[0].expectedConfigurationHeadRevision,
+        "configurationMutated": true,
+        "analyticsGenerationId": $receipt[0].analyticsGenerationId,
+        "analyticsHeadRevision": $receipt[0].analyticsHeadRevision,
+        "inputManifestSha256": $receipt[0].inputManifestSha256,
+        "currentModelHeadRevision": $receipt[0].currentModelHeadRevision,
+        "currentModelArtifactSha256": $receipt[0].currentModelArtifactSha256,
+        "targetApplicationVersion": $receipt[0].targetApplicationVersion,
+        "targetApplicationCommit": $receipt[0].targetApplicationCommit,
+        "targetApplicationBuildTime": $receipt[0].targetApplicationBuildTime,
+        "targetCatalogSha256": $receipt[0].catalogSha256,
+        "targetModelId": $receipt[0].modelId,
+        "targetModelArtifactSha256": $receipt[0].modelArtifactSha256,
+        "targetModelReleaseId": $receipt[0].targetModelReleaseId
+      } and
       .catalog == {
         "configurationKey": "recommendation.catalog.active",
         "configurationKind": "knowledge_catalog",
@@ -1016,6 +1194,7 @@ admin_psql postgres --command="CREATE DATABASE ${SOURCE_DATABASE} WITH TEMPLATE 
 admin_psql "${SOURCE_DATABASE}" --file="${INSTALLED_RELEASE}/db/roles/001_v2_roles.sql" >/dev/null
 admin_psql "${SOURCE_DATABASE}" >/dev/null <<SQL
 ALTER ROLE ${RUNTIME_LOGIN} PASSWORD '${RUNTIME_PASSWORD}';
+ALTER ROLE ${CATALOG_PUBLISHER_LOGIN} PASSWORD '${CATALOG_PUBLISHER_PASSWORD}';
 ALTER ROLE ${MIGRATOR_LOGIN} PASSWORD '${MIGRATOR_PASSWORD}';
 ALTER ROLE ${BACKUP_LOGIN} PASSWORD '${BACKUP_PASSWORD}';
 ALTER ROLE ${RESTORE_LOGIN} PASSWORD '${RESTORE_PASSWORD}';
@@ -1023,14 +1202,16 @@ SQL
 admin_psql postgres --tuples-only --no-align >"${PGBOUNCER_USERLIST_FILE}" <<'SQL'
 SELECT format('"%s" "%s"', rolname, rolpassword)
 FROM pg_authid
-WHERE rolname = 'ascendanyd_login'
+WHERE rolname IN ('ascendany_catalog_publisher_login', 'ascendanyd_login')
   AND rolpassword LIKE 'SCRAM-SHA-256$%'
+ORDER BY rolname
 SQL
-[[ "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 1 ]] ||
-  fail 'real PgBouncer E2E did not capture the sole v2 runtime SCRAM identity'
-[[ "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 1 ]] ||
+[[ "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 2 ]] ||
+  fail 'real PgBouncer E2E did not capture the exact runtime and publisher SCRAM identities'
+[[ "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 2 ]] ||
   fail 'real PgBouncer E2E userlist contains a non-SCRAM credential'
-if grep -Fq -- "${RUNTIME_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}"; then
+if grep -Fq -- "${RUNTIME_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
+   grep -Fq -- "${CATALOG_PUBLISHER_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}"; then
   fail 'real PgBouncer E2E userlist contains plaintext credential material'
 fi
 chmod 0400 -- "${PGBOUNCER_USERLIST_FILE}"
@@ -1041,7 +1222,7 @@ chmod 0400 -- "${PGBOUNCER_USERLIST_FILE}"
   ASCENDANY_DATABASE_PASSWORD_FILE="${MIGRATOR_PASSWORD_FILE}" \
   ASCENDANY_DATABASE_ROLE="${SCHEMA_OWNER}" \
   ASCENDANY_DATABASE_SCHEMA=ascendany \
-  ASCENDANY_DATABASE_SCHEMA_VERSION=6 \
+  ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
   ASCENDANY_MIGRATION_HISTORY_TABLE=ascendany.schema_migrations_v2 \
   ASCENDANY_MIGRATION_LOCK_TIMEOUT=30s \
   ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
@@ -1099,19 +1280,22 @@ prepare_server_environment() {
   local write_mode="$2"
   [[ "${write_mode}" == enabled || "${write_mode}" == disabled ]] ||
     fail 'server write mode must be enabled or disabled'
-  cp --no-preserve=mode,ownership -- "${INSTALLED_RELEASE}/config/ascendanyd.env" "${target}"
-  sed -i \
-    "s|^ASCENDANY_RECOMMENDATION_MODEL_PATH=.*$|ASCENDANY_RECOMMENDATION_MODEL_PATH=${INSTALLED_RELEASE}/models/recommendation-model.json|" \
-    "${target}"
+	cp --no-preserve=mode,ownership -- "${INSTALLED_RELEASE}/config/ascendanyd.env" "${target}"
+	sed -i \
+	  -e "s|^ASCENDANY_RECOMMENDATION_MODEL_PATH=.*$|ASCENDANY_RECOMMENDATION_MODEL_PATH=${INSTALLED_RELEASE}/models/recommendation-model.json|" \
+	  -e "s|^ASCENDANY_KNOWLEDGE_CATALOG_PATH=.*$|ASCENDANY_KNOWLEDGE_CATALOG_PATH=${INSTALLED_RELEASE}/models/recommendation-knowledge-catalog.json|" \
+	  "${target}"
   [[ "$(grep -Fxc "ASCENDANY_RECOMMENDATION_MODEL_PATH=${INSTALLED_RELEASE}/models/recommendation-model.json" "${target}")" == 1 &&
      "$(grep -Fxc "ASCENDANY_RECOMMENDATION_MODEL_SHA256=${RECOMMENDATION_MODEL_SHA256}" "${target}")" == 1 &&
-     "$(grep -Fxc "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=${RELEASE_PURPOSE}" "${target}")" == 1 ]] ||
-    fail 'installed server configuration does not bind the exact acceptance model identity'
+     "$(grep -Fxc "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=${RELEASE_PURPOSE}" "${target}")" == 1 &&
+     "$(grep -Fxc "ASCENDANY_KNOWLEDGE_CATALOG_PATH=${INSTALLED_RELEASE}/models/recommendation-knowledge-catalog.json" "${target}")" == 1 &&
+     "$(grep -Fxc "ASCENDANY_KNOWLEDGE_CATALOG_SHA256=${KNOWLEDGE_CATALOG_SHA256}" "${target}")" == 1 ]] ||
+    fail 'installed server configuration does not bind the exact acceptance model/catalog identity'
   {
     printf '\nASCENDANY_HTTP_LISTEN=%s:%s\n' "${API_HOST}" "${API_PORT}"
     printf 'ASCENDANY_DATABASE_URL=postgresql://%s@%s:6432/%s?sslmode=disable\n' "${RUNTIME_LOGIN}" "${POOL_HOST}" "${SOURCE_DATABASE}"
     printf 'ASCENDANY_DATABASE_PASSWORD_FILE=%s\n' "${RUNTIME_PASSWORD_FILE}"
-    printf 'ASCENDANY_JWT_SIGNING_KEY_FILE=%s\n' "${JWT_SIGNING_KEY_FILE}"
+    printf 'ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE=%s\n' "${JWT_SIGNING_PRIVATE_KEY_FILE}"
     printf 'ASCENDANY_PASSWORD_PEPPER_FILE=%s\n' "${PASSWORD_PEPPER_FILE}"
     printf 'ASCENDANY_AUTH_ALLOWED_ORIGINS=http://%s:%s\n' "${API_HOST}" "${API_PORT}"
     printf 'ASCENDANY_ANALYTICS_CONFIG=%s\n' "${INSTALLED_RELEASE}/config/analytics.json"
@@ -1185,12 +1369,30 @@ cmp -s "${PRE_SMOKE_DATABASE_FINGERPRINT}" "${POST_SMOKE_DATABASE_FINGERPRINT}" 
   fail 'read-only smoke changed an AscendAny base table or sequence'
 prepare_server_environment "${SERVER_ENV}" enabled
 
+/usr/bin/printf '%s\n' 'Registering the installed immutable model release without advancing the model head'
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+  /usr/bin/bash -c 'set -a; source "$1"; set +a; exec "$2" register-model' bash \
+  "${SERVER_ENV}" "${INSTALLED_RELEASE}/bin/ascendanyd" \
+  >"${LOG_ROOT}/model-registration.log" 2>&1 || {
+    jq -c '{level,msg,error}' "${LOG_ROOT}/model-registration.log" >&2 2>/dev/null || true
+    fail 'release model registration failed before initial activation'
+  }
+
+/usr/bin/printf '%s\n' 'Activating the installed release model with the HTTP runtime stopped and no account state'
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+  /usr/bin/bash -c 'set -a; source "$1"; set +a; exec "$2" activate-model' bash \
+  "${SERVER_ENV}" "${INSTALLED_RELEASE}/bin/ascendanyd" \
+  >"${LOG_ROOT}/model-activation.log" 2>&1 || {
+    jq -c '{level,msg,error}' "${LOG_ROOT}/model-activation.log" >&2 2>/dev/null || true
+    fail 'release model activation failed before administrator bootstrap'
+  }
+
 /usr/bin/env -i \
   PATH=/usr/bin:/bin LC_ALL=C \
   ASCENDANY_DATABASE_URL="postgresql://${RUNTIME_LOGIN}@${POOL_HOST}:6432/${SOURCE_DATABASE}?sslmode=disable" \
   ASCENDANY_DATABASE_POOL_MODE=transaction \
   ASCENDANY_DATABASE_PASSWORD_FILE="${RUNTIME_PASSWORD_FILE}" \
-  ASCENDANY_DATABASE_SCHEMA_VERSION=6 \
+  ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
   ASCENDANY_DATABASE_MAX_CONNECTIONS=1 \
   ASCENDANY_DATABASE_MIN_CONNECTIONS=0 \
   ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
@@ -1205,15 +1407,6 @@ prepare_server_environment "${SERVER_ENV}" enabled
 [[ ! -s "${LOG_ROOT}/admin-bootstrap.error" ]] || fail 'administrator bootstrap emitted unexpected stderr'
 jq -e '.username == "admin" and .displayName == "E2E Administrator" and .role == "admin" and .authRevision == 1' \
   "${LOG_ROOT}/admin-bootstrap.json" >/dev/null || fail 'administrator bootstrap result is noncanonical'
-
-/usr/bin/printf '%s\n' 'Activating the installed release model with the HTTP runtime stopped'
-/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
-  /usr/bin/bash -c 'set -a; source "$1"; set +a; exec "$2" activate-model' bash \
-  "${SERVER_ENV}" "${INSTALLED_RELEASE}/bin/ascendanyd" \
-  >"${LOG_ROOT}/model-activation.log" 2>&1 || {
-    jq -c '{level,msg,error}' "${LOG_ROOT}/model-activation.log" >&2 2>/dev/null || true
-    fail 'release model activation failed before the write-enabled runtime started'
-  }
 
 mkdir -m 0700 -- "${RUNTIME_PARENT}/judge-sockets"
 
@@ -1239,6 +1432,343 @@ for _attempt in {1..240}; do
 done
 ((server_ready == 1)) || fail 'installed server did not become ready'
 
+/usr/bin/printf '%s\n' 'Preparing the initial catalog publication from the generated SDK and real write runtime'
+/usr/bin/env -i \
+  PATH=/usr/bin:/bin LC_ALL=C \
+  ASCENDANY_INITIALIZATION_DEPLOYMENT_KIND=initial \
+  ASCENDANY_INITIALIZATION_BASE_URL="${BASE_URL}" \
+  ASCENDANY_INITIALIZATION_ORIGIN="${BASE_URL}" \
+  ASCENDANY_INITIALIZATION_SNAPSHOT_PATH="${GENERATED_SNAPSHOT_PATH}" \
+  ASCENDANY_INITIALIZATION_ADMIN_PASSWORD_FILE="${ADMIN_PASSWORD_FILE}" \
+  ASCENDANY_INITIALIZATION_TARGET_APPLICATION_VERSION="${VERSION}" \
+  ASCENDANY_INITIALIZATION_TARGET_APPLICATION_COMMIT="${REQUESTED_COMMIT}" \
+  ASCENDANY_INITIALIZATION_TARGET_APPLICATION_BUILD_TIME="${TARGET_APPLICATION_BUILD_TIME}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_MODEL_PURPOSE="${RELEASE_PURPOSE}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_MODEL_HEAD_REVISION=2 \
+  ASCENDANY_INITIALIZATION_EXPECTED_CURRENT_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_CURRENT_MODEL_HEAD_REVISION=1 \
+  ASCENDANY_INITIALIZATION_EXPECTED_CURRENT_CATALOG_HEAD_REVISION=0 \
+  ASCENDANY_INITIALIZATION_EXPECTED_CATALOG_HEAD_REVISION=1 \
+  ASCENDANY_INITIALIZATION_KNOWLEDGE_CATALOG_PATH="${CAPTURED_KNOWLEDGE_CATALOG}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_CATALOG_SHA256="${KNOWLEDGE_CATALOG_SHA256}" \
+  ASCENDANY_INITIALIZATION_ACCEPTANCE_STUDENT_NUMBER="${ACCEPTANCE_STUDENT_NUMBER}" \
+  ASCENDANY_INITIALIZATION_CATALOG_CREDENTIAL_DIRECTORY_OUTPUT="${CATALOG_CREDENTIAL_DIRECTORY}" \
+  "${NODE_BINARY}" "${INITIALIZATION_CLIENT_BUNDLE}" prepare \
+  >"${INITIALIZATION_PREPARE_RESULT}"
+jq -e \
+  --arg model_sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+  --arg catalog_sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
+  --arg application_version "${VERSION}" \
+  --arg application_commit "${REQUESTED_COMMIT}" \
+  --arg application_build_time "${TARGET_APPLICATION_BUILD_TIME}" \
+  --arg credential_directory "${CATALOG_CREDENTIAL_DIRECTORY}" '
+  keys == [
+    "accessTokenExpiresAt", "administratorAccountId", "analyticsGenerationId",
+    "analyticsHeadRevision", "catalogCoverageVerified", "catalogProblemAssignmentCount",
+    "catalogPublicationAuthorizationId", "catalogSha256", "credentialDirectory",
+    "currentApplication", "currentModelArtifactSha256", "currentModelHeadRevision",
+    "deploymentKind", "examId", "expectedConfigurationHeadRevision", "importJobId",
+    "importStatus", "inputManifestSha256", "problemSetId", "releaseVerified", "schema",
+    "snapshotId", "snapshotSequence", "snapshotSha256", "targetApplication",
+    "targetCatalogAlreadyActive", "targetCatalogHeadRevision", "targetModelArtifactSha256",
+    "targetModelHeadRevision"
+  ] and
+  .schema == "ascendany.production-initialization.prepare-receipt.v1" and
+  .deploymentKind == "initial" and .releaseVerified == true and
+  .importStatus == "succeeded" and .snapshotSequence == 1 and
+  .catalogCoverageVerified == true and
+  .expectedConfigurationHeadRevision == 0 and .targetCatalogHeadRevision == 1 and
+  .currentModelHeadRevision == 1 and .currentModelArtifactSha256 == $model_sha256 and
+  .targetModelHeadRevision == 2 and
+  .targetModelArtifactSha256 == $model_sha256 and
+  (.catalogPublicationAuthorizationId | type == "string" and
+    test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+  (.accessTokenExpiresAt | type == "string" and test("Z$")) and
+  .credentialDirectory == $credential_directory and
+  .targetApplication == {
+    "version": $application_version,
+    "commit": $application_commit,
+    "buildTime": $application_build_time
+  } and .currentApplication == .targetApplication and
+  .catalogSha256 == $catalog_sha256
+' "${INITIALIZATION_PREPARE_RESULT}" >/dev/null ||
+  fail 'initial catalog publication preparation evidence is incomplete'
+readonly CATALOG_PUBLICATION_AUTHORIZATION_ID="$(jq -er '.catalogPublicationAuthorizationId' "${INITIALIZATION_PREPARE_RESULT}")"
+[[ ! -L "${CATALOG_CREDENTIAL_DIRECTORY}" &&
+   ! -L "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request" &&
+   ! -L "${CATALOG_CREDENTIAL_DIRECTORY}/admin_access_token" &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_CREDENTIAL_DIRECTORY}")" == 700:2 &&
+   "$(find "${CATALOG_CREDENTIAL_DIRECTORY}" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" == $'admin_access_token\ncatalog_publication_request' &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request")" == 600:1 &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_CREDENTIAL_DIRECTORY}/admin_access_token")" == 600:1 &&
+   -s "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request" &&
+   -s "${CATALOG_CREDENTIAL_DIRECTORY}/admin_access_token" ]] ||
+  fail 'catalog publication credential directory violates its exact private entry contract'
+jq -e \
+  --arg model_sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+  --arg catalog_sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
+  --arg application_version "${VERSION}" \
+  --arg application_commit "${REQUESTED_COMMIT}" \
+  --arg application_build_time "${TARGET_APPLICATION_BUILD_TIME}" \
+  --arg authorization_id "${CATALOG_PUBLICATION_AUTHORIZATION_ID}" '
+  keys == [
+    "authorizationId",
+    "expectedAnalyticsGenerationId",
+    "expectedAnalyticsHeadRevision",
+    "expectedConfigurationHeadRevision",
+    "expectedCurrentModelArtifactSha256",
+    "expectedCurrentModelHeadRevision",
+    "expectedInputManifestSha256",
+    "schema",
+    "targetApplicationBuildTime",
+    "targetApplicationCommit",
+    "targetApplicationVersion",
+    "targetCatalogSha256",
+    "targetModelArtifactSha256"
+  ] and
+  .schema == "ascendany.knowledge_catalog.publication-request.v1" and
+  .authorizationId == $authorization_id and
+  .expectedConfigurationHeadRevision == 0 and
+  (.expectedAnalyticsGenerationId | type == "string" and test("^[1-9][0-9]*$")) and
+  (.expectedAnalyticsHeadRevision | type == "number" and . >= 1) and
+  (.expectedInputManifestSha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+  .expectedCurrentModelHeadRevision == 1 and
+  .expectedCurrentModelArtifactSha256 == $model_sha256 and
+  .targetCatalogSha256 == $catalog_sha256 and
+  .targetModelArtifactSha256 == $model_sha256 and
+  .targetApplicationVersion == $application_version and
+  .targetApplicationCommit == $application_commit and
+  .targetApplicationBuildTime == $application_build_time
+' "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request" >/dev/null ||
+  fail 'catalog publication request credential differs from the reviewed release intent'
+
+install -m 0400 -- \
+  "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request" \
+  "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request"
+install -m 0400 -- \
+  "${CATALOG_CREDENTIAL_DIRECTORY}/admin_access_token" \
+  "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token"
+[[ ! -L "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}" &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}")" == 700:2 &&
+   "$(find "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" == $'admin_access_token\ncatalog_publication_request' &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request")" == 400:1 &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token")" == 400:1 &&
+   -s "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request" &&
+   -s "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token" ]] ||
+  fail 'catalog publication runtime credentials violate the systemd credential materialization contract'
+cmp -s -- "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request" \
+  "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request" ||
+  fail 'catalog publication request changed at the runtime credential boundary'
+cmp -s -- "${CATALOG_CREDENTIAL_DIRECTORY}/admin_access_token" \
+  "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token" ||
+  fail 'catalog publication access token changed at the runtime credential boundary'
+
+kill -TERM "${SERVER_PID}"
+wait "${SERVER_PID}"
+SERVER_PID=''
+mkdir -m 0750 -- "${CATALOG_PUBLISHER_STATE_ROOT}/receipts"
+
+/usr/bin/printf '%s\n' 'Publishing the release catalog through the isolated stopped-runtime capability'
+/usr/bin/bwrap \
+  --die-with-parent \
+  --ro-bind / / \
+  --tmpfs /var/lib \
+  --dir /var/lib/ascendany-catalog-publisher \
+  --bind "${CATALOG_PUBLISHER_STATE_ROOT}" /var/lib/ascendany-catalog-publisher \
+  -- /usr/bin/env -i \
+    PATH=/usr/bin:/bin LC_ALL=C \
+    ASCENDANY_DATABASE_URL="postgresql://${CATALOG_PUBLISHER_LOGIN}@${POOL_HOST}:6432/${SOURCE_DATABASE}?sslmode=disable" \
+    ASCENDANY_DATABASE_POOL_MODE=transaction \
+    ASCENDANY_DATABASE_PASSWORD_FILE="${CATALOG_PUBLISHER_PASSWORD_FILE}" \
+    ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE="${JWT_VERIFICATION_PUBLIC_KEY_FILE}" \
+    ASCENDANY_AUTH_ISSUER=ascendany \
+    ASCENDANY_AUTH_AUDIENCE=ascendany-v2 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
+    ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
+    ASCENDANY_DATABASE_HEALTH_TIMEOUT=5s \
+    ASCENDANY_RECOMMENDATION_MODEL_PATH="${INSTALLED_RELEASE}/models/recommendation-model.json" \
+    ASCENDANY_RECOMMENDATION_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
+    ASCENDANY_RECOMMENDATION_MODEL_PURPOSE="${RELEASE_PURPOSE}" \
+    ASCENDANY_KNOWLEDGE_CATALOG_PATH="${INSTALLED_RELEASE}/models/recommendation-knowledge-catalog.json" \
+    ASCENDANY_KNOWLEDGE_CATALOG_SHA256="${KNOWLEDGE_CATALOG_SHA256}" \
+    ASCENDANY_LOG_LEVEL=info \
+    CREDENTIALS_DIRECTORY="${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}" \
+    "${INSTALLED_RELEASE}/bin/ascendany-catalog-publish" publish \
+  >"${LOG_ROOT}/catalog-publication-receipt.json" \
+  2>"${LOG_ROOT}/catalog-publication.log" || {
+    jq -c '{level,msg,error,configurationCode,authenticationCode}' \
+      "${LOG_ROOT}/catalog-publication.log" >&2 2>/dev/null || true
+    fail 'stopped-runtime catalog publication failed'
+  }
+jq -e \
+  --arg model_sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+  --arg catalog_sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
+  --arg application_version "${VERSION}" \
+  --arg application_commit "${REQUESTED_COMMIT}" \
+  --arg application_build_time "${TARGET_APPLICATION_BUILD_TIME}" \
+  --arg authorization_id "${CATALOG_PUBLICATION_AUTHORIZATION_ID}" '
+  keys == [
+    "analyticsGenerationId",
+    "analyticsHeadRevision",
+    "auditEventId",
+    "authorizationId",
+    "catalogSha256",
+    "configurationHeadRevision",
+    "configurationId",
+    "configurationKey",
+    "configurationMutated",
+    "configurationVersionId",
+    "configurationVersionNumber",
+    "currentModelArtifactSha256",
+    "currentModelHeadRevision",
+    "expectedConfigurationHeadRevision",
+    "inputManifestSha256",
+    "knowledgeCatalogPublicationId",
+    "modelArtifactSha256",
+    "modelId",
+    "publishedAt",
+    "publishedByAccountId",
+    "publishedBySessionId",
+    "schema",
+    "targetApplicationBuildTime",
+    "targetApplicationCommit",
+    "targetApplicationVersion",
+    "targetModelReleaseId"
+  ] and
+  .schema == "ascendany.knowledge_catalog.publication-receipt.v1" and
+  .authorizationId == $authorization_id and
+  (.knowledgeCatalogPublicationId | type == "string" and test("^[1-9][0-9]*$")) and
+  (.targetModelReleaseId | type == "string" and test("^[1-9][0-9]*$")) and
+  .modelArtifactSha256 == $model_sha256 and .catalogSha256 == $catalog_sha256 and
+  .targetApplicationVersion == $application_version and
+  .targetApplicationCommit == $application_commit and
+  .targetApplicationBuildTime == $application_build_time and
+  .configurationMutated == true
+' "${LOG_ROOT}/catalog-publication-receipt.json" >/dev/null ||
+  fail 'catalog publisher stdout receipt differs from the selected release intent'
+readonly KNOWLEDGE_CATALOG_PUBLICATION_ID="$(jq -er '.knowledgeCatalogPublicationId' "${LOG_ROOT}/catalog-publication-receipt.json")"
+readonly CATALOG_PUBLICATION_RECEIPT_PATH="${CATALOG_PUBLISHER_STATE_ROOT}/receipts/${KNOWLEDGE_CATALOG_PUBLICATION_ID}.json"
+[[ -f "${CATALOG_PUBLICATION_RECEIPT_PATH}" && ! -L "${CATALOG_PUBLICATION_RECEIPT_PATH}" &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_PUBLICATION_RECEIPT_PATH}")" == 640:1 ]] ||
+  fail 'catalog publisher did not materialize one immutable publication-keyed receipt'
+catalog_stdout_size="$(stat -Lc '%s' -- "${LOG_ROOT}/catalog-publication-receipt.json")"
+catalog_receipt_size="$(stat -Lc '%s' -- "${CATALOG_PUBLICATION_RECEIPT_PATH}")"
+[[ "${catalog_stdout_size}" =~ ^[0-9]+$ && "${catalog_receipt_size}" =~ ^[0-9]+$ &&
+   "${catalog_stdout_size}" -eq "$((catalog_receipt_size + 1))" ]] ||
+  fail 'catalog publisher stdout is not exactly one canonical receipt line'
+cmp --silent --bytes="${catalog_receipt_size}" \
+  "${LOG_ROOT}/catalog-publication-receipt.json" "${CATALOG_PUBLICATION_RECEIPT_PATH}" ||
+  fail 'catalog publisher stdout payload differs from the durable receipt bytes'
+[[ "$(tail -c 1 -- "${LOG_ROOT}/catalog-publication-receipt.json" | od -An -tx1 | tr -d '[:space:]')" == 0a ]] ||
+  fail 'catalog publisher stdout lacks exactly one terminal LF'
+unset catalog_stdout_size catalog_receipt_size
+
+/usr/bin/printf '%s\n' 'Binding the receipt-backed catalog publication into model head H2'
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+  /usr/bin/bash -c 'set -a; source "$1"; set +a; exec "$2" activate-model' bash \
+  "${SERVER_ENV}" "${INSTALLED_RELEASE}/bin/ascendanyd" \
+  >"${LOG_ROOT}/model-catalog-activation.log" 2>&1 || {
+    jq -c '{level,msg,error}' "${LOG_ROOT}/model-catalog-activation.log" >&2 2>/dev/null || true
+    fail 'receipt-backed model head H2 activation failed'
+  }
+
+/usr/bin/printf '%s\n' 'Restarting the write runtime for receipt-bound inference acceptance'
+/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
+  /usr/bin/bash -c 'set -a; source "$1"; set +a; exec "$2" serve' bash \
+  "${SERVER_ENV}" "${INSTALLED_RELEASE}/bin/ascendanyd" \
+  >>"${SERVER_LOG}" 2>&1 &
+SERVER_PID=$!
+server_ready=0
+for _attempt in {1..240}; do
+  if curl --fail --silent --show-error \
+      --header "Origin: ${BASE_URL}" --header 'CF-Connecting-IP: 203.0.113.19' \
+      "${BASE_URL}/readyz" >/dev/null 2>&1; then
+    server_ready=1
+    break
+  fi
+  if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+    jq -c '{level,msg,error,code}' "${SERVER_LOG}" >&2 2>/dev/null || true
+    fail 'installed server stopped before post-publication readiness'
+  fi
+  sleep 0.25
+done
+((server_ready == 1)) || fail 'installed server did not become ready after catalog publication'
+
+/usr/bin/env -i \
+  PATH=/usr/bin:/bin LC_ALL=C \
+  ASCENDANY_INITIALIZATION_DEPLOYMENT_KIND=initial \
+  ASCENDANY_INITIALIZATION_BASE_URL="${BASE_URL}" \
+  ASCENDANY_INITIALIZATION_ORIGIN="${BASE_URL}" \
+  ASCENDANY_INITIALIZATION_SNAPSHOT_PATH="${GENERATED_SNAPSHOT_PATH}" \
+  ASCENDANY_INITIALIZATION_ADMIN_PASSWORD_FILE="${ADMIN_PASSWORD_FILE}" \
+  ASCENDANY_INITIALIZATION_TARGET_APPLICATION_VERSION="${VERSION}" \
+  ASCENDANY_INITIALIZATION_TARGET_APPLICATION_COMMIT="${REQUESTED_COMMIT}" \
+  ASCENDANY_INITIALIZATION_TARGET_APPLICATION_BUILD_TIME="${TARGET_APPLICATION_BUILD_TIME}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_MODEL_PURPOSE="${RELEASE_PURPOSE}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_MODEL_HEAD_REVISION=2 \
+  ASCENDANY_INITIALIZATION_EXPECTED_CURRENT_MODEL_SHA256="${RECOMMENDATION_MODEL_SHA256}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_CURRENT_MODEL_HEAD_REVISION=1 \
+  ASCENDANY_INITIALIZATION_EXPECTED_CURRENT_CATALOG_HEAD_REVISION=0 \
+  ASCENDANY_INITIALIZATION_EXPECTED_CATALOG_HEAD_REVISION=1 \
+  ASCENDANY_INITIALIZATION_KNOWLEDGE_CATALOG_PATH="${CAPTURED_KNOWLEDGE_CATALOG}" \
+  ASCENDANY_INITIALIZATION_EXPECTED_CATALOG_SHA256="${KNOWLEDGE_CATALOG_SHA256}" \
+  ASCENDANY_INITIALIZATION_ACCEPTANCE_STUDENT_NUMBER="${ACCEPTANCE_STUDENT_NUMBER}" \
+  ASCENDANY_INITIALIZATION_STUDENT_USERNAME=e2e_acceptance \
+  ASCENDANY_INITIALIZATION_STUDENT_CREDENTIAL_DIRECTORY="${STUDENT_CREDENTIAL_DIRECTORY}" \
+  ASCENDANY_INITIALIZATION_CATALOG_PUBLICATION_RECEIPT_PATH="${CATALOG_PUBLICATION_RECEIPT_PATH}" \
+  "${NODE_BINARY}" "${INITIALIZATION_CLIENT_BUNDLE}" verify \
+  >"${INITIALIZATION_VERIFY_RESULT}"
+jq -e \
+  --arg model_sha256 "${RECOMMENDATION_MODEL_SHA256}" \
+  --arg catalog_sha256 "${KNOWLEDGE_CATALOG_SHA256}" \
+  --arg publication_id "${KNOWLEDGE_CATALOG_PUBLICATION_ID}" \
+  --arg authorization_id "${CATALOG_PUBLICATION_AUTHORIZATION_ID}" \
+  --arg application_version "${VERSION}" \
+  --arg application_commit "${REQUESTED_COMMIT}" \
+  --arg application_build_time "${TARGET_APPLICATION_BUILD_TIME}" '
+  keys == [
+    "acceptanceStudentAccountId", "acceptanceStudentNumber", "acceptanceStudentUsername",
+    "analyticsGenerationId", "analyticsHeadRevision", "catalogAuditEventId",
+    "catalogConfigurationId", "catalogHeadRevision", "catalogPublicationAuthorizationId",
+    "catalogPublicationConfigurationMutated", "catalogPublicationModelId",
+    "catalogPublicationModelReleaseId", "catalogPublicationReceiptPath", "catalogSha256",
+    "deploymentKind", "enrollmentSingleUse", "examId", "importJobId", "importStatus",
+    "knowledgeCatalogPublicationId", "leaderboardHeadRevision", "leaderboardPopulation",
+    "leaderboardState", "leaderboardVisibleCount", "problemSetId",
+    "recommendationKnowledgePointCount", "recommendationModel", "recommendationResultSha256",
+    "recommendationResultStatus", "recommendationState", "releaseVerified", "schema",
+    "snapshotId", "snapshotSequence", "snapshotSha256", "studentAnalyticsHeadRevision",
+    "studentAnalyticsState", "studentCredentialDirectory", "targetApplication"
+  ] and
+  .schema == "ascendany.production-initialization.verify-receipt.v1" and
+  .deploymentKind == "initial" and .releaseVerified == true and
+  .catalogHeadRevision == 1 and .catalogSha256 == $catalog_sha256 and
+  .catalogPublicationConfigurationMutated == true and
+  .catalogPublicationAuthorizationId == $authorization_id and
+  .knowledgeCatalogPublicationId == $publication_id and
+  (.catalogPublicationModelReleaseId | type == "string" and test("^[1-9][0-9]*$")) and
+  (.catalogPublicationModelId | type == "string" and length == 36) and
+  (.catalogAuditEventId | type == "string" and test("^[1-9][0-9]*$")) and
+  .targetApplication == {
+    "version": $application_version,
+    "commit": $application_commit,
+    "buildTime": $application_build_time
+  } and
+  .enrollmentSingleUse == true and .studentAnalyticsState == "ready" and
+  .studentAnalyticsHeadRevision == .analyticsHeadRevision and
+  .leaderboardState == "ready" and
+  .leaderboardHeadRevision == .analyticsHeadRevision and
+  (.leaderboardPopulation | type == "number" and . >= 1) and
+  (.leaderboardVisibleCount | type == "number" and . >= 1 and . <= 100) and
+  .recommendationState == "fresh" and
+  .recommendationModel.modelHeadRevision == 2 and
+  .recommendationModel.artifactSha256 == $model_sha256 and
+  .recommendationModel.knowledgeCatalogSha256 == $catalog_sha256
+' "${INITIALIZATION_VERIFY_RESULT}" >/dev/null ||
+  fail 'receipt-bound initial inference acceptance evidence is incomplete'
+
 /usr/bin/env -i \
   PATH=/usr/bin:/bin LC_ALL=C \
   ASCENDANY_E2E_BASE_URL="${BASE_URL}" \
@@ -1251,6 +1781,7 @@ done
   ASCENDANY_E2E_EXPECTED_MODEL_PURPOSE="${RELEASE_PURPOSE}" \
   ASCENDANY_E2E_KNOWLEDGE_CATALOG_PATH="${CAPTURED_KNOWLEDGE_CATALOG}" \
   ASCENDANY_E2E_EXPECTED_CATALOG_SHA256="${KNOWLEDGE_CATALOG_SHA256}" \
+  ASCENDANY_E2E_STUDENT_CREDENTIAL_DIRECTORY="${STUDENT_CREDENTIAL_DIRECTORY}" \
   "${NODE_BINARY}" "${CLIENT_BUNDLE}" >"${CLIENT_RESULT}"
 jq -e \
   --arg model_sha256 "${RECOMMENDATION_MODEL_SHA256}" \
@@ -1261,9 +1792,9 @@ jq -e \
   .importReplayConverged == true and .analyticsStatus == "succeeded" and
   .typedDomainDuplicateStatus == "superseded" and
   .newSnapshotStatus == "succeeded" and .snapshotSequence == 2 and
-  .enrollmentSingleUse == true and .studentAnalyticsState == "ready" and
+  .acceptanceAccountReused == true and .studentAnalyticsState == "ready" and
   .leaderboardState == "ready" and .examCount == 1 and
-  .knowledgeCatalogPublished == true and
+  .knowledgeCatalogVerified == true and
   .knowledgeCatalogSha256 == $catalog_sha256 and
   .recommendationState == "fresh" and
   .recommendationResultSchema == "ascendany.recommendation.inference-result.v1" and
@@ -1284,12 +1815,12 @@ jq -e '
 kill -TERM "${SERVER_PID}"
 wait "${SERVER_PID}"
 SERVER_PID=''
-EXPECTED_APPLICATION_BUILD_TIME="$(jq -er '.model.applicationBuildTime' "${CLIENT_RESULT}")" ||
-  fail 'client evidence lacks the active application build-time provenance'
-readonly EXPECTED_APPLICATION_BUILD_TIME
+jq -e --arg build_time "${TARGET_APPLICATION_BUILD_TIME}" \
+  '.model.applicationBuildTime == $build_time' "${CLIENT_RESULT}" >/dev/null ||
+  fail 'client evidence differs from the target application build-time provenance'
 jq -S '.model' "${CLIENT_RESULT}" >"${API_MODEL_PROVENANCE}"
 chmod 0600 "${API_MODEL_PROVENANCE}"
-assert_database_model_state "${SOURCE_DATABASE}" "${SOURCE_MODEL_STATE}" "${EXPECTED_APPLICATION_BUILD_TIME}"
+assert_database_model_state "${SOURCE_DATABASE}" "${SOURCE_MODEL_STATE}" "${TARGET_APPLICATION_BUILD_TIME}"
 jq -S '.model' "${SOURCE_MODEL_STATE}" >"${SOURCE_MODEL_PROVENANCE}"
 chmod 0600 "${SOURCE_MODEL_PROVENANCE}"
 cmp --silent -- "${API_MODEL_PROVENANCE}" "${SOURCE_MODEL_PROVENANCE}" ||
@@ -1304,9 +1835,10 @@ if ! run_with_private_runtime_root \
     ASCENDANY_DATABASE_URL="postgresql://${BACKUP_LOGIN}@${DIRECT_HOST}:5432/${SOURCE_DATABASE}?sslmode=disable" \
     ASCENDANY_DATABASE_PASSWORD_FILE="${BACKUP_PASSWORD_FILE}" \
     ASCENDANY_ARTIFACT_ROOT="${ARTIFACT_ROOT}" \
+    ASCENDANY_CATALOG_RECEIPT_ROOT="${CATALOG_PUBLISHER_STATE_ROOT}/receipts" \
     ASCENDANY_BACKUP_ROOT="${BACKUP_ROOT}" \
     ASCENDANY_BACKUP_RUNTIME_ROOT=/run/ascendany-backup \
-    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_and_catalog_receipt_tar_zstd \
     ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
     ASCENDANY_BACKUP_RETAIN_DAILY=1 \
     ASCENDANY_BACKUP_RETAIN_WEEKLY=0 \
@@ -1329,7 +1861,7 @@ readonly BACKUP_MANIFEST_SHA256="$(jq -er '.manifestSHA256' "${CREATE_LOG}")"
 if ! /usr/bin/env -i \
     PATH=/usr/bin:/bin LC_ALL=C \
     ASCENDANY_BACKUP_ROOT="${BACKUP_ROOT}" \
-    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_and_catalog_receipt_tar_zstd \
     ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
     ASCENDANY_BACKUP_COMMAND_TIMEOUT=30m \
     ASCENDANY_PG_DUMP_PATH=/usr/bin/pg_dump \
@@ -1343,7 +1875,7 @@ assert_single_backup_log "${VERIFY_LOG}" 'backup verified'
 [[ "$(jq -er '.manifestSHA256' "${VERIFY_LOG}")" == "${BACKUP_MANIFEST_SHA256}" ]] ||
   fail 'verified backup manifest digest changed'
 [[ "$(find "${BACKUP_ROOT}/${BACKUP_ID}" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" == \
-  'artifacts.tar.zst database.dump manifest.json manifest.sha256 ' ]] ||
+  'artifacts.tar.zst catalog-receipts.tar.zst database.dump manifest.json manifest.sha256 ' ]] ||
   fail 'backup bundle has an unexpected entry set'
 
 role_psql "${RESTORE_LOGIN}" "${RESTORE_PASSWORD_FILE}" postgres \
@@ -1361,11 +1893,12 @@ if ! run_with_private_runtime_root \
     /usr/bin/env -i \
     PATH=/usr/bin:/bin LC_ALL=C \
     ASCENDANY_BACKUP_ROOT="${BACKUP_ROOT}" \
-    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_tar_zstd \
+    ASCENDANY_BACKUP_FORMAT=pg_custom_plus_artifact_and_catalog_receipt_tar_zstd \
     ASCENDANY_BACKUP_MANIFEST_HASH=sha256 \
     ASCENDANY_RESTORE_DATABASE_URL="postgresql://${RESTORE_LOGIN}@${DIRECT_HOST}:5432/${SCRATCH_DATABASE}?sslmode=disable" \
     ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE="${RESTORE_PASSWORD_FILE}" \
     ASCENDANY_RESTORE_ARTIFACT_ROOT="${RESTORE_ARTIFACT_ROOT}" \
+    ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT="${RESTORE_CATALOG_RECEIPT_ROOT}" \
     ASCENDANY_RESTORE_RUNTIME_ROOT="${RESTORE_RUNTIME_VISIBLE}" \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
     ASCENDANY_BACKUP_COMMAND_TIMEOUT=30m \
@@ -1381,10 +1914,12 @@ assert_single_backup_log "${RESTORE_LOG}" 'backup restore verified'
   fail 'restore verifier reported the wrong scratch database'
 [[ "$(jq -er '.manifestSHA256' "${RESTORE_LOG}")" == "${BACKUP_MANIFEST_SHA256}" ]] ||
   fail 'restored backup manifest digest changed'
+[[ "$(jq -er '.catalogReceiptRoot' "${RESTORE_LOG}")" == "${RESTORE_CATALOG_RECEIPT_ROOT}" ]] ||
+  fail 'restore verifier reported the wrong catalog publication receipt root'
 [[ -z "$(find "${RESTORE_RUNTIME_ROOT}" -mindepth 1 -maxdepth 1 -print)" ]] ||
   fail 'restore runtime retained a private credential'
 
-assert_database_model_state "${SCRATCH_DATABASE}" "${RESTORED_MODEL_STATE}" "${EXPECTED_APPLICATION_BUILD_TIME}"
+assert_database_model_state "${SCRATCH_DATABASE}" "${RESTORED_MODEL_STATE}" "${TARGET_APPLICATION_BUILD_TIME}"
 jq -S '.model' "${RESTORED_MODEL_STATE}" >"${RESTORED_MODEL_PROVENANCE}"
 chmod 0600 "${RESTORED_MODEL_PROVENANCE}"
 cmp --silent -- "${SOURCE_MODEL_STATE}" "${RESTORED_MODEL_STATE}" ||
@@ -1414,9 +1949,28 @@ artifact_fingerprint "${RESTORED_PUBLISHED_ARTIFACT_ROOT}" "${RESTORED_ARTIFACT_
 cmp --silent -- "${SOURCE_ARTIFACT_FINGERPRINT}" "${RESTORED_ARTIFACT_FINGERPRINT}" ||
   fail 'restored import provenance artifacts differ from the source'
 
+readonly SOURCE_CATALOG_RECEIPT_ROOT="${CATALOG_PUBLISHER_STATE_ROOT}/receipts"
+for receipt_root in "${SOURCE_CATALOG_RECEIPT_ROOT}" "${RESTORE_CATALOG_RECEIPT_ROOT}"; do
+  [[ -d "${receipt_root}" && ! -L "${receipt_root}" &&
+     "$(stat -Lc '%a' -- "${receipt_root}")" == 750 &&
+     "$(find "${receipt_root}" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" == \
+       "${EXPECTED_CATALOG_RECEIPT_COUNT}" &&
+     -f "${receipt_root}/${KNOWLEDGE_CATALOG_PUBLICATION_ID}.json" &&
+     ! -L "${receipt_root}/${KNOWLEDGE_CATALOG_PUBLICATION_ID}.json" ]] ||
+    fail 'source/restored catalog receipt namespace violates its exact directory contract'
+done
+unset receipt_root
+readonly SOURCE_CATALOG_RECEIPT_FINGERPRINT="${WORK_ROOT}/source-catalog-receipts.fingerprint"
+readonly RESTORED_CATALOG_RECEIPT_FINGERPRINT="${WORK_ROOT}/restored-catalog-receipts.fingerprint"
+artifact_fingerprint "${SOURCE_CATALOG_RECEIPT_ROOT}" "${SOURCE_CATALOG_RECEIPT_FINGERPRINT}"
+artifact_fingerprint "${RESTORE_CATALOG_RECEIPT_ROOT}" "${RESTORED_CATALOG_RECEIPT_FINGERPRINT}"
+cmp --silent -- "${SOURCE_CATALOG_RECEIPT_FINGERPRINT}" "${RESTORED_CATALOG_RECEIPT_FINGERPRINT}" ||
+  fail 'restored immutable catalog publication receipts differ from the source'
+
 restore_owner_psql --command="ALTER DATABASE ${SCRATCH_DATABASE} WITH ALLOW_CONNECTIONS false" >/dev/null
 restore_owner_psql --command="DROP DATABASE ${SCRATCH_DATABASE} WITH (FORCE)" >/dev/null
 rm -rf --one-file-system -- "${RESTORE_ARTIFACT_ROOT}"
+rm -rf --one-file-system -- "${RESTORE_CATALOG_RECEIPT_ROOT}"
 rmdir -- "${RESTORE_RUNTIME_ROOT}"
 
 [[ "$(git -C "${REPOSITORY_ROOT}" rev-parse HEAD)" == "${REQUESTED_COMMIT}" &&
@@ -1424,4 +1978,4 @@ rmdir -- "${RESTORE_RUNTIME_ROOT}"
   fail 'full E2E mutated the reviewed checkout'
 
 /usr/bin/printf \
-  'FULL_E2E_RESULT release_purpose=acceptance_test production_installer_rejection=purpose_gate release_manifest_verified=true acceptance_installer_verified=true postgres_major=17 pgbouncer_package=1.25.2-1.fc44 pgbouncer_pool_mode=transaction pgbouncer_auth_type=hba pgbouncer_userlist=v2_runtime_scram_only sdk_generated=true pintia_exporter_checked=true typescript_apps=5 api_import=succeeded import_replay=converged typed_domain_duplicate=superseded new_snapshot_sequence=2 analytics=succeeded enrollment=single_use student_analytics=ready recommendation=fresh recommendation_output=ordered model_catalog_provenance=exact app_http_smoke=5 backup_commands=3 artifact_count=3 restored_database_exact=true restored_model_provenance_exact=true role_closure_reapplied=true sandbox_acceptance=separate_fail_closed_gate\n'
+  'FULL_E2E_RESULT release_purpose=acceptance_test production_installer_rejection=purpose_gate release_manifest_verified=true acceptance_installer_verified=true postgres_major=17 pgbouncer_package=1.25.2-1.fc44 pgbouncer_pool_mode=transaction pgbouncer_auth_type=hba pgbouncer_userlist=v2_runtime_catalog_publisher_scram_only sdk_generated=true pintia_exporter_checked=true typescript_apps=5 api_import=succeeded import_replay=converged typed_domain_duplicate=superseded new_snapshot_sequence=2 analytics=succeeded enrollment=single_use student_analytics=ready recommendation=fresh recommendation_output=ordered model_catalog_provenance=exact app_http_smoke=5 backup_commands=3 artifact_count=3 restored_database_exact=true restored_model_provenance_exact=true role_closure_reapplied=true sandbox_acceptance=separate_fail_closed_gate\n'

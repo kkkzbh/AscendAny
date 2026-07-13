@@ -5,9 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/kkkzbh/AscendAny/backend/internal/catalogpublication"
 )
 
 type fakeRestoredDatabaseConnection struct {
@@ -59,6 +62,70 @@ type fakeRowTypeACLTransaction struct {
 type failingRecommendationModelQueryer struct {
 	err error
 }
+
+type catalogPublicationQueryer struct {
+	values    []catalogpublication.Receipt
+	query     string
+	scanCount int
+}
+
+func (queryer *catalogPublicationQueryer) Query(
+	_ context.Context,
+	query string,
+	_ ...any,
+) (pgx.Rows, error) {
+	queryer.query = query
+	return &catalogPublicationRows{values: queryer.values, index: -1, scanCount: &queryer.scanCount}, nil
+}
+
+type catalogPublicationRows struct {
+	pgx.Rows
+	values    []catalogpublication.Receipt
+	index     int
+	scanCount *int
+}
+
+func (rows *catalogPublicationRows) Next() bool {
+	rows.index++
+	return rows.index < len(rows.values)
+}
+
+func (rows *catalogPublicationRows) Scan(destinations ...any) error {
+	if rows.scanCount != nil {
+		*rows.scanCount = len(destinations)
+	}
+	if len(destinations) != 25 || rows.index < 0 || rows.index >= len(rows.values) {
+		return errors.New("unexpected catalog publication scan shape")
+	}
+	value := rows.values[rows.index]
+	stringValues := map[int]string{
+		0: value.AuthorizationID, 1: value.KnowledgeCatalogPublicationID, 2: value.TargetModelReleaseID,
+		3: value.CatalogSHA256, 4: value.ModelArtifactSHA256,
+		5: value.ModelID, 6: value.TargetApplicationVersion, 7: value.TargetApplicationCommit,
+		8: value.TargetApplicationBuildTime, 9: value.ConfigurationKey, 10: value.ConfigurationID,
+		13: value.ConfigurationVersionID, 15: value.AnalyticsGenerationID, 17: value.InputManifestSHA256,
+		19: value.CurrentModelArtifactSHA256, 20: value.PublishedByAccountID,
+		21: value.PublishedBySessionID, 23: value.AuditEventID,
+	}
+	for index, stringValue := range stringValues {
+		*destinations[index].(*string) = stringValue
+	}
+	*destinations[11].(*int64) = value.ExpectedConfigurationHeadRevision
+	*destinations[12].(*int64) = value.ConfigurationHeadRevision
+	*destinations[14].(*int64) = value.ConfigurationVersionNumber
+	*destinations[16].(*int64) = value.AnalyticsHeadRevision
+	*destinations[18].(*int64) = value.CurrentModelHeadRevision
+	publishedAt, err := time.Parse(time.RFC3339Nano, value.PublishedAt)
+	if err != nil {
+		return err
+	}
+	*destinations[22].(*time.Time) = publishedAt
+	*destinations[24].(*bool) = value.ConfigurationMutated
+	return nil
+}
+
+func (*catalogPublicationRows) Close()     {}
+func (*catalogPublicationRows) Err() error { return nil }
 
 func (queryer failingRecommendationModelQueryer) QueryRow(
 	context.Context,
@@ -141,6 +208,42 @@ func TestReadRecommendationModelDescriptorPreservesDatabaseFailure(t *testing.T)
 	if !errors.Is(err, databaseFailure) ||
 		!strings.Contains(err.Error(), "read active recommendation model snapshot") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReadKnowledgeCatalogPublicationsUsesExactV1Scan(t *testing.T) {
+	t.Parallel()
+	want := []catalogpublication.Receipt{
+		testCatalogPublication(t, 1), testCatalogPublication(t, 2), testCatalogPublication(t, 10),
+	}
+	queryer := &catalogPublicationQueryer{values: want}
+	values, err := readKnowledgeCatalogPublications(context.Background(), queryer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicationField := strings.Index(queryer.query, "publication.knowledge_catalog_publication_id::text")
+	targetReleaseField := strings.Index(queryer.query, "publication.target_model_release_id::text")
+	if !equalKnowledgeCatalogPublications(values, want) || queryer.scanCount != 25 ||
+		publicationField < 0 || targetReleaseField <= publicationField ||
+		!strings.Contains(queryer.query, "ORDER BY publication.knowledge_catalog_publication_id") {
+		t.Fatalf("values=%v scanCount=%d query=%q", values, queryer.scanCount, queryer.query)
+	}
+	if !strings.Contains(queryer.query, "publication_authorization_id") ||
+		!strings.Contains(queryer.query, "knowledge_catalog_publication_authorizations") {
+		t.Fatalf("authorization provenance join is absent from query %q", queryer.query)
+	}
+	for _, invalid := range [][]catalogpublication.Receipt{
+		nil,
+		{testCatalogPublication(t, 2), testCatalogPublication(t, 1)},
+		{testCatalogPublication(t, 1), testCatalogPublication(t, 1)},
+	} {
+		_, err := readKnowledgeCatalogPublications(
+			context.Background(),
+			&catalogPublicationQueryer{values: invalid},
+		)
+		if err == nil || !strings.Contains(err.Error(), "snapshot rejected") {
+			t.Fatalf("invalid values %v error = %v", invalid, err)
+		}
 	}
 }
 

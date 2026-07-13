@@ -51,10 +51,11 @@ func verifyWithExecutor(ctx context.Context, config VerifyConfig, backupID strin
 		return VerifyResult{}, err
 	}
 	return VerifyResult{
-		BackupID:       backupID,
-		BundlePath:     bundlePath,
-		ManifestSHA256: manifestSHA,
-		ArtifactCount:  manifest.Artifacts.Count,
+		BackupID:            backupID,
+		BundlePath:          bundlePath,
+		ManifestSHA256:      manifestSHA,
+		ArtifactCount:       manifest.Artifacts.Count,
+		CatalogReceiptCount: manifest.CatalogPublicationReceipts.Count,
 	}, nil
 }
 
@@ -100,7 +101,19 @@ func loadManifest(bundlePath, expectedID string) (Manifest, string, error) {
 }
 
 func verifyBundlePayload(ctx context.Context, tools ToolConfig, bundlePath string, manifest Manifest, commands commandExecutor) error {
-	for _, descriptor := range []FileDescriptor{manifest.Database.File, manifest.Artifacts.File} {
+	publicationIDs, err := parseKnowledgeCatalogPublicationIDs(manifest.Database.KnowledgeCatalogPublicationIDs)
+	if err != nil {
+		return err
+	}
+	if err := validateKnowledgeCatalogPublications(manifest.Database.KnowledgeCatalogPublications); err != nil ||
+		!equalPublicationIDsAndDescriptors(publicationIDs, manifest.Database.KnowledgeCatalogPublications) {
+		return errors.New("knowledge catalog publication descriptors differ from their database identities")
+	}
+	for _, descriptor := range []FileDescriptor{
+		manifest.Database.File,
+		manifest.Artifacts.File,
+		manifest.CatalogPublicationReceipts.File,
+	} {
 		path := filepath.Join(bundlePath, descriptor.Filename)
 		if _, err := validateRegularFile(path, backupBundleFileMode); err != nil {
 			return fmt.Errorf("backup payload %s rejected: %w", descriptor.Filename, err)
@@ -119,6 +132,16 @@ func verifyBundlePayload(ctx context.Context, tools ToolConfig, bundlePath strin
 	}
 	if err := verifyOrExtractArtifactArchive(ctx, tools.Zstd, filepath.Join(bundlePath, ArtifactArchiveFilename), manifest.Artifacts, nil); err != nil {
 		return fmt.Errorf("verify artifact archive: %w", err)
+	}
+	if err := verifyOrExtractCatalogReceiptArchive(
+		ctx,
+		tools.Zstd,
+		filepath.Join(bundlePath, CatalogReceiptArchiveFilename),
+		manifest.CatalogPublicationReceipts,
+		publicationIDs,
+		nil,
+	); err != nil {
+		return fmt.Errorf("verify catalog publication receipt archive: %w", err)
 	}
 	return nil
 }
@@ -148,6 +171,10 @@ func validateManifest(manifest Manifest, expectedID string) error {
 	if err := validateMigrations(manifest.Database.Migrations); err != nil {
 		return err
 	}
+	publicationIDs, err := parseKnowledgeCatalogPublicationIDs(manifest.Database.KnowledgeCatalogPublicationIDs)
+	if err != nil {
+		return err
+	}
 	if err := validateRecommendationModelDescriptor(manifest.Database.RecommendationModel); err != nil {
 		return fmt.Errorf("recommendation model: %w", err)
 	}
@@ -169,6 +196,25 @@ func validateManifest(manifest Manifest, expectedID string) error {
 	}
 	if totalBytes != manifest.Artifacts.TotalBytes {
 		return errors.New("artifact total bytes does not match entries")
+	}
+	if err := validateFileDescriptor(
+		manifest.CatalogPublicationReceipts.File,
+		CatalogReceiptArchiveFilename,
+		"tar+zstd",
+	); err != nil {
+		return fmt.Errorf("catalog publication receipt archive: %w", err)
+	}
+	if err := validateCatalogReceiptSnapshot(
+		manifest.CatalogPublicationReceipts,
+		publicationIDs,
+	); err != nil {
+		return err
+	}
+	if err := validateCatalogReceiptDatabaseBinding(
+		manifest.Database.KnowledgeCatalogPublications,
+		manifest.CatalogPublicationReceipts,
+	); err != nil {
+		return err
 	}
 	return nil
 }

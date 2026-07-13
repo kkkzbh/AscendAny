@@ -3,6 +3,7 @@ package judgerunner
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -16,16 +17,17 @@ import (
 )
 
 type fakeEngine struct {
-	results []ContainerResult
-	calls   []ContainerCommand
+	identity string
+	results  []ContainerResult
+	calls    []ContainerCommand
 }
 
-func (*fakeEngine) Identity() string { return testImage }
+func (engine *fakeEngine) Identity() string { return engine.identity }
 
 func (engine *fakeEngine) Run(_ context.Context, command ContainerCommand) (ContainerResult, error) {
 	engine.calls = append(engine.calls, command)
 	if command.Executable == cpp20Compiler {
-		if err := os.WriteFile(filepath.Join(command.Workspace, "program"), []byte("executable"), 0o500); err != nil {
+		if err := os.WriteFile(filepath.Join(command.Workspace, "program"), staticLinuxAMD64ELF(), 0o500); err != nil {
 			return ContainerResult{}, err
 		}
 		if len(engine.results) == 0 {
@@ -63,8 +65,9 @@ func TestRunnerCompilesThenExecutesHiddenCases(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	engine := &fakeEngine{}
-	runner, err := New(engine, DefaultConfig(jobID, workRoot))
+	compilerEngine := &fakeEngine{identity: testCompilerImage}
+	runtimeEngine := &fakeEngine{identity: testRuntimeImage}
+	runner, err := New(compilerEngine, runtimeEngine, DefaultConfig(jobID, workRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +82,12 @@ func TestRunnerCompilesThenExecutesHiddenCases(t *testing.T) {
 	if result.Verdict != judgecontract.VerdictAccepted || result.ScoreFraction != 1 || result.PassedCaseCount != 1 || len(output) != 0 {
 		t.Fatalf("result=%#v output=%q", result, output)
 	}
-	if len(engine.calls) != 2 || engine.calls[1].Workspace != filepath.Join(workRoot, "run") || !engine.calls[1].ReadOnlyWorkspace {
-		t.Fatalf("engine calls = %#v", engine.calls)
+	if len(compilerEngine.calls) != 1 || len(runtimeEngine.calls) != 1 ||
+		runtimeEngine.calls[0].Workspace != filepath.Join(workRoot, "run") || !runtimeEngine.calls[0].ReadOnlyWorkspace {
+		t.Fatalf("compiler calls = %#v, runtime calls = %#v", compilerEngine.calls, runtimeEngine.calls)
+	}
+	if !containsArgument(compilerEngine.calls[0].Arguments, "-static") {
+		t.Fatalf("compiler arguments do not require static linking: %#v", compilerEngine.calls[0].Arguments)
 	}
 	if _, err := os.Stat(filepath.Join(workRoot, "run", "program")); err != nil {
 		t.Fatal(err)
@@ -112,8 +119,9 @@ func TestRunnerCompileFailureDoesNotExecuteProgram(t *testing.T) {
 	if err := os.WriteFile(sourcePath, []byte("invalid"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	engine := &fakeEngine{results: []ContainerResult{{ExitCode: 1, Stderr: []byte("compile failed")}}}
-	runner, err := New(engine, DefaultConfig(jobID, workRoot))
+	compilerEngine := &fakeEngine{identity: testCompilerImage, results: []ContainerResult{{ExitCode: 1, Stderr: []byte("compile failed")}}}
+	runtimeEngine := &fakeEngine{identity: testRuntimeImage}
+	runner, err := New(compilerEngine, runtimeEngine, DefaultConfig(jobID, workRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,9 +132,121 @@ func TestRunnerCompileFailureDoesNotExecuteProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Verdict != judgecontract.VerdictCompileError || string(output) != "compile failed" || len(engine.calls) != 1 {
-		t.Fatalf("result=%#v output=%q calls=%d", result, output, len(engine.calls))
+	if result.Verdict != judgecontract.VerdictCompileError || string(output) != "compile failed" ||
+		len(compilerEngine.calls) != 1 || len(runtimeEngine.calls) != 0 {
+		t.Fatalf("result=%#v output=%q compiler calls=%d runtime calls=%d", result, output, len(compilerEngine.calls), len(runtimeEngine.calls))
 	}
+}
+
+func TestRunnerRejectsDynamicOrMalformedCompilerOutput(t *testing.T) {
+	for name, output := range map[string][]byte{
+		"malformed": []byte("executable"),
+		"dynamic":   dynamicLinuxAMD64ELF(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "program")
+			if err := os.WriteFile(path, output, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyStaticLinuxAMD64Executable(path); err == nil {
+				t.Fatal("verifyStaticLinuxAMD64Executable() error = nil")
+			}
+		})
+	}
+}
+
+func TestExecutionManifestV2BindsBothImageIdentities(t *testing.T) {
+	jobID := "11111111-1111-4111-8111-111111111111"
+	workRoot := filepath.Join(t.TempDir(), jobID)
+	runner, err := New(
+		&fakeEngine{identity: testCompilerImage},
+		&fakeEngine{identity: testRuntimeImage},
+		DefaultConfig(jobID, workRoot),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := runner.manifest(judgecontract.CheckerExact, judgecontract.SubmissionSubmit, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := `{"cases":[],"checker":"exact","compilerImage":"` + testCompilerImage + `","mode":"submit","runtimeImage":"` + testRuntimeImage + `","schema":"ascendany.oj.execution-manifest.v2"}`
+	if string(manifest) != expected {
+		t.Fatalf("manifest = %s", manifest)
+	}
+}
+
+func TestRunnerRequiresDistinctPinnedImageIdentities(t *testing.T) {
+	jobID := "11111111-1111-4111-8111-111111111111"
+	workRoot := filepath.Join(t.TempDir(), jobID)
+	config := DefaultConfig(jobID, workRoot)
+	for name, engines := range map[string]struct {
+		compiler ContainerEngine
+		runtime  ContainerEngine
+	}{
+		"same image": {
+			compiler: &fakeEngine{identity: testCompilerImage},
+			runtime:  &fakeEngine{identity: testCompilerImage},
+		},
+		"unpinned compiler": {
+			compiler: &fakeEngine{identity: "localhost/compiler:latest"},
+			runtime:  &fakeEngine{identity: testRuntimeImage},
+		},
+		"unpinned runtime": {
+			compiler: &fakeEngine{identity: testCompilerImage},
+			runtime:  &fakeEngine{identity: "localhost/runtime:latest"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := New(engines.compiler, engines.runtime, config); err == nil {
+				t.Fatal("New() error = nil")
+			}
+		})
+	}
+}
+
+func containsArgument(arguments []string, expected string) bool {
+	for _, argument := range arguments {
+		if argument == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func staticLinuxAMD64ELF() []byte {
+	const (
+		headerSize  = 64
+		programSize = 56
+	)
+	value := make([]byte, headerSize+programSize)
+	copy(value[:4], []byte{0x7f, 'E', 'L', 'F'})
+	value[4] = byte(2)                                      // ELFCLASS64
+	value[5] = byte(1)                                      // little endian
+	value[6] = byte(1)                                      // ELF version
+	binary.LittleEndian.PutUint16(value[16:18], uint16(2))  // ET_EXEC
+	binary.LittleEndian.PutUint16(value[18:20], uint16(62)) // EM_X86_64
+	binary.LittleEndian.PutUint32(value[20:24], uint32(1))
+	binary.LittleEndian.PutUint64(value[24:32], uint64(0x400000))
+	binary.LittleEndian.PutUint64(value[32:40], uint64(headerSize))
+	binary.LittleEndian.PutUint16(value[52:54], uint16(headerSize))
+	binary.LittleEndian.PutUint16(value[54:56], uint16(programSize))
+	binary.LittleEndian.PutUint16(value[56:58], uint16(1))
+	program := value[headerSize:]
+	binary.LittleEndian.PutUint32(program[0:4], uint32(1)) // PT_LOAD
+	binary.LittleEndian.PutUint32(program[4:8], uint32(5)) // PF_R | PF_X
+	binary.LittleEndian.PutUint64(program[16:24], uint64(0x400000))
+	binary.LittleEndian.PutUint64(program[24:32], uint64(0x400000))
+	binary.LittleEndian.PutUint64(program[32:40], uint64(len(value)))
+	binary.LittleEndian.PutUint64(program[40:48], uint64(len(value)))
+	binary.LittleEndian.PutUint64(program[48:56], uint64(0x1000))
+	return value
+}
+
+func dynamicLinuxAMD64ELF() []byte {
+	value := staticLinuxAMD64ELF()
+	binary.LittleEndian.PutUint32(value[64:68], uint32(3)) // PT_INTERP
+	return value
 }
 
 func executionHeader(jobID string) judgeprotocol.RequestHeader {

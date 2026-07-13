@@ -277,6 +277,7 @@ func prepareBundleForPublication(path string) error {
 	}
 	for _, name := range []string{
 		ArtifactArchiveFilename,
+		CatalogReceiptArchiveFilename,
 		DatabaseDumpFilename,
 		ManifestDigestFilename,
 		ManifestFilename,
@@ -314,7 +315,13 @@ func ensureExactBundleEntries(root *os.Root) error {
 		actual = append(actual, entry.Name())
 	}
 	sort.Strings(actual)
-	expected := []string{ArtifactArchiveFilename, DatabaseDumpFilename, ManifestDigestFilename, ManifestFilename}
+	expected := []string{
+		ArtifactArchiveFilename,
+		CatalogReceiptArchiveFilename,
+		DatabaseDumpFilename,
+		ManifestDigestFilename,
+		ManifestFilename,
+	}
 	sort.Strings(expected)
 	if len(actual) != len(expected) {
 		return fmt.Errorf("backup bundle contains %d entries; expected %d", len(actual), len(expected))

@@ -242,6 +242,24 @@ expect_failure \
   'obsolete PostgreSQL transition configuration remains: deploy/v2/config/postgresql-hba-bootstrap.conf' \
   bash "$obsolete_postgres_transition/tools/verify-v2-boundary.sh"
 
+approved_catalog_receipt_exec="$fixture_parent/approved-catalog-receipt-exec"
+make_fixture "$approved_catalog_receipt_exec"
+mkdir -p "$approved_catalog_receipt_exec/backend/internal/backup"
+printf '%s\n' 'package backup' 'func archive() { exec.CommandContext(ctx, zstdPath) }' \
+  >"$approved_catalog_receipt_exec/backend/internal/backup/catalog_receipts.go"
+bash "$approved_catalog_receipt_exec/tools/verify-v2-boundary.sh" >/dev/null
+printf 'PASS fixture approved-catalog-receipt-exec\n'
+
+unreviewed_catalog_receipt_exec="$fixture_parent/unreviewed-catalog-receipt-exec"
+make_fixture "$unreviewed_catalog_receipt_exec"
+mkdir -p "$unreviewed_catalog_receipt_exec/backend/internal/backup"
+printf '%s\n' 'package backup' 'func archive() { exec.CommandContext(ctx, zstdPath) }' \
+  >"$unreviewed_catalog_receipt_exec/backend/internal/backup/catalog_receipt_helper.go"
+expect_failure \
+  unreviewed-catalog-receipt-exec \
+  'unreviewed Go host-process execution site: backend/internal/backup/catalog_receipt_helper.go' \
+  bash "$unreviewed_catalog_receipt_exec/tools/verify-v2-boundary.sh"
+
 shell_test_literal="$fixture_parent/shell-test-literal"
 make_fixture "$shell_test_literal"
 mkdir -p "$shell_test_literal/apps/mobile/scripts"
@@ -266,6 +284,40 @@ expect_failure \
   first-party-javascript-runtime \
   'a first-party application runtime is hand-written JavaScript: apps/web/src/runtime.mjs' \
   bash "$javascript_runtime/tools/verify-v2-boundary.sh"
+
+controlled_catalog_authorization="$fixture_parent/controlled-catalog-authorization"
+make_fixture "$controlled_catalog_authorization"
+mkdir -p "$controlled_catalog_authorization/backend/internal/migrate/migrations"
+printf '%s\n' \
+  'CREATE TABLE ascendany.knowledge_catalog_publication_authorizations (public_id uuid PRIMARY KEY);' \
+  'ALTER TABLE ascendany.knowledge_catalog_publications ADD COLUMN publication_authorization_id uuid;' \
+  >"$controlled_catalog_authorization/backend/internal/migrate/migrations/0007_catalog.sql"
+printf '%s\n' \
+  'paths:' \
+  '  /api/v2/admin/recommendation/catalog-publication-authorizations:' \
+  '    post: {operationId: authorizeKnowledgeCatalogPublication}' \
+  'components: {schemas: {AuthorizedRequest: {properties: {authorizationId: {type: string}}}}}' \
+  >"$controlled_catalog_authorization/contracts/openapi/ascendany-v2.yaml"
+bash "$controlled_catalog_authorization/tools/verify-v2-boundary.sh" >/dev/null
+printf 'PASS fixture controlled-catalog-authorization\n'
+
+obsolete_catalog_authorization="$fixture_parent/obsolete-catalog-authorization"
+make_fixture "$obsolete_catalog_authorization"
+printf '%s\n' 'package catalogauthorization' 'const field = "secretSha256"' \
+  >"$obsolete_catalog_authorization/backend/obsolete.go"
+expect_failure \
+  obsolete-catalog-authorization \
+  'production retains a legacy or generic knowledge-catalog mutation path' \
+  bash "$obsolete_catalog_authorization/tools/verify-v2-boundary.sh"
+
+generic_catalog_mutation="$fixture_parent/generic-catalog-mutation"
+make_fixture "$generic_catalog_mutation"
+printf '%s\n' 'package httpapi' 'func createKnowledgeCatalogVersion() {}' \
+  >"$generic_catalog_mutation/backend/generic_catalog.go"
+expect_failure \
+  generic-catalog-mutation \
+  'production retains a legacy or generic knowledge-catalog mutation path' \
+  bash "$generic_catalog_mutation/tools/verify-v2-boundary.sh"
 
 javascript_import="$fixture_parent/javascript-import"
 make_fixture "$javascript_import"

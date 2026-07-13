@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/kkkzbh/AscendAny/backend/internal/configuration"
 )
 
@@ -15,12 +16,15 @@ const (
 	publicationIssueAnalyticsUnavailable = "recommendation_review_unavailable"
 	publicationIssueAnalyticsChanged     = "recommendation_review_changed"
 	publicationIssueCatalogCoverage      = "knowledge_catalog_coverage_mismatch"
+	publicationIssueModelUnavailable     = "recommendation_model_unavailable"
+	publicationIssueModelChanged         = "recommendation_model_changed"
 )
 
 // ConfigurationPublicationContract owns both the pure knowledge-catalog
 // document contract and its transactional analytics review precondition.
-// Callers publishing through configuration.Service reuse this exact boundary
-// from HTTP, a local administrative command, or a deployment oneshot.
+// The stopped-runtime publisher reuses this exact boundary inside the same
+// transaction that owns the model, analytics, configuration, and provenance
+// locks.
 type ConfigurationPublicationContract struct{}
 
 func (ConfigurationPublicationContract) ValidateRecommendationDocument(kind configuration.Kind, schemaID string, document json.RawMessage) error {
@@ -47,25 +51,61 @@ func (ConfigurationPublicationContract) ValidateVersionWrite(
 		return configurationPublicationError(configuration.ErrorDocumentInvalid, "validate recommendation catalog document", err)
 	}
 	if command.ExpectedAnalyticsGenerationID == nil || command.ExpectedAnalyticsHeadRevision == nil ||
-		command.ExpectedInputManifestSHA256 == nil {
+		command.ExpectedInputManifestSHA256 == nil || command.ExpectedCurrentModelHeadRevision == nil ||
+		command.ExpectedCurrentModelArtifactSHA256 == nil {
 		return configurationPublicationError(configuration.ErrorInvalidQuery, "validate recommendation review expectation", errors.New("complete analytics review provenance is required"))
 	}
-	review, err := loadReviewContext(ctx, tx, true)
+	var currentModelHeadRevision int64
+	var currentModelArtifactSHA256 string
+	if err := tx.QueryRow(ctx, `
+SELECT head.head_revision,
+       release.artifact_sha256
+FROM ascendany.recommendation_model_head AS head
+JOIN ascendany.recommendation_model_releases AS release
+  ON release.recommendation_model_release_id = head.current_release_id
+JOIN ascendany.recommendation_model_activation_events AS activation
+  ON activation.head_revision = head.head_revision
+ AND activation.recommendation_model_release_id = head.current_release_id
+ AND activation.artifact_sha256 = release.artifact_sha256
+WHERE head.singleton`).Scan(&currentModelHeadRevision, &currentModelArtifactSHA256); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return configurationPublicationError(configuration.ErrorReviewConflict, "read current recommendation model", &configuration.PublicationIssue{
+				IssueCode:                          publicationIssueModelUnavailable,
+				ExpectedCurrentModelHeadRevision:   *command.ExpectedCurrentModelHeadRevision,
+				ExpectedCurrentModelArtifactSHA256: *command.ExpectedCurrentModelArtifactSHA256,
+			})
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return configurationPublicationError(configuration.ErrorCanceled, "read current recommendation model", err)
+		}
+		return configurationPublicationError(configuration.ErrorDatabase, "read current recommendation model", err)
+	}
+	if currentModelHeadRevision != *command.ExpectedCurrentModelHeadRevision ||
+		currentModelArtifactSHA256 != *command.ExpectedCurrentModelArtifactSHA256 {
+		return configurationPublicationError(configuration.ErrorReviewConflict, "compare current recommendation model", &configuration.PublicationIssue{
+			IssueCode:                          publicationIssueModelChanged,
+			ExpectedCurrentModelHeadRevision:   *command.ExpectedCurrentModelHeadRevision,
+			CurrentModelHeadRevision:           currentModelHeadRevision,
+			ExpectedCurrentModelArtifactSHA256: *command.ExpectedCurrentModelArtifactSHA256,
+			CurrentModelArtifactSHA256:         currentModelArtifactSHA256,
+		})
+	}
+	review, err := loadReviewContext(ctx, tx, false)
 	if err != nil {
 		switch CodeOf(err) {
 		case ErrorAnalyticsUnavailable:
-			return configurationPublicationError(configuration.ErrorReviewConflict, "lock recommendation review context", &configuration.PublicationIssue{
+			return configurationPublicationError(configuration.ErrorReviewConflict, "read recommendation review context", &configuration.PublicationIssue{
 				IssueCode:                     publicationIssueAnalyticsUnavailable,
 				ExpectedAnalyticsGenerationID: *command.ExpectedAnalyticsGenerationID,
 				ExpectedAnalyticsHeadRevision: *command.ExpectedAnalyticsHeadRevision,
 				ExpectedInputManifestSHA256:   *command.ExpectedInputManifestSHA256,
 			})
 		case ErrorCanceled:
-			return configurationPublicationError(configuration.ErrorCanceled, "lock recommendation review context", err)
+			return configurationPublicationError(configuration.ErrorCanceled, "read recommendation review context", err)
 		case ErrorDatabase:
-			return configurationPublicationError(configuration.ErrorDatabase, "lock recommendation review context", err)
+			return configurationPublicationError(configuration.ErrorDatabase, "read recommendation review context", err)
 		default:
-			return configurationPublicationError(configuration.ErrorStoredDataInvalid, "lock recommendation review context", err)
+			return configurationPublicationError(configuration.ErrorStoredDataInvalid, "read recommendation review context", err)
 		}
 	}
 	currentGenerationID := strconv.FormatInt(review.AnalyticsGenerationID, 10)

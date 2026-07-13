@@ -14,6 +14,7 @@ readonly scratch_database="ascendany_v2_restore_verify"
 readonly maintenance_database="postgres"
 readonly restore_parent="/var/lib/ascendany-restore"
 readonly artifact_root="${restore_parent}/artifacts"
+readonly catalog_receipt_root="${restore_parent}/catalog-receipts"
 readonly lock_directory="/run/ascendany-restore-operator"
 readonly lock_file="${lock_directory}/operator.lock"
 readonly backup_root="/var/backups/ascendany"
@@ -38,11 +39,13 @@ validate_context() {
   validate_backup_id "$2"
   [[ "$(id -un)" == "$restore_user" ]] || fail "restore operator must run as ${restore_user}"
   [[ "${ASCENDANY_BACKUP_ROOT-}" == "$backup_root" ]] || fail "restore backup root differs from the unit contract"
-  [[ "${ASCENDANY_BACKUP_FORMAT-}" == "pg_custom_plus_artifact_tar_zstd" ]] || fail "restore backup format differs from the unit contract"
+  [[ "${ASCENDANY_BACKUP_FORMAT-}" == "pg_custom_plus_artifact_and_catalog_receipt_tar_zstd" ]] || fail "restore backup format differs from the unit contract"
   [[ "${ASCENDANY_BACKUP_MANIFEST_HASH-}" == "sha256" ]] || fail "restore manifest hash differs from the unit contract"
   [[ "${ASCENDANY_RESTORE_DATABASE_URL-}" == "postgresql://${restore_login}@127.0.0.1:5432/${scratch_database}" ]] ||
     fail "restore database URL differs from the unit contract"
   [[ "${ASCENDANY_RESTORE_ARTIFACT_ROOT-}" == "$artifact_root" ]] || fail "restore artifact root differs from the unit contract"
+  [[ "${ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT-}" == "$catalog_receipt_root" ]] ||
+    fail "restore catalog receipt root differs from the unit contract"
   [[ "${ASCENDANY_RESTORE_RUNTIME_ROOT-}" == "/run/ascendany-restore-verify-$2" ]] ||
     fail "restore runtime root differs from the per-instance unit contract"
   [[ "${ASCENDANY_DATABASE_CONNECT_TIMEOUT-}" == "5s" ]] || fail "restore connect timeout differs from the unit contract"
@@ -139,11 +142,18 @@ drop_owned_scratch_database() {
 
 remove_owned_scratch_paths() {
   local backup_id="$1"
-  if [[ "$artifact_root" != "$restore_parent/artifacts" || "$restore_parent" == "/" ]]; then
+  if [[ "$artifact_root" != "$restore_parent/artifacts" ||
+        "$catalog_receipt_root" != "$restore_parent/catalog-receipts" ||
+        "$restore_parent" == "/" ]]; then
     printf '%s\n' "restore cleanup path contract is invalid" >&2
     return 1
   fi
-  rm -rf --one-file-system -- "$artifact_root" "$restore_parent/.restore-$backup_id"
+  rm -rf --one-file-system -- \
+    "$artifact_root" \
+    "$catalog_receipt_root" \
+    "$restore_parent/.restore-$backup_id" \
+    "$restore_parent/.restore-catalog-receipts-$backup_id"
+  sync -f "$restore_parent"
 }
 
 validate_result() {
@@ -151,18 +161,25 @@ validate_result() {
   [[ "$(wc -l <"$result_file")" == "1" ]] || fail "restore verifier must emit exactly one JSON log line"
   manifest_sha="$(sha256sum -- "$backup_root/$backup_id/manifest.json" | awk '{print $1}')"
   jq -e --arg backupId "$backup_id" --arg manifestSHA256 "$manifest_sha" \
+    --arg catalogReceiptRoot "$catalog_receipt_root" \
     --slurpfile manifest "$backup_root/$backup_id/manifest.json" \
     --slurpfile release "$release_manifest" \
     --slurpfile model "$recommendation_model" '
     type == "object" and
-    (keys == ["artifactCount", "backupId", "databaseName", "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"]) and
+    (keys == ["artifactCount", "backupId", "catalogReceiptCount", "catalogReceiptRoot", "databaseName", "level", "manifestSHA256", "modelApplicationBuildTime", "modelApplicationCommit", "modelApplicationVersion", "modelArtifactSHA256", "modelFeatureSchemaSHA256", "modelHeadRevision", "modelId", "modelKnowledgeCatalogSHA256", "modelManifestSHA256", "modelPurpose", "msg", "releaseCommit", "releaseVersion", "time"]) and
     .level == "INFO" and .msg == "backup restore verified" and
     .backupId == $backupId and .manifestSHA256 == $manifestSHA256 and
     .databaseName == "ascendany_v2_restore_verify" and
     (.artifactCount | type == "number" and floor == . and . >= 0) and
+    (.catalogReceiptCount | type == "number" and floor == . and . > 0) and
+    .catalogReceiptRoot == $catalogReceiptRoot and
     ($manifest | length == 1) and
     $manifest[0].schema == "ascendany.backup.bundle.v2" and
     .artifactCount == $manifest[0].artifacts.count and
+    .catalogReceiptCount == $manifest[0].catalogPublicationReceipts.count and
+    .catalogReceiptCount == ($manifest[0].catalogPublicationReceipts.entries | length) and
+    .catalogReceiptCount == ($manifest[0].database.knowledgeCatalogPublicationIds | length) and
+    .catalogReceiptCount == ($manifest[0].database.knowledgeCatalogPublications | length) and
     (.modelId | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
     (.modelArtifactSHA256 | type == "string" and test("^[0-9a-f]{64}$")) and
     (.modelHeadRevision | type == "number" and floor == . and . > 0) and
@@ -248,6 +265,7 @@ run_restore() {
     ASCENDANY_RESTORE_DATABASE_URL="$ASCENDANY_RESTORE_DATABASE_URL" \
     ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE="$ASCENDANY_RESTORE_DATABASE_PASSWORD_FILE" \
     ASCENDANY_RESTORE_ARTIFACT_ROOT="$ASCENDANY_RESTORE_ARTIFACT_ROOT" \
+    ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT="$ASCENDANY_RESTORE_CATALOG_RECEIPT_ROOT" \
     ASCENDANY_RESTORE_RUNTIME_ROOT="$ASCENDANY_RESTORE_RUNTIME_ROOT" \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT="$ASCENDANY_DATABASE_CONNECT_TIMEOUT" \
     ASCENDANY_BACKUP_COMMAND_TIMEOUT="$ASCENDANY_BACKUP_COMMAND_TIMEOUT" \

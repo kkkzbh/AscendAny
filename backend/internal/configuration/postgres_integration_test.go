@@ -59,12 +59,13 @@ func TestPostgresConfigurationVersionLifecycle(t *testing.T) {
 		t.Fatalf("first CreateVersion() error=%v", err)
 	}
 	if first.Idempotent || first.Item.HeadRevision != 1 || first.Item.ActiveVersion == nil ||
-		first.Item.ActiveVersion.Number != 1 || string(first.Item.ActiveVersion.Document) != `{"a":1,"z":2}` {
+		first.Item.ActiveVersion.Number != 1 || string(first.Item.ActiveVersion.Document) != `{"a":1,"z":2}` || first.AuditEventID < 1 {
 		t.Fatalf("first result=%#v", first)
 	}
 
 	replay, err := service.CreateVersion(ctx, firstCommand)
-	if err != nil || !replay.Idempotent || replay.Item.HeadRevision != 1 || replay.Item.ActiveVersion == nil || replay.Item.ActiveVersion.Number != 1 {
+	if err != nil || !replay.Idempotent || replay.Item.HeadRevision != 1 || replay.Item.ActiveVersion == nil ||
+		replay.Item.ActiveVersion.Number != 1 || replay.AuditEventID != first.AuditEventID {
 		t.Fatalf("idempotent replay=%#v error=%v", replay, err)
 	}
 
@@ -80,7 +81,8 @@ func TestPostgresConfigurationVersionLifecycle(t *testing.T) {
 		Principal: principal, Key: key, Kind: KindPrompt, ExpectedHeadRevision: 1,
 		SchemaID: "ascendany.prompt.v1", Document: json.RawMessage(`{"a":2}`),
 	})
-	if err != nil || second.Item.HeadRevision != 2 || second.Item.ActiveVersion == nil || second.Item.ActiveVersion.Number != 2 {
+	if err != nil || second.Item.HeadRevision != 2 || second.Item.ActiveVersion == nil ||
+		second.Item.ActiveVersion.Number != 2 || second.AuditEventID <= first.AuditEventID {
 		t.Fatalf("second result=%#v error=%v", second, err)
 	}
 

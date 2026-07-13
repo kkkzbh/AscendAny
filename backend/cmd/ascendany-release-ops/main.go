@@ -834,8 +834,8 @@ func validateRegularFile(stat unix.Stat_t, expectedOwner ownership) error {
 		return errors.New("file ownership is invalid")
 	}
 	mode := stat.Mode & 0o7777
-	if mode != 0o644 && mode != 0o755 {
-		return errors.New("file mode is not 0644 or 0755")
+	if mode != 0o555 && mode != 0o644 && mode != 0o755 {
+		return errors.New("file mode is not 0555, 0644, or 0755")
 	}
 	if stat.Nlink != 1 {
 		return errors.New("file link count is not one")

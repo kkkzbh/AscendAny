@@ -2,6 +2,7 @@ package judgerunner
 
 import (
 	"context"
+	"debug/elf"
 	"encoding/json"
 	"errors"
 	"io"
@@ -49,11 +50,15 @@ func DefaultConfig(jobID, workRoot string) Config {
 }
 
 type Runner struct {
-	engine ContainerEngine
-	config Config
+	compilerEngine ContainerEngine
+	runtimeEngine  ContainerEngine
+	config         Config
 }
 
-const cpp20Compiler = "/usr/local/bin/g++"
+const (
+	cpp20Compiler             = "/usr/bin/g++"
+	executionManifestSchemaV2 = "ascendany.oj.execution-manifest.v2"
+)
 
 type Failure struct {
 	Code      string
@@ -82,18 +87,22 @@ type executionCaseManifest struct {
 }
 
 type executionManifest struct {
-	Cases          []executionCaseManifest      `json:"cases"`
-	Checker        judgecontract.Checker        `json:"checker"`
-	ContainerImage string                       `json:"containerImage"`
-	Mode           judgecontract.SubmissionMode `json:"mode"`
-	Schema         string                       `json:"schema"`
+	Cases         []executionCaseManifest      `json:"cases"`
+	Checker       judgecontract.Checker        `json:"checker"`
+	CompilerImage string                       `json:"compilerImage"`
+	Mode          judgecontract.SubmissionMode `json:"mode"`
+	RuntimeImage  string                       `json:"runtimeImage"`
+	Schema        string                       `json:"schema"`
 }
 
-func New(engine ContainerEngine, config Config) (*Runner, error) {
-	if engine == nil || !validConfig(config) || !imageDigestPattern.MatchString(engine.Identity()) {
-		return nil, errors.New("container engine and bounded judge runner configuration are required")
+func New(compilerEngine, runtimeEngine ContainerEngine, config Config) (*Runner, error) {
+	if compilerEngine == nil || runtimeEngine == nil || !validConfig(config) ||
+		!imageDigestPattern.MatchString(compilerEngine.Identity()) ||
+		!imageDigestPattern.MatchString(runtimeEngine.Identity()) ||
+		compilerEngine.Identity() == runtimeEngine.Identity() {
+		return nil, errors.New("distinct digest-pinned compiler and runtime engines plus bounded judge configuration are required")
 	}
-	return &Runner{engine: engine, config: config}, nil
+	return &Runner{compilerEngine: compilerEngine, runtimeEngine: runtimeEngine, config: config}, nil
 }
 
 func (runner *Runner) execute(ctx context.Context, request materializedRequest) (judgeprotocol.Result, []byte, error) {
@@ -132,11 +141,11 @@ func (runner *Runner) compile(ctx context.Context, request materializedRequest) 
 		return "", nil, nil, err
 	}
 	outputLimit := min(request.header.OutputLimitBytes, runner.config.CompileOutputBytes)
-	containerResult, err := runner.engine.Run(ctx, ContainerCommand{
+	containerResult, err := runner.compilerEngine.Run(ctx, ContainerCommand{
 		Name: containerName(request.header.JudgeJobID, "compile"), Workspace: workspace,
 		RuntimeRoot: runtimeRoot,
 		Executable:  cpp20Compiler, Arguments: []string{
-			"-std=c++20", "-O2", "-pipe", "-fdiagnostics-color=never", "-fno-ident",
+			"-std=c++20", "-O2", "-pipe", "-static", "-fdiagnostics-color=never", "-fno-ident",
 			"-o", "/workspace/program", "/workspace/main.cpp",
 		},
 		Timeout: runner.config.CompileTimeout, MemoryLimitBytes: runner.config.CompileMemoryBytes,
@@ -157,6 +166,9 @@ func (runner *Runner) compile(ctx context.Context, request materializedRequest) 
 	info, err := os.Lstat(compiled)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Size() < 1 || info.Size() > runner.config.MaximumCompiledBytes {
 		return "", nil, nil, &Failure{Code: "compiler_contract", Permanent: true, Detail: "compiler did not produce one bounded executable"}
+	}
+	if err := verifyStaticLinuxAMD64Executable(compiled); err != nil {
+		return "", nil, nil, &Failure{Code: "compiler_contract", Permanent: true, Detail: "compiler did not produce one static linux/amd64 executable"}
 	}
 	runRoot := filepath.Join(runner.config.WorkRoot, "run")
 	if err := os.Mkdir(runRoot, 0o700); err != nil {
@@ -258,7 +270,7 @@ func (runner *Runner) runProgram(ctx context.Context, request materializedReques
 	if err != nil {
 		return ContainerResult{}, err
 	}
-	result, err := runner.engine.Run(ctx, ContainerCommand{
+	result, err := runner.runtimeEngine.Run(ctx, ContainerCommand{
 		Name: containerName(request.header.JudgeJobID, phase), Workspace: filepath.Dir(programPath),
 		RuntimeRoot:       runtimeRoot,
 		ReadOnlyWorkspace: true, Executable: "/workspace/program", Stdin: stdin,
@@ -293,8 +305,8 @@ func (runner *Runner) manifest(checker judgecontract.Checker, mode judgecontract
 		cases = make([]executionCaseManifest, 0)
 	}
 	raw, err := json.Marshal(executionManifest{
-		Cases: cases, Checker: checker, ContainerImage: runner.engine.Identity(),
-		Mode: mode, Schema: judgecontract.ExecutionManifestSchemaV1,
+		Cases: cases, Checker: checker, CompilerImage: runner.compilerEngine.Identity(),
+		Mode: mode, RuntimeImage: runner.runtimeEngine.Identity(), Schema: executionManifestSchemaV2,
 	})
 	if err != nil {
 		return nil, &Failure{Code: "executor_result_contract", Permanent: true, Detail: "could not encode execution manifest"}
@@ -304,6 +316,31 @@ func (runner *Runner) manifest(checker judgecontract.Checker, mode judgecontract
 		return nil, &Failure{Code: "executor_result_contract", Permanent: true, Detail: "execution manifest violates its hard limit"}
 	}
 	return canonical, nil
+}
+
+func verifyStaticLinuxAMD64Executable(path string) error {
+	file, err := elf.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if file.Class != elf.ELFCLASS64 || file.Data != elf.ELFDATA2LSB ||
+		file.Type != elf.ET_EXEC || file.Machine != elf.EM_X86_64 || file.Entry == 0 {
+		return errors.New("ELF identity differs from static linux/amd64 executable policy")
+	}
+	loadSegments := 0
+	for _, program := range file.Progs {
+		switch program.Type {
+		case elf.PT_LOAD:
+			loadSegments++
+		case elf.PT_INTERP, elf.PT_DYNAMIC:
+			return errors.New("ELF contains a dynamic loader contract")
+		}
+	}
+	if loadSegments == 0 {
+		return errors.New("ELF contains no loadable segment")
+	}
+	return nil
 }
 
 func (runner *Runner) validateRequest(request materializedRequest) error {

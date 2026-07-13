@@ -2,11 +2,14 @@
 Description=Activate the release-bound AscendAny recommendation model
 Documentation=file:/opt/ascendany/v2/README.md
 Wants=network-online.target
-After=network-online.target ascendany-migrate.service
+Requires=ascendany-model-register.service
+After=network-online.target ascendany-migrate.service ascendany-model-register.service
 Before=ascendanyd.service
+Conflicts=ascendanyd.service
 AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendanyd
 AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-model
 AssertPathExists=/opt/ascendany/v2/models/recommendation-model.json
+AssertPathExists=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json
 AssertPathExists=/etc/ascendany/v2/ascendanyd.env
 
 [Service]
@@ -22,7 +25,7 @@ EnvironmentFile=/etc/ascendany/v2/ascendanyd.env
 Environment=SHELL=/usr/sbin/nologin
 Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password
 ExecStartPre=/usr/bin/test -s %d/db_password
-ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}
+ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}
 ExecStart=/opt/ascendany/v2/bin/ascendanyd activate-model
 TimeoutStartSec=60s
 
@@ -58,4 +61,4 @@ IPAddressAllow=localhost
 IPAddressAllow=10.88.0.2/32
 ReadOnlyPaths=/etc/ascendany/v2
 ReadWritePaths=/var/lib/ascendany
-InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany
+InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher

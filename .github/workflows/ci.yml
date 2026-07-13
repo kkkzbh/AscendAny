@@ -113,6 +113,12 @@ jobs:
       - name: Verify production lifecycle state contracts
         run: ./tools/tests/validate-production-state-fixture.sh
 
+      - name: Verify pre-v2 generation retirement and fresh-state contracts
+        run: ./tools/tests/validate-production-generation-fixture.sh
+
+      - name: Verify stopped-runtime catalog publication contracts
+        run: ./tools/tests/validate-production-catalog-fixture.sh
+
       - name: Verify restore operator stable-lock concurrency
         run: ./tools/tests/restore-operator-concurrency-fixture.sh
 
@@ -210,7 +216,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.22.0"
+          node-version: "22.22.2"
           cache: pnpm
 
       - name: Install workspace dependencies
@@ -234,7 +240,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.22.0"
+          node-version: "22.22.2"
           cache: pnpm
 
       - name: Install workspace dependencies
@@ -263,7 +269,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.22.0"
+          node-version: "22.22.2"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

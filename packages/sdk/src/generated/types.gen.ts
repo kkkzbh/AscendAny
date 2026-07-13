@@ -598,11 +598,11 @@ export type ConfigurationVersionPage = {
     nextBeforeNumber: number | null;
 };
 
-export type CreateConfigurationVersionRequest = CreateGenericConfigurationVersionRequest | CreateRecommendationKnowledgeCatalogVersionRequest;
+export type CreateConfigurationVersionRequest = CreateGenericConfigurationVersionRequest;
 
 export type CreateGenericConfigurationVersionRequest = {
     /**
-     * recommendation.catalog.active is reserved exclusively for knowledge_catalog.
+     * recommendation.catalog.active is reserved for the stopped-runtime release operator.
      */
     key: ConfigurationKey & unknown;
     kind: 'prompt' | 'model_connection' | 'feedback_policy' | 'feedback_delivery';
@@ -615,18 +615,6 @@ export type CreateGenericConfigurationVersionRequest = {
         [key: string]: unknown;
     };
     credentialRef: ConfigurationKey | null;
-};
-
-export type CreateRecommendationKnowledgeCatalogVersionRequest = {
-    key: 'recommendation.catalog.active';
-    kind: 'knowledge_catalog';
-    expectedHeadRevision: number;
-    expectedAnalyticsGenerationId: CanonicalPositiveInt64String;
-    expectedAnalyticsHeadRevision: number;
-    expectedInputManifestSha256: string;
-    schemaId: 'ascendany.knowledge_catalog.recommendation.v1';
-    document: RecommendationKnowledgeCatalogV1;
-    credentialRef: null;
 };
 
 export type CreateConfigurationVersionResult = {
@@ -643,6 +631,39 @@ export type ModelConnectionProbeResult = {
     model: string;
     checkedAt: string;
     latencyMilliseconds: number;
+};
+
+export type CatalogPublicationIntent = {
+    schema: 'ascendany.knowledge_catalog.publication-request.v1';
+    expectedConfigurationHeadRevision: number;
+    expectedAnalyticsGenerationId: CanonicalPositiveInt64String;
+    expectedAnalyticsHeadRevision: number;
+    expectedInputManifestSha256: string;
+    expectedCurrentModelHeadRevision: number;
+    expectedCurrentModelArtifactSha256: string;
+    targetCatalogSha256: string;
+    targetModelArtifactSha256: string;
+    targetApplicationVersion: string;
+    targetApplicationCommit: string;
+    targetApplicationBuildTime: string;
+};
+
+export type CatalogPublicationAuthorizationRequest = {
+    publicationIntent: CatalogPublicationIntent;
+    document: RecommendationKnowledgeCatalogV1;
+};
+
+export type AuthorizedCatalogPublicationRequest = CatalogPublicationIntent & {
+    authorizationId: CanonicalUuiDv4;
+};
+
+export type CatalogPublicationAuthorizationResult = {
+    authorizationId: CanonicalUuiDv4;
+    /**
+     * Exact expiry of the administrator access token that created this authorization.
+     */
+    expiresAt: string;
+    publicationRequest: AuthorizedCatalogPublicationRequest;
 };
 
 export type RecommendationKnowledgeCatalogV1 = {
@@ -2191,7 +2212,7 @@ export type ListConfigurationsResponses = {
 export type ListConfigurationsResponse = ListConfigurationsResponses[keyof ListConfigurationsResponses];
 
 export type CreateConfigurationVersionData = {
-    body: CreateConfigurationVersionRequest;
+    body: CreateGenericConfigurationVersionRequest;
     path?: never;
     query?: never;
     url: '/api/v2/admin/configurations/versions';
@@ -2382,6 +2403,71 @@ export type GetRecommendationReviewContextResponses = {
 };
 
 export type GetRecommendationReviewContextResponse = GetRecommendationReviewContextResponses[keyof GetRecommendationReviewContextResponses];
+
+export type AuthorizeKnowledgeCatalogPublicationData = {
+    body: CatalogPublicationAuthorizationRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v2/admin/recommendation/catalog-publication-authorizations';
+};
+
+export type AuthorizeKnowledgeCatalogPublicationErrors = {
+    /**
+     * Request syntax or payload contract is invalid.
+     */
+    400: ApiError;
+    /**
+     * Authentication is missing or invalid.
+     */
+    401: ApiError;
+    /**
+     * Authorization, Origin, or CSRF policy rejected the request.
+     */
+    403: ApiError;
+    /**
+     * Request processing or stream setup exceeded its configured duration limit.
+     */
+    408: ApiError;
+    /**
+     * The requested state transition is unavailable without revealing its prior state.
+     */
+    409: ApiError;
+    /**
+     * Request payload exceeds the route's advertised hard byte limit.
+     */
+    413: ApiError;
+    /**
+     * Request Content-Type or Content-Encoding is unsupported by the route.
+     */
+    415: ApiError;
+    /**
+     * The active provider configuration or resolved credential violates the provider contract.
+     */
+    422: ApiError;
+    /**
+     * The operation exceeded its authentication/request rate limit or active SSE capacity.
+     */
+    429: ApiError;
+    /**
+     * The server could not complete the request without exposing internal failure details.
+     */
+    500: ApiError;
+    /**
+     * Writes are disabled or a required runtime dependency is unavailable.
+     */
+    503: ApiError;
+};
+
+export type AuthorizeKnowledgeCatalogPublicationError = AuthorizeKnowledgeCatalogPublicationErrors[keyof AuthorizeKnowledgeCatalogPublicationErrors];
+
+export type AuthorizeKnowledgeCatalogPublicationResponses = {
+    /**
+     * One immutable catalog publication authorization was created.
+     */
+    201: CatalogPublicationAuthorizationResult;
+};
+
+export type AuthorizeKnowledgeCatalogPublicationResponse = AuthorizeKnowledgeCatalogPublicationResponses[keyof AuthorizeKnowledgeCatalogPublicationResponses];
 
 export type GetConfigurationData = {
     body?: never;

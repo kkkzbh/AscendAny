@@ -4,6 +4,7 @@ set -euo pipefail
 repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 validator="$repository_root/deploy/v2/scripts/validate-production.sh"
 ascendanyd_unit="$repository_root/deploy/v2/systemd/ascendanyd.service"
+catalog_publisher_unit="$repository_root/deploy/v2/systemd/ascendany-catalog-publish.service"
 cloudflared_unit="$repository_root/deploy/v2/systemd/ascendany-cloudflared.service"
 pgbouncer_unit_source="$repository_root/deploy/v2/systemd/ascendany-pgbouncer.service"
 go_binary="$(realpath -e -- "$(command -v go)")"
@@ -61,14 +62,14 @@ if ASCENDANY_VALIDATION_PHASE=invalid \
   printf 'invalid ASCENDANY_VALIDATION_PHASE unexpectedly passed\n' >&2
   exit 1
 fi
-grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production' \
+grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, catalog, or production' \
   "$fixture_root/phase.err" >/dev/null
 if ASCENDANY_VALIDATION_PHASE='' \
     "$validator" >"$fixture_root/phase-empty.out" 2>"$fixture_root/phase-empty.err"; then
   printf 'empty ASCENDANY_VALIDATION_PHASE unexpectedly passed\n' >&2
   exit 1
 fi
-grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production' \
+grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, catalog, or production' \
   "$fixture_root/phase-empty.err" >/dev/null
 if grep -F 'ASCENDANY_CLOUDFLARE_ACCOUNT_ID' "$validator" >/dev/null ||
    grep -F 'ASCENDANY_CLOUDFLARE_TUNNEL_ID' "$validator" >/dev/null; then
@@ -114,6 +115,15 @@ for directive in \
   'MemoryPressureThresholdSec=200ms'; do
   [[ "$(grep -Fxc -- "$directive" "$ascendanyd_unit")" == "1" ]]
 done
+[[ "$(grep -Fxc -- 'LoadCredentialEncrypted=jwt_signing_private_key:/etc/ascendany/credentials/jwt_signing_private_key.cred' "$ascendanyd_unit")" == 1 ]]
+[[ "$(grep -Fxc -- 'Environment=ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE=%d/jwt_signing_private_key' "$ascendanyd_unit")" == 1 ]]
+[[ "$(grep -Fxc -- 'LoadCredentialEncrypted=jwt_verification_public_key:/etc/ascendany/credentials/jwt_verification_public_key.cred' "$catalog_publisher_unit")" == 1 ]]
+[[ "$(grep -Fxc -- 'Environment=ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE=%d/jwt_verification_public_key' "$catalog_publisher_unit")" == 1 ]]
+if grep -F 'jwt_signing_private_key' "$catalog_publisher_unit" >/dev/null ||
+   grep -F 'jwt_verification_public_key' "$ascendanyd_unit" >/dev/null; then
+  printf 'JWT signing and verification capabilities cross the systemd unit boundary\n' >&2
+  exit 1
+fi
 
 (
   # shellcheck source=../../deploy/v2/scripts/validate-production.sh
@@ -146,9 +156,9 @@ done
       */livez) printf '%s\n' '{"status":"alive"}' ;;
       */readyz)
         if [[ "$health_fixture_mode" == "valid" ]]; then
-          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":6,"expectedVersion":6}}}'
+          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":7,"expectedVersion":7}}}'
         else
-          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":5,"expectedVersion":6}}}'
+          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":6,"expectedVersion":7}}}'
         fi
         ;;
       *) return 1 ;;
@@ -301,6 +311,11 @@ done
   fixture_model_activation_result=success
   fixture_model_activation_main_code=exited
   fixture_model_activation_main_status=0
+  fixture_model_registration_active_state=inactive
+  fixture_model_registration_enabled_state=static
+  fixture_model_registration_result=success
+  fixture_model_registration_main_code=exited
+  fixture_model_registration_main_status=0
   fixture_timer_active_state=inactive
   fixture_timer_enabled_state=disabled
   render_fixture_unit() {
@@ -312,12 +327,12 @@ done
           'EnvironmentFile=-/etc/ascendany/v2/ascendanyd.env' \
           'Environment=SHELL=/usr/sbin/nologin' \
           'Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password' \
-          'Environment=ASCENDANY_JWT_SIGNING_KEY_FILE=%d/jwt_signing_key' \
+          'Environment=ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE=%d/jwt_signing_private_key' \
           'Environment=ASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper' \
           'ExecStartPre=/usr/bin/test -s %d/db_password' \
-          'ExecStartPre=/usr/bin/test -s %d/jwt_signing_key' \
+          'ExecStartPre=/usr/bin/test -s %d/jwt_signing_private_key' \
           'ExecStartPre=/usr/bin/test -s %d/password_pepper' \
-          'ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}' \
+          'ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}' \
           'ExecStart=/opt/ascendany/v2/bin/ascendanyd serve' \
           'StandardOutput=journal' \
           'StandardError=journal' \
@@ -338,8 +353,41 @@ done
           'Environment=SHELL=/usr/sbin/nologin' \
           'Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password' \
           'ExecStartPre=/usr/bin/test -s %d/db_password' \
-          'ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify --model /opt/ascendany/v2/models/recommendation-model.json --sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}' \
+          'ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}' \
           'ExecStart=/opt/ascendany/v2/bin/ascendanyd activate-model'
+        ;;
+      ascendany-model-register.service)
+        printf '%s\n' \
+          '[Service]' \
+          'EnvironmentFile=/etc/ascendany/v2/ascendanyd.env' \
+          'Environment=SHELL=/usr/sbin/nologin' \
+          'Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password' \
+          'ExecStartPre=/usr/bin/test -s %d/db_password' \
+          'ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}' \
+          'ExecStart=/opt/ascendany/v2/bin/ascendanyd register-model'
+        ;;
+      ascendany-catalog-publish.service)
+        printf '%s\n' \
+          '[Service]' \
+          'EnvironmentFile=/etc/ascendany-catalog-publisher/catalog-publish.env' \
+          'Environment=SHELL=/usr/sbin/nologin' \
+          'Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/catalog_publisher_db_password' \
+          'Environment=ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE=%d/jwt_verification_public_key' \
+          'ExecStartPre=+/usr/bin/test -x /opt/ascendany/v2/bin/ascendany-catalog-publish' \
+          'ExecStartPre=+/usr/bin/test -r /etc/ascendany-catalog-publisher/catalog-publish.env' \
+          'ExecStartPre=+/usr/bin/test -f /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred' \
+          'ExecStartPre=+/usr/bin/test ! -L /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred' \
+          'ExecStartPre=+/usr/bin/test -s /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred' \
+          'ExecStartPre=+/usr/bin/test -f /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred' \
+          'ExecStartPre=+/usr/bin/test ! -L /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred' \
+          'ExecStartPre=+/usr/bin/test -s /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred' \
+          'ExecStartPre=/usr/bin/test -s %d/catalog_publisher_db_password' \
+          'ExecStartPre=/usr/bin/test -s %d/jwt_verification_public_key' \
+          'ExecStartPre=/usr/bin/test -s %d/catalog_publication_request' \
+          'ExecStartPre=/usr/bin/test -s %d/admin_access_token' \
+          'ExecStart=/opt/ascendany/v2/bin/ascendany-catalog-publish publish' \
+          'ExecStartPost=/usr/bin/test -d /var/lib/ascendany-catalog-publisher/receipts' \
+          'ExecStartPost=+/usr/bin/rm -f -- /var/lib/ascendany-catalog-publisher/pending/catalog_publication_request.cred /var/lib/ascendany-catalog-publisher/pending/admin_access_token.cred'
         ;;
       ascendany-judge@validation.service)
         printf '%s\n' \
@@ -349,7 +397,7 @@ done
           'Environment=XDG_DATA_HOME=/var/lib/ascendany-judge/.local/share' \
           'Environment=XDG_CONFIG_HOME=/var/lib/ascendany-judge/.config' \
           'Environment=XDG_CACHE_HOME=/var/lib/ascendany-judge/.cache' \
-          'ExecStart=/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --container-image ${ASCENDANY_JUDGE_CPP20_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup'
+          'ExecStart=/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --compiler-image ${ASCENDANY_JUDGE_COMPILER_IMAGE} --runtime-image ${ASCENDANY_JUDGE_RUNTIME_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup'
         ;;
       ascendany-lsp@validation.service)
         printf '%s\n' \
@@ -420,7 +468,9 @@ done
       is-enabled)
         case "$2" in
           ascendanyd.service) printf '%s\n' "$fixture_ascendanyd_enabled_state" ;;
+          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_enabled_state" ;;
           ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_enabled_state" ;;
+          ascendany-catalog-publish.service) printf '%s\n' static ;;
           ascendany-backup.timer) printf '%s\n' "$fixture_timer_enabled_state" ;;
           *) return 1 ;;
         esac
@@ -433,7 +483,7 @@ done
     case "$property" in
       FragmentPath)
         case "$unit" in
-          ascendanyd.service|ascendany-model-activate.service|ascendany-admin-bootstrap.service|ascendany-backup.service|ascendany-backup.timer|ascendany-migrate.service)
+          ascendanyd.service|ascendany-model-register.service|ascendany-model-activate.service|ascendany-catalog-publish.service|ascendany-admin-bootstrap.service|ascendany-backup.service|ascendany-backup.timer|ascendany-migrate.service)
             printf '/etc/systemd/system/%s\n' "$unit"
             ;;
           ascendany-judge@validation.service) printf '/etc/systemd/system/ascendany-judge@.service\n' ;;
@@ -453,7 +503,9 @@ done
       ActiveState)
         case "$unit" in
           ascendanyd.service) printf '%s\n' "$fixture_ascendanyd_active_state" ;;
+          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_active_state" ;;
           ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_active_state" ;;
+          ascendany-catalog-publish.service) printf '%s\n' inactive ;;
           ascendany-backup.timer) printf '%s\n' "$fixture_timer_active_state" ;;
           *) return 1 ;;
         esac
@@ -468,7 +520,8 @@ done
         ;;
       WorkingDirectory)
         case "$unit" in
-          ascendanyd.service|ascendany-model-activate.service) printf '/var/lib/ascendany\n' ;;
+          ascendanyd.service|ascendany-model-register.service|ascendany-model-activate.service) printf '/var/lib/ascendany\n' ;;
+          ascendany-catalog-publish.service) printf '/var/lib/ascendany-catalog-publisher\n' ;;
           ascendany-judge@validation.service) printf '/var/lib/ascendany-judge\n' ;;
           ascendany-lsp@validation.service) printf '/tmp\n' ;;
           ascendany-admin-bootstrap.service) printf '/var/lib/ascendany\n' ;;
@@ -499,52 +552,78 @@ done
         if [[ "$memory_pressure_threshold_drift" == "1" ]]; then printf '1s\n'; else printf '200ms\n'; fi
         ;;
       Result)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
-        printf '%s\n' "$fixture_model_activation_result"
+        case "$unit" in
+          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_result" ;;
+          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_result" ;;
+          *) return 1 ;;
+        esac
         ;;
       ExecMainCode)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
-        printf '%s\n' "$fixture_model_activation_main_code"
+        case "$unit" in
+          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_main_code" ;;
+          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_main_code" ;;
+          *) return 1 ;;
+        esac
         ;;
       ExecMainStatus)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
-        printf '%s\n' "$fixture_model_activation_main_status"
+        case "$unit" in
+          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_main_status" ;;
+          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_main_status" ;;
+          *) return 1 ;;
+        esac
         ;;
       Type)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
         printf 'oneshot\n'
         ;;
       NoNewPrivileges|ProtectHome|PrivateDevices|RestrictNamespaces|MemoryDenyWriteExecute)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
         printf 'yes\n'
         ;;
       ProtectSystem)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
         printf 'strict\n'
         ;;
       ProtectProc)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
         printf 'invisible\n'
         ;;
       ProcSubset)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
         printf 'pid\n'
         ;;
       DevicePolicy)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
         printf 'closed\n'
         ;;
       RestrictAddressFamilies)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
+        [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
         printf '%s\n' 'AF_UNIX AF_INET AF_INET6'
         ;;
       ReadWritePaths)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
-        printf '/var/lib/ascendany\n'
+        case "$unit" in
+          ascendany-model-register.service) printf '/var/lib/ascendany\n' ;;
+          ascendany-model-activate.service) printf '/var/lib/ascendany\n' ;;
+          ascendany-catalog-publish.service) printf '%s\n' '/var/lib/ascendany-catalog-publisher/receipts /var/lib/ascendany-catalog-publisher/pending' ;;
+          *) return 1 ;;
+        esac
         ;;
       InaccessiblePaths)
-        [[ "$unit" == "ascendany-model-activate.service" ]] || return 1
-        printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany'
+        case "$unit" in
+          ascendanyd.service)
+            printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany-catalog-publisher'
+            ;;
+          ascendany-model-register.service)
+            printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher'
+            ;;
+          ascendany-model-activate.service)
+            printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher'
+            ;;
+          ascendany-catalog-publish.service)
+            printf '%s\n' '/etc/ascendany/v2 /etc/ascendany/credentials /opt/ascendany/Release /var/lib/ascendany /var/backups/ascendany'
+            ;;
+          *) return 1 ;;
+        esac
         ;;
       Unit)
         [[ "$unit" == "ascendany-backup.timer" ]] || return 1
@@ -582,6 +661,7 @@ done
   runtime_feedback_credential_ids=()
   runtime_feedback_environment=()
   release_model_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  release_catalog_sha256='cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
   release_manifest_purpose=production
 
   printf '%s\n' \
@@ -590,6 +670,8 @@ done
     'ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json' \
     'ASCENDANY_RECOMMENDATION_MODEL_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production' \
+    'ASCENDANY_KNOWLEDGE_CATALOG_PATH=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json' \
+    'ASCENDANY_KNOWLEDGE_CATALOG_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' \
     'ASCENDANY_WRITE_MODE=enabled' \
     >"$fixture_root/ascendanyd.env"
   printf '%s\n' \
@@ -640,9 +722,11 @@ done
       'ASCENDANY_RECOMMENDATION_MODEL_PATH=/opt/ascendany/v2/models/recommendation-model.json' \
       'ASCENDANY_RECOMMENDATION_MODEL_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
       'ASCENDANY_RECOMMENDATION_MODEL_PURPOSE=production' \
+      'ASCENDANY_KNOWLEDGE_CATALOG_PATH=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json' \
+      'ASCENDANY_KNOWLEDGE_CATALOG_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' \
       "ASCENDANY_WRITE_MODE=$expected_write_mode" \
       'ASCENDANY_DATABASE_PASSWORD_FILE=/run/credentials/ascendanyd.service/db_password' \
-      'ASCENDANY_JWT_SIGNING_KEY_FILE=/run/credentials/ascendanyd.service/jwt_signing_key' \
+      'ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE=/run/credentials/ascendanyd.service/jwt_signing_private_key' \
       'ASCENDANY_PASSWORD_PEPPER_FILE=/run/credentials/ascendanyd.service/password_pepper' \
       'INVOCATION_ID=0123456789abcdef0123456789abcdef' \
       'JOURNAL_STREAM=8:9' \
@@ -749,6 +833,19 @@ done
   [[ "$failures" == "1" ]]
 
   validation_phase=activation
+  failures=0
+  check_model_registration_unit_state
+  [[ "$failures" == "0" ]]
+  fixture_model_registration_main_status=1
+  check_model_registration_unit_state
+  [[ "$failures" == "1" ]]
+  fixture_model_registration_main_status=0
+  fixture_model_registration_enabled_state=enabled
+  failures=0
+  check_model_registration_unit_state
+  [[ "$failures" == "1" ]]
+  fixture_model_registration_enabled_state=static
+
   failures=0
   check_model_activation_unit_state
   [[ "$failures" == "0" ]]
@@ -1279,7 +1376,9 @@ done
   cat >"$fixture_root/expected-installed-release-copy-contract" <<'CONTRACT'
 systemd/ascendany-cloudflared.service|/etc/systemd/system/ascendany-cloudflared.service|1
 systemd/ascendanyd.service|/etc/systemd/system/ascendanyd.service|1
+systemd/ascendany-model-register.service|/etc/systemd/system/ascendany-model-register.service|1
 systemd/ascendany-model-activate.service|/etc/systemd/system/ascendany-model-activate.service|1
+systemd/ascendany-catalog-publish.service|/etc/systemd/system/ascendany-catalog-publish.service|1
 systemd/ascendany-admin-bootstrap.service|/etc/systemd/system/ascendany-admin-bootstrap.service|1
 systemd/ascendany-backup.service|/etc/systemd/system/ascendany-backup.service|1
 systemd/ascendany-backup.timer|/etc/systemd/system/ascendany-backup.timer|1
@@ -1296,6 +1395,7 @@ config/analytics.json|/etc/ascendany/v2/analytics.json|0
 config/ascendanyd.env|/etc/ascendany/v2/ascendanyd.env|0
 config/ascendanyd-read-only-smoke.env|/etc/ascendany/v2/ascendanyd-read-only-smoke.env|0
 config/backup.env|/etc/ascendany/v2/backup.env|0
+config/catalog-publish.env|/etc/ascendany-catalog-publisher/catalog-publish.env|0
 config/judge.env|/etc/ascendany/v2/judge.env|0
 config/migrate.env|/etc/ascendany/v2/migrate.env|0
 config/pgbouncer-hba.conf|/opt/ascendany/infra/pgbouncer/pgbouncer-hba.conf|0

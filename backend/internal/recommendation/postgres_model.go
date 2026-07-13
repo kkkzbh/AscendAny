@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/inferencemodel"
+	"github.com/kkkzbh/AscendAny/backend/internal/modelrelease"
 )
 
 func (repository *PostgresRepository) loadModelProvenance(ctx context.Context, tx recommendationTx) (ModelProvenance, error) {
@@ -78,6 +79,19 @@ WHERE head.singleton`).Scan(
 		!validApplicationIdentity(provenance.ApplicationVersion) || !validApplicationIdentity(provenance.ApplicationCommit) ||
 		!validApplicationIdentity(provenance.ApplicationBuildTime) {
 		return ModelProvenance{}, domainError(ErrorStoredDataInvalid, true, "validate recommendation model provenance", errors.New("active database model differs from the process-bound artifact"))
+	}
+	activationErr := modelrelease.RequireCurrentActivationCatalog(ctx, tx, modelrelease.CurrentActivationExpectation{
+		ReleaseID: releaseID, HeadRevision: headRevision,
+		ArtifactSHA256: provenance.ArtifactSHA256, KnowledgeCatalogSHA256: provenance.KnowledgeCatalogSHA256,
+		Application: modelrelease.ApplicationIdentity{
+			Version: provenance.ApplicationVersion, Commit: provenance.ApplicationCommit, BuildTime: provenance.ApplicationBuildTime,
+		},
+	})
+	if errors.Is(activationErr, modelrelease.ErrStoredDataInvalid) || errors.Is(activationErr, modelrelease.ErrInvalidConfiguration) {
+		return ModelProvenance{}, domainError(ErrorStoredDataInvalid, true, "validate recommendation activation catalog binding", activationErr)
+	}
+	if activationErr != nil {
+		return ModelProvenance{}, databaseError("validate recommendation activation catalog binding", activationErr)
 	}
 	provenance.TrainedAt = manifest.TrainedAt
 	provenance.ModelHeadRevision = headRevision

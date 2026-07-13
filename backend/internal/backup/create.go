@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/kkkzbh/AscendAny/backend/internal/catalogpublication"
 )
 
 type snapshotHandle interface {
@@ -110,6 +112,13 @@ func createWithDependencies(ctx context.Context, config CreateConfig, dependenci
 	if err := validateMigrations(snapshotData.Migrations); err != nil {
 		return CreateResult{}, fmt.Errorf("migration snapshot rejected: %w", err)
 	}
+	if err := validateKnowledgeCatalogPublicationIDs(snapshotData.KnowledgeCatalogPublicationIDs); err != nil {
+		return CreateResult{}, fmt.Errorf("knowledge catalog publication snapshot rejected: %w", err)
+	}
+	if err := validateKnowledgeCatalogPublications(snapshotData.KnowledgeCatalogPublications); err != nil ||
+		!equalPublicationIDsAndDescriptors(snapshotData.KnowledgeCatalogPublicationIDs, snapshotData.KnowledgeCatalogPublications) {
+		return CreateResult{}, errors.New("knowledge catalog publication descriptors differ from their database identities")
+	}
 	if err := validateRecommendationModelDescriptor(snapshotData.RecommendationModel); err != nil {
 		return CreateResult{}, fmt.Errorf("recommendation model snapshot rejected: %w", err)
 	}
@@ -167,6 +176,16 @@ func createWithDependencies(ctx context.Context, config CreateConfig, dependenci
 	if err != nil {
 		return CreateResult{}, err
 	}
+	receiptArchiveDescriptor, receiptEntries, totalReceiptBytes, err := createCatalogReceiptArchive(
+		operationContext,
+		config.Tools.Zstd,
+		config.CatalogReceiptRoot,
+		filepath.Join(stagingPath, CatalogReceiptArchiveFilename),
+		snapshotData.KnowledgeCatalogPublicationIDs,
+	)
+	if err != nil {
+		return CreateResult{}, err
+	}
 	if err := snapshot.Close(operationContext); err != nil {
 		return CreateResult{}, errors.New("close database snapshot")
 	}
@@ -184,14 +203,22 @@ func createWithDependencies(ctx context.Context, config CreateConfig, dependenci
 				SHA256:    dumpSHA,
 				SizeBytes: dumpSize,
 			},
-			Migrations:          append([]MigrationDescriptor(nil), snapshotData.Migrations...),
-			RecommendationModel: snapshotData.RecommendationModel,
+			Migrations:                     append([]MigrationDescriptor(nil), snapshotData.Migrations...),
+			KnowledgeCatalogPublicationIDs: encodeKnowledgeCatalogPublicationIDs(snapshotData.KnowledgeCatalogPublicationIDs),
+			KnowledgeCatalogPublications:   append([]catalogpublication.Receipt(nil), snapshotData.KnowledgeCatalogPublications...),
+			RecommendationModel:            snapshotData.RecommendationModel,
 		},
 		Artifacts: ArtifactSnapshotDescriptor{
 			File:       archiveDescriptor,
 			Count:      len(snapshotData.Artifacts),
 			TotalBytes: totalArtifactBytes,
 			Entries:    append([]ArtifactDescriptor(nil), snapshotData.Artifacts...),
+		},
+		CatalogPublicationReceipts: CatalogReceiptSnapshotDescriptor{
+			File:       receiptArchiveDescriptor,
+			Count:      len(receiptEntries),
+			TotalBytes: totalReceiptBytes,
+			Entries:    append([]CatalogReceiptDescriptor(nil), receiptEntries...),
 		},
 	}
 	if err := validateManifest(manifest, backupID); err != nil {
@@ -218,10 +245,11 @@ func createWithDependencies(ctx context.Context, config CreateConfig, dependenci
 		return CreateResult{}, fmt.Errorf("apply backup retention: %w", err)
 	}
 	return CreateResult{
-		BackupID:       backupID,
-		BundlePath:     bundlePath,
-		ManifestSHA256: manifestSHA,
-		ArtifactCount:  len(snapshotData.Artifacts),
+		BackupID:            backupID,
+		BundlePath:          bundlePath,
+		ManifestSHA256:      manifestSHA,
+		ArtifactCount:       len(snapshotData.Artifacts),
+		CatalogReceiptCount: len(receiptEntries),
 	}, nil
 }
 
@@ -271,14 +299,18 @@ func validateCreateRuntimeConfig(config CreateConfig) error {
 	if config.RetainDaily < 0 || config.RetainWeekly < 0 || config.RetainDaily+config.RetainWeekly == 0 {
 		return errors.New("backup retention is invalid")
 	}
-	if pathsOverlap(config.ArtifactRoot, config.BackupRoot) ||
+	if pathsOverlap(config.ArtifactRoot, config.CatalogReceiptRoot) ||
+		pathsOverlap(config.ArtifactRoot, config.BackupRoot) ||
+		pathsOverlap(config.CatalogReceiptRoot, config.BackupRoot) ||
 		pathsOverlap(config.RuntimeRoot, config.ArtifactRoot) ||
+		pathsOverlap(config.RuntimeRoot, config.CatalogReceiptRoot) ||
 		pathsOverlap(config.RuntimeRoot, config.BackupRoot) {
-		return errors.New("runtime, artifact, and backup roots must be disjoint")
+		return errors.New("runtime, artifact, catalog receipt, and backup roots must be disjoint")
 	}
-	if !isCleanAbsoluteBelowRoot(config.ArtifactRoot) || !isCleanAbsoluteBelowRoot(config.BackupRoot) ||
+	if !isCleanAbsoluteBelowRoot(config.ArtifactRoot) || !isCleanAbsoluteBelowRoot(config.CatalogReceiptRoot) ||
+		!isCleanAbsoluteBelowRoot(config.BackupRoot) ||
 		!isCleanAbsoluteBelowRoot(config.RuntimeRoot) {
-		return errors.New("runtime, artifact, and backup roots must be clean absolute paths")
+		return errors.New("runtime, artifact, catalog receipt, and backup roots must be clean absolute paths")
 	}
 	if config.Tools.PGDump == "" || config.Tools.PGRestore == "" || config.Tools.Zstd == "" {
 		return errors.New("backup tool paths are required")

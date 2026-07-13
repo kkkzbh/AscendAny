@@ -1,0 +1,62 @@
+[Unit]
+Description=Register the release-bound AscendAny recommendation model
+Documentation=file:/opt/ascendany/v2/README.md
+Wants=network-online.target
+After=network-online.target ascendany-migrate.service
+Before=ascendany-model-activate.service ascendany-catalog-publish.service ascendanyd.service
+AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendanyd
+AssertFileIsExecutable=/opt/ascendany/v2/bin/ascendany-model
+AssertPathExists=/opt/ascendany/v2/models/recommendation-model.json
+AssertPathExists=/opt/ascendany/v2/models/recommendation-knowledge-catalog.json
+AssertPathExists=/etc/ascendany/v2/ascendanyd.env
+
+[Service]
+Type=oneshot
+User=ascendany
+Group=ascendany
+SupplementaryGroups=ascendany-runtime
+WorkingDirectory=/var/lib/ascendany
+UMask=0077
+
+LoadCredentialEncrypted=db_password:/etc/ascendany/credentials/runtime_db_password.cred
+EnvironmentFile=/etc/ascendany/v2/ascendanyd.env
+Environment=SHELL=/usr/sbin/nologin
+Environment=ASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password
+ExecStartPre=/usr/bin/test -s %d/db_password
+ExecStartPre=/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}
+ExecStart=/opt/ascendany/v2/bin/ascendanyd register-model
+TimeoutStartSec=60s
+TimeoutStopFailureMode=abort
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+DevicePolicy=closed
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.88.0.2/32
+ReadWritePaths=/var/lib/ascendany
+InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher

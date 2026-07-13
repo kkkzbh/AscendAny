@@ -322,6 +322,9 @@ func TestRemoveRetiredDeletesOnlyTheTrustedTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nestedPath, "binary"), []byte("retired binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(nestedPath, "operator"), []byte("retired operator bundle"), 0o555); err != nil {
+		t.Fatal(err)
+	}
 	targetPath := filepath.Join(parent, targetName)
 	mkdir0755(t, targetPath)
 	if err := os.WriteFile(filepath.Join(targetPath, "marker"), []byte("replacement"), 0o644); err != nil {

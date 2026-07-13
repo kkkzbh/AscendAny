@@ -1,1 +1,99 @@
-{"dockerfile":{"path":"15/Dockerfile","repository":"https://github.com/docker-library/gcc.git","revision":"915af5ccbb6b09575e244f280c26925e77172039","sha256":"83698252336fc29625bd5302ce124db1b22a7fee693c54483372e43ea429ccfa"},"image":{"configDigest":"sha256:2ae40e2dca571da289031064a6c11db4e3e895287e2ec8f5629fd48aec5a5069","configSize":7422,"index":"docker.io/library/gcc@sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289","indexMediaType":"application/vnd.oci.image.index.v1+json","leaf":"docker.io/library/gcc@sha256:c101370f78e4a30be178c11dd18aeee64c65d617908a98157db2392ca73ab04f","manifestMediaType":"application/vnd.oci.image.manifest.v1+json","manifestSize":2488},"platform":{"architecture":"amd64","os":"linux"},"schema":"ascendany.judge-image-lock.v1","toolchain":{"compiler":"/usr/local/bin/g++","version":"15.2.0"}}
+{
+  "build": {
+    "buildahVersion": "1.43.2",
+    "containerfilePath": "config/judge-images.Containerfile",
+    "containerfileSHA256": "6182244b6f4e3f68395fd41c716b5e2f44dffe1c163e3b538b386e28c06c3d25",
+    "format": "oci",
+    "podmanVersion": "5.8.4",
+    "sourceDateEpoch": 0
+  },
+  "compiler": {
+    "architecture": "amd64",
+    "configDigest": "sha256:76b314872c5106ffa1290995958127c635141ddff4b70191cc156bf8f956c7ee",
+    "configSize": 1096,
+    "identity": "localhost/ascendany-judge-compiler@sha256:8e181d6492b38a7bcb458855ea3332f609965ff158a47f70e0ddf7fabe0b06c9",
+    "manifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+    "manifestSize": 1033,
+    "os": "linux",
+    "packages": [
+      "alpine-baselayout-3.7.2-r0",
+      "alpine-baselayout-data-3.7.2-r0",
+      "alpine-keys-2.6-r0",
+      "alpine-release-3.23.5-r0",
+      "apk-tools-3.0.6-r0",
+      "binutils-2.45.1-r0",
+      "busybox-1.37.0-r30",
+      "busybox-binsh-1.37.0-r30",
+      "ca-certificates-bundle-20260611-r0",
+      "g++-15.2.0-r2",
+      "gcc-15.2.0-r2",
+      "gmp-6.3.0-r4",
+      "isl26-0.26-r1",
+      "jansson-2.14.1-r0",
+      "libapk-3.0.6-r0",
+      "libatomic-15.2.0-r2",
+      "libcrypto3-3.5.7-r0",
+      "libgcc-15.2.0-r2",
+      "libgomp-15.2.0-r2",
+      "libssl3-3.5.7-r0",
+      "libstdc++-15.2.0-r2",
+      "libstdc++-dev-15.2.0-r2",
+      "mpc1-1.3.1-r1",
+      "mpfr4-4.2.2-r0",
+      "musl-1.2.5-r23",
+      "musl-dev-1.2.5-r23",
+      "musl-utils-1.2.5-r23",
+      "scanelf-1.3.8-r2",
+      "ssl_client-1.37.0-r30",
+      "zlib-1.3.2-r0",
+      "zstd-libs-1.5.7-r2"
+    ],
+    "rootfs": {
+      "entryCount": 2681,
+      "inventoryPath": "config/judge-compiler-rootfs.inventory",
+      "inventorySHA256": "2aad9fd962f922ff1e6be704c24236087821967e2f73515a484be84395ceacf1",
+      "layerDigest": "sha256:b8604f149b557633fac94619b8ca4e481502c7a022380880dfc6a52a8f75486c",
+      "layerMediaType": "application/vnd.oci.image.layer.v1.tar",
+      "layerSize": 279690752
+    },
+    "toolchain": {
+      "compiler": "/usr/bin/g++",
+      "package": "g++",
+      "packageVersion": "15.2.0-r2",
+      "version": "15.2.0"
+    }
+  },
+  "runtime": {
+    "architecture": "amd64",
+    "configDigest": "sha256:6c15d33cc2aeb412475f0902441b68c149197a1139b05aea688b8dcf5b866769",
+    "configSize": 282,
+    "identity": "localhost/ascendany-judge-runtime@sha256:24da141bbad671d09025550a745e047a5d37e34ceb7a2cc673ccd585237bfc0f",
+    "manifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+    "manifestSize": 553,
+    "os": "linux",
+    "rootfs": {
+      "entryCount": 0,
+      "inventorySHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "layerDigest": "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+      "layerMediaType": "application/vnd.oci.image.layer.v1.tar",
+      "layerSize": 1024
+    }
+  },
+  "schema": "ascendany.judge-image-lock.v2",
+  "source": {
+    "architecture": "amd64",
+    "configDigest": "sha256:0d3e09a185d997484a3ba1743b3223ed08d633b891cc05bc9a3dea5556f89ca2",
+    "configSize": 611,
+    "index": "docker.io/library/alpine@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40",
+    "indexMediaType": "application/vnd.oci.image.index.v1+json",
+    "indexSize": 9218,
+    "leaf": "docker.io/library/alpine@sha256:1beb0dc0a51de7ff38e3b5274078a2e0b81113ba5c7535e1a03d5913a5edbda3",
+    "manifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+    "manifestSize": 1022,
+    "os": "linux",
+    "release": "3.23.5",
+    "rootfsLayerDigest": "sha256:e6f31ffc071e5560b82a8685fba8214954e5721e3e49269d00958316edbe89fe",
+    "rootfsLayerMediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+    "rootfsLayerSize": 3844421
+  }
+}

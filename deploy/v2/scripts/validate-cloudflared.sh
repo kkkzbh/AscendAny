@@ -348,7 +348,7 @@ probe_live_routes() {
     return
   fi
   probe_http_code "$metrics_origin/ready" 200 "cloudflared connector readiness"
-  [[ "$phase" == staged || "$phase" == activation ]] && return
+  [[ "$phase" == staged || "$phase" == catalog || "$phase" == activation ]] && return
 
   local_version="$temporary_workspace/local-version"
   shadow_version="$temporary_workspace/shadow-version"
@@ -399,8 +399,9 @@ main() {
     fail "validate-cloudflared.sh must run as root"
   fi
   phase="${ASCENDANY_VALIDATION_PHASE-}"
-  [[ "$phase" == staged || "$phase" == smoke || "$phase" == activation || "$phase" == production ]] ||
-    fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, or production"
+  [[ "$phase" == staged || "$phase" == smoke || "$phase" == catalog ||
+     "$phase" == activation || "$phase" == production ]] ||
+    fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, catalog, activation, or production"
   for command in awk base64 cmp curl dirname grep id jq mapfile podman readlink realpath \
       rm rpm sed sha256sum sort stat systemctl tail tr wc; do
     command -v "$command" >/dev/null 2>&1 || fail "required command is missing: $command"

@@ -14,8 +14,8 @@ The process fails at startup unless all required values are explicitly configure
 export ASCENDANY_DATABASE_URL='postgresql://ascendanyd_login@127.0.0.1:6432/ascendany_v2?sslmode=require'
 export ASCENDANY_DATABASE_POOL_MODE='transaction'
 export ASCENDANY_DATABASE_PASSWORD_FILE='/run/credentials/ascendany/db_password'
-export ASCENDANY_DATABASE_SCHEMA_VERSION='6'
-export ASCENDANY_JWT_SIGNING_KEY_FILE='/run/credentials/ascendany/jwt_signing_key'
+export ASCENDANY_DATABASE_SCHEMA_VERSION='7'
+export ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE='/run/credentials/ascendany/jwt_signing_private_key'
 export ASCENDANY_PASSWORD_PEPPER_FILE='/run/credentials/ascendany/password_pepper'
 export ASCENDANY_AUTH_ISSUER='ascendany'
 export ASCENDANY_AUTH_AUDIENCE='ascendany-v2'
@@ -60,6 +60,8 @@ export ASCENDANY_ANALYTICS_POLL_INTERVAL='1s'
 export ASCENDANY_RECOMMENDATION_MODEL_PATH='/absolute/path/to/recommendation-model.json'
 export ASCENDANY_RECOMMENDATION_MODEL_SHA256='64_lowercase_hex'
 export ASCENDANY_RECOMMENDATION_MODEL_PURPOSE='production'
+export ASCENDANY_KNOWLEDGE_CATALOG_PATH='/absolute/path/to/recommendation-knowledge-catalog.json'
+export ASCENDANY_KNOWLEDGE_CATALOG_SHA256='64_lowercase_hex'
 export ASCENDANY_FEEDBACK_RATE_WINDOW='1h'
 export ASCENDANY_FEEDBACK_RATE_MAXIMUM='5'
 export ASCENDANY_FEEDBACK_DELIVERY_CONFIGURATION_KEY='feedback.delivery.default'
@@ -85,7 +87,19 @@ its internal parameter and golden-vector digests, the fixed online feature
 schema, and all golden-vector results before binding its immutable model release
 to PostgreSQL. Production contains no model-training process or Python runtime.
 
-The database URL targets PgBouncer and must not contain a password. The database credential file must contain at least 16 bytes. The JWT signing key and password pepper must be separate credential files of at least 32 bytes. Credential files may not contain surrounding whitespace. Feedback webhook and model-provider bearer credentials also come from credential files: the environment contains only the path, and its variable name binds one `credentialRef` to one canonical HTTPS authority. Use `credential.FileEnvironmentVariable(reference, authority)` to derive that name. Browser origins use an exact comma-separated allowlist: canonical HTTPS, canonical loopback HTTP for development, `ascendany-app://bundle`, and `capacitor://localhost`; wildcards and padded entries are rejected. The access lifetime must be shorter than the refresh lifetime. The global HTTP read ceiling must exceed both route body deadlines; the SSE write timeout must not exceed its periodic reauthorization interval. The pool uses pgx `QueryExecModeExec` with statement and description caches disabled, so it does not rely on session-scoped prepared statements in PgBouncer transaction-pooling mode.
+Knowledge-catalog publication begins in `ascendanyd`. Its administrator route
+validates the complete catalog/release intent and creates one short-lived,
+single-use authorization bound to the canonical publication request and the
+creating access token's expiry. The stopped-runtime
+`ascendany-catalog-publish` binary receives that exact request and token,
+verifies the token with the public JWT key, and consumes the authorization only
+through
+`ascendany.publish_authorized_knowledge_catalog(uuid, text, text)`. Its database
+role has no direct catalog DML. A successful publication emits the strict
+26-field `ascendany.knowledge_catalog.publication-receipt.v1`, including
+`authorizationId`.
+
+The database URL targets PgBouncer and must not contain a password. The database credential file must contain at least 16 bytes. The online JWT credential is one canonical PKCS#8 Ed25519 private-key PEM; the stopped publisher receives only the matching canonical PKIX public-key PEM. Access JWTs use EdDSA exclusively. The password pepper is a separate credential file of at least 32 bytes, without surrounding whitespace. Feedback webhook and model-provider bearer credentials also come from credential files: the environment contains only the path, and its variable name binds one `credentialRef` to one canonical HTTPS authority. Use `credential.FileEnvironmentVariable(reference, authority)` to derive that name. Browser origins use an exact comma-separated allowlist: canonical HTTPS, canonical loopback HTTP for development, `ascendany-app://bundle`, and `capacitor://localhost`; wildcards and padded entries are rejected. The access lifetime must be shorter than the refresh lifetime. The global HTTP read ceiling must exceed both route body deadlines; the SSE write timeout must not exceed its periodic reauthorization interval. The pool uses pgx `QueryExecModeExec` with statement and description caches disabled, so it does not rely on session-scoped prepared statements in PgBouncer transaction-pooling mode.
 
 Readiness compares every row in `ascendany.schema_migrations_v2` with the exact version, name, and SHA-256 digest compiled into the binary. `/readyz` returns HTTP 503 when PostgreSQL cannot be pinged or the migration history has a missing, extra, renamed, or digest-drifted entry. Startup also rejects an `ASCENDANY_DATABASE_SCHEMA_VERSION` value that differs from the embedded manifest.
 

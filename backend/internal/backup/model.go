@@ -3,13 +3,16 @@ package backup
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/kkkzbh/AscendAny/backend/internal/catalogpublication"
 )
 
 const (
-	DatabaseDumpFilename    = "database.dump"
-	ArtifactArchiveFilename = "artifacts.tar.zst"
-	ManifestFilename        = "manifest.json"
-	ManifestDigestFilename  = "manifest.sha256"
+	DatabaseDumpFilename          = "database.dump"
+	ArtifactArchiveFilename       = "artifacts.tar.zst"
+	CatalogReceiptArchiveFilename = "catalog-receipts.tar.zst"
+	ManifestFilename              = "manifest.json"
+	ManifestDigestFilename        = "manifest.sha256"
 )
 
 type FileDescriptor struct {
@@ -32,6 +35,21 @@ type ArtifactSnapshotDescriptor struct {
 	Entries    []ArtifactDescriptor `json:"entries"`
 }
 
+type CatalogReceiptDescriptor struct {
+	PublicationID string `json:"publicationId"`
+	Path          string `json:"path"`
+	SHA256        string `json:"sha256"`
+	SizeBytes     int64  `json:"sizeBytes"`
+	Mode          int64  `json:"mode"`
+}
+
+type CatalogReceiptSnapshotDescriptor struct {
+	File       FileDescriptor             `json:"file"`
+	Count      int                        `json:"count"`
+	TotalBytes int64                      `json:"totalBytes"`
+	Entries    []CatalogReceiptDescriptor `json:"entries"`
+}
+
 type MigrationDescriptor struct {
 	Version int64  `json:"version"`
 	Name    string `json:"name"`
@@ -39,10 +57,12 @@ type MigrationDescriptor struct {
 }
 
 type DatabaseSnapshotDescriptor struct {
-	DatabaseName        string                        `json:"databaseName"`
-	File                FileDescriptor                `json:"file"`
-	Migrations          []MigrationDescriptor         `json:"migrations"`
-	RecommendationModel RecommendationModelDescriptor `json:"recommendationModel"`
+	DatabaseName                   string                        `json:"databaseName"`
+	File                           FileDescriptor                `json:"file"`
+	Migrations                     []MigrationDescriptor         `json:"migrations"`
+	KnowledgeCatalogPublicationIDs []string                      `json:"knowledgeCatalogPublicationIds"`
+	KnowledgeCatalogPublications   []catalogpublication.Receipt  `json:"knowledgeCatalogPublications"`
+	RecommendationModel            RecommendationModelDescriptor `json:"recommendationModel"`
 }
 
 type RecommendationModelDescriptor struct {
@@ -73,39 +93,46 @@ type RecommendationModelDescriptor struct {
 }
 
 type Manifest struct {
-	Schema    string                     `json:"schema"`
-	BackupID  string                     `json:"backupId"`
-	CreatedAt time.Time                  `json:"createdAt"`
-	Database  DatabaseSnapshotDescriptor `json:"database"`
-	Artifacts ArtifactSnapshotDescriptor `json:"artifacts"`
+	Schema                     string                           `json:"schema"`
+	BackupID                   string                           `json:"backupId"`
+	CreatedAt                  time.Time                        `json:"createdAt"`
+	Database                   DatabaseSnapshotDescriptor       `json:"database"`
+	Artifacts                  ArtifactSnapshotDescriptor       `json:"artifacts"`
+	CatalogPublicationReceipts CatalogReceiptSnapshotDescriptor `json:"catalogPublicationReceipts"`
 }
 
 type CreateResult struct {
-	BackupID       string
-	BundlePath     string
-	ManifestSHA256 string
-	ArtifactCount  int
+	BackupID            string
+	BundlePath          string
+	ManifestSHA256      string
+	ArtifactCount       int
+	CatalogReceiptCount int
 }
 
 type VerifyResult struct {
-	BackupID       string
-	BundlePath     string
-	ManifestSHA256 string
-	ArtifactCount  int
+	BackupID            string
+	BundlePath          string
+	ManifestSHA256      string
+	ArtifactCount       int
+	CatalogReceiptCount int
 }
 
 type RestoreResult struct {
 	BackupID            string
 	ManifestSHA256      string
 	ArtifactCount       int
+	CatalogReceiptCount int
 	DatabaseName        string
 	ArtifactRoot        string
+	CatalogReceiptRoot  string
 	RecommendationModel RecommendationModelDescriptor
 }
 
 type databaseSnapshot struct {
-	ID                  string
-	Artifacts           []ArtifactDescriptor
-	Migrations          []MigrationDescriptor
-	RecommendationModel RecommendationModelDescriptor
+	ID                             string
+	Artifacts                      []ArtifactDescriptor
+	Migrations                     []MigrationDescriptor
+	KnowledgeCatalogPublicationIDs []int64
+	KnowledgeCatalogPublications   []catalogpublication.Receipt
+	RecommendationModel            RecommendationModelDescriptor
 }

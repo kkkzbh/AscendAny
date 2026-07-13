@@ -122,6 +122,11 @@ func (spy writeBoundaryConfigurationSpy) CreateVersion(context.Context, string, 
 	return configuration.CreateVersionResult{}, nil
 }
 
+func (spy writeBoundaryConfigurationSpy) AuthorizeKnowledgeCatalogPublication(context.Context, string, configuration.CatalogPublicationAuthorizationInput) (configuration.CatalogPublicationAuthorizationResult, error) {
+	spy.recorder.record("configuration")
+	return configuration.CatalogPublicationAuthorizationResult{}, nil
+}
+
 type writeBoundaryFeedbackSpy struct {
 	unusedFeedbackService
 	recorder *writeBoundaryRecorder
@@ -226,6 +231,7 @@ var writeRouteExamples = []writeRouteExample{
 	{http.MethodGet, "/api/v2/lsp/sessions/123e4567-e89b-42d3-a456-426614174027/websocket", "lsp"},
 	{http.MethodPatch, "/api/v2/admin/accounts/123e4567-e89b-42d3-a456-426614174029/state", "administration"},
 	{http.MethodPost, "/api/v2/admin/configurations/versions", "configuration"},
+	{http.MethodPost, "/api/v2/admin/recommendation/catalog-publication-authorizations", "configuration"},
 	{http.MethodPost, "/api/v2/admin/model-connections/chat.primary/test", "model-probe"},
 	{http.MethodPost, "/api/v2/feedback", "feedback"},
 	{http.MethodPost, "/api/v2/imports/pintia", "import"},

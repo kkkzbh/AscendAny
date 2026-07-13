@@ -23,8 +23,11 @@ import (
 const (
 	KnowledgeCatalogSchemaV1 = "ascendany.knowledge_catalog.recommendation.v1"
 	FeatureSchemaV1          = "ascendany.recommendation.feature-schema.v1"
+	// MaximumKnowledgeCatalogBytes is the immutable release-file and
+	// configuration-document boundary shared by catalog publication.
+	MaximumKnowledgeCatalogBytes = 256 << 10
 
-	maximumConfigurationBytes = 256 << 10
+	maximumConfigurationBytes = MaximumKnowledgeCatalogBytes
 	maximumManifestBytes      = 1 << 20
 	maximumResultBytes        = 4 << 20
 	maximumContentHTMLBytes   = 4 << 20

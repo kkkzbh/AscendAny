@@ -98,7 +98,9 @@ var (
 	createLinePattern      = regexp.MustCompile(`(?m)^CREATE [^\n]+`)
 	createTablePattern     = regexp.MustCompile(`(?m)^CREATE TABLE ascendany\.([a-z][a-z0-9_]*) \($`)
 	tableBlockPattern      = regexp.MustCompile(`(?ms)^CREATE TABLE ascendany\.([a-z][a-z0-9_]*) \(\n(.*?)^\);`)
-	createFunctionPattern  = regexp.MustCompile(`(?m)^CREATE FUNCTION ascendany\.([a-z][a-z0-9_]*)\(([^)]*)\)$`)
+	createFunctionPattern  = regexp.MustCompile(`(?ms)^CREATE FUNCTION ascendany\.([a-z][a-z0-9_]*)\((.*?)\)\nRETURNS\b`)
+	replaceFunctionPattern = regexp.MustCompile(`(?ms)^CREATE OR REPLACE FUNCTION ascendany\.([a-z][a-z0-9_]*)\((.*?)\)\nRETURNS\b`)
+	functionArguments      = regexp.MustCompile(`^(?:[a-z][a-z0-9_]* (?:uuid|bigint|boolean|text)(?:, [a-z][a-z0-9_]* (?:uuid|bigint|boolean|text))*)?$`)
 	createIndexPattern     = regexp.MustCompile(`(?m)^CREATE (?:UNIQUE )?INDEX ([a-z][a-z0-9_]*)$`)
 	createTriggerPattern   = regexp.MustCompile(`(?ms)^CREATE (CONSTRAINT )?TRIGGER ([a-z][a-z0-9_]*)\n(.*?);`)
 	triggerTablePattern    = regexp.MustCompile(`\bON ascendany\.([a-z][a-z0-9_]*)\b`)
@@ -135,11 +137,30 @@ func expectedInventory() ([]string, error) {
 
 func addMigrationInventory(keys map[string]struct{}, sql string) error {
 	for _, line := range createLinePattern.FindAllString(sql, -1) {
-		if !createTablePattern.MatchString(line) && !createFunctionPattern.MatchString(line) &&
+		if !createTablePattern.MatchString(line) && !strings.HasPrefix(line, "CREATE FUNCTION ascendany.") &&
+			!strings.HasPrefix(line, "CREATE OR REPLACE FUNCTION ascendany.") &&
 			!createIndexPattern.MatchString(line) && !strings.HasPrefix(line, "CREATE TRIGGER ") &&
 			!strings.HasPrefix(line, "CREATE CONSTRAINT TRIGGER ") {
 			return fmt.Errorf("unsupported schema creation statement %q", line)
 		}
+	}
+	functionDefinitions := createFunctionPattern.FindAllStringSubmatch(sql, -1)
+	replacementFunctionDefinitions := replaceFunctionPattern.FindAllStringSubmatch(sql, -1)
+	functionLineCount := 0
+	replacementFunctionLineCount := 0
+	for _, line := range createLinePattern.FindAllString(sql, -1) {
+		if strings.HasPrefix(line, "CREATE FUNCTION ascendany.") {
+			functionLineCount++
+		}
+		if strings.HasPrefix(line, "CREATE OR REPLACE FUNCTION ascendany.") {
+			replacementFunctionLineCount++
+		}
+	}
+	if len(functionDefinitions) != functionLineCount {
+		return fmt.Errorf("CREATE FUNCTION block is not in the canonical migration form")
+	}
+	if len(replacementFunctionDefinitions) != replacementFunctionLineCount {
+		return fmt.Errorf("CREATE OR REPLACE FUNCTION block is not in the canonical migration form")
 	}
 
 	blocks := tableBlockPattern.FindAllStringSubmatch(sql, -1)
@@ -199,12 +220,23 @@ func addMigrationInventory(keys map[string]struct{}, sql string) error {
 		}
 	}
 
-	for _, match := range createFunctionPattern.FindAllStringSubmatch(sql, -1) {
-		if strings.TrimSpace(match[2]) != "" {
-			return fmt.Errorf("function %s uses an unsupported non-empty identity signature", match[1])
+	for _, match := range functionDefinitions {
+		signature := strings.Join(strings.Fields(match[2]), " ")
+		if !functionArguments.MatchString(signature) {
+			return fmt.Errorf("function %s uses a non-canonical identity signature %q", match[1], signature)
 		}
-		if err := addInventoryKey(keys, "routine:f:"+match[1]+"()"); err != nil {
+		if err := addInventoryKey(keys, "routine:f:"+match[1]+"("+signature+")"); err != nil {
 			return err
+		}
+	}
+	for _, match := range replacementFunctionDefinitions {
+		signature := strings.Join(strings.Fields(match[2]), " ")
+		if !functionArguments.MatchString(signature) {
+			return fmt.Errorf("replacement function %s uses a non-canonical identity signature %q", match[1], signature)
+		}
+		key := "routine:f:" + match[1] + "(" + signature + ")"
+		if _, exists := keys[key]; !exists {
+			return fmt.Errorf("CREATE OR REPLACE FUNCTION does not replace an earlier routine: %s", key)
 		}
 	}
 	for _, match := range createIndexPattern.FindAllStringSubmatch(sql, -1) {
@@ -257,9 +289,41 @@ func addConstraintAndIndex(keys map[string]struct{}, constraintType, name string
 }
 
 func addInventoryKey(keys map[string]struct{}, key string) error {
+	identifier, found := inventoryKeyIdentifier(key)
+	if !found {
+		return fmt.Errorf("unsupported database inventory key %q", key)
+	}
+	if len(identifier) > 63 {
+		return fmt.Errorf("PostgreSQL identifier exceeds 63 bytes: %s", identifier)
+	}
 	if _, exists := keys[key]; exists {
 		return fmt.Errorf("%w: %s", errDuplicateInventoryKey, key)
 	}
 	keys[key] = struct{}{}
 	return nil
+}
+
+func inventoryKeyIdentifier(key string) (string, bool) {
+	parts := strings.SplitN(key, ":", 3)
+	if len(parts) < 2 {
+		return "", false
+	}
+	var identifier string
+	switch parts[0] {
+	case "relation", "routine", "constraint":
+		if len(parts) != 3 {
+			return "", false
+		}
+		identifier = parts[2]
+	default:
+		identifier = strings.TrimPrefix(key, parts[0]+":")
+	}
+	if parts[0] == "routine" {
+		var found bool
+		identifier, _, found = strings.Cut(identifier, "(")
+		if !found {
+			return "", false
+		}
+	}
+	return identifier, identifier != ""
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,15 +14,18 @@ import (
 )
 
 type repositoryStub struct {
-	itemsResult    ItemPage
-	itemResult     Item
-	itemFound      bool
-	versionsResult VersionPage
-	versionsFound  bool
-	createResult   CreateVersionResult
-	createRequest  CreateVersionCommand
-	createDigest   string
-	err            error
+	itemsResult          ItemPage
+	itemResult           Item
+	itemFound            bool
+	versionsResult       VersionPage
+	versionsFound        bool
+	createResult         CreateVersionResult
+	createRequest        CreateVersionCommand
+	createDigest         string
+	authorizationRecord  CatalogPublicationAuthorizationRecord
+	authorizationCommand CreateCatalogPublicationAuthorizationCommand
+	authorizationDigest  string
+	err                  error
 }
 
 type acceptingRecommendationDocumentValidator struct{}
@@ -46,14 +50,72 @@ func TestCreateVersionRejectsInvalidRecommendationDocumentBeforeStore(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.CreateVersion(context.Background(), CreateVersionCommand{
+	_, err = service.CreateVersion(context.Background(), authorizedCatalogCommand(t, CreateVersionCommand{
 		Principal: testAdminPrincipal(), Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
 		ExpectedAnalyticsGenerationID: stringPointer("1"), ExpectedAnalyticsHeadRevision: int64Pointer(1),
-		ExpectedInputManifestSHA256: stringPointer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		SchemaID:                    "ascendany.knowledge_catalog.recommendation.v1", Document: json.RawMessage(`{}`),
-	})
+		ExpectedInputManifestSHA256:        stringPointer(strings.Repeat("a", 64)),
+		ExpectedCurrentModelHeadRevision:   int64Pointer(1),
+		ExpectedCurrentModelArtifactSHA256: stringPointer(strings.Repeat("b", 64)),
+		TargetCatalogSHA256:                "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+		TargetModelID:                      "11111111-1111-4111-8111-111111111111",
+		TargetModelArtifactSHA256:          strings.Repeat("c", 64),
+		TargetApplicationVersion:           "0.2.0",
+		TargetApplicationCommit:            strings.Repeat("d", 40),
+		TargetApplicationBuildTime:         "2026-07-13T04:00:00Z",
+		SchemaID:                           "ascendany.knowledge_catalog.recommendation.v1", Document: json.RawMessage(`{}`),
+	}))
 	if CodeOf(err) != ErrorDocumentInvalid || stub.createDigest != "" {
 		t.Fatalf("error=%v code=%q storedDigest=%q", err, CodeOf(err), stub.createDigest)
+	}
+}
+
+func TestCreateVersionAcceptsKnowledgeCatalogWithCompleteProvenance(t *testing.T) {
+	principal := testAdminPrincipal()
+	createdAt := time.Date(2026, 7, 13, 4, 0, 0, 0, time.UTC)
+	canonical := json.RawMessage(`{}`)
+	const catalogSHA256 = "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+	active := &Version{
+		ID: "1", Number: 1, SchemaID: "ascendany.knowledge_catalog.recommendation.v1",
+		Document: canonical, DocumentSHA256: catalogSHA256,
+		CreatedByAccountID: principal.AccountID, CreatedBySessionID: principal.SessionID, CreatedAt: createdAt,
+	}
+	stub := &repositoryStub{createResult: CreateVersionResult{
+		Item: Item{
+			ID: "33333333-3333-4333-8333-333333333333", Key: KnowledgeCatalogKey,
+			Kind: KindKnowledgeCatalog, HeadRevision: 1, ActiveVersion: active,
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		KnowledgeCatalogPublication: &KnowledgeCatalogPublication{KnowledgeCatalogPublicationID: "1"},
+	}}
+	service, err := NewService(stub, acceptingRecommendationDocumentValidator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestSHA256 := strings.Repeat("a", 64)
+	currentModelSHA256 := strings.Repeat("b", 64)
+	result, err := service.CreateVersion(context.Background(), authorizedCatalogCommand(t, CreateVersionCommand{
+		Principal: principal, Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
+		ExpectedAnalyticsGenerationID:      stringPointer("17"),
+		ExpectedAnalyticsHeadRevision:      int64Pointer(9),
+		ExpectedInputManifestSHA256:        &manifestSHA256,
+		ExpectedCurrentModelHeadRevision:   int64Pointer(2),
+		ExpectedCurrentModelArtifactSHA256: &currentModelSHA256,
+		TargetCatalogSHA256:                catalogSHA256,
+		TargetModelID:                      "11111111-1111-4111-8111-111111111111",
+		TargetModelArtifactSHA256:          strings.Repeat("c", 64),
+		TargetApplicationVersion:           "0.2.0",
+		TargetApplicationCommit:            strings.Repeat("d", 40),
+		TargetApplicationBuildTime:         "2026-07-13T04:00:00Z",
+		SchemaID:                           "ascendany.knowledge_catalog.recommendation.v1",
+		Document:                           canonical,
+	}))
+	if err != nil || result.Item.ActiveVersion == nil {
+		t.Fatalf("CreateVersion() result=%#v error=%v", result, err)
+	}
+	if stub.createDigest != catalogSHA256 || stub.createRequest.TargetCatalogSHA256 != catalogSHA256 ||
+		stub.createRequest.ExpectedAnalyticsGenerationID == nil || *stub.createRequest.ExpectedAnalyticsGenerationID != "17" ||
+		stub.createRequest.ExpectedCurrentModelArtifactSHA256 == nil || *stub.createRequest.ExpectedCurrentModelArtifactSHA256 != currentModelSHA256 {
+		t.Fatalf("stored command=%#v digest=%q", stub.createRequest, stub.createDigest)
 	}
 }
 
@@ -73,6 +135,51 @@ func (stub *repositoryStub) StoreVersion(_ context.Context, request CreateVersio
 	stub.createRequest = request
 	stub.createDigest = digest
 	return stub.createResult, stub.err
+}
+
+func (stub *repositoryStub) CreateCatalogPublicationAuthorization(
+	_ context.Context,
+	command CreateCatalogPublicationAuthorizationCommand,
+	digest string,
+) (CatalogPublicationAuthorizationRecord, error) {
+	stub.authorizationCommand = command
+	stub.authorizationDigest = digest
+	return stub.authorizationRecord, stub.err
+}
+
+func TestCreateCatalogPublicationAuthorizationOwnsCanonicalIntentAndDocument(t *testing.T) {
+	t.Parallel()
+	principal := testAdminPrincipal()
+	principal.ExpiresAt = time.Date(2026, 7, 13, 5, 0, 0, 0, time.UTC)
+	intent := testCatalogPublicationIntent("43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777")
+	request := AuthorizedCatalogPublicationRequest{
+		AuthorizationID:          "33333333-3333-4333-8333-333333333333",
+		CatalogPublicationIntent: intent,
+	}
+	stub := &repositoryStub{authorizationRecord: CatalogPublicationAuthorizationRecord{
+		AuthorizationID:    request.AuthorizationID,
+		ExpiresAt:          principal.ExpiresAt,
+		PublicationRequest: request,
+	}}
+	service, err := NewService(stub, acceptingRecommendationDocumentValidator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.CreateCatalogPublicationAuthorization(context.Background(), CreateCatalogPublicationAuthorizationCommand{
+		Principal:         principal,
+		AccessTokenSHA256: strings.Repeat("f", 64),
+		PublicationIntent: intent,
+		Document:          json.RawMessage(` {"b":2,"a":1} `),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AuthorizationID != request.AuthorizationID || !result.ExpiresAt.Equal(principal.ExpiresAt) ||
+		result.PublicationRequest != request || stub.authorizationDigest != intent.TargetCatalogSHA256 ||
+		string(stub.authorizationCommand.Document) != `{"a":1,"b":2}` ||
+		stub.authorizationCommand.AccessTokenSHA256 != strings.Repeat("f", 64) {
+		t.Fatalf("result=%#v command=%#v digest=%q", result, stub.authorizationCommand, stub.authorizationDigest)
+	}
 }
 
 func TestCanonicalDocumentNormalizesOrderingAndNumbers(t *testing.T) {
@@ -171,45 +278,93 @@ func TestServiceRejectsStudentAndInvalidMetadata(t *testing.T) {
 	}
 }
 
-func TestCreateVersionRequiresAnalyticsReviewProvenanceOnlyForKnowledgeCatalog(t *testing.T) {
-	service, err := NewService(&repositoryStub{}, acceptingRecommendationDocumentValidator{})
+func TestCreateVersionRequiresPublicationProvenanceOnlyForKnowledgeCatalog(t *testing.T) {
+	stub := &repositoryStub{}
+	service, err := NewService(stub, acceptingRecommendationDocumentValidator{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := testAdminPrincipal()
-	manifest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	validCatalog := CreateVersionCommand{
-		Principal: admin, Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
-		ExpectedAnalyticsGenerationID: stringPointer("9223372036854775807"), ExpectedAnalyticsHeadRevision: int64Pointer(1),
-		ExpectedInputManifestSHA256: &manifest, SchemaID: "ascendany.knowledge_catalog.recommendation.v1", Document: json.RawMessage(`{}`),
-	}
-	for _, mutate := range []func(*CreateVersionCommand){
-		func(value *CreateVersionCommand) { value.ExpectedAnalyticsGenerationID = nil },
-		func(value *CreateVersionCommand) { value.ExpectedAnalyticsGenerationID = stringPointer("01") },
-		func(value *CreateVersionCommand) {
+	manifestSHA256 := strings.Repeat("a", 64)
+	currentModelSHA256 := strings.Repeat("b", 64)
+	validCatalog := authorizedCatalogCommand(t, CreateVersionCommand{
+		Principal: testAdminPrincipal(), Key: KnowledgeCatalogKey, Kind: KindKnowledgeCatalog,
+		ExpectedAnalyticsGenerationID:      stringPointer("9223372036854775807"),
+		ExpectedAnalyticsHeadRevision:      int64Pointer(1),
+		ExpectedInputManifestSHA256:        &manifestSHA256,
+		ExpectedCurrentModelHeadRevision:   int64Pointer(1),
+		ExpectedCurrentModelArtifactSHA256: &currentModelSHA256,
+		TargetCatalogSHA256:                "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+		TargetModelID:                      "11111111-1111-4111-8111-111111111111",
+		TargetModelArtifactSHA256:          strings.Repeat("c", 64),
+		TargetApplicationVersion:           "0.2.0",
+		TargetApplicationCommit:            strings.Repeat("d", 40),
+		TargetApplicationBuildTime:         "2026-07-13T04:00:00Z",
+		SchemaID:                           "ascendany.knowledge_catalog.recommendation.v1",
+		Document:                           json.RawMessage(`{}`),
+	})
+	mutations := map[string]func(*CreateVersionCommand){
+		"generation absent": func(value *CreateVersionCommand) { value.ExpectedAnalyticsGenerationID = nil },
+		"generation noncanonical": func(value *CreateVersionCommand) {
+			value.ExpectedAnalyticsGenerationID = stringPointer("01")
+		},
+		"generation overflow": func(value *CreateVersionCommand) {
 			value.ExpectedAnalyticsGenerationID = stringPointer("9223372036854775808")
 		},
-		func(value *CreateVersionCommand) { value.ExpectedAnalyticsHeadRevision = nil },
-		func(value *CreateVersionCommand) { value.ExpectedAnalyticsHeadRevision = int64Pointer(0) },
-		func(value *CreateVersionCommand) { value.ExpectedInputManifestSHA256 = nil },
-		func(value *CreateVersionCommand) {
-			value.ExpectedInputManifestSHA256 = stringPointer("A" + manifest[1:])
+		"analytics revision absent": func(value *CreateVersionCommand) { value.ExpectedAnalyticsHeadRevision = nil },
+		"analytics revision invalid": func(value *CreateVersionCommand) {
+			value.ExpectedAnalyticsHeadRevision = int64Pointer(0)
 		},
-	} {
-		command := validCatalog
-		mutate(&command)
-		if _, err := service.CreateVersion(context.Background(), command); CodeOf(err) != ErrorInvalidQuery {
-			t.Fatalf("catalog provenance command=%#v error=%v", command, err)
-		}
+		"manifest absent": func(value *CreateVersionCommand) { value.ExpectedInputManifestSHA256 = nil },
+		"manifest invalid": func(value *CreateVersionCommand) {
+			value.ExpectedInputManifestSHA256 = stringPointer("A" + manifestSHA256[1:])
+		},
+		"model revision absent": func(value *CreateVersionCommand) { value.ExpectedCurrentModelHeadRevision = nil },
+		"model revision invalid": func(value *CreateVersionCommand) {
+			value.ExpectedCurrentModelHeadRevision = int64Pointer(0)
+		},
+		"current model digest absent": func(value *CreateVersionCommand) {
+			value.ExpectedCurrentModelArtifactSHA256 = nil
+		},
+		"current model digest invalid": func(value *CreateVersionCommand) {
+			value.ExpectedCurrentModelArtifactSHA256 = stringPointer("B" + currentModelSHA256[1:])
+		},
+		"catalog digest invalid": func(value *CreateVersionCommand) { value.TargetCatalogSHA256 = strings.Repeat("A", 64) },
+		"model identity invalid": func(value *CreateVersionCommand) { value.TargetModelID = "invalid" },
+		"target model digest invalid": func(value *CreateVersionCommand) {
+			value.TargetModelArtifactSHA256 = strings.Repeat("C", 64)
+		},
+		"application identity invalid": func(value *CreateVersionCommand) { value.TargetApplicationVersion = "01.2.3" },
 	}
-	generation := "1"
-	head := int64(1)
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			command := validCatalog
+			mutate(&command)
+			if _, err := service.CreateVersion(context.Background(), command); CodeOf(err) != ErrorInvalidQuery {
+				t.Fatalf("CreateVersion() error=%v command=%#v", err, command)
+			}
+		})
+	}
+
 	generic := CreateVersionCommand{
-		Principal: admin, Key: "prompt.main", Kind: KindPrompt, SchemaID: "ascendany.prompt.v1", Document: json.RawMessage(`{}`),
-		ExpectedAnalyticsGenerationID: &generation, ExpectedAnalyticsHeadRevision: &head, ExpectedInputManifestSHA256: &manifest,
+		Principal: testAdminPrincipal(), Key: "prompt.main", Kind: KindPrompt,
+		ExpectedAnalyticsGenerationID:      validCatalog.ExpectedAnalyticsGenerationID,
+		ExpectedAnalyticsHeadRevision:      validCatalog.ExpectedAnalyticsHeadRevision,
+		ExpectedInputManifestSHA256:        validCatalog.ExpectedInputManifestSHA256,
+		ExpectedCurrentModelHeadRevision:   validCatalog.ExpectedCurrentModelHeadRevision,
+		ExpectedCurrentModelArtifactSHA256: validCatalog.ExpectedCurrentModelArtifactSHA256,
+		TargetCatalogSHA256:                validCatalog.TargetCatalogSHA256,
+		TargetModelID:                      validCatalog.TargetModelID,
+		TargetModelArtifactSHA256:          validCatalog.TargetModelArtifactSHA256,
+		TargetApplicationVersion:           validCatalog.TargetApplicationVersion,
+		TargetApplicationCommit:            validCatalog.TargetApplicationCommit,
+		TargetApplicationBuildTime:         validCatalog.TargetApplicationBuildTime,
+		SchemaID:                           "ascendany.prompt.v1", Document: json.RawMessage(`{}`),
 	}
 	if _, err := service.CreateVersion(context.Background(), generic); CodeOf(err) != ErrorInvalidQuery {
-		t.Fatalf("generic provenance error=%v", err)
+		t.Fatalf("generic publication provenance error=%v", err)
+	}
+	if stub.createDigest != "" {
+		t.Fatalf("rejected write reached repository with digest %q", stub.createDigest)
 	}
 }
 
@@ -283,6 +438,52 @@ func testAdminPrincipal() auth.AccessPrincipal {
 		JWTID:     "99999999-9999-4999-8999-999999999999",
 		Role:      auth.RoleAdmin, AuthRevision: 1,
 	}
+}
+
+func testCatalogPublicationIntent(catalogSHA256 string) CatalogPublicationIntent {
+	return CatalogPublicationIntent{
+		Schema:                             CatalogPublicationRequestSchema,
+		ExpectedConfigurationHeadRevision:  3,
+		ExpectedAnalyticsGenerationID:      "17",
+		ExpectedAnalyticsHeadRevision:      9,
+		ExpectedInputManifestSHA256:        strings.Repeat("a", 64),
+		ExpectedCurrentModelHeadRevision:   2,
+		ExpectedCurrentModelArtifactSHA256: strings.Repeat("b", 64),
+		TargetCatalogSHA256:                catalogSHA256,
+		TargetModelArtifactSHA256:          strings.Repeat("c", 64),
+		TargetApplicationVersion:           "0.2.0",
+		TargetApplicationCommit:            strings.Repeat("d", 40),
+		TargetApplicationBuildTime:         "2026-07-13T04:00:00Z",
+	}
+}
+
+func authorizedCatalogCommand(t *testing.T, command CreateVersionCommand) CreateVersionCommand {
+	t.Helper()
+	request := AuthorizedCatalogPublicationRequest{
+		AuthorizationID: "88888888-8888-4888-8888-888888888888",
+		CatalogPublicationIntent: CatalogPublicationIntent{
+			Schema:                             CatalogPublicationRequestSchema,
+			ExpectedConfigurationHeadRevision:  command.ExpectedHeadRevision,
+			ExpectedAnalyticsGenerationID:      *command.ExpectedAnalyticsGenerationID,
+			ExpectedAnalyticsHeadRevision:      *command.ExpectedAnalyticsHeadRevision,
+			ExpectedInputManifestSHA256:        *command.ExpectedInputManifestSHA256,
+			ExpectedCurrentModelHeadRevision:   *command.ExpectedCurrentModelHeadRevision,
+			ExpectedCurrentModelArtifactSHA256: *command.ExpectedCurrentModelArtifactSHA256,
+			TargetCatalogSHA256:                command.TargetCatalogSHA256,
+			TargetModelArtifactSHA256:          command.TargetModelArtifactSHA256,
+			TargetApplicationVersion:           command.TargetApplicationVersion,
+			TargetApplicationCommit:            command.TargetApplicationCommit,
+			TargetApplicationBuildTime:         command.TargetApplicationBuildTime,
+		},
+	}
+	canonical, err := CanonicalCatalogPublicationRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.PublicationAuthorizationID = request.AuthorizationID
+	command.PublicationAccessTokenSHA256 = strings.Repeat("e", 64)
+	command.PublicationAuthorizationRequest = canonical
+	return command
 }
 
 func stringPointer(value string) *string { return &value }

@@ -15,10 +15,12 @@ readonly -a UNIT_NAMES=(
   ascendany-admin-bootstrap.service
   ascendany-backup.service
   ascendany-backup.timer
+  ascendany-catalog-publish.service
   ascendany-cloudflared.service
   ascendany-judge@.service
   ascendany-lsp@.service
   ascendany-migrate.service
+  ascendany-model-register.service
   ascendany-model-activate.service
   ascendany-pgbouncer.service
   ascendany-restore-verify@.service
@@ -27,6 +29,7 @@ readonly -a UNIT_NAMES=(
 readonly -a RELEASE_EXECUTABLES=(
   /opt/ascendany/v2/bin/ascendany-admin-bootstrap
   /opt/ascendany/v2/bin/ascendany-backup
+  /opt/ascendany/v2/bin/ascendany-catalog-publish
   /opt/ascendany/v2/bin/ascendany-judge
   /opt/ascendany/v2/bin/ascendany-lsp
   /opt/ascendany/v2/bin/ascendany-migrate
@@ -63,10 +66,14 @@ diff -r -- "$DEPLOY_UNIT_SOURCE" "$UNIT_SOURCE" >/dev/null ||
 jq -e '
   .schema == "ascendany.release.v2" and
   .purpose == "production" and
-  (.files | length == 59) and
-  any(.files[]; .path == "bin/ascendany-release-ops" and .mode == "0755")
+  (.files | length == 68) and
+  ([.files[] | select(.path == "bin/ascendany-release-ops" and .mode == "0755")] | length == 1) and
+  ([.files[] | select(
+    .path == "operators/ascendany-production-initialize.mjs" and .mode == "0555" and
+    (.sha256 | test("^[0-9a-f]{64}$")) and (.size | type == "number" and . > 0)
+  )] | length == 1)
 ' "$INSTALLED_RELEASE/release-manifest.json" >/dev/null ||
-  fail 'installed release manifest does not carry the exact native-helper release contract'
+  fail 'installed release manifest does not carry the exact native-helper/operator contract'
 mapfile -t actual_unit_names < <(
   find "$UNIT_SOURCE" -mindepth 1 -maxdepth 1 -type f \
     \( -name '*.service' -o -name '*.timer' \) -printf '%f\n' |
@@ -90,6 +97,7 @@ install -d -m 0755 \
   "$FAKE_ROOT/usr/lib/systemd/system/service.d" \
   "$FAKE_ROOT/etc/ascendany/v2" \
   "$FAKE_ROOT/etc/ascendany/credentials" \
+  "$FAKE_ROOT/etc/ascendany-catalog-publisher/credentials" \
   "$FAKE_ROOT/opt/ascendany/infra/pgbouncer" \
   "$FAKE_ROOT/opt/ascendany/v2/config" \
   "$FAKE_ROOT/run/ascendany" \
@@ -99,6 +107,8 @@ install -d -m 0755 \
   "$FAKE_ROOT/run/postgresql" \
   "$FAKE_ROOT/var/empty" \
   "$FAKE_ROOT/var/lib/ascendany/artifacts" \
+  "$FAKE_ROOT/var/lib/ascendany-catalog-publisher/receipts" \
+  "$FAKE_ROOT/var/lib/ascendany-catalog-publisher/pending" \
   "$FAKE_ROOT/var/lib/ascendany-judge" \
   "$FAKE_ROOT/var/lib/ascendany-lsp-root/dev" \
   "$FAKE_ROOT/var/lib/ascendany-lsp-root/etc" \
@@ -133,6 +143,7 @@ cat >"$FAKE_ROOT/etc/passwd" <<'PASSWD'
 root:x:0:0:root:/root:/usr/sbin/nologin
 ascendany:x:1001:1001:AscendAny:/var/lib/ascendany:/usr/sbin/nologin
 ascendany-backup:x:1002:1002:AscendAny backup:/var/backups/ascendany:/usr/sbin/nologin
+ascendany-catalog-publisher:x:1007:1010:AscendAny catalog publisher:/var/lib/ascendany-catalog-publisher:/usr/sbin/nologin
 ascendany-judge:x:1003:1003:AscendAny judge:/var/lib/ascendany-judge:/usr/sbin/nologin
 ascendany-lsp:x:1004:1004:AscendAny LSP:/var/empty:/usr/sbin/nologin
 ascendany-migrator:x:1005:1005:AscendAny migrator:/var/lib/ascendany-migrate:/usr/sbin/nologin
@@ -142,12 +153,14 @@ cat >"$FAKE_ROOT/etc/group" <<'GROUP'
 root:x:0:
 ascendany:x:1001:ascendany-backup
 ascendany-backup-readers:x:1002:ascendany-backup,ascendany-restore
+ascendany-catalog-readers:x:1008:ascendany-backup
 ascendany-runtime:x:1003:ascendany,ascendany-judge
 ascendany-lsp-control:x:1009:ascendany,ascendany-lsp
 ascendany-judge:x:1004:
 ascendany-lsp:x:1005:
 ascendany-migrator:x:1006:
 ascendany-restore:x:1007:
+ascendany-catalog-publisher:x:1010:
 GROUP
 chmod 0644 "$FAKE_ROOT/etc/passwd" "$FAKE_ROOT/etc/group"
 
@@ -200,7 +213,9 @@ done
 for direct_postgres_unit in \
   ascendany-pgbouncer.service \
   ascendany-migrate.service \
+  ascendany-model-register.service \
   ascendany-model-activate.service \
+  ascendany-catalog-publish.service \
   ascendany-backup.service \
   'ascendany-restore-verify@.service'; do
   [[ "$(grep -Fxc -- 'IPAddressAllow=localhost' "$UNIT_SOURCE/$direct_postgres_unit")" == "1" &&
@@ -224,6 +239,8 @@ for environment_file in \
   : >"$FAKE_ROOT/etc/ascendany/v2/$environment_file"
   chmod 0644 "$FAKE_ROOT/etc/ascendany/v2/$environment_file"
 done
+: >"$FAKE_ROOT/etc/ascendany-catalog-publisher/catalog-publish.env"
+chmod 0640 "$FAKE_ROOT/etc/ascendany-catalog-publisher/catalog-publish.env"
 
 mapfile -t referenced_executables < <(
   sed -n -E \

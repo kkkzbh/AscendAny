@@ -12,14 +12,17 @@ import (
 	"time"
 )
 
-const testImage = "localhost/ascendany-cpp20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const (
+	testCompilerImage = "localhost/ascendany-judge-compiler@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testRuntimeImage  = "localhost/ascendany-judge-runtime@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
 
 func TestPodmanArgumentsEnforceIsolationWithoutShell(t *testing.T) {
 	binary, err := filepath.Abs("/usr/bin/podman")
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := NewPodmanEngine(binary, testImage, "/var/empty")
+	engine, err := NewPodmanEngine(binary, testCompilerImage, "/var/empty")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +44,7 @@ func TestPodmanArgumentsEnforceIsolationWithoutShell(t *testing.T) {
 		"--cgroup-manager=cgroupfs", "--events-backend=none", "--hooks-dir=/var/empty", "--interactive", "--pull=never", "--network=none", "--http-proxy=false", "--read-only",
 		"--cap-drop=all", "--security-opt=no-new-privileges", "--cgroups=enabled", "--cgroup-parent=/containers", "--pids-limit=64",
 		"--memory=268435456b", "--memory-swap=268435456b", "--userns=host",
-		testImage, cpp20Compiler, "-std=c++20",
+		testCompilerImage, cpp20Compiler, "-std=c++20",
 	} {
 		if !slices.Contains(arguments, required) {
 			t.Fatalf("arguments missing %q: %v", required, arguments)
@@ -86,7 +89,7 @@ func TestPodmanRejectsUnpinnedImageAndUnsafeWorkspace(t *testing.T) {
 	if _, err := NewPodmanEngine("/usr/bin/podman", "docker.io/library/gcc:latest", "/var/empty"); err == nil {
 		t.Fatal("NewPodmanEngine() error = nil")
 	}
-	engine, err := NewPodmanEngine("/usr/bin/podman", testImage, "/var/empty")
+	engine, err := NewPodmanEngine("/usr/bin/podman", testCompilerImage, "/var/empty")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +148,7 @@ esac
 `), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	engine, err := NewPodmanEngine(binary, testImage, "/var/empty")
+	engine, err := NewPodmanEngine(binary, testCompilerImage, "/var/empty")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,15 +174,8 @@ esac
 	}
 }
 
-func TestPodmanEngineCompilesAndRunsWhenImageConfigured(t *testing.T) {
-	image := os.Getenv("ASCENDANY_TEST_JUDGE_IMAGE")
-	if image == "" {
-		t.Skip("ASCENDANY_TEST_JUDGE_IMAGE is not configured")
-	}
-	engine, err := NewPodmanEngine("/usr/bin/podman", image, "/var/empty")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestPodmanEngineCompilesAndRunsWithSeparateImagesWhenConfigured(t *testing.T) {
+	compilerEngine, runtimeEngine := configuredJudgeEngines(t)
 	workspace := t.TempDir()
 	if err := os.Chmod(workspace, 0o700); err != nil {
 		t.Fatal(err)
@@ -190,16 +186,19 @@ int main() { std::string value; std::getline(std::cin, value); std::cout << valu
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	compileResult, err := engine.Run(context.Background(), ContainerCommand{
+	compileResult, err := compilerEngine.Run(context.Background(), ContainerCommand{
 		Name: "ascendany-integration-compile", Workspace: workspace, RuntimeRoot: runtimeRoot,
-		Executable: cpp20Compiler, Arguments: []string{"-std=c++20", "-o", "/workspace/program", "/workspace/main.cpp"},
+		Executable: cpp20Compiler, Arguments: []string{"-std=c++20", "-static", "-o", "/workspace/program", "/workspace/main.cpp"},
 		Timeout: 30 * time.Second, MemoryLimitBytes: 512 << 20, OutputLimitBytes: 1 << 20,
 		PIDsLimit: 64, CPUs: 1, TemporaryLimitBytes: 64 << 20,
 	})
 	if err != nil || compileResult.ExitCode != 0 {
 		t.Fatalf("compile result=%#v error=%v stderr=%s", compileResult, err, compileResult.Stderr)
 	}
-	runResult, err := engine.Run(context.Background(), ContainerCommand{
+	if err := verifyStaticLinuxAMD64Executable(filepath.Join(workspace, "program")); err != nil {
+		t.Fatalf("compiler produced a non-static executable: %v", err)
+	}
+	runResult, err := runtimeEngine.Run(context.Background(), ContainerCommand{
 		Name: "ascendany-integration-run", Workspace: workspace, RuntimeRoot: runtimeRoot, ReadOnlyWorkspace: true,
 		Executable: "/workspace/program", Stdin: bytes.NewBufferString("isolated\n"),
 		Timeout: 5 * time.Second, MemoryLimitBytes: 64 << 20, OutputLimitBytes: 1024,
@@ -210,17 +209,10 @@ int main() { std::string value; std::getline(std::cin, value); std::cout << valu
 	}
 }
 
-func TestPodmanAttackCorpusWhenImageConfigured(t *testing.T) {
-	image := os.Getenv("ASCENDANY_TEST_JUDGE_IMAGE")
-	if image == "" {
-		t.Skip("ASCENDANY_TEST_JUDGE_IMAGE is not configured")
-	}
-	engine, err := NewPodmanEngine("/usr/bin/podman", image, "/var/empty")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestPodmanAttackCorpusWithSeparateImagesWhenConfigured(t *testing.T) {
+	compilerEngine, runtimeEngine := configuredJudgeEngines(t)
 	t.Run("network credentials and host artifacts", func(t *testing.T) {
-		result := compileAndRunCPP(t, engine, "isolation", `
+		result := compileAndRunCPP(t, compilerEngine, runtimeEngine, "isolation", `
 #include <arpa/inet.h>
 #include <cstdlib>
 #include <iostream>
@@ -243,13 +235,13 @@ int main() {
 		}
 	})
 	t.Run("CPU timeout", func(t *testing.T) {
-		result := compileAndRunCPP(t, engine, "timeout", `int main() { for (;;) {} }`, 64<<20, 1024, 250*time.Millisecond)
+		result := compileAndRunCPP(t, compilerEngine, runtimeEngine, "timeout", `int main() { for (;;) {} }`, 64<<20, 1024, 250*time.Millisecond)
 		if !result.TimedOut {
 			t.Fatalf("timeout result = %#v", result)
 		}
 	})
 	t.Run("output limit", func(t *testing.T) {
-		result := compileAndRunCPP(t, engine, "output", `
+		result := compileAndRunCPP(t, compilerEngine, runtimeEngine, "output", `
 #include <iostream>
 int main() { for (;;) std::cout << "0123456789"; }
 `, 64<<20, 1024, 2*time.Second)
@@ -258,7 +250,7 @@ int main() { for (;;) std::cout << "0123456789"; }
 		}
 	})
 	t.Run("memory limit", func(t *testing.T) {
-		result := compileAndRunCPP(t, engine, "memory", `
+		result := compileAndRunCPP(t, compilerEngine, runtimeEngine, "memory", `
 #include <cstddef>
 int main() {
   constexpr std::size_t size = 256UL * 1024UL * 1024UL;
@@ -271,7 +263,7 @@ int main() {
 		}
 	})
 	t.Run("process limit", func(t *testing.T) {
-		result := compileAndRunCPP(t, engine, "pids", `
+		result := compileAndRunCPP(t, compilerEngine, runtimeEngine, "pids", `
 #include <csignal>
 #include <iostream>
 #include <sys/wait.h>
@@ -298,7 +290,7 @@ int main() {
 	})
 }
 
-func compileAndRunCPP(t *testing.T, engine *PodmanEngine, name, source string, memory, output int64, timeout time.Duration) ContainerResult {
+func compileAndRunCPP(t *testing.T, compilerEngine, runtimeEngine *PodmanEngine, name, source string, memory, output int64, timeout time.Duration) ContainerResult {
 	t.Helper()
 	workspace := t.TempDir()
 	if err := os.Chmod(workspace, 0o700); err != nil {
@@ -308,16 +300,19 @@ func compileAndRunCPP(t *testing.T, engine *PodmanEngine, name, source string, m
 	if err := os.WriteFile(filepath.Join(workspace, "main.cpp"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	compileResult, err := engine.Run(context.Background(), ContainerCommand{
+	compileResult, err := compilerEngine.Run(context.Background(), ContainerCommand{
 		Name: "ascendany-attack-" + name + "-compile", Workspace: workspace, RuntimeRoot: runtimeRoot,
-		Executable: cpp20Compiler, Arguments: []string{"-std=c++20", "-O2", "-o", "/workspace/program", "/workspace/main.cpp"},
+		Executable: cpp20Compiler, Arguments: []string{"-std=c++20", "-O2", "-static", "-o", "/workspace/program", "/workspace/main.cpp"},
 		Timeout: 30 * time.Second, MemoryLimitBytes: 512 << 20, OutputLimitBytes: 1 << 20,
 		PIDsLimit: 64, CPUs: 1, TemporaryLimitBytes: 64 << 20,
 	})
 	if err != nil || compileResult.ExitCode != 0 {
 		t.Fatalf("compile result=%#v error=%v stderr=%s", compileResult, err, compileResult.Stderr)
 	}
-	runResult, err := engine.Run(context.Background(), ContainerCommand{
+	if err := verifyStaticLinuxAMD64Executable(filepath.Join(workspace, "program")); err != nil {
+		t.Fatalf("compiler produced a non-static executable: %v", err)
+	}
+	runResult, err := runtimeEngine.Run(context.Background(), ContainerCommand{
 		Name: "ascendany-attack-" + name + "-run", Workspace: workspace, RuntimeRoot: runtimeRoot, ReadOnlyWorkspace: true,
 		Executable: "/workspace/program", Timeout: timeout, MemoryLimitBytes: memory,
 		OutputLimitBytes: output, PIDsLimit: 16, CPUs: 1, TemporaryLimitBytes: 16 << 20,
@@ -326,6 +321,27 @@ func compileAndRunCPP(t *testing.T, engine *PodmanEngine, name, source string, m
 		t.Fatal(err)
 	}
 	return runResult
+}
+
+func configuredJudgeEngines(t *testing.T) (*PodmanEngine, *PodmanEngine) {
+	t.Helper()
+	compilerImage := os.Getenv("ASCENDANY_TEST_JUDGE_COMPILER_IMAGE")
+	runtimeImage := os.Getenv("ASCENDANY_TEST_JUDGE_RUNTIME_IMAGE")
+	if compilerImage == "" || runtimeImage == "" {
+		t.Skip("ASCENDANY_TEST_JUDGE_COMPILER_IMAGE and ASCENDANY_TEST_JUDGE_RUNTIME_IMAGE are required")
+	}
+	if compilerImage == runtimeImage {
+		t.Fatal("compiler and runtime image identities must differ")
+	}
+	compilerEngine, err := NewPodmanEngine("/usr/bin/podman", compilerImage, "/var/empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeEngine, err := NewPodmanEngine("/usr/bin/podman", runtimeImage, "/var/empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compilerEngine, runtimeEngine
 }
 
 func makeRuntimeRoot(t *testing.T) string {

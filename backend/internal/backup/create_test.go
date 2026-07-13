@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kkkzbh/AscendAny/backend/internal/catalogpublication"
 )
 
 type fakeSnapshot struct {
@@ -63,10 +65,12 @@ func TestCreatePublishesOneBoundAndVerifiableBundle(t *testing.T) {
 	zstd := requireZstd(t)
 	config, artifact := testCreateConfig(t, zstd)
 	snapshot := &fakeSnapshot{data: databaseSnapshot{
-		ID:                  "00000003-0000001B-1",
-		Artifacts:           []ArtifactDescriptor{artifact},
-		Migrations:          testMigrations(),
-		RecommendationModel: testRecommendationModelDescriptor(t),
+		ID:                             "00000003-0000001B-1",
+		Artifacts:                      []ArtifactDescriptor{artifact},
+		Migrations:                     testMigrations(),
+		KnowledgeCatalogPublicationIDs: []int64{1},
+		KnowledgeCatalogPublications:   []catalogpublication.Receipt{testCatalogPublication(t, 1)},
+		RecommendationModel:            testRecommendationModelDescriptor(t),
 	}}
 	commands := &fakeCommands{dumpBytes: []byte("fake custom dump fixture")}
 	result, err := createWithDependencies(context.Background(), config, createDependencies{
@@ -83,7 +87,8 @@ func TestCreatePublishesOneBoundAndVerifiableBundle(t *testing.T) {
 	if result.BackupID != "backup-20260710T170203Z-0001020304050607" {
 		t.Fatalf("backup id = %q", result.BackupID)
 	}
-	if !snapshot.closed || !commands.listed || result.ArtifactCount != 1 || !sha256Pattern.MatchString(result.ManifestSHA256) {
+	if !snapshot.closed || !commands.listed || result.ArtifactCount != 1 || result.CatalogReceiptCount != 1 ||
+		!sha256Pattern.MatchString(result.ManifestSHA256) {
 		t.Fatalf("result=%#v snapshot.closed=%v commands.listed=%v", result, snapshot.closed, commands.listed)
 	}
 	if commands.pgpassPath != filepath.Join(config.RuntimeRoot, backupPGPassFilename) {
@@ -110,7 +115,13 @@ func TestCreatePublishesOneBoundAndVerifiableBundle(t *testing.T) {
 	if !bundleInfo.IsDir() || bundleInfo.Mode().Perm() != backupBundleMode {
 		t.Fatalf("published bundle mode = %04o", bundleInfo.Mode().Perm())
 	}
-	for _, name := range []string{ArtifactArchiveFilename, DatabaseDumpFilename, ManifestDigestFilename, ManifestFilename} {
+	for _, name := range []string{
+		ArtifactArchiveFilename,
+		CatalogReceiptArchiveFilename,
+		DatabaseDumpFilename,
+		ManifestDigestFilename,
+		ManifestFilename,
+	} {
 		info, err := os.Lstat(filepath.Join(result.BundlePath, name))
 		if err != nil {
 			t.Fatal(err)
@@ -127,7 +138,7 @@ func TestCreatePublishesOneBoundAndVerifiableBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.ManifestSHA256 != result.ManifestSHA256 || verified.ArtifactCount != 1 {
+	if verified.ManifestSHA256 != result.ManifestSHA256 || verified.ArtifactCount != 1 || verified.CatalogReceiptCount != 1 {
 		t.Fatalf("verified = %#v", verified)
 	}
 	manifest, _, err := loadManifest(result.BundlePath, result.BackupID)
@@ -137,13 +148,19 @@ func TestCreatePublishesOneBoundAndVerifiableBundle(t *testing.T) {
 	if !manifest.CreatedAt.Equal(time.Date(2026, 7, 10, 17, 2, 3, 0, time.UTC)) || manifest.Artifacts.TotalBytes != artifact.SizeBytes {
 		t.Fatalf("manifest = %#v", manifest)
 	}
+	if len(manifest.Database.KnowledgeCatalogPublicationIDs) != 1 ||
+		manifest.Database.KnowledgeCatalogPublicationIDs[0] != "1" ||
+		manifest.CatalogPublicationReceipts.Count != 1 ||
+		manifest.CatalogPublicationReceipts.Entries[0].PublicationID != "1" {
+		t.Fatalf("catalog receipt manifest = %#v", manifest.CatalogPublicationReceipts)
+	}
 }
 
 func TestCreateFailureRemovesStagingAndNeverPublishes(t *testing.T) {
 	t.Parallel()
 	zstd := requireZstd(t)
 	config, artifact := testCreateConfig(t, zstd)
-	snapshot := &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}
+	snapshot := &fakeSnapshot{data: testDatabaseSnapshot(t, "snapshot", artifact)}
 	_, err := createWithDependencies(context.Background(), config, createDependencies{
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
@@ -171,6 +188,29 @@ func TestCreateFailureRemovesStagingAndNeverPublishes(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsSnapshotWithoutCatalogPublicationBeforeDump(t *testing.T) {
+	t.Parallel()
+	zstd := requireZstd(t)
+	config, artifact := testCreateConfig(t, zstd)
+	snapshotData := testDatabaseSnapshot(t, "snapshot", artifact)
+	snapshotData.KnowledgeCatalogPublicationIDs = nil
+	commands := &fakeCommands{dumpBytes: []byte("dump must not run")}
+	_, err := createWithDependencies(context.Background(), config, createDependencies{
+		clock:  time.Now,
+		random: bytes.NewReader(make([]byte, 8)),
+		openSnapshot: func(context.Context, CreateConfig) (snapshotHandle, error) {
+			return &fakeSnapshot{data: snapshotData}, nil
+		},
+		commands: commands,
+	})
+	if err == nil || !strings.Contains(err.Error(), "at least one immutable knowledge catalog publication") {
+		t.Fatalf("error = %v", err)
+	}
+	if commands.pgpassPath != "" {
+		t.Fatalf("database dump ran with pgpass %q", commands.pgpassPath)
+	}
+}
+
 func TestCreateRemovesExactCrashStagingBeforeOpeningSnapshot(t *testing.T) {
 	t.Parallel()
 	zstd := requireZstd(t)
@@ -189,9 +229,7 @@ func TestCreateRemovesExactCrashStagingBeforeOpeningSnapshot(t *testing.T) {
 			if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("stale staging still exists when snapshot opens: %v", err)
 			}
-			return &fakeSnapshot{data: databaseSnapshot{
-				ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t),
-			}}, nil
+			return &fakeSnapshot{data: testDatabaseSnapshot(t, "snapshot", artifact)}, nil
 		},
 		commands: &fakeCommands{dumpBytes: []byte("dump")},
 	})
@@ -307,7 +345,7 @@ func TestVerifyRejectsPayloadTamperingBeforeArchiveDecode(t *testing.T) {
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
 		openSnapshot: func(context.Context, CreateConfig) (snapshotHandle, error) {
-			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}, nil
+			return &fakeSnapshot{data: testDatabaseSnapshot(t, "snapshot", artifact)}, nil
 		},
 		commands: commands,
 	})
@@ -340,7 +378,7 @@ func TestVerifyRejectsPrivateModeAfterBundlePublication(t *testing.T) {
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
 		openSnapshot: func(context.Context, CreateConfig) (snapshotHandle, error) {
-			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}, nil
+			return &fakeSnapshot{data: testDatabaseSnapshot(t, "snapshot", artifact)}, nil
 		},
 		commands: commands,
 	})
@@ -369,7 +407,7 @@ func TestCreateRejectsBackupRootWithoutReaderGroupTraversal(t *testing.T) {
 		clock:  func() time.Time { return time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC) },
 		random: bytes.NewReader(make([]byte, 8)),
 		openSnapshot: func(context.Context, CreateConfig) (snapshotHandle, error) {
-			return &fakeSnapshot{data: databaseSnapshot{ID: "snapshot", Artifacts: []ArtifactDescriptor{artifact}, Migrations: testMigrations(), RecommendationModel: testRecommendationModelDescriptor(t)}}, nil
+			return &fakeSnapshot{data: testDatabaseSnapshot(t, "snapshot", artifact)}, nil
 		},
 		commands: &fakeCommands{dumpBytes: []byte("dump")},
 	})
@@ -386,8 +424,9 @@ func testCreateConfig(t *testing.T, zstd string) (CreateConfig, ArtifactDescript
 	}
 	backupRoot := filepath.Join(root, "backups")
 	artifactRoot := filepath.Join(root, "artifacts")
+	catalogReceiptRoot := filepath.Join(root, "catalog-receipts")
 	runtimeRoot := filepath.Join(root, "runtime")
-	for _, directory := range []string{backupRoot, artifactRoot, runtimeRoot} {
+	for _, directory := range []string{backupRoot, artifactRoot, catalogReceiptRoot, runtimeRoot} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -396,6 +435,16 @@ func testCreateConfig(t *testing.T, zstd string) (CreateConfig, ArtifactDescript
 		t.Fatal(err)
 	}
 	if err := os.Chmod(artifactRoot, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(catalogReceiptRoot, catalogReceiptDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	receipt := testCatalogReceiptBytes(t, 1)
+	if err := os.WriteFile(filepath.Join(catalogReceiptRoot, "1.json"), receipt, catalogReceiptFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(catalogReceiptRoot, "1.json"), catalogReceiptFileMode); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(artifactRoot, "sha256"), 0o750); err != nil {
@@ -422,21 +471,34 @@ func testCreateConfig(t *testing.T, zstd string) (CreateConfig, ArtifactDescript
 		t.Fatal(err)
 	}
 	return CreateConfig{
-		DatabaseURL:      "postgresql://ascendany_backup_login@127.0.0.1:5432/ascendany_v2?sslmode=disable",
-		DatabasePassword: strings.Repeat("p", 24),
-		ArtifactRoot:     artifactRoot,
-		BackupRoot:       backupRoot,
-		RuntimeRoot:      runtimeRoot,
-		RetainDaily:      14,
-		RetainWeekly:     8,
-		ConnectTimeout:   time.Second,
-		CommandTimeout:   time.Minute,
+		DatabaseURL:        "postgresql://ascendany_backup_login@127.0.0.1:5432/ascendany_v2?sslmode=disable",
+		DatabasePassword:   strings.Repeat("p", 24),
+		ArtifactRoot:       artifactRoot,
+		CatalogReceiptRoot: catalogReceiptRoot,
+		BackupRoot:         backupRoot,
+		RuntimeRoot:        runtimeRoot,
+		RetainDaily:        14,
+		RetainWeekly:       8,
+		ConnectTimeout:     time.Second,
+		CommandTimeout:     time.Minute,
 		Tools: ToolConfig{
 			PGDump:    "/usr/bin/pg_dump",
 			PGRestore: "/usr/bin/pg_restore",
 			Zstd:      zstd,
 		},
 	}, ArtifactDescriptor{SHA256: digestHex, SizeBytes: int64(len(contents)), StorageKey: "sha256/" + digestHex[:2] + "/" + digestHex}
+}
+
+func testDatabaseSnapshot(t *testing.T, id string, artifact ArtifactDescriptor) databaseSnapshot {
+	t.Helper()
+	return databaseSnapshot{
+		ID:                             id,
+		Artifacts:                      []ArtifactDescriptor{artifact},
+		Migrations:                     testMigrations(),
+		KnowledgeCatalogPublicationIDs: []int64{1},
+		KnowledgeCatalogPublications:   []catalogpublication.Receipt{testCatalogPublication(t, 1)},
+		RecommendationModel:            testRecommendationModelDescriptor(t),
+	}
 }
 
 func testMigrations() []MigrationDescriptor {

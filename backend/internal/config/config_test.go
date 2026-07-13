@@ -1,6 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"testing"
@@ -8,9 +12,10 @@ import (
 )
 
 const (
-	databasePasswordPath = "/run/credentials/ascendany/db_password"
-	jwtSigningKeyPath    = "/run/credentials/ascendany/jwt_signing_key"
-	passwordPepperPath   = "/run/credentials/ascendany/password_pepper"
+	databasePasswordPath         = "/run/credentials/ascendany/db_password"
+	jwtSigningPrivateKeyPath     = "/run/credentials/ascendany/jwt_signing_private_key"
+	jwtVerificationPublicKeyPath = "/run/credentials/ascendany/jwt_verification_public_key"
+	passwordPepperPath           = "/run/credentials/ascendany/password_pepper"
 )
 
 func TestLoadRequiresSecurityAndDatabaseSettings(t *testing.T) {
@@ -42,13 +47,13 @@ func TestLoadRequiresSecurityAndDatabaseSettings(t *testing.T) {
 			want: "ASCENDANY_DATABASE_PASSWORD_FILE is required",
 		},
 		{
-			name: "JWT signing key file",
+			name: "JWT signing private key file",
 			env: map[string]string{
 				"ASCENDANY_DATABASE_URL":           "postgres://ascendany@127.0.0.1:6432/ascendany",
 				"ASCENDANY_DATABASE_POOL_MODE":     "transaction",
 				"ASCENDANY_DATABASE_PASSWORD_FILE": databasePasswordPath,
 			},
-			want: "ASCENDANY_JWT_SIGNING_KEY_FILE is required",
+			want: "ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE is required",
 		},
 		{
 			name: "password pepper file",
@@ -145,20 +150,35 @@ func TestLoadRequiresSecurityAndDatabaseSettings(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsWeakJWTSigningKey(t *testing.T) {
+func TestLoadRejectsMalformedJWTSigningPrivateKey(t *testing.T) {
 	t.Parallel()
 
 	env := validEnvironment()
 	readFile := func(path string) ([]byte, error) {
-		if path == jwtSigningKeyPath {
+		if path == jwtSigningPrivateKeyPath {
 			return []byte("development-secret"), nil
 		}
 		return testReadFile(path)
 	}
 
 	_, err := Load(mapLookup(env), readFile)
-	if err == nil || !strings.Contains(err.Error(), "at least 32 bytes") {
-		t.Fatalf("Load() error = %v, want weak-secret error", err)
+	if err == nil || !strings.Contains(err.Error(), "canonical PKCS#8 Ed25519 PRIVATE KEY PEM") {
+		t.Fatalf("Load() error = %v, want private-key format error", err)
+	}
+}
+
+func TestLoadRejectsNoncanonicalJWTSigningPrivateKeyPEM(t *testing.T) {
+	t.Parallel()
+	env := validEnvironment()
+	readFile := func(path string) ([]byte, error) {
+		if path == jwtSigningPrivateKeyPath {
+			return append(testJWTSigningPrivateKeyPEM(), '\n'), nil
+		}
+		return testReadFile(path)
+	}
+	_, err := Load(mapLookup(env), readFile)
+	if err == nil || !strings.Contains(err.Error(), "one canonical PKCS#8 Ed25519 PRIVATE KEY PEM block") {
+		t.Fatalf("Load() error = %v, want canonical private-key encoding error", err)
 	}
 }
 
@@ -185,7 +205,7 @@ func TestLoadAdminBootstrapRequiresOnlyOwnedConfiguration(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":             "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":       "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":   databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "6",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "7",
 		"ASCENDANY_PASSWORD_PEPPER_FILE":     passwordPepperPath,
 		"ASCENDANY_DATABASE_MIN_CONNECTIONS": "0",
 		"ASCENDANY_DATABASE_MAX_CONNECTIONS": "4",
@@ -195,7 +215,7 @@ func TestLoadAdminBootstrapRequiresOnlyOwnedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAdminBootstrap() error = %v", err)
 	}
-	if got.Database.ExpectedSchemaVersion != 6 || got.Database.MinConnections != 0 ||
+	if got.Database.ExpectedSchemaVersion != 7 || got.Database.MinConnections != 0 ||
 		got.Database.MaxConnections != 4 || got.Database.HealthTimeout != 750*time.Millisecond {
 		t.Fatalf("bootstrap database config = %#v", got.Database)
 	}
@@ -210,7 +230,7 @@ func TestLoadAdminBootstrapRequiresPasswordPepper(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":            "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":      "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":  databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION": "6",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION": "7",
 	}
 	_, err := LoadAdminBootstrap(mapLookup(env), testReadFile)
 	if err == nil || err.Error() != "ASCENDANY_PASSWORD_PEPPER_FILE is required" {
@@ -224,13 +244,15 @@ func TestLoadModelActivationRequiresOnlyOwnedConfiguration(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":                      "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":                "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":            databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":           "6",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":           "7",
 		"ASCENDANY_DATABASE_CONNECT_TIMEOUT":          "4s",
 		"ASCENDANY_DATABASE_HEALTH_TIMEOUT":           "750ms",
 		"ASCENDANY_RECOMMENDATION_MODEL_PATH":         "/opt/ascendany/v2/models/recommendation-model.json",
 		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":       strings.Repeat("a", 64),
 		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE":      "production",
-		"ASCENDANY_JWT_SIGNING_KEY_FILE":              "/must/not/be/read",
+		"ASCENDANY_KNOWLEDGE_CATALOG_PATH":            "/opt/ascendany/v2/models/recommendation-knowledge-catalog.json",
+		"ASCENDANY_KNOWLEDGE_CATALOG_SHA256":          strings.Repeat("b", 64),
+		"ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE":      "/must/not/be/read",
 		"ASCENDANY_PASSWORD_PEPPER_FILE":              "/must/not/be/read",
 		"ASCENDANY_IMPORT_WORKER_OWNER":               "must-not-be-read",
 		"ASCENDANY_DATABASE_MAX_CONNECTIONS":          "999",
@@ -248,13 +270,15 @@ func TestLoadModelActivationRequiresOnlyOwnedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadModelActivation() error = %v", err)
 	}
-	if got.Database.ExpectedSchemaVersion != 6 || got.Database.MaxConnections != 1 ||
+	if got.Database.ExpectedSchemaVersion != 7 || got.Database.MaxConnections != 1 ||
 		got.Database.MinConnections != 0 || got.Database.ConnectTimeout != 4*time.Second ||
 		got.Database.HealthTimeout != 750*time.Millisecond || got.Database.Password != strings.Repeat("d", minimumDatabasePasswordBytes) {
 		t.Fatalf("activation database config = %#v", got.Database)
 	}
 	if got.Recommendation.ModelPath != "/opt/ascendany/v2/models/recommendation-model.json" ||
-		got.Recommendation.ModelSHA256 != strings.Repeat("a", 64) || got.Recommendation.ModelPurpose != "production" {
+		got.Recommendation.ModelSHA256 != strings.Repeat("a", 64) || got.Recommendation.ModelPurpose != "production" ||
+		got.Recommendation.CatalogPath != "/opt/ascendany/v2/models/recommendation-knowledge-catalog.json" ||
+		got.Recommendation.CatalogSHA256 != strings.Repeat("b", 64) {
 		t.Fatalf("activation model config = %#v", got.Recommendation)
 	}
 }
@@ -264,14 +288,144 @@ func TestLoadModelActivationRequiresOnlyDatabaseCredential(t *testing.T) {
 	env := map[string]string{
 		"ASCENDANY_DATABASE_URL":                 "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":           "transaction",
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":      "6",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":      "7",
 		"ASCENDANY_RECOMMENDATION_MODEL_PATH":    "/opt/ascendany/v2/models/recommendation-model.json",
 		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":  strings.Repeat("a", 64),
 		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE": "production",
+		"ASCENDANY_KNOWLEDGE_CATALOG_PATH":       "/opt/ascendany/v2/models/recommendation-knowledge-catalog.json",
+		"ASCENDANY_KNOWLEDGE_CATALOG_SHA256":     strings.Repeat("b", 64),
 	}
 	_, err := LoadModelActivation(mapLookup(env), testReadFile)
 	if err == nil || err.Error() != "ASCENDANY_DATABASE_PASSWORD_FILE is required" {
 		t.Fatalf("LoadModelActivation() error = %v", err)
+	}
+}
+
+func TestLoadCatalogPublicationRequiresOnlyOwnedConfiguration(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{
+		"ASCENDANY_DATABASE_URL":                     "postgres://ascendany@127.0.0.1:6432/ascendany",
+		"ASCENDANY_DATABASE_POOL_MODE":               "transaction",
+		"ASCENDANY_DATABASE_PASSWORD_FILE":           databasePasswordPath,
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "7",
+		"ASCENDANY_DATABASE_CONNECT_TIMEOUT":         "4s",
+		"ASCENDANY_DATABASE_HEALTH_TIMEOUT":          "750ms",
+		"ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE": jwtVerificationPublicKeyPath,
+		"ASCENDANY_AUTH_ISSUER":                      "ascendany",
+		"ASCENDANY_AUTH_AUDIENCE":                    "ascendany-v2",
+		"ASCENDANY_RECOMMENDATION_MODEL_PATH":        "/opt/ascendany/v2/models/recommendation-model.json",
+		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":      strings.Repeat("a", 64),
+		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE":     "production",
+		"ASCENDANY_KNOWLEDGE_CATALOG_PATH":           "/opt/ascendany/v2/models/recommendation-knowledge-catalog.json",
+		"ASCENDANY_KNOWLEDGE_CATALOG_SHA256":         strings.Repeat("b", 64),
+		"ASCENDANY_PASSWORD_PEPPER_FILE":             "/must/not/be/read",
+		"ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE":     "/must/not/be-read",
+		"ASCENDANY_AUTH_ACCESS_TTL":                  "must-not-be-read",
+		"ASCENDANY_AUTH_REFRESH_TTL":                 "must-not-be-read",
+		"ASCENDANY_AUTH_ALLOWED_ORIGINS":             "must-not-be-read",
+		"ASCENDANY_DATABASE_MAX_CONNECTIONS":         "999",
+		"ASCENDANY_DATABASE_MIN_CONNECTIONS":         "999",
+		"ASCENDANY_IMPORT_WORKER_OWNER":              "must-not-be-read",
+	}
+	readFile := func(path string) ([]byte, error) {
+		if path != databasePasswordPath && path != jwtVerificationPublicKeyPath {
+			t.Fatalf("LoadCatalogPublication read unowned credential %q", path)
+		}
+		return testReadFile(path)
+	}
+	got, err := LoadCatalogPublication(mapLookup(env), readFile)
+	if err != nil {
+		t.Fatalf("LoadCatalogPublication() error = %v", err)
+	}
+	if got.Database.ExpectedSchemaVersion != 7 || got.Database.MaxConnections != 1 ||
+		got.Database.MinConnections != 0 || got.Database.ConnectTimeout != 4*time.Second ||
+		got.Database.HealthTimeout != 750*time.Millisecond {
+		t.Fatalf("publication database config = %#v", got.Database)
+	}
+	if got.Recommendation.ModelSHA256 != strings.Repeat("a", 64) ||
+		got.Recommendation.CatalogSHA256 != strings.Repeat("b", 64) ||
+		got.Recommendation.CatalogPath != "/opt/ascendany/v2/models/recommendation-knowledge-catalog.json" {
+		t.Fatalf("publication artifact config = %#v", got.Recommendation)
+	}
+	wantVerificationKey := testJWTSigningPrivateKey().Public().(ed25519.PublicKey)
+	if !bytes.Equal(got.Authentication.JWTVerificationPublicKey, wantVerificationKey) ||
+		got.Authentication.Issuer != "ascendany" || got.Authentication.Audience != "ascendany-v2" {
+		t.Fatalf("publication authentication config = %#v", got.Authentication)
+	}
+}
+
+func TestLoadCatalogPublicationRequiresVerifierConfiguration(t *testing.T) {
+	t.Parallel()
+	base := map[string]string{
+		"ASCENDANY_DATABASE_URL":                     "postgres://ascendany@127.0.0.1:6432/ascendany",
+		"ASCENDANY_DATABASE_POOL_MODE":               "transaction",
+		"ASCENDANY_DATABASE_PASSWORD_FILE":           databasePasswordPath,
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "7",
+		"ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE": jwtVerificationPublicKeyPath,
+		"ASCENDANY_AUTH_ISSUER":                      "ascendany",
+		"ASCENDANY_AUTH_AUDIENCE":                    "ascendany-v2",
+		"ASCENDANY_RECOMMENDATION_MODEL_PATH":        "/opt/ascendany/v2/models/recommendation-model.json",
+		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":      strings.Repeat("a", 64),
+		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE":     "production",
+		"ASCENDANY_KNOWLEDGE_CATALOG_PATH":           "/opt/ascendany/v2/models/recommendation-knowledge-catalog.json",
+		"ASCENDANY_KNOWLEDGE_CATALOG_SHA256":         strings.Repeat("b", 64),
+	}
+	for _, variable := range []string{
+		"ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE",
+		"ASCENDANY_AUTH_ISSUER",
+		"ASCENDANY_AUTH_AUDIENCE",
+	} {
+		t.Run(variable, func(t *testing.T) {
+			environment := make(map[string]string, len(base))
+			for key, value := range base {
+				environment[key] = value
+			}
+			delete(environment, variable)
+			if _, err := LoadCatalogPublication(mapLookup(environment), testReadFile); err == nil {
+				t.Fatalf("LoadCatalogPublication() accepted missing %s", variable)
+			}
+		})
+	}
+}
+
+func TestLoadCatalogPublicationRejectsPrivateOrNoncanonicalVerificationKey(t *testing.T) {
+	t.Parallel()
+	base := map[string]string{
+		"ASCENDANY_DATABASE_URL":                     "postgres://ascendany@127.0.0.1:6432/ascendany",
+		"ASCENDANY_DATABASE_POOL_MODE":               "transaction",
+		"ASCENDANY_DATABASE_PASSWORD_FILE":           databasePasswordPath,
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "7",
+		"ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE": jwtVerificationPublicKeyPath,
+		"ASCENDANY_AUTH_ISSUER":                      "ascendany",
+		"ASCENDANY_AUTH_AUDIENCE":                    "ascendany-v2",
+		"ASCENDANY_RECOMMENDATION_MODEL_PATH":        "/opt/ascendany/v2/models/recommendation-model.json",
+		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":      strings.Repeat("a", 64),
+		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE":     "production",
+		"ASCENDANY_KNOWLEDGE_CATALOG_PATH":           "/opt/ascendany/v2/models/recommendation-knowledge-catalog.json",
+		"ASCENDANY_KNOWLEDGE_CATALOG_SHA256":         strings.Repeat("b", 64),
+	}
+	tests := []struct {
+		name string
+		key  []byte
+		want string
+	}{
+		{name: "private capability", key: testJWTSigningPrivateKeyPEM(), want: "canonical PKIX Ed25519 PUBLIC KEY PEM"},
+		{name: "noncanonical public PEM", key: append(testJWTVerificationPublicKeyPEM(), '\n'), want: "one canonical PKIX Ed25519 PUBLIC KEY PEM block"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			readFile := func(path string) ([]byte, error) {
+				if path == jwtVerificationPublicKeyPath {
+					return test.key, nil
+				}
+				return testReadFile(path)
+			}
+			_, err := LoadCatalogPublication(mapLookup(base), readFile)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LoadCatalogPublication() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -308,14 +462,14 @@ func TestLoadReturnsValidatedConfiguration(t *testing.T) {
 	if got.Database.HealthTimeout != 750*time.Millisecond {
 		t.Fatalf("health timeout = %s", got.Database.HealthTimeout)
 	}
-	if got.Database.ExpectedSchemaVersion != 6 {
+	if got.Database.ExpectedSchemaVersion != 7 {
 		t.Fatalf("schema version = %d", got.Database.ExpectedSchemaVersion)
 	}
 	if got.Database.Password != strings.Repeat("d", minimumDatabasePasswordBytes) {
 		t.Fatal("database password was not loaded from its credential file")
 	}
-	if got.Auth.JWTSigningKey != strings.Repeat("s", minimumJWTSecretBytes) {
-		t.Fatal("JWT signing key was not loaded from its credential file")
+	if !bytes.Equal(got.Auth.JWTSigningPrivateKey, testJWTSigningPrivateKey()) {
+		t.Fatal("JWT signing private key was not loaded from its credential file")
 	}
 	if got.Auth.PasswordPepper != strings.Repeat("p", minimumPasswordPepperBytes) {
 		t.Fatal("password pepper was not loaded from its credential file")
@@ -366,7 +520,9 @@ func TestLoadReturnsValidatedConfiguration(t *testing.T) {
 		t.Fatalf("chat agent runtime = %#v", got.ChatAgent)
 	}
 	if got.Recommendation.ModelPath != "/opt/ascendany/current/models/recommendation-model.json" ||
-		got.Recommendation.ModelSHA256 != strings.Repeat("a", 64) || got.Recommendation.ModelPurpose != "production" {
+		got.Recommendation.ModelSHA256 != strings.Repeat("a", 64) || got.Recommendation.ModelPurpose != "production" ||
+		got.Recommendation.CatalogPath != "/opt/ascendany/current/models/recommendation-knowledge-catalog.json" ||
+		got.Recommendation.CatalogSHA256 != strings.Repeat("b", 64) {
 		t.Fatalf("recommendation runtime = %#v", got.Recommendation)
 	}
 	if got.Judge.SocketDirectory != "/run/ascendany-judge" || got.Judge.WorkerUser != "ascendany-judge" ||
@@ -432,6 +588,8 @@ func TestLoadRequiresRuntimeWorkerAndLimitSettings(t *testing.T) {
 		"ASCENDANY_RECOMMENDATION_MODEL_PATH",
 		"ASCENDANY_RECOMMENDATION_MODEL_SHA256",
 		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE",
+		"ASCENDANY_KNOWLEDGE_CATALOG_PATH",
+		"ASCENDANY_KNOWLEDGE_CATALOG_SHA256",
 		"ASCENDANY_JUDGE_SOCKET_DIRECTORY",
 		"ASCENDANY_JUDGE_WORKER_USER",
 		"ASCENDANY_JUDGE_SYSTEMCTL_PATH",
@@ -654,6 +812,8 @@ func TestLoadRejectsInvalidWorkerAndLimitSettings(t *testing.T) {
 		{name: "uppercase recommendation digest", key: "ASCENDANY_RECOMMENDATION_MODEL_SHA256", value: strings.Repeat("A", 64), want: "lowercase SHA-256"},
 		{name: "short recommendation digest", key: "ASCENDANY_RECOMMENDATION_MODEL_SHA256", value: strings.Repeat("a", 63), want: "lowercase SHA-256"},
 		{name: "invalid recommendation purpose", key: "ASCENDANY_RECOMMENDATION_MODEL_PURPOSE", value: "test", want: "production or acceptance_test"},
+		{name: "relative knowledge catalog", key: "ASCENDANY_KNOWLEDGE_CATALOG_PATH", value: "models/recommendation-knowledge-catalog.json", want: "absolute path"},
+		{name: "uppercase knowledge catalog digest", key: "ASCENDANY_KNOWLEDGE_CATALOG_SHA256", value: strings.Repeat("B", 64), want: "lowercase SHA-256"},
 		{name: "relative judge socket", key: "ASCENDANY_JUDGE_SOCKET_DIRECTORY", value: "run/judge", want: "absolute path"},
 		{name: "long judge socket", key: "ASCENDANY_JUDGE_SOCKET_DIRECTORY", value: "/run/" + strings.Repeat("a", 80), want: "socket path limit"},
 		{name: "invalid judge worker user", key: "ASCENDANY_JUDGE_WORKER_USER", value: "AscendAny Judge", want: "canonical system user"},
@@ -751,7 +911,7 @@ func validEnvironment() map[string]string {
 		"ASCENDANY_DATABASE_URL":                           "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":                     "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":                 databasePasswordPath,
-		"ASCENDANY_JWT_SIGNING_KEY_FILE":                   jwtSigningKeyPath,
+		"ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE":           jwtSigningPrivateKeyPath,
 		"ASCENDANY_PASSWORD_PEPPER_FILE":                   passwordPepperPath,
 		"ASCENDANY_AUTH_ISSUER":                            "ascendany",
 		"ASCENDANY_AUTH_AUDIENCE":                          "ascendany-v2",
@@ -760,7 +920,7 @@ func validEnvironment() map[string]string {
 		"ASCENDANY_AUTH_REFRESH_TTL":                       "720h",
 		"ASCENDANY_HTTP_TRUSTED_PROXY_CIDRS":               "127.0.0.1/32",
 		"ASCENDANY_HTTP_CLIENT_IP_HEADER":                  "CF-Connecting-IP",
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":                "6",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":                "7",
 		"ASCENDANY_ARTIFACT_ROOT":                          "/var/lib/ascendany/artifacts",
 		"ASCENDANY_ARTIFACT_MAX_BYTES":                     "134217728",
 		"ASCENDANY_ARTIFACT_ORPHAN_MIN_AGE":                "24h",
@@ -798,6 +958,8 @@ func validEnvironment() map[string]string {
 		"ASCENDANY_RECOMMENDATION_MODEL_PATH":              "/opt/ascendany/current/models/recommendation-model.json",
 		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":            strings.Repeat("a", 64),
 		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE":           "production",
+		"ASCENDANY_KNOWLEDGE_CATALOG_PATH":                 "/opt/ascendany/current/models/recommendation-knowledge-catalog.json",
+		"ASCENDANY_KNOWLEDGE_CATALOG_SHA256":               strings.Repeat("b", 64),
 		"ASCENDANY_JUDGE_SOCKET_DIRECTORY":                 "/run/ascendany-judge",
 		"ASCENDANY_JUDGE_WORKER_USER":                      "ascendany-judge",
 		"ASCENDANY_JUDGE_SYSTEMCTL_PATH":                   "/usr/bin/systemctl",
@@ -825,13 +987,35 @@ func testReadFile(path string) ([]byte, error) {
 	switch path {
 	case databasePasswordPath:
 		return []byte(strings.Repeat("d", minimumDatabasePasswordBytes)), nil
-	case jwtSigningKeyPath:
-		return []byte(strings.Repeat("s", minimumJWTSecretBytes)), nil
+	case jwtSigningPrivateKeyPath:
+		return testJWTSigningPrivateKeyPEM(), nil
+	case jwtVerificationPublicKeyPath:
+		return testJWTVerificationPublicKeyPEM(), nil
 	case passwordPepperPath:
 		return []byte(strings.Repeat("p", minimumPasswordPepperBytes)), nil
 	default:
 		return nil, fmt.Errorf("unknown credential path")
 	}
+}
+
+func testJWTSigningPrivateKey() ed25519.PrivateKey {
+	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x73}, ed25519.SeedSize))
+}
+
+func testJWTSigningPrivateKeyPEM() []byte {
+	encoded, err := x509.MarshalPKCS8PrivateKey(testJWTSigningPrivateKey())
+	if err != nil {
+		panic(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})
+}
+
+func testJWTVerificationPublicKeyPEM() []byte {
+	encoded, err := x509.MarshalPKIXPublicKey(testJWTSigningPrivateKey().Public().(ed25519.PublicKey))
+	if err != nil {
+		panic(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: encoded})
 }
 
 func mapLookup(values map[string]string) LookupEnv {

@@ -25,7 +25,7 @@ Environment=XDG_DATA_HOME=/var/lib/ascendany-judge/.local/share
 Environment=XDG_CONFIG_HOME=/var/lib/ascendany-judge/.config
 Environment=XDG_CACHE_HOME=/var/lib/ascendany-judge/.cache
 EnvironmentFile=/etc/ascendany/v2/judge.env
-ExecStart=/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --container-image ${ASCENDANY_JUDGE_CPP20_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup
+ExecStart=/opt/ascendany/v2/bin/ascendany-judge run --job-id %i --control-socket /run/ascendany-judge/%i.sock --work-root /var/lib/ascendany-judge/jobs/%i --allowed-client-user ascendany --compiler-image ${ASCENDANY_JUDGE_COMPILER_IMAGE} --runtime-image ${ASCENDANY_JUDGE_RUNTIME_IMAGE} --podman-binary /usr/bin/podman --delegated-cgroup-root /sys/fs/cgroup
 TimeoutStartSec=30s
 TimeoutStopSec=15s
 KillMode=mixed
