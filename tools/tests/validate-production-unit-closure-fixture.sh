@@ -1066,10 +1066,11 @@ fi
   pgbouncer_binary_sha256="$(sha256sum "$pgbouncer_binary" | command awk '{print $1}')"
   mkdir -p "$pgbouncer_config_root"
   printf '%s\n' \
+    '"ascendany_catalog_publisher_login" "SCRAM-SHA-256$4096:c2FsdDE=$c3RvcmVkMQ==:c2VydmVyMQ=="' \
     '"ascendanyd_login" "SCRAM-SHA-256$4096:c2FsdDI=$c3RvcmVkMg==:c2VydmVyMg=="' \
     >"$pgbouncer_runtime_credential"
   printf '%s\n' \
-    'host ascendany_v2 ascendanyd_login 127.0.0.1/32 scram-sha-256' \
+    'host ascendany_v2 ascendanyd_login,ascendany_catalog_publisher_login 127.0.0.1/32 scram-sha-256' \
     'host all all 0.0.0.0/0 reject' \
     >"$pgbouncer_config_root/pgbouncer-hba.conf"
   printf '%s\n' \

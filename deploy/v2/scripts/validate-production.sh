@@ -851,7 +851,7 @@ check_credential_source() {
         "$(stat -c '%u:%g:%a:%h' "$source" 2>/dev/null || true)" != "0:0:400:1" ||
         ! "$source" =~ ^/ || "$source" != "$(realpath -m -- "$source")" ||
         "$source" != "$(realpath -e -- "$source" 2>/dev/null || true)" ]] ||
-     ! check_root_owned_ancestry "$source" 1; then
+     ! check_root_owned_ancestry "$source" 0; then
     fail "$unit encrypted credential $credential_id must be a real root:root 0400 single-link file with root-owned non-writable ancestry"
     return 1
   elif is_under "$source" "$release_root"; then
@@ -2652,15 +2652,19 @@ check_pgbouncer_contract() {
          verifier = "SCRAM-SHA-256\\$4096:" b64 "\\$" b64 ":" b64
        }
        NR == 1 {
+         if ($0 !~ ("^\"ascendany_catalog_publisher_login\" \"" verifier "\"$")) exit 1
+         next
+       }
+       NR == 2 {
          if ($0 !~ ("^\"ascendanyd_login\" \"" verifier "\"$")) exit 1
          next
        }
        { exit 1 }
-       END { if (NR != 1) exit 1 }
+       END { if (NR != 2) exit 1 }
      ' "$pgbouncer_runtime_credential"; then
-    fail "decrypted PgBouncer userlist violates the one-record runtime SCRAM contract"
+    fail "decrypted PgBouncer userlist violates the two-record runtime and catalog publisher SCRAM contract"
   else
-    pass "native PgBouncer runs with the exact encrypted runtime SCRAM capability"
+    pass "native PgBouncer runs with the exact encrypted runtime and catalog publisher SCRAM capabilities"
   fi
 
   if (( failures == failures_before )); then

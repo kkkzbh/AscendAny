@@ -12,7 +12,7 @@ AssertPathIsDirectory=/var/lib/ascendany-catalog-publisher/receipts
 Type=oneshot
 User=ascendany-backup
 Group=ascendany-backup-readers
-SupplementaryGroups=ascendany ascendany-catalog-readers
+SupplementaryGroups=ascendany
 WorkingDirectory=/var/backups/ascendany
 UMask=0077
 
