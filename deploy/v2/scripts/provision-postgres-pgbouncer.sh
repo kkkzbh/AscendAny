@@ -421,7 +421,7 @@ SQL
   local created_state
   created_state="$(postgres_psql --dbname=postgres --tuples-only --no-align --field-separator='|' <<'SQL'
 SELECT (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'ascendany_v2'),
-       (SELECT obj_description(oid, 'pg_database') FROM pg_database WHERE datname = 'ascendany_v2'),
+       (SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = 'ascendany_v2'),
        (SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname !~ '^pg_'),
        (SELECT count(*) = 5 AND count(DISTINCT rolpassword) = 5
         FROM pg_authid
