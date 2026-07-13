@@ -1284,7 +1284,7 @@ check_lsp_runtime() {
     pass "ascendany-lsp belongs only to its primary and dedicated control groups"
   fi
 
-  if [[ "$ascendanyd_active" == "1" ]]; then
+  if [[ "$ascendanyd_active" == "1" && "$expected_write_mode" == "enabled" ]]; then
     local control_socket=/run/ascendany-lsp-control/control.sock
     metadata="$(stat -Lc '%U:%G:%a' "$control_socket" 2>/dev/null || true)"
     if [[ ! -S "$control_socket" || -L "$control_socket" ||
