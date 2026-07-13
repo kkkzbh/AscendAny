@@ -18,7 +18,6 @@ const (
 	AccessTokenInputName    = "admin_access_token"
 	MaximumRequestBytes     = 4096
 	MaximumAccessTokenBytes = 8192
-	InputFileMode           = os.FileMode(0o400)
 )
 
 var compactJWT = regexp.MustCompile(`^[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$`)
@@ -30,6 +29,12 @@ type Inputs struct {
 	AccessToken string
 }
 
+type InputFileContract struct {
+	UID  uint32
+	GID  uint32
+	Mode os.FileMode
+}
+
 func CanonicalRequest(request Request) ([]byte, error) {
 	return configuration.CanonicalCatalogPublicationRequest(request)
 }
@@ -38,14 +43,15 @@ func ParseRequest(raw []byte) (Request, error) {
 	return configuration.ParseCatalogPublicationRequest(raw)
 }
 
-// ReadInputs reads exactly the two publisher-owned systemd credential paths.
+// ReadInputs reads exactly the two credential paths under the caller's explicit
+// file ownership and mode contract.
 // Other credentials in the shared CREDENTIALS_DIRECTORY are intentionally
 // outside this boundary and are never enumerated.
-func ReadInputs(requestPath, accessTokenPath string) (Inputs, error) {
+func ReadInputs(requestPath, accessTokenPath string, fileContract InputFileContract) (Inputs, error) {
 	if !validInputPath(requestPath) || !validInputPath(accessTokenPath) || requestPath == accessTokenPath {
 		return Inputs{}, errors.New("catalog publication input paths must be distinct, absolute, and normalized")
 	}
-	requestRaw, err := readExactInput(requestPath, RequestInputName, MaximumRequestBytes)
+	requestRaw, err := readExactInput(requestPath, RequestInputName, MaximumRequestBytes, fileContract)
 	if err != nil {
 		return Inputs{}, err
 	}
@@ -53,7 +59,7 @@ func ReadInputs(requestPath, accessTokenPath string) (Inputs, error) {
 	if err != nil {
 		return Inputs{}, fmt.Errorf("catalog publication request rejected: %w", err)
 	}
-	tokenRaw, err := readExactInput(accessTokenPath, AccessTokenInputName, MaximumAccessTokenBytes)
+	tokenRaw, err := readExactInput(accessTokenPath, AccessTokenInputName, MaximumAccessTokenBytes, fileContract)
 	if err != nil {
 		return Inputs{}, err
 	}
@@ -67,10 +73,16 @@ func validInputPath(path string) bool {
 	return path != "" && filepath.IsAbs(path) && filepath.Clean(path) == path && filepath.Base(path) != "."
 }
 
-func readExactInput(path, name string, maximumBytes int64) ([]byte, error) {
+func readExactInput(path, name string, maximumBytes int64, fileContract InputFileContract) ([]byte, error) {
 	var pathStat unix.Stat_t
-	if err := unix.Lstat(path, &pathStat); err != nil || !validInputStat(pathStat, maximumBytes) {
-		return nil, fmt.Errorf("%s input must be one owned 0400 regular file", name)
+	if err := unix.Lstat(path, &pathStat); err != nil || !validInputStat(pathStat, maximumBytes, fileContract) {
+		return nil, fmt.Errorf(
+			"%s input must be one uid=%d gid=%d mode=%04o regular file with one link",
+			name,
+			fileContract.UID,
+			fileContract.GID,
+			fileContract.Mode,
+		)
 	}
 	fileDescriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -97,9 +109,10 @@ func readExactInput(path, name string, maximumBytes int64) ([]byte, error) {
 	return raw, nil
 }
 
-func validInputStat(stat unix.Stat_t, maximumBytes int64) bool {
-	return stat.Mode&unix.S_IFMT == unix.S_IFREG && os.FileMode(stat.Mode&0o777) == InputFileMode &&
-		stat.Nlink == 1 && stat.Uid == uint32(os.Geteuid()) && stat.Size >= 1 && stat.Size <= maximumBytes
+func validInputStat(stat unix.Stat_t, maximumBytes int64, fileContract InputFileContract) bool {
+	return stat.Mode&unix.S_IFMT == unix.S_IFREG && os.FileMode(stat.Mode&0o7777) == fileContract.Mode &&
+		stat.Nlink == 1 && stat.Uid == fileContract.UID && stat.Gid == fileContract.GID &&
+		stat.Size >= 1 && stat.Size <= maximumBytes
 }
 
 func sameInputStat(left, right unix.Stat_t) bool {

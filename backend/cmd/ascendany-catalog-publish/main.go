@@ -123,6 +123,11 @@ func run(
 	inputs, err := catalogpublication.ReadInputs(
 		filepath.Join(credentialsDirectory, catalogpublication.RequestInputName),
 		filepath.Join(credentialsDirectory, catalogpublication.AccessTokenInputName),
+		catalogpublication.InputFileContract{
+			UID:  0,
+			GID:  0,
+			Mode: 0o440,
+		},
 	)
 	if err != nil {
 		logger.Error("catalog publication inputs rejected", "error", err)

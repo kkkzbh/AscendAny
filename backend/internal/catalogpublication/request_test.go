@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/configuration"
+	"golang.org/x/sys/unix"
 )
 
 func TestCanonicalRequestHasExactClosedShape(t *testing.T) {
@@ -76,7 +77,7 @@ func TestReadInputsIgnoresOtherSystemdCredentials(t *testing.T) {
 	writePublicationInput(t, directory, "catalog_publisher_db_password", []byte("database-password"))
 	writePublicationInput(t, directory, "jwt_verification_public_key", []byte(strings.Repeat("v", 32)))
 
-	inputs, err := ReadInputs(requestPath, tokenPath)
+	inputs, err := ReadInputs(requestPath, tokenPath, testInputFileContract())
 	if err != nil {
 		t.Fatalf("ReadInputs() error = %v", err)
 	}
@@ -94,28 +95,40 @@ func TestReadInputsRejectsAliasedAndMutableFiles(t *testing.T) {
 	}
 	requestPath := writePublicationInput(t, directory, RequestInputName, requestRaw)
 	tokenPath := writePublicationInput(t, directory, AccessTokenInputName, []byte("header.payload.signature"))
-	if _, err := ReadInputs(requestPath, requestPath); err == nil {
+	fileContract := testInputFileContract()
+	if _, err := ReadInputs(requestPath, requestPath, fileContract); err == nil {
 		t.Fatal("ReadInputs() accepted one path for both inputs")
 	}
-	if _, err := ReadInputs(filepath.Base(requestPath), tokenPath); err == nil {
+	if _, err := ReadInputs(filepath.Base(requestPath), tokenPath, fileContract); err == nil {
 		t.Fatal("ReadInputs() accepted a relative path")
 	}
 
 	if err := os.Chmod(tokenPath, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadInputs(requestPath, tokenPath); err == nil {
+	if _, err := ReadInputs(requestPath, tokenPath, fileContract); err == nil {
 		t.Fatal("ReadInputs() accepted a mutable access-token file")
 	}
-	if err := os.Chmod(tokenPath, InputFileMode); err != nil {
+	if err := os.Chmod(tokenPath, fileContract.Mode); err != nil {
 		t.Fatal(err)
+	}
+
+	wrongOwner := fileContract
+	wrongOwner.UID ^= 1
+	if _, err := ReadInputs(requestPath, tokenPath, wrongOwner); err == nil {
+		t.Fatal("ReadInputs() accepted files outside its owner contract")
+	}
+	wrongGroup := fileContract
+	wrongGroup.GID ^= 1
+	if _, err := ReadInputs(requestPath, tokenPath, wrongGroup); err == nil {
+		t.Fatal("ReadInputs() accepted files outside its group contract")
 	}
 
 	symlinkPath := filepath.Join(directory, "access-token-link")
 	if err := os.Symlink(tokenPath, symlinkPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadInputs(requestPath, symlinkPath); err == nil {
+	if _, err := ReadInputs(requestPath, symlinkPath, fileContract); err == nil {
 		t.Fatal("ReadInputs() accepted a symlink")
 	}
 
@@ -123,8 +136,40 @@ func TestReadInputsRejectsAliasedAndMutableFiles(t *testing.T) {
 	if err := os.Link(tokenPath, hardlinkPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadInputs(requestPath, tokenPath); err == nil {
+	if _, err := ReadInputs(requestPath, tokenPath, fileContract); err == nil {
 		t.Fatal("ReadInputs() accepted a multiply linked file")
+	}
+}
+
+func TestValidInputStatEnforcesProductionSystemdCredentialContract(t *testing.T) {
+	t.Parallel()
+	fileContract := InputFileContract{UID: 0, GID: 0, Mode: 0o440}
+	credential := unix.Stat_t{
+		Mode:  unix.S_IFREG | uint32(fileContract.Mode),
+		Nlink: 1,
+		Uid:   fileContract.UID,
+		Gid:   fileContract.GID,
+		Size:  1,
+	}
+	if !validInputStat(credential, 1, fileContract) {
+		t.Fatal("validInputStat() rejected the production systemd credential contract")
+	}
+	for name, mutate := range map[string]func(*unix.Stat_t){
+		"owner":      func(stat *unix.Stat_t) { stat.Uid++ },
+		"group":      func(stat *unix.Stat_t) { stat.Gid++ },
+		"mode":       func(stat *unix.Stat_t) { stat.Mode = unix.S_IFREG | 0o400 },
+		"type":       func(stat *unix.Stat_t) { stat.Mode = unix.S_IFDIR | uint32(fileContract.Mode) },
+		"link count": func(stat *unix.Stat_t) { stat.Nlink++ },
+		"empty":      func(stat *unix.Stat_t) { stat.Size = 0 },
+		"oversize":   func(stat *unix.Stat_t) { stat.Size = 2 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := credential
+			mutate(&candidate)
+			if validInputStat(candidate, 1, fileContract) {
+				t.Fatalf("validInputStat() accepted a credential with invalid %s", name)
+			}
+		})
 	}
 }
 
@@ -154,8 +199,16 @@ func writePublicationInput(t *testing.T, directory, name string, raw []byte) str
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, InputFileMode); err != nil {
+	if err := os.Chmod(path, testInputFileContract().Mode); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func testInputFileContract() InputFileContract {
+	return InputFileContract{
+		UID:  uint32(os.Geteuid()),
+		GID:  uint32(os.Getegid()),
+		Mode: 0o400,
+	}
 }
