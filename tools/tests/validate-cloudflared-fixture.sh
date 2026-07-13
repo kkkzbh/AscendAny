@@ -110,7 +110,7 @@ for directive in \
   'CapabilityBoundingSet=' \
   'AmbientCapabilities=' \
   'MemoryDenyWriteExecute=yes' \
-  'InaccessiblePaths=-/etc/ascendany -/opt/ascendany/Release -/var/lib/ascendany/artifacts' \
+  'InaccessiblePaths=-/etc/ascendany -/var/lib/ascendany/artifacts' \
   'SystemCallFilter=@system-service'; do
   [[ "$(grep -Fxc -- "$directive" "$UNIT")" == 1 ]] ||
     fail "cloudflared unit directive is missing or duplicated: $directive"

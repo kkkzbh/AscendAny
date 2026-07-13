@@ -66,4 +66,4 @@ IPAddressDeny=any
 IPAddressAllow=localhost
 ReadOnlyPaths=/etc/ascendany/v2
 ReadWritePaths=/var/lib/ascendany /run/ascendany-admin-bootstrap-input
-InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany
+InaccessiblePaths=/var/lib/ascendany/artifacts /var/backups/ascendany

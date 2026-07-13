@@ -751,8 +751,8 @@ check_all_unit_effective_shapes() {
   check_effective_word_set ascendany-catalog-publish.service ReadWritePaths \
     /var/lib/ascendany-catalog-publisher/pending /var/lib/ascendany-catalog-publisher/receipts
   check_effective_word_set ascendany-catalog-publish.service InaccessiblePaths \
-    /etc/ascendany/credentials /etc/ascendany/v2 /opt/ascendany/Release \
-    /var/backups/ascendany /var/lib/ascendany
+    /etc/ascendany/credentials /etc/ascendany/v2 /var/backups/ascendany \
+    /var/lib/ascendany
   check_effective_value ascendany-model-activate.service NoNewPrivileges yes
   check_effective_value ascendany-model-register.service NoNewPrivileges yes
   check_effective_value ascendany-model-activate.service ProtectSystem strict
@@ -776,13 +776,11 @@ check_all_unit_effective_shapes() {
   check_effective_word_set ascendany-model-activate.service ReadWritePaths /var/lib/ascendany
   check_effective_word_set ascendany-model-register.service ReadWritePaths /var/lib/ascendany
   check_effective_word_set ascendany-model-activate.service InaccessiblePaths \
-    /opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany \
-    /var/lib/ascendany-catalog-publisher
+    /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher
   check_effective_word_set ascendany-model-register.service InaccessiblePaths \
-    /opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany \
-    /var/lib/ascendany-catalog-publisher
+    /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher
   check_effective_word_set ascendanyd.service InaccessiblePaths \
-    /opt/ascendany/Release /var/lib/ascendany-catalog-publisher
+    /var/lib/ascendany-catalog-publisher
   check_effective_value ascendanyd.service TimeoutStopFailureMode abort
   check_effective_value ascendany-model-activate.service TimeoutStopFailureMode abort
   check_effective_value ascendany-model-register.service TimeoutStopFailureMode abort

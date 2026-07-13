@@ -84,7 +84,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 ReadOnlyPaths=/etc/ascendany/v2
 ReadWritePaths=/var/lib/ascendany /run/ascendany /run/ascendany-lsp-control
-InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany-catalog-publisher
+InaccessiblePaths=/var/lib/ascendany-catalog-publisher
 
 [Install]
 WantedBy=multi-user.target

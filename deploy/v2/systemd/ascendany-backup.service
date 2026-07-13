@@ -67,4 +67,3 @@ IPAddressAllow=localhost
 IPAddressAllow=10.88.0.2/32
 ReadOnlyPaths=/etc/ascendany/v2 /var/lib/ascendany/artifacts /var/lib/ascendany-catalog-publisher/receipts
 ReadWritePaths=/var/backups/ascendany /run/ascendany-backup
-InaccessiblePaths=/opt/ascendany/Release

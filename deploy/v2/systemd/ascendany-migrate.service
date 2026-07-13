@@ -60,4 +60,4 @@ IPAddressAllow=localhost
 IPAddressAllow=10.88.0.2/32
 ReadOnlyPaths=/etc/ascendany/v2
 ReadWritePaths=/var/lib/ascendany-migrate
-InaccessiblePaths=/opt/ascendany/Release /var/lib/ascendany/artifacts
+InaccessiblePaths=/var/lib/ascendany/artifacts

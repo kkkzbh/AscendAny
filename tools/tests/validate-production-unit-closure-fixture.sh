@@ -611,16 +611,16 @@ fi
       InaccessiblePaths)
         case "$unit" in
           ascendanyd.service)
-            printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany-catalog-publisher'
+            printf '%s\n' '/var/lib/ascendany-catalog-publisher'
             ;;
           ascendany-model-register.service)
-            printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher'
+            printf '%s\n' '/var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher'
             ;;
           ascendany-model-activate.service)
-            printf '%s\n' '/opt/ascendany/Release /var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher'
+            printf '%s\n' '/var/lib/ascendany/artifacts /var/backups/ascendany /var/lib/ascendany-catalog-publisher'
             ;;
           ascendany-catalog-publish.service)
-            printf '%s\n' '/etc/ascendany/v2 /etc/ascendany/credentials /opt/ascendany/Release /var/lib/ascendany /var/backups/ascendany'
+            printf '%s\n' '/etc/ascendany/v2 /etc/ascendany/credentials /var/lib/ascendany /var/backups/ascendany'
             ;;
           *) return 1 ;;
         esac

@@ -82,4 +82,4 @@ IPAddressAllow=localhost
 IPAddressAllow=10.88.0.2/32
 ReadOnlyPaths=/etc/ascendany-catalog-publisher
 ReadWritePaths=/var/lib/ascendany-catalog-publisher/receipts /var/lib/ascendany-catalog-publisher/pending
-InaccessiblePaths=/etc/ascendany/v2 /etc/ascendany/credentials /opt/ascendany/Release /var/lib/ascendany /var/backups/ascendany
+InaccessiblePaths=/etc/ascendany/v2 /etc/ascendany/credentials /var/lib/ascendany /var/backups/ascendany
