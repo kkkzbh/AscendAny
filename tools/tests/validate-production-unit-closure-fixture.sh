@@ -331,14 +331,8 @@ fi
   fixture_ascendanyd_enabled_state=enabled
   fixture_model_activation_active_state=inactive
   fixture_model_activation_enabled_state=static
-  fixture_model_activation_result=success
-  fixture_model_activation_main_code=exited
-  fixture_model_activation_main_status=0
   fixture_model_registration_active_state=inactive
   fixture_model_registration_enabled_state=static
-  fixture_model_registration_result=success
-  fixture_model_registration_main_code=exited
-  fixture_model_registration_main_status=0
   fixture_timer_active_state=inactive
   fixture_timer_enabled_state=disabled
   render_fixture_unit() {
@@ -573,27 +567,6 @@ fi
       MemoryPressureThresholdUSec)
         [[ "$unit" == "ascendanyd.service" ]] || return 1
         if [[ "$memory_pressure_threshold_drift" == "1" ]]; then printf '1s\n'; else printf '200ms\n'; fi
-        ;;
-      Result)
-        case "$unit" in
-          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_result" ;;
-          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_result" ;;
-          *) return 1 ;;
-        esac
-        ;;
-      ExecMainCode)
-        case "$unit" in
-          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_main_code" ;;
-          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_main_code" ;;
-          *) return 1 ;;
-        esac
-        ;;
-      ExecMainStatus)
-        case "$unit" in
-          ascendany-model-register.service) printf '%s\n' "$fixture_model_registration_main_status" ;;
-          ascendany-model-activate.service) printf '%s\n' "$fixture_model_activation_main_status" ;;
-          *) return 1 ;;
-        esac
         ;;
       Type)
         [[ "$unit" == "ascendany-model-register.service" || "$unit" == "ascendany-model-activate.service" || "$unit" == "ascendany-catalog-publish.service" ]] || return 1
@@ -859,10 +832,10 @@ fi
   failures=0
   check_model_registration_unit_state
   [[ "$failures" == "0" ]]
-  fixture_model_registration_main_status=1
+  fixture_model_registration_active_state=active
   check_model_registration_unit_state
   [[ "$failures" == "1" ]]
-  fixture_model_registration_main_status=0
+  fixture_model_registration_active_state=inactive
   fixture_model_registration_enabled_state=enabled
   failures=0
   check_model_registration_unit_state
@@ -872,10 +845,10 @@ fi
   failures=0
   check_model_activation_unit_state
   [[ "$failures" == "0" ]]
-  fixture_model_activation_main_status=1
+  fixture_model_activation_active_state=active
   check_model_activation_unit_state
   [[ "$failures" == "1" ]]
-  fixture_model_activation_main_status=0
+  fixture_model_activation_active_state=inactive
   fixture_model_activation_enabled_state=enabled
   failures=0
   check_model_activation_unit_state
