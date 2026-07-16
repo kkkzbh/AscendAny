@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/backup"
+	"github.com/kkkzbh/AscendAny/backend/internal/logging"
 	"github.com/kkkzbh/AscendAny/backend/internal/version"
 )
 
@@ -41,7 +41,10 @@ func run(
 	stderr io.Writer,
 	operations operations,
 ) int {
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	logger, err := logging.New(stderr, "info")
+	if err != nil {
+		return 1
+	}
 	command, backupID, err := parseCommand(args)
 	if err != nil {
 		logger.Error("command rejected", "error", err)

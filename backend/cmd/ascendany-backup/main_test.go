@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -11,6 +12,14 @@ import (
 )
 
 const validBackupID = "backup-20260711T010203Z-0123456789abcdef"
+
+func TestRunRejectsMissingLogOutput(t *testing.T) {
+	t.Parallel()
+
+	if exitCode := run(context.Background(), []string{"create"}, nil, nil, nil, operations{}); exitCode != 1 {
+		t.Fatalf("exit = %d, want 1", exitCode)
+	}
+}
 
 func TestRunCreateLoadsSecretAndReportsSafeIdentity(t *testing.T) {
 	t.Parallel()
@@ -99,6 +108,15 @@ func TestRunRestoreVerifyUsesDedicatedCredential(t *testing.T) {
 	)
 	if exitCode != 0 || !strings.Contains(output.String(), "backup restore verified") {
 		t.Fatalf("exit=%d output=%s", exitCode, output.String())
+	}
+	var entry struct {
+		Time string `json:"time"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &entry); err != nil {
+		t.Fatalf("restore output is not JSON: %v", err)
+	}
+	if !strings.HasSuffix(entry.Time, "Z") {
+		t.Fatalf("restore output time = %q, want canonical UTC", entry.Time)
 	}
 }
 

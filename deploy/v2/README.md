@@ -1133,7 +1133,19 @@ Create the first schema-v7 backup, verify it, run the sole restore operator, the
 ```bash
 systemctl start ascendany-backup.service
 backup_id="$(find /var/backups/ascendany -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort | tail -n 1)"
-/opt/ascendany/v2/bin/ascendany-backup verify "$backup_id"
+(
+  . /etc/ascendany/v2/backup.env
+  /usr/bin/runuser -u ascendany-backup -- /usr/bin/env -i \
+    PATH=/usr/bin:/bin \
+    ASCENDANY_BACKUP_ROOT="$ASCENDANY_BACKUP_ROOT" \
+    ASCENDANY_BACKUP_FORMAT="$ASCENDANY_BACKUP_FORMAT" \
+    ASCENDANY_BACKUP_MANIFEST_HASH="$ASCENDANY_BACKUP_MANIFEST_HASH" \
+    ASCENDANY_BACKUP_COMMAND_TIMEOUT="$ASCENDANY_BACKUP_COMMAND_TIMEOUT" \
+    ASCENDANY_PG_DUMP_PATH="$ASCENDANY_PG_DUMP_PATH" \
+    ASCENDANY_PG_RESTORE_PATH="$ASCENDANY_PG_RESTORE_PATH" \
+    ASCENDANY_ZSTD_PATH="$ASCENDANY_ZSTD_PATH" \
+    /opt/ascendany/v2/bin/ascendany-backup verify "$backup_id"
+)
 systemctl start "ascendany-restore-verify@${backup_id}.service"
 systemctl enable --now ascendany-backup.timer
 ```
@@ -1578,7 +1590,19 @@ production gate with the post-catalog prior-model anchors:
 ```bash
 systemctl start ascendany-backup.service
 backup_id="$(find /var/backups/ascendany -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort | tail -n 1)"
-/opt/ascendany/v2/bin/ascendany-backup verify "$backup_id"
+(
+  . /etc/ascendany/v2/backup.env
+  /usr/bin/runuser -u ascendany-backup -- /usr/bin/env -i \
+    PATH=/usr/bin:/bin \
+    ASCENDANY_BACKUP_ROOT="$ASCENDANY_BACKUP_ROOT" \
+    ASCENDANY_BACKUP_FORMAT="$ASCENDANY_BACKUP_FORMAT" \
+    ASCENDANY_BACKUP_MANIFEST_HASH="$ASCENDANY_BACKUP_MANIFEST_HASH" \
+    ASCENDANY_BACKUP_COMMAND_TIMEOUT="$ASCENDANY_BACKUP_COMMAND_TIMEOUT" \
+    ASCENDANY_PG_DUMP_PATH="$ASCENDANY_PG_DUMP_PATH" \
+    ASCENDANY_PG_RESTORE_PATH="$ASCENDANY_PG_RESTORE_PATH" \
+    ASCENDANY_ZSTD_PATH="$ASCENDANY_ZSTD_PATH" \
+    /opt/ascendany/v2/bin/ascendany-backup verify "$backup_id"
+)
 systemctl start "ascendany-restore-verify@${backup_id}.service"
 systemctl enable --now ascendany-backup.timer
 ASCENDANY_DEPLOYMENT_TRANSITION=forward \
