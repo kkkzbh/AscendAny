@@ -7,6 +7,7 @@ readonly repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && p
 readonly postgres_rehearsal="${repository_root}/tools/run-v2-postgres-podman-rehearsal.sh"
 readonly postgres_integration="${repository_root}/tools/run-v2-postgres-integration.sh"
 readonly backup_rehearsal="${repository_root}/tools/run-v2-backup-restore-podman-rehearsal.sh"
+readonly full_e2e="${repository_root}/tools/run-v2-full-e2e.sh"
 readonly recommendation_catalog_fixture="${repository_root}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json"
 readonly recommendation_catalog_sha256="a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
 readonly recommendation_model_fixture="${repository_root}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json"
@@ -96,14 +97,14 @@ append_required_rehearsal_inputs() {
   fi
 }
 
-for command_name in awk chmod env grep id ln mapfile mktemp realpath rm sed stat; do
+for command_name in awk bwrap chmod env grep id install ln mapfile mktemp realpath rm sed stat; do
   command -v "${command_name}" >/dev/null 2>&1 ||
     fail "required command is unavailable: ${command_name}"
 done
 unset command_name
 
 ((EUID != 0)) || fail 'the executable fixture must run as a non-root user'
-[[ -f "${postgres_rehearsal}" && -f "${postgres_integration}" &&
+[[ -f "${postgres_rehearsal}" && -f "${postgres_integration}" && -f "${full_e2e}" &&
   -f "${backup_rehearsal}" && -f "${recommendation_catalog_fixture}" &&
   -f "${recommendation_model_fixture}" ]] ||
   fail 'one or more rehearsal scripts are unavailable'
@@ -181,6 +182,32 @@ for rehearsal in "${postgres_rehearsal}" "${backup_rehearsal}"; do
   printf 'PASS fixture static-private-runtime-contract script=%s\n' "$(basename -- "${rehearsal}")"
 done
 unset rehearsal trap_line allocation_line body create_attempt_line pod_create_line
+
+[[ "$(grep -Fc -- 'install -m 0440 -- \' "${full_e2e}")" == 2 ]] ||
+  fail 'full E2E does not materialize both catalog credentials with mode 0440'
+[[ "$(grep -Fc -- '== 440:1 &&' "${full_e2e}")" == 2 ]] ||
+  fail 'full E2E does not assert both catalog runtime credential modes'
+catalog_publish_line="$(line_number \
+  "${full_e2e}" \
+  "'Publishing the release catalog through the isolated stopped-runtime capability'")"
+sed -n "${catalog_publish_line},$((catalog_publish_line + 12))p" "${full_e2e}" |
+  grep -Fq -- '--unshare-user --uid 0 --gid 0 \' ||
+  fail 'full E2E catalog publisher does not enter the systemd-compatible root user namespace'
+
+readonly catalog_credential_fixture="${static_boundary_fixture_root}/catalog-credential"
+install -m 0440 /dev/null "${catalog_credential_fixture}"
+catalog_credential_metadata="$({
+  /usr/bin/bwrap \
+    --die-with-parent \
+    --unshare-user --uid 0 --gid 0 \
+    --ro-bind / / \
+    -- /usr/bin/stat -Lc '%u:%g:%a' -- "${catalog_credential_fixture}"
+} 2>/dev/null)" ||
+  fail 'catalog credential user-namespace fixture could not execute'
+[[ "${catalog_credential_metadata}" == 0:0:440 ]] ||
+  fail "catalog credential user namespace exposes ${catalog_credential_metadata}; expected 0:0:440"
+printf 'PASS fixture catalog-publisher-systemd-credential-materialization\n'
+unset catalog_publish_line catalog_credential_metadata
 
 require_fixed \
   "${postgres_rehearsal}" \

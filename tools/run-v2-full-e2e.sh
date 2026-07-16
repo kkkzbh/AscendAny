@@ -1543,17 +1543,17 @@ jq -e \
 ' "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request" >/dev/null ||
   fail 'catalog publication request credential differs from the reviewed release intent'
 
-install -m 0400 -- \
+install -m 0440 -- \
   "${CATALOG_CREDENTIAL_DIRECTORY}/catalog_publication_request" \
   "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request"
-install -m 0400 -- \
+install -m 0440 -- \
   "${CATALOG_CREDENTIAL_DIRECTORY}/admin_access_token" \
   "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token"
 [[ ! -L "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}" &&
    "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}")" == 700:2 &&
    "$(find "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)" == $'admin_access_token\ncatalog_publication_request' &&
-   "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request")" == 400:1 &&
-   "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token")" == 400:1 &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request")" == 440:1 &&
+   "$(stat -Lc '%a:%h' -- "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token")" == 440:1 &&
    -s "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/catalog_publication_request" &&
    -s "${CATALOG_RUNTIME_CREDENTIAL_DIRECTORY}/admin_access_token" ]] ||
   fail 'catalog publication runtime credentials violate the systemd credential materialization contract'
@@ -1572,6 +1572,7 @@ mkdir -m 0750 -- "${CATALOG_PUBLISHER_STATE_ROOT}/receipts"
 /usr/bin/printf '%s\n' 'Publishing the release catalog through the isolated stopped-runtime capability'
 /usr/bin/bwrap \
   --die-with-parent \
+  --unshare-user --uid 0 --gid 0 \
   --ro-bind / / \
   --tmpfs /var/lib \
   --dir /var/lib/ascendany-catalog-publisher \
