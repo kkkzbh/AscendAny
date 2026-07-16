@@ -536,17 +536,19 @@ PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" psql \
   >"${PGBOUNCER_USERLIST_FILE}" <<'SQL'
 SELECT format('"%s" "%s"', rolname, rolpassword)
 FROM pg_authid
-WHERE rolname IN ('pgbouncer_rehearsal', 'ascendanyd_login')
-  AND rolpassword LIKE 'SCRAM-SHA-256$%'
-ORDER BY rolname COLLATE "C";
+WHERE rolname = 'pgbouncer_rehearsal'
+  AND rolpassword LIKE 'SCRAM-SHA-256$%';
 SQL
+printf '"ascendanyd_login" "%s"\n' "${RUNTIME_PASSWORD}" \
+  >>"${PGBOUNCER_USERLIST_FILE}"
 [[ "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 2 &&
-  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 2 ]] ||
-  fail 'native PgBouncer rehearsal did not capture exactly two SCRAM verifiers'
+  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 1 &&
+  "$(sed -n '1s/^"\([^"]*\)" .*/\1/p' "${PGBOUNCER_USERLIST_FILE}")" == "${PGBOUNCER_ADMIN_USER}" &&
+  "$(sed -n '2p' "${PGBOUNCER_USERLIST_FILE}")" == "\"ascendanyd_login\" \"${RUNTIME_PASSWORD}\"" ]] ||
+  fail 'native PgBouncer rehearsal auth_file differs from its bootstrap admin-SCRAM/runtime-plaintext contract'
 if grep -Fq -- "${PGBOUNCER_ADMIN_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
-  grep -Fq -- "${RUNTIME_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
   grep -Fq -- "${CATALOG_PUBLISHER_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}"; then
-  fail 'native PgBouncer userlist contains plaintext credential material'
+  fail 'native PgBouncer bootstrap auth_file contains unexpected plaintext credential material'
 fi
 chmod 0400 -- "${PGBOUNCER_USERLIST_FILE}"
 
@@ -621,7 +623,7 @@ PGPASSWORD="${PGBOUNCER_ADMIN_PASSWORD}" psql \
   fail 'PgBouncer auth_file console identity failed after database role retirement'
 
 readonly POSTGRES_IMAGE_ID="$(podman image inspect "${POSTGRES_IMAGE}" --format '{{.Id}}')"
-printf 'Infrastructure ready: rootless=true PostgreSQL_image=%s PgBouncer_nevra=%s pool_mode=transaction auth_type=hba userlist=SCRAM-only\n' \
+printf 'Infrastructure ready: rootless=true PostgreSQL_image=%s PgBouncer_nevra=%s pool_mode=transaction auth_type=hba userlist=admin-SCRAM-app-plaintext\n' \
   "${POSTGRES_IMAGE_ID}" "${EXPECTED_PGBOUNCER_NEVRA}"
 printf 'Migrator contract endpoint: %s:5432 (isolated loopback alias)\n' "${MIGRATOR_LOOPBACK_HOST}"
 printf 'Snapshot under rehearsal: %s\n' "${SNAPSHOT_PATH}"
@@ -689,8 +691,11 @@ readonly CATALOG_PUBLISHER_POOL_IDENTITY="$(PGPASSWORD="${CATALOG_PUBLISHER_PASS
   fail 'native PgBouncer rehearsal did not preserve the v2 catalog publisher route'
 [[ "$(stat -Lc '%u:%a' -- "${PGBOUNCER_USERLIST_FILE}")" == "${EUID}:400" &&
   "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 3 &&
-  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 3 ]] ||
-  fail 'integration runner did not atomically publish the exact SCRAM userlist'
+  "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 1 &&
+  "$(sed -n '1s/^"\([^"]*\)" .*/\1/p' "${PGBOUNCER_USERLIST_FILE}")" == "${PGBOUNCER_ADMIN_USER}" &&
+  "$(sed -n '2p' "${PGBOUNCER_USERLIST_FILE}")" == "\"ascendany_catalog_publisher_login\" \"${CATALOG_PUBLISHER_PASSWORD}\"" &&
+  "$(sed -n '3p' "${PGBOUNCER_USERLIST_FILE}")" == "\"ascendanyd_login\" \"${RUNTIME_PASSWORD}\"" ]] ||
+  fail 'integration runner did not atomically publish the exact admin-SCRAM/app-plaintext userlist'
 
 mapfile -t MANIFEST_TEST_COUNTS < <(
   sed -nE \
@@ -702,6 +707,15 @@ if [[ "${#MANIFEST_TEST_COUNTS[@]}" != 1 ]]; then
   exit 1
 fi
 readonly MANIFEST_TEST_COUNT="${MANIFEST_TEST_COUNTS[0]}"
+mapfile -t PGBOUNCER_RECONNECT_RESULTS < <(
+  sed -nE \
+    's/^PGBOUNCER_RECONNECT_RESULT auth_file=app_plaintext runtime_first=passed catalog_first=passed reconnect=passed runtime_second=passed catalog_second=passed repetitions=([1-9][0-9]*)$/\1/p' \
+    "${RUN_LOG}"
+)
+if [[ "${#PGBOUNCER_RECONNECT_RESULTS[@]}" != 1 ||
+      "${PGBOUNCER_RECONNECT_RESULTS[0]}" != "${MANIFEST_TEST_COUNT}" ]]; then
+  fail 'integration runner did not prove both app identities across every PgBouncer RECONNECT'
+fi
 readonly FINAL_SNAPSHOT_SUMMARY="$(rg '^  REAL_SNAPSHOT_DATABASE_SUMMARY ' "${RUN_LOG}" | tail -n 1)"
 if [[ -z "${FINAL_SNAPSHOT_SUMMARY}" ]]; then
   printf 'integration runner did not emit a real snapshot database summary\n' >&2

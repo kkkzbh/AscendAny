@@ -81,14 +81,45 @@ for required in \
   'PostgreSQL DBA, durability, role or database entry state is not fresh' \
   'CREATE DATABASE ascendany_v2 OWNER ascendany_database_owner TEMPLATE template0;' \
   'COMMENT ON ROLE postgres IS '\''ascendany.postgres.dba.v2'\'';' \
-  'WHERE rolname = ANY(ARRAY['\''ascendanyd_login'\'', '\''ascendany_catalog_publisher_login'\''])' \
   'install_postgres_access_files' \
-  'verify_pool_once' \
+  'verify_pool_reconnect' \
   'schema=ascendany.postgres-pgbouncer.provision.v2' \
   'consume_password_inputs' \
   'pass committed'; do
   require_literal "$PROVISIONER" "$required"
 done
+
+pool_reconnect_function="$WORK_ROOT/verify-pool-reconnect.sh"
+sed -n '/^verify_pool_reconnect() {$/,/^}$/p' "$PROVISIONER" >"$pool_reconnect_function"
+[[ "$(grep -Fc 'verify_pool_identity ascendanyd_login "$RUNTIME_PASSWORD_FILE"' "$pool_reconnect_function")" == 2 &&
+   "$(grep -Fc 'verify_pool_identity ascendany_catalog_publisher_login "$CATALOG_PUBLISHER_PASSWORD_FILE"' "$pool_reconnect_function")" == 2 ]] ||
+  fail 'PgBouncer provision verification does not prove both app identities before and after backend reconnect'
+require_literal "$pool_reconnect_function" 'terminate_pool_backends'
+require_literal "$PROVISIONER" 'SELECT pg_terminate_backend(pid, 5000) AS terminated'
+require_literal "$pool_reconnect_function" '"$runtime_pid_after" != "$runtime_pid_before"'
+require_literal "$pool_reconnect_function" '"$catalog_pid_after" != "$catalog_pid_before"'
+
+pool_credential_function="$WORK_ROOT/generate-pool-credential.sh"
+sed -n '/^generate_pool_credential() {$/,/^}$/p' "$PROVISIONER" >"$pool_credential_function"
+for required in \
+  'local plaintext="$stage_root/pgbouncer-userlist"' \
+  '/usr/bin/printf '\''%s'\'' '\''"ascendany_catalog_publisher_login" "'\''' \
+  '/usr/bin/printf '\''%s'\'' $'\''"\n"ascendanyd_login" "'\''' \
+  '/usr/bin/printf '\''%s\n'\'' '\''"'\''' \
+  'encrypt_credential pgbouncer_userlist "$plaintext" pgbouncer_userlist.cred' \
+  '/usr/bin/rm -f -- "$plaintext"'; do
+  require_literal "$pool_credential_function" "$required"
+done
+mapfile -t pool_password_sources < <(
+  grep -F '/usr/bin/cat -- "$' "$pool_credential_function"
+)
+[[ "${#pool_password_sources[@]}" == 2 &&
+   "${pool_password_sources[0]}" == '    /usr/bin/cat -- "$CATALOG_PUBLISHER_PASSWORD_FILE"' &&
+   "${pool_password_sources[1]}" == '    /usr/bin/cat -- "$RUNTIME_PASSWORD_FILE"' ]] ||
+  fail 'PgBouncer plaintext password sources or their fixed catalog-publisher/runtime order differ'
+if rg -n 'postgres_psql|pg_authid|rolpassword|SCRAM-SHA-256' "$pool_credential_function" >/dev/null; then
+  fail 'PgBouncer userlist generation still derives credentials from PostgreSQL SCRAM verifiers'
+fi
 
 mapfile -t pool_databases < <(sed -n '/^\[databases\]$/,/^$/p' "$POOL_CONFIG" |
   sed '1d;/^$/d')

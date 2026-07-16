@@ -85,12 +85,20 @@ pnpm --filter @ascendany/desktop build
 The disposable integration environment uses the digest-pinned PostgreSQL 17
 image and the release-locked native Fedora 44 x86_64 PgBouncer 1.25.2 RPM.
 PgBouncer derives its temporary configuration and HBA rules from the production
-release, receives only SCRAM verifiers in the private runtime tree, and binds to
-loopback. Pull the PostgreSQL image explicitly if it is absent; the rehearsal
-never pulls or starts a PgBouncer image.
+release and binds to loopback. The private auth file contains the console SCRAM
+verifier plus the exact plaintext runtime and catalog-publisher passwords;
+production stores the corresponding two-entry auth file as a host-encrypted
+systemd credential and exposes plaintext only in PgBouncer's private runtime
+credential mount. Client and PostgreSQL backend authentication remain
+`scram-sha-256`. This contract avoids the PgBouncer 1.25.2 stored-verifier
+reconnect regression fixed upstream by
+[PgBouncer #1504](https://github.com/pgbouncer/pgbouncer/pull/1504). Pull the
+PostgreSQL image explicitly if it is absent; the rehearsal never pulls or starts
+a PgBouncer image.
 After each disposable role-password reset, the integration runner publishes the
-exact v2 capability-role SCRAM verifier set with same-directory fsync and atomic
-rename, then issues explicit PgBouncer `RELOAD` and database `RECONNECT` commands.
+exact app identity entries with same-directory fsync and atomic rename, then
+proves both identities before and after explicit PgBouncer `RELOAD` and database
+`RECONNECT` commands.
 
 ```bash
 tools/run-v2-postgres-podman-rehearsal.sh \

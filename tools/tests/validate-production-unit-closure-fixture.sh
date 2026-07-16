@@ -1022,7 +1022,23 @@ fi
 
   pgbouncer_config_root="$fixture_root/pgbouncer"
   pgbouncer_runtime_credential="$fixture_root/pgbouncer-userlist.runtime"
+  runtime_db_credential_source="$fixture_root/runtime_db_password.cred"
+  catalog_publisher_db_credential_source="$fixture_root/catalog_publisher_db_password.cred"
+  systemd_creds_binary="$fixture_root/systemd-creds-fixture"
   pgbouncer_binary="$fixture_root/native-pgbouncer-fixture"
+  runtime_db_password='RuntimeDatabasePassword0123456789ABCDEF'
+  catalog_publisher_db_password='CatalogPublisherPassword0123456789ABCDEF'
+  mismatched_runtime_db_password='DifferentRuntimePassword0123456789ABCDEF'
+  printf '%s' "$runtime_db_password" >"$runtime_db_credential_source"
+  printf '%s' "$catalog_publisher_db_password" >"$catalog_publisher_db_credential_source"
+  chmod 0400 "$runtime_db_credential_source" "$catalog_publisher_db_credential_source"
+  printf '%s\n' \
+    '#!/usr/bin/bash' \
+    'set -euo pipefail' \
+    '[[ "$#" == 4 && "$1" == --name=* && "$2" == decrypt && "$4" == - ]]' \
+    '/usr/bin/cat -- "$3"' \
+    >"$systemd_creds_binary"
+  chmod 0700 "$systemd_creds_binary"
   printf '%s\n' \
     'package main' \
     '' \
@@ -1062,8 +1078,8 @@ fi
   pgbouncer_binary_sha256="$(sha256sum "$pgbouncer_binary" | command awk '{print $1}')"
   mkdir -p "$pgbouncer_config_root"
   printf '%s\n' \
-    '"ascendany_catalog_publisher_login" "SCRAM-SHA-256$4096:c2FsdDE=$c3RvcmVkMQ==:c2VydmVyMQ=="' \
-    '"ascendanyd_login" "SCRAM-SHA-256$4096:c2FsdDI=$c3RvcmVkMg==:c2VydmVyMg=="' \
+    "\"ascendany_catalog_publisher_login\" \"$catalog_publisher_db_password\"" \
+    "\"ascendanyd_login\" \"$runtime_db_password\"" \
     >"$pgbouncer_runtime_credential"
   printf '%s\n' \
     'host ascendany_v2 ascendanyd_login,ascendany_catalog_publisher_login 127.0.0.1/32 scram-sha-256' \
@@ -1117,6 +1133,7 @@ fi
   pgbouncer_dropin_drift=0
   pgbouncer_process_security_drift=0
   pgbouncer_credential_source_drift=0
+  pgbouncer_userlist_mode_drift=0
   stat() {
     local target="${!#}"
     if [[ "$target" == "$pgbouncer_config_root" ]]; then
@@ -1132,7 +1149,11 @@ fi
       return
     fi
     if [[ "$target" == "$pgbouncer_runtime_credential" ]]; then
-      printf '%s\n' '0:0:440:1'
+      if [[ "$pgbouncer_userlist_mode_drift" == 1 ]]; then
+        printf '%s\n' '0:0:640:1'
+      else
+        printf '%s\n' '0:0:440:1'
+      fi
       return
     fi
     if [[ "$target" == "$pgbouncer_binary" ]]; then
@@ -1266,13 +1287,56 @@ fi
 
   cp "$pgbouncer_runtime_credential" "$fixture_root/userlist.valid"
   chmod 0640 "$pgbouncer_runtime_credential"
-  printf '%s\n' '"ascendanyd_login" "plaintext"' \
+
+  printf '%s\n' \
+    "\"ascendanyd_login\" \"$runtime_db_password\"" \
+    "\"ascendany_catalog_publisher_login\" \"$catalog_publisher_db_password\"" \
     >"$pgbouncer_runtime_credential"
   failures=0
-  check_pgbouncer_contract
+  check_pgbouncer_plaintext_userlist_contract
   [[ "$failures" == "1" ]]
+
   cp "$fixture_root/userlist.valid" "$pgbouncer_runtime_credential"
-  chmod 0440 "$pgbouncer_runtime_credential"
+  printf '%s\n' \
+    "\"ascendany_catalog_publisher_login\" \"$catalog_publisher_db_password\"" \
+    "\"ascendanyd_login\" \"$mismatched_runtime_db_password\"" \
+    >"$pgbouncer_runtime_credential"
+  failures=0
+  check_pgbouncer_plaintext_userlist_contract
+  [[ "$failures" == "1" ]]
+
+  printf '%s\n' \
+    '"ascendany_catalog_publisher_login" "SCRAM-SHA-256$4096:c2FsdDE=$c3RvcmVkMQ==:c2VydmVyMQ=="' \
+    '"ascendanyd_login" "SCRAM-SHA-256$4096:c2FsdDI=$c3RvcmVkMg==:c2VydmVyMg=="' \
+    >"$pgbouncer_runtime_credential"
+  failures=0
+  check_pgbouncer_plaintext_userlist_contract
+  [[ "$failures" == "1" ]]
+
+  cp "$fixture_root/userlist.valid" "$pgbouncer_runtime_credential"
+  pgbouncer_userlist_mode_drift=1
+  failures=0
+  check_pgbouncer_plaintext_userlist_contract
+  [[ "$failures" == "1" ]]
+  pgbouncer_userlist_mode_drift=0
+
+  printf '%s\n' \
+    "\"ascendany_catalog_publisher_login\" \"$catalog_publisher_db_password\"" \
+    >"$pgbouncer_runtime_credential"
+  failures=0
+  check_pgbouncer_plaintext_userlist_contract
+  [[ "$failures" == "1" ]]
+
+  printf '%s\n' \
+    "\"ascendany_catalog_publisher_login\" \"$catalog_publisher_db_password\"" \
+    "\"ascendanyd_login\" \"$runtime_db_password\"" \
+    '"extra_login" "ExtraDatabasePassword0123456789ABCDEF"' \
+    >"$pgbouncer_runtime_credential"
+  failures=0
+  check_pgbouncer_plaintext_userlist_contract
+  [[ "$failures" == "1" ]]
+
+  cp "$fixture_root/userlist.valid" "$pgbouncer_runtime_credential"
 
   pgbouncer_package_drift=1
   failures=0

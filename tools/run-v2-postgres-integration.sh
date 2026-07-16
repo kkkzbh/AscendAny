@@ -226,35 +226,23 @@ publish_pgbouncer_userlist() {
   temporary_userlist="$(mktemp "${PGBOUNCER_USERLIST_PATH}.new.XXXXXX")"
   (
     trap 'rm -f -- "${temporary_userlist}"' EXIT
-    printf '%s\n' "${admin_line}" >"${temporary_userlist}"
-    admin_psql postgres \
-      --tuples-only \
-      --no-align \
-      >>"${temporary_userlist}" <<'SQL'
-SELECT format('"%s" "%s"', rolname, rolpassword)
-FROM pg_authid
-WHERE rolname IN ('ascendanyd_login', 'ascendany_catalog_publisher_login')
-  AND rolpassword LIKE 'SCRAM-SHA-256$%'
-ORDER BY CASE rolname
-    WHEN 'ascendanyd_login' THEN 1
-    WHEN 'ascendany_catalog_publisher_login' THEN 2
-END;
-SQL
+    {
+      printf '%s\n' "${admin_line}"
+      printf '"ascendany_catalog_publisher_login" "%s"\n' "${CATALOG_PUBLISHER_PASSWORD}"
+      printf '"ascendanyd_login" "%s"\n' "${RUNTIME_PASSWORD}"
+    } >"${temporary_userlist}"
     if [[ "$(wc -l <"${temporary_userlist}" | tr -d ' ')" != 3 ||
-      "$(grep -c ' "SCRAM-SHA-256\$' "${temporary_userlist}")" != 3 ]]; then
-      printf 'PostgreSQL did not yield the exact ordered PgBouncer SCRAM identities\n' >&2
+      "$(grep -c ' "SCRAM-SHA-256\$' "${temporary_userlist}")" != 1 ||
+      "$(sed -n '1p' "${temporary_userlist}")" != "${admin_line}" ||
+      "$(sed -n '2p' "${temporary_userlist}")" != \
+        "\"ascendany_catalog_publisher_login\" \"${CATALOG_PUBLISHER_PASSWORD}\"" ||
+      "$(sed -n '3p' "${temporary_userlist}")" != \
+        "\"ascendanyd_login\" \"${RUNTIME_PASSWORD}\"" ]]; then
+      printf 'PgBouncer auth_file differs from the exact admin-SCRAM/app-plaintext identity contract\n' >&2
       exit 1
     fi
-    if [[ "$(sed -n '1s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != "${PGBOUNCER_ADMIN_USER}" ||
-      "$(sed -n '2s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != ascendanyd_login ||
-      "$(sed -n '3s/^"\([^"]*\)" .*/\1/p' "${temporary_userlist}")" != ascendany_catalog_publisher_login ]]; then
-      printf 'PostgreSQL returned PgBouncer SCRAM identities in a noncanonical order\n' >&2
-      exit 1
-    fi
-    if grep -Fq -- "${PGBOUNCER_ADMIN_PASSWORD}" "${temporary_userlist}" ||
-      grep -Fq -- "${RUNTIME_PASSWORD}" "${temporary_userlist}" ||
-      grep -Fq -- "${CATALOG_PUBLISHER_PASSWORD}" "${temporary_userlist}"; then
-      printf 'PgBouncer userlist publication exposed plaintext credential material\n' >&2
+    if grep -Fq -- "${PGBOUNCER_ADMIN_PASSWORD}" "${temporary_userlist}"; then
+      printf 'PgBouncer auth_file exposed the console administrator plaintext password\n' >&2
       exit 1
     fi
     chmod 0400 -- "${temporary_userlist}"
@@ -263,6 +251,25 @@ SQL
     sync -f -- "${PGBOUNCER_USERLIST_PARENT}"
     trap - EXIT
   )
+}
+
+verify_postgres_app_scram_verifiers() {
+  local identities
+  identities="$(admin_psql postgres --tuples-only --no-align <<'SQL'
+SELECT rolname
+FROM pg_authid
+WHERE rolname IN ('ascendany_catalog_publisher_login', 'ascendanyd_login')
+  AND rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$'
+ORDER BY CASE rolname
+    WHEN 'ascendany_catalog_publisher_login' THEN 1
+    WHEN 'ascendanyd_login' THEN 2
+END;
+SQL
+)"
+  if [[ "${identities}" != $'ascendany_catalog_publisher_login\nascendanyd_login' ]]; then
+    printf 'PostgreSQL app login passwords are not exact SCRAM-SHA-256 verifiers\n' >&2
+    exit 1
+  fi
 }
 
 runtime_psql() {
@@ -287,6 +294,41 @@ catalog_publisher_psql() {
     --username=ascendany_catalog_publisher_login \
     --dbname="${DATABASE_NAME}" \
     "$@"
+}
+
+verify_pgbouncer_reconnect_regression() {
+  local runtime_identity catalog_publisher_identity
+
+  runtime_identity="$(runtime_psql --tuples-only --no-align \
+    --command="SELECT session_user || ':' || current_database()")"
+  [[ "${runtime_identity}" == "ascendanyd_login:${DATABASE_NAME}" ]] || {
+    printf 'first new runtime client connection returned %s\n' "${runtime_identity:-<empty>}" >&2
+    exit 1
+  }
+  catalog_publisher_identity="$(catalog_publisher_psql --tuples-only --no-align \
+    --command="SELECT session_user || ':' || current_database()")"
+  [[ "${catalog_publisher_identity}" == "ascendany_catalog_publisher_login:${DATABASE_NAME}" ]] || {
+    printf 'first new catalog publisher client connection returned %s\n' \
+      "${catalog_publisher_identity:-<empty>}" >&2
+    exit 1
+  }
+
+  pgbouncer_admin_psql --command="RECONNECT ${DATABASE_NAME}" >/dev/null
+
+  runtime_identity="$(runtime_psql --tuples-only --no-align \
+    --command="SELECT session_user || ':' || current_database()")"
+  [[ "${runtime_identity}" == "ascendanyd_login:${DATABASE_NAME}" ]] || {
+    printf 'second new runtime client connection after RECONNECT returned %s\n' \
+      "${runtime_identity:-<empty>}" >&2
+    exit 1
+  }
+  catalog_publisher_identity="$(catalog_publisher_psql --tuples-only --no-align \
+    --command="SELECT session_user || ':' || current_database()")"
+  [[ "${catalog_publisher_identity}" == "ascendany_catalog_publisher_login:${DATABASE_NAME}" ]] || {
+    printf 'second new catalog publisher client connection after RECONNECT returned %s\n' \
+      "${catalog_publisher_identity:-<empty>}" >&2
+    exit 1
+  }
 }
 
 backup_psql() {
@@ -375,9 +417,10 @@ ALTER ROLE ascendany_backup_login PASSWORD :'backup_password';
 ALTER ROLE ascendany_restore_login PASSWORD :'restore_password';
 SQL
 
+  verify_postgres_app_scram_verifiers
   publish_pgbouncer_userlist
   pgbouncer_admin_psql --command='RELOAD' >/dev/null
-  pgbouncer_admin_psql --command="RECONNECT ${DATABASE_NAME}" >/dev/null
+  verify_pgbouncer_reconnect_regression
 }
 
 run_migrations() {
@@ -1073,7 +1116,9 @@ main() {
     fi
   done
 
-  printf '\nAll %d env-gated PostgreSQL integration tests executed without skips.\n' "${#TEST_CASES[@]}"
+  printf '\nPGBOUNCER_RECONNECT_RESULT auth_file=app_plaintext runtime_first=passed catalog_first=passed reconnect=passed runtime_second=passed catalog_second=passed repetitions=%d\n' \
+    "${#TEST_CASES[@]}"
+  printf 'All %d env-gated PostgreSQL integration tests executed without skips.\n' "${#TEST_CASES[@]}"
 }
 
 main "$@"

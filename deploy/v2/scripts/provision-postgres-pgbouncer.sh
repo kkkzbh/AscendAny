@@ -441,15 +441,15 @@ SQL
 
 generate_pool_credential() {
   local plaintext="$stage_root/pgbouncer-userlist"
-  postgres_psql --dbname=postgres --tuples-only --no-align >"$plaintext" <<'SQL'
-SELECT format('"%s" "%s"', rolname, rolpassword)
-FROM pg_authid
-WHERE rolname = ANY(ARRAY['ascendanyd_login', 'ascendany_catalog_publisher_login'])
-  AND rolpassword ~ '^SCRAM-SHA-256\$4096:[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2}:[A-Za-z0-9+/]+={0,2}$'
-ORDER BY rolname;
-SQL
+  {
+    /usr/bin/printf '%s' '"ascendany_catalog_publisher_login" "'
+    /usr/bin/cat -- "$CATALOG_PUBLISHER_PASSWORD_FILE"
+    /usr/bin/printf '%s' $'"\n"ascendanyd_login" "'
+    /usr/bin/cat -- "$RUNTIME_PASSWORD_FILE"
+    /usr/bin/printf '%s\n' '"'
+  } >"$plaintext"
   [[ "$(/usr/bin/wc -l <"$plaintext")" == 2 ]] ||
-    fail pgbouncer_auth 'PgBouncer userlist generation did not produce exactly two SCRAM identities'
+    fail pgbouncer_auth 'PgBouncer userlist generation did not produce exactly two plaintext password identities'
   /usr/bin/chown 0:0 "$plaintext"
   /usr/bin/chmod 0600 "$plaintext"
   encrypt_credential pgbouncer_userlist "$plaintext" pgbouncer_userlist.cred
@@ -551,28 +551,60 @@ SQL
 
 verify_pool_identity() {
   local login="$1" password_file="$2"
-  local pgpass="$stage_root/${login}.pgpass" identity='' attempt
+  local pgpass="$stage_root/${login}.pgpass" identity='' backend_pid='' attempt
   /usr/bin/printf '127.0.0.1:6432:ascendany_v2:%s:' "$login" >"$pgpass"
   /usr/bin/cat "$password_file" >>"$pgpass"
   /usr/bin/printf '\n' >>"$pgpass"
   /usr/bin/chmod 0600 "$pgpass"
-  for attempt in {1..50}; do
+  for attempt in {1..200}; do
     if identity="$(PGPASSFILE="$pgpass" /usr/bin/psql -X --no-psqlrc --no-password \
       --host=127.0.0.1 --port=6432 --dbname=ascendany_v2 --username="$login" \
-      --tuples-only --no-align --set=ON_ERROR_STOP=1 --command='SELECT current_user' 2>/dev/null)"; then
+      --tuples-only --no-align --set=ON_ERROR_STOP=1 \
+      --command="SELECT current_user || '|' || pg_backend_pid()" 2>/dev/null)"; then
       break
     fi
     /usr/bin/sleep 0.1
   done
-  [[ "$identity" == "$login" ]] || fail pgbouncer "$login authentication through native PgBouncer failed"
+  [[ "$identity" =~ ^${login}\|([1-9][0-9]*)$ ]] ||
+    fail pgbouncer "$login authentication through native PgBouncer failed"
+  backend_pid="${BASH_REMATCH[1]}"
   /usr/bin/rm -f -- "$pgpass"
+  /usr/bin/printf '%s' "$backend_pid"
 }
 
-verify_pool_once() {
+terminate_pool_backends() {
+  local runtime_pid="$1" catalog_pid="$2" terminated
+  [[ "$runtime_pid" =~ ^[1-9][0-9]*$ && "$catalog_pid" =~ ^[1-9][0-9]*$ &&
+     "$runtime_pid" != "$catalog_pid" ]] ||
+    fail pgbouncer 'native PgBouncer returned invalid or shared app backend identities'
+  terminated="$(postgres_psql --dbname=postgres --tuples-only --no-align <<SQL
+SELECT count(*)
+FROM (
+  SELECT pg_terminate_backend(pid, 5000) AS terminated
+  FROM (VALUES ($runtime_pid), ($catalog_pid)) AS expected(pid)
+) AS pool_backends
+WHERE terminated;
+SQL
+)"
+  [[ "$terminated" == 2 ]] ||
+    fail pgbouncer 'native PgBouncer did not retain exactly two app backend connections for reconnect verification'
+  [[ "$(postgres_psql --dbname=postgres --tuples-only --no-align \
+      --command="SELECT count(*) FROM pg_stat_activity WHERE pid IN ($runtime_pid, $catalog_pid)")" == 0 ]] ||
+    fail pgbouncer 'terminated PgBouncer app backends remain visible in PostgreSQL'
+}
+
+verify_pool_reconnect() {
+  local runtime_pid_before catalog_pid_before runtime_pid_after catalog_pid_after
   /usr/bin/systemctl start "$TARGET_POOL_UNIT" || fail pgbouncer 'native PgBouncer failed to start'
   pool_started=1
-  verify_pool_identity ascendanyd_login "$RUNTIME_PASSWORD_FILE"
-  verify_pool_identity ascendany_catalog_publisher_login "$CATALOG_PUBLISHER_PASSWORD_FILE"
+  runtime_pid_before="$(verify_pool_identity ascendanyd_login "$RUNTIME_PASSWORD_FILE")"
+  catalog_pid_before="$(verify_pool_identity ascendany_catalog_publisher_login "$CATALOG_PUBLISHER_PASSWORD_FILE")"
+  terminate_pool_backends "$runtime_pid_before" "$catalog_pid_before"
+  runtime_pid_after="$(verify_pool_identity ascendanyd_login "$RUNTIME_PASSWORD_FILE")"
+  catalog_pid_after="$(verify_pool_identity ascendany_catalog_publisher_login "$CATALOG_PUBLISHER_PASSWORD_FILE")"
+  [[ "$runtime_pid_after" != "$runtime_pid_before" &&
+     "$catalog_pid_after" != "$catalog_pid_before" ]] ||
+    fail pgbouncer 'native PgBouncer did not establish new app backends after forced termination'
   /usr/bin/systemctl stop "$TARGET_POOL_UNIT" || fail pgbouncer 'native PgBouncer failed to return to inactive state'
   pool_started=0
   [[ "$(/usr/bin/systemctl is-enabled "$TARGET_POOL_UNIT" 2>/dev/null || true)" == disabled &&
@@ -661,7 +693,7 @@ main() {
   install_postgres_access_files
   pass access_contract
 
-  verify_pool_once
+  verify_pool_reconnect
   pass pgbouncer
 
   write_receipt

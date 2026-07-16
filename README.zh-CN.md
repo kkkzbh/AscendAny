@@ -84,12 +84,16 @@ pnpm --filter @ascendany/desktop build
 
 一次性集成环境使用 digest-pinned PostgreSQL 17 镜像，以及 release lock 固定的
 Fedora 44 x86_64 native PgBouncer 1.25.2 RPM。PgBouncer 的临时配置与 HBA 规则
-直接派生自 production release，私有 runtime tree 只保存 SCRAM verifier，服务仅
-绑定 loopback。PostgreSQL 镜像缺失时需要显式执行 pull；演练脚本不会拉取或启动
-PgBouncer 镜像。
-每次重置一次性 role password 后，integration runner 都会通过同目录 fsync 与
-atomic rename 发布精确的 v2 capability-role SCRAM verifier 集合，再显式执行 PgBouncer
-`RELOAD` 和 database `RECONNECT`。
+直接派生自 production release，服务仅绑定 loopback。私有 auth file 保存 console
+SCRAM verifier，以及 runtime、catalog publisher 两条精确明文密码；production 将后两条
+记录持久化为 host-encrypted systemd credential，明文只出现在 PgBouncer 私有的 runtime
+credential mount。客户端与 PostgreSQL backend 认证继续使用 `scram-sha-256`。该约定规避
+PgBouncer 1.25.2 的 stored-verifier reconnect 回归；上游修复见
+[PgBouncer #1504](https://github.com/pgbouncer/pgbouncer/pull/1504)。PostgreSQL 镜像缺失时
+需要显式执行 pull；演练脚本不会拉取或启动 PgBouncer 镜像。
+每次重置一次性 role password 后，integration runner 都会通过同目录 fsync 与 atomic
+rename 发布精确的应用 identity 记录，并在显式执行 PgBouncer `RELOAD` 和 database
+`RECONNECT` 的前后分别验证两种 identity。
 
 ```bash
 tools/run-v2-postgres-podman-rehearsal.sh \

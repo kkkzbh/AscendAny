@@ -84,12 +84,15 @@ pgbouncer_binary="/usr/bin/pgbouncer"
 pgbouncer_nevra="pgbouncer-1.25.2-1.fc44.x86_64"
 pgbouncer_binary_sha256="42c722ab7352ccbb1eaba8dcc6d7fb9d28df11fbe1a73aa8b177c88dcd0bb318"
 pgbouncer_binary_size="467960"
+systemd_creds_binary="/usr/bin/systemd-creds"
 initialization_node_binary="/usr/bin/node-22"
 initialization_node_version="v22.22.2"
 initialization_node_package="nodejs22-22.22.2-3.fc44.x86_64"
 initialization_node_sha256="7ed75caca3ed639ebde926277e43ed04c67de55bfece9d56bd752159d96368f0"
 pgbouncer_credential_source="/etc/ascendany/credentials/pgbouncer_userlist.cred"
 pgbouncer_runtime_credential="/run/credentials/ascendany-pgbouncer.service/pgbouncer_userlist"
+runtime_db_credential_source="/etc/ascendany/credentials/runtime_db_password.cred"
+catalog_publisher_db_credential_source="$catalog_publisher_config_root/credentials/catalog_publisher_db_password.cred"
 retired_api_unit="ascendany-api.service"
 retired_api_port="8000"
 retired_trainer_unit="ascendany-trainer-agent.service"
@@ -2494,11 +2497,73 @@ check_retired_generation_closure() {
   fi
 }
 
+encrypted_credential_sha256() {
+  local credential_name="$1" source="$2" digest
+  if ! digest="$({
+      "$systemd_creds_binary" --name="$credential_name" decrypt "$source" - 2>/dev/null
+    } | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')" ||
+     [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+    return 1
+  fi
+  /usr/bin/printf '%s' "$digest"
+}
+
+check_pgbouncer_plaintext_userlist_contract() {
+  local runtime_metadata catalog_pattern runtime_pattern
+  local catalog_password runtime_password catalog_source_sha runtime_source_sha
+  local catalog_userlist_sha runtime_userlist_sha
+  local -a userlist_lines=()
+
+  runtime_metadata="$(stat -Lc '%u:%g:%a:%h' "$pgbouncer_runtime_credential" 2>/dev/null || true)"
+  if [[ ! -s "$pgbouncer_runtime_credential" || -L "$pgbouncer_runtime_credential" ||
+        "$runtime_metadata" != "0:0:440:1" ||
+        -n "$(tail -c 1 -- "$pgbouncer_runtime_credential" 2>/dev/null || true)" ]]; then
+    fail "decrypted PgBouncer plaintext userlist violates the protected runtime-file contract"
+    return
+  fi
+
+  mapfile -t userlist_lines <"$pgbouncer_runtime_credential"
+  catalog_pattern='^"ascendany_catalog_publisher_login" "([A-Za-z0-9._~+/@%=-]{32,128})"$'
+  runtime_pattern='^"ascendanyd_login" "([A-Za-z0-9._~+/@%=-]{32,128})"$'
+  if (( ${#userlist_lines[@]} != 2 )) ||
+     [[ ! "${userlist_lines[0]:-}" =~ $catalog_pattern ]]; then
+    fail "decrypted PgBouncer userlist violates the fixed-order two-record plaintext contract"
+    return
+  fi
+  catalog_password="${BASH_REMATCH[1]}"
+  if [[ ! "${userlist_lines[1]:-}" =~ $runtime_pattern ]]; then
+    fail "decrypted PgBouncer userlist violates the fixed-order two-record plaintext contract"
+    return
+  fi
+  runtime_password="${BASH_REMATCH[1]}"
+
+  if ! catalog_source_sha="$(encrypted_credential_sha256 \
+      catalog_publisher_db_password "$catalog_publisher_db_credential_source")" ||
+     ! runtime_source_sha="$(encrypted_credential_sha256 \
+      db_password "$runtime_db_credential_source")"; then
+    fail "PgBouncer plaintext userlist cannot be bound to the encrypted database credentials"
+    return
+  fi
+  catalog_userlist_sha="$({
+      /usr/bin/printf '%s' "$catalog_password"
+    } | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')"
+  runtime_userlist_sha="$({
+      /usr/bin/printf '%s' "$runtime_password"
+    } | /usr/bin/sha256sum | /usr/bin/awk '{print $1}')"
+  if [[ "$catalog_userlist_sha" != "$catalog_source_sha" ||
+        "$runtime_userlist_sha" != "$runtime_source_sha" ]]; then
+    fail "PgBouncer plaintext userlist differs from the encrypted database credentials"
+    return
+  fi
+
+  pass "native PgBouncer runs with the exact encrypted runtime and catalog publisher plaintext auth entries"
+}
+
 check_pgbouncer_contract() {
   local failures_before="$failures" entries metadata installed_nevra binary_sha verify_output verify_status=0
   local active enabled fragment dropins reload dynamic user group main_pid executable
   local uid_line gid_line uid_real uid_effective uid_saved uid_fs
-  local gid_real gid_effective gid_saved gid_fs field value runtime_metadata
+  local gid_real gid_effective gid_saved gid_fs field value
   local relative path conflicting_containers
   local -a argv=()
 
@@ -2637,30 +2702,7 @@ check_pgbouncer_contract() {
     fail "native PgBouncer process inherited proxy or plaintext secret environment"
   fi
 
-  runtime_metadata="$(stat -Lc '%u:%g:%a:%h' "$pgbouncer_runtime_credential" 2>/dev/null || true)"
-  if [[ ! -s "$pgbouncer_runtime_credential" || -L "$pgbouncer_runtime_credential" ||
-        "$runtime_metadata" != "0:0:440:1" ||
-        -n "$(tail -c 1 -- "$pgbouncer_runtime_credential" 2>/dev/null || true)" ]] ||
-     ! LC_ALL=C awk '
-       BEGIN {
-         b64 = "[A-Za-z0-9+/]+={0,2}"
-         verifier = "SCRAM-SHA-256\\$4096:" b64 "\\$" b64 ":" b64
-       }
-       NR == 1 {
-         if ($0 !~ ("^\"ascendany_catalog_publisher_login\" \"" verifier "\"$")) exit 1
-         next
-       }
-       NR == 2 {
-         if ($0 !~ ("^\"ascendanyd_login\" \"" verifier "\"$")) exit 1
-         next
-       }
-       { exit 1 }
-       END { if (NR != 2) exit 1 }
-     ' "$pgbouncer_runtime_credential"; then
-    fail "decrypted PgBouncer userlist violates the two-record runtime and catalog publisher SCRAM contract"
-  else
-    pass "native PgBouncer runs with the exact encrypted runtime and catalog publisher SCRAM capabilities"
-  fi
+  check_pgbouncer_plaintext_userlist_contract
 
   if (( failures == failures_before )); then
     probe_pgbouncer_hba_rejection ascendanyd_login postgres
@@ -4780,7 +4822,7 @@ main() {
     printf 'Production validation failed with %d finding(s).\n' "$failures" >&2
     return 1
   fi
-  for command in systemctl realpath find stat psql ss grep getent id runuser jq curl sha256sum base64 awk cmp date dirname sed sort tail tr mktemp chmod readlink podman rpm; do
+  for command in systemctl systemd-creds realpath find stat psql ss grep getent id runuser jq curl sha256sum base64 awk cmp date dirname sed sort tail tr mktemp chmod readlink podman rpm; do
     require_command "$command" || true
   done
 

@@ -42,17 +42,23 @@ manifest SHA-256, size, and mode, and rejects unmanifested installed entries.
   `deploy/v2/config/fedora-runtime-packages.json`
 
 The runner derives its temporary PgBouncer configuration and HBA policy from
-the installed release. Its mode-0400 userlist contains PostgreSQL-generated
-SCRAM verifiers only. Production supplies the same userlist contract through an
-encrypted systemd credential; the disposable runner keeps the verifier file in
-its mode-0700 temporary tree and removes it on exit.
-The PostgreSQL integration runner republishes the exact v2 runtime verifier
-after every role-password reset using a same-directory temporary
-file, fsync, mode `0400`, atomic rename, and directory fsync. It then issues
-explicit PgBouncer `RELOAD` and database `RECONNECT` commands before any runtime
-probe. `ASCENDANY_CI_PGBOUNCER_USERLIST_PATH` is required and must name a
-canonical, caller-owned, mode-`0400` file inside a canonical caller-owned
-mode-`0700` directory.
+the installed release. Its mode-0400 userlist contains exact plaintext entries
+for the v2 runtime and catalog publisher. The nested rootless PostgreSQL
+integration rehearsal adds one console SCRAM verifier ahead of those two app
+entries so it can issue an explicit `RECONNECT`. Production persists only the
+two app entries inside a host-encrypted systemd credential; plaintext exists in
+PgBouncer's private runtime credential mount. Both client HBA and PostgreSQL
+backend authentication remain SCRAM. This is the documented PgBouncer
+plaintext-password path and avoids the 1.25.2 stored-verifier reconnect
+regression fixed by
+[PgBouncer #1504](https://github.com/pgbouncer/pgbouncer/pull/1504).
+The PostgreSQL integration runner republishes the exact app entries after every
+role-password reset using a same-directory temporary file, fsync, mode `0400`,
+atomic rename, and directory fsync. It proves both app identities, issues
+explicit PgBouncer `RELOAD` and database `RECONNECT` commands, and proves both
+identities again through new client connections. `ASCENDANY_CI_PGBOUNCER_USERLIST_PATH`
+is required and must name a canonical, caller-owned, mode-`0400` file inside a
+canonical caller-owned mode-`0700` directory.
 
 The checkout must be completely clean, including untracked files. The requested
 commit must equal `HEAD`. The explicit destructive confirmation only authorizes

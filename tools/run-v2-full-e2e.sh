@@ -1199,21 +1199,14 @@ ALTER ROLE ${MIGRATOR_LOGIN} PASSWORD '${MIGRATOR_PASSWORD}';
 ALTER ROLE ${BACKUP_LOGIN} PASSWORD '${BACKUP_PASSWORD}';
 ALTER ROLE ${RESTORE_LOGIN} PASSWORD '${RESTORE_PASSWORD}';
 SQL
-admin_psql postgres --tuples-only --no-align >"${PGBOUNCER_USERLIST_FILE}" <<'SQL'
-SELECT format('"%s" "%s"', rolname, rolpassword)
-FROM pg_authid
-WHERE rolname IN ('ascendany_catalog_publisher_login', 'ascendanyd_login')
-  AND rolpassword LIKE 'SCRAM-SHA-256$%'
-ORDER BY rolname
-SQL
-[[ "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 2 ]] ||
-  fail 'real PgBouncer E2E did not capture the exact runtime and publisher SCRAM identities'
-[[ "$(grep -c ' "SCRAM-SHA-256\$' "${PGBOUNCER_USERLIST_FILE}")" == 2 ]] ||
-  fail 'real PgBouncer E2E userlist contains a non-SCRAM credential'
-if grep -Fq -- "${RUNTIME_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}" ||
-   grep -Fq -- "${CATALOG_PUBLISHER_PASSWORD}" "${PGBOUNCER_USERLIST_FILE}"; then
-  fail 'real PgBouncer E2E userlist contains plaintext credential material'
-fi
+printf '%s\n' \
+  "\"ascendany_catalog_publisher_login\" \"${CATALOG_PUBLISHER_PASSWORD}\"" \
+  "\"ascendanyd_login\" \"${RUNTIME_PASSWORD}\"" \
+  >"${PGBOUNCER_USERLIST_FILE}"
+[[ "$(wc -l <"${PGBOUNCER_USERLIST_FILE}" | tr -d ' ')" == 2 &&
+   "$(grep -Fxc -- "\"ascendany_catalog_publisher_login\" \"${CATALOG_PUBLISHER_PASSWORD}\"" "${PGBOUNCER_USERLIST_FILE}")" == 1 &&
+   "$(grep -Fxc -- "\"ascendanyd_login\" \"${RUNTIME_PASSWORD}\"" "${PGBOUNCER_USERLIST_FILE}")" == 1 ]] ||
+  fail 'real PgBouncer E2E userlist differs from the exact plaintext app identity contract'
 chmod 0400 -- "${PGBOUNCER_USERLIST_FILE}"
 
 /usr/bin/env -i \
@@ -1260,6 +1253,69 @@ grep -Fx 'auth_type = hba' "${PGBOUNCER_CONFIG_FILE}" >/dev/null ||
   fail 'release-owned PgBouncer config does not enforce HBA authentication'
 readonly PGBOUNCER_POOL_MODE=transaction
 [[ "${PGBOUNCER_POOL_MODE}" == transaction ]] || fail 'PgBouncer is not in transaction mode'
+
+verify_pool_identity() {
+  local login="$1" password="$2" expected="$3" identity='' observed='' backend_pid='' attempt
+  for attempt in {1..200}; do
+    if identity="$(/usr/bin/env PGPASSWORD="${password}" psql \
+        -X --no-password --tuples-only --no-align \
+        --host="${POOL_HOST}" --port=6432 --username="${login}" \
+        --dbname="${SOURCE_DATABASE}" \
+        --command="SELECT session_user || ':' || current_user || '|' || pg_backend_pid()" 2>/dev/null)"; then
+      break
+    fi
+    sleep 0.1
+  done
+  backend_pid="${identity##*|}"
+  observed="${identity%|*}"
+  [[ "${observed}" == "${expected}" && "${backend_pid}" =~ ^[1-9][0-9]*$ ]] ||
+    fail "PgBouncer E2E identity verification failed for ${login}"
+  printf '%s' "${backend_pid}"
+}
+
+runtime_backend_pid_before="$(verify_pool_identity \
+  "${RUNTIME_LOGIN}" "${RUNTIME_PASSWORD}" \
+  "${RUNTIME_LOGIN}:${RUNTIME_LOGIN}")"
+catalog_backend_pid_before="$(verify_pool_identity \
+  "${CATALOG_PUBLISHER_LOGIN}" "${CATALOG_PUBLISHER_PASSWORD}" \
+  "${CATALOG_PUBLISHER_LOGIN}:${CATALOG_PUBLISHER_LOGIN}")"
+[[ "${runtime_backend_pid_before}" != "${catalog_backend_pid_before}" ]] ||
+  fail 'PgBouncer E2E app identities unexpectedly shared one PostgreSQL backend'
+terminated_pool_backends="$(admin_psql postgres --tuples-only --no-align \
+  --set=runtime_backend_pid="${runtime_backend_pid_before}" \
+  --set=catalog_backend_pid="${catalog_backend_pid_before}" <<'SQL'
+SELECT count(*)
+FROM (
+  SELECT pg_terminate_backend(pid, 5000) AS terminated
+  FROM (VALUES (:'runtime_backend_pid'::int), (:'catalog_backend_pid'::int)) AS expected(pid)
+) AS pool_backends
+WHERE terminated;
+SQL
+)"
+[[ "${terminated_pool_backends}" == 2 ]] ||
+  fail 'PgBouncer E2E did not retain exactly two app backends for reconnect verification'
+remaining_pool_backends="$(admin_psql postgres --tuples-only --no-align \
+  --set=runtime_backend_pid="${runtime_backend_pid_before}" \
+  --set=catalog_backend_pid="${catalog_backend_pid_before}" <<'SQL'
+SELECT count(*)
+FROM pg_stat_activity
+WHERE pid IN (:'runtime_backend_pid'::int, :'catalog_backend_pid'::int);
+SQL
+)"
+[[ "${remaining_pool_backends}" == 0 ]] ||
+  fail 'terminated PgBouncer E2E app backends remain visible in PostgreSQL'
+runtime_backend_pid_after="$(verify_pool_identity \
+  "${RUNTIME_LOGIN}" "${RUNTIME_PASSWORD}" \
+  "${RUNTIME_LOGIN}:${RUNTIME_LOGIN}")"
+catalog_backend_pid_after="$(verify_pool_identity \
+  "${CATALOG_PUBLISHER_LOGIN}" "${CATALOG_PUBLISHER_PASSWORD}" \
+  "${CATALOG_PUBLISHER_LOGIN}:${CATALOG_PUBLISHER_LOGIN}")"
+[[ "${runtime_backend_pid_after}" != "${runtime_backend_pid_before}" &&
+   "${catalog_backend_pid_after}" != "${catalog_backend_pid_before}" ]] ||
+  fail 'PgBouncer E2E did not establish new app backends after forced termination'
+readonly runtime_backend_pid_before catalog_backend_pid_before
+readonly terminated_pool_backends remaining_pool_backends
+readonly runtime_backend_pid_after catalog_backend_pid_after
 
 probe_pool_hba_rejection() {
   local user="$1" database="$2" output expected
@@ -1979,4 +2035,4 @@ rmdir -- "${RESTORE_RUNTIME_ROOT}"
   fail 'full E2E mutated the reviewed checkout'
 
 /usr/bin/printf \
-  'FULL_E2E_RESULT release_purpose=acceptance_test production_installer_rejection=purpose_gate release_manifest_verified=true acceptance_installer_verified=true postgres_major=17 pgbouncer_package=1.25.2-1.fc44 pgbouncer_pool_mode=transaction pgbouncer_auth_type=hba pgbouncer_userlist=v2_runtime_catalog_publisher_scram_only sdk_generated=true pintia_exporter_checked=true typescript_apps=5 api_import=succeeded import_replay=converged typed_domain_duplicate=superseded new_snapshot_sequence=2 analytics=succeeded enrollment=single_use student_analytics=ready recommendation=fresh recommendation_output=ordered model_catalog_provenance=exact app_http_smoke=5 backup_commands=3 artifact_count=3 restored_database_exact=true restored_model_provenance_exact=true role_closure_reapplied=true sandbox_acceptance=separate_fail_closed_gate\n'
+  'FULL_E2E_RESULT release_purpose=acceptance_test production_installer_rejection=purpose_gate release_manifest_verified=true acceptance_installer_verified=true postgres_major=17 pgbouncer_package=1.25.2-1.fc44 pgbouncer_pool_mode=transaction pgbouncer_auth_type=hba pgbouncer_userlist=v2_runtime_catalog_publisher_plaintext_private_test_file pgbouncer_backend_reconnect=verified sdk_generated=true pintia_exporter_checked=true typescript_apps=5 api_import=succeeded import_replay=converged typed_domain_duplicate=superseded new_snapshot_sequence=2 analytics=succeeded enrollment=single_use student_analytics=ready recommendation=fresh recommendation_output=ordered model_catalog_provenance=exact app_http_smoke=5 backup_commands=3 artifact_count=3 restored_database_exact=true restored_model_provenance_exact=true role_closure_reapplied=true sandbox_acceptance=separate_fail_closed_gate\n'
