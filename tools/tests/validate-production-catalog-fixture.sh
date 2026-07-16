@@ -64,6 +64,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
     local target_version="$1"
     local target_commit="$2"
     local target_build_time="$3"
+    local target_model_release_id="${4:-$publication_id}"
     local authorization_id
     printf -v authorization_id '77777777-7777-4777-8777-%012d' "$publication_id"
     jq -jScn \
@@ -83,7 +84,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
       --argjson expectedHead "$expected_head" \
       --argjson head "$head" \
       --argjson currentRevision "$current_revision" \
-      --arg targetModelReleaseId "$publication_id" \
+      --arg targetModelReleaseId "$target_model_release_id" \
       --argjson configurationMutated "$configuration_mutated" '
         {
           schema: "ascendany.knowledge_catalog.publication-receipt.v1",
@@ -166,8 +167,8 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
         printf '%s\n' "$fixture_database_ids"
         ;;
       *ascendany-validator:catalog-publication-target*)
-        if [[ "$arguments" == *"-v expected_prior_revision=$fixture_expected_prior_revision"* &&
-              "$arguments" == *"-v expected_prior_sha=$fixture_expected_prior_sha"* ]]; then
+        if [[ " $arguments " == *" -v expected_prior_revision=$fixture_expected_prior_revision "* &&
+              " $arguments " == *" -v expected_prior_sha=$fixture_expected_prior_sha "* ]]; then
           printf '%s\n' "$fixture_target_state"
         else
           return 1
@@ -215,10 +216,21 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   check_catalog_publication_binding
   [[ "$failures" == 0 ]]
 
-  reset_initial_fixture
+  rm -f -- "$catalog_receipt_root"/*
+  write_receipt 1 0 1 true "$release_catalog_sha256" "$TARGET_MODEL_SHA256" \
+    "$TARGET_MODEL_ID" 1 "$TARGET_MODEL_SHA256" \
+    "$HISTORICAL_VERSION" "$HISTORICAL_COMMIT" "$HISTORICAL_BUILD_TIME"
+  write_receipt 2 1 1 false "$release_catalog_sha256" "$TARGET_MODEL_SHA256" \
+    "$TARGET_MODEL_ID" 2 "$TARGET_MODEL_SHA256" \
+    "$TARGET_VERSION" "$TARGET_COMMIT" "$TARGET_BUILD_TIME" 1
+  deployment_transition=initial
   validation_phase=production
   observed_forward_model_head_revision=3
-  fixture_target_state="1|1|1|1|$TARGET_MODEL_SHA256|1|1|2"
+  observed_forward_model_artifact_sha256="$TARGET_MODEL_SHA256"
+  fixture_expected_prior_revision=2
+  fixture_expected_prior_sha="$TARGET_MODEL_SHA256"
+  fixture_database_ids=$'1\n2'
+  fixture_target_state="1|2|1|2|$TARGET_MODEL_SHA256|1|1|3"
   fixture_activation_state='3||3|1|3|3|0|1|2|0'
   failures=0
   check_catalog_publication_binding
