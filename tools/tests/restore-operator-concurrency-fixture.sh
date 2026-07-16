@@ -7,9 +7,10 @@ publisher="$repository_root/deploy/v2/scripts/publish-restore-evidence.sh"
 unit="$repository_root/deploy/v2/systemd/ascendany-restore-verify@.service"
 tmpfiles="$repository_root/deploy/v2/tmpfiles.d/ascendany-v2.conf"
 fixture_root="$(mktemp -d)"
+cross_filesystem_root="$(mktemp -d /dev/shm/ascendany-restore-publication.XXXXXX)"
 
 cleanup_fixture() {
-  rm -rf -- "$fixture_root"
+  rm -rf -- "$fixture_root" "$cross_filesystem_root"
 }
 trap cleanup_fixture EXIT
 
@@ -44,7 +45,7 @@ publish_validated_temp() {
   mv -f -- "$temporary" "$destination"
 }
 
-for required_command in awk cmp flock grep mapfile mktemp mv sha256sum stat; do
+for required_command in awk cmp cp flock grep mapfile mktemp mv sha256sum stat; do
   command -v "$required_command" >/dev/null 2>&1 || fail "required command is unavailable: $required_command"
 done
 
@@ -87,7 +88,7 @@ require_exact_line "$publisher" 'exec 8<>"$operator_lock"'
 require_exact_line "$publisher" 'flock -n 8 || fail "another restore verification is active"'
 require_exact_line "$publisher" 'exec 9<>"$publication_lock"'
 require_exact_line "$publisher" 'flock -n 9 || fail "another restore evidence publication is active"'
-require_exact_line "$publisher" 'quarantine="$(mktemp -d "$evidence_directory/.restore-quarantine.XXXXXX")"'
+require_exact_line "$publisher" 'quarantine="$(mktemp -d "$restore_parent/.restore-quarantine.XXXXXX")"'
 require_exact_line "$publisher" 'temporary="$(mktemp "$evidence_directory/.restore-verify.XXXXXX")"'
 require_exact_line "$publisher" 'mv --no-copy --no-clobber --no-target-directory -- "$pending_evidence" "$captured" ||'
 require_exact_line "$publisher" 'cp --no-dereference --reflink=never -- "$captured" "$temporary"'
@@ -96,6 +97,7 @@ require_exact_line "$publisher" 'chmod 0600 "$temporary"'
 require_exact_line "$publisher" "  ' \"\$temporary\" >/dev/null || fail \"captured restore evidence does not bind the installed release and backup\""
 require_exact_line "$publisher" 'evidence_time="$(jq -er '\''.time'\'' "$temporary")"'
 require_exact_line "$publisher" 'mv -f -- "$temporary" "$evidence_path"'
+require_exact_line "$publisher" 'sync -f "$restore_parent"'
 [[ "$(grep -Fc -- '"$pending_evidence"' "$publisher")" == "1" ]] ||
   fail 'publisher reads the mutable pending pathname outside the single atomic capture'
 
@@ -105,8 +107,12 @@ copy_line="$(line_number "$publisher" 'cp --no-dereference --reflink=never -- "$
 validation_line="$(line_number "$publisher" "  ' \"\$temporary\" >/dev/null || fail \"captured restore evidence does not bind the installed release and backup\"")"
 time_line="$(line_number "$publisher" 'evidence_time="$(jq -er '\''.time'\'' "$temporary")"')"
 publish_line="$(line_number "$publisher" 'mv -f -- "$temporary" "$evidence_path"')"
+captured_cleanup_line="$(line_number "$publisher" 'rm -f -- "$captured"')"
+source_sync_line="$(line_number "$publisher" 'sync -f "$restore_parent"')"
+trap_off_line="$(line_number "$publisher" 'trap - EXIT')"
 ((operator_lock_line < capture_line && capture_line < copy_line && copy_line < validation_line &&
-  validation_line < time_line && time_line < publish_line)) ||
+  validation_line < time_line && time_line < publish_line && publish_line < captured_cleanup_line &&
+  captured_cleanup_line < source_sync_line && source_sync_line < trap_off_line)) ||
   fail 'publisher capture, validation, and publication order drifted'
 printf 'PASS fixture restore-static-lock-and-capture-contract\n'
 
@@ -169,7 +175,7 @@ printf '%s\n' '{"backupId":"backup-20260711T000000Z-0123456789abcdef","status":"
 good_sha256="$(sha256sum -- "$good" | awk '{print $1}')"
 
 pending="$restore_state/restore-verify.backup-20260711T000000Z-0123456789abcdef.pending.json"
-quarantine="$(mktemp -d "$acceptance_state/.restore-quarantine.XXXXXX")"
+quarantine="$(mktemp -d "$restore_state/.restore-quarantine.XXXXXX")"
 captured="$quarantine/pending.json"
 temporary="$(mktemp "$acceptance_state/.restore-verify.XXXXXX")"
 evidence="$acceptance_state/restore-verify.json"
@@ -186,7 +192,7 @@ printf 'PASS fixture capture-before-source-replacement\n'
 # A replacement that wins before capture is captured, fails validation, and
 # cannot publish evidence.
 pending_before="$restore_state/restore-verify.backup-20260711T000001Z-fedcba9876543210.pending.json"
-quarantine_before="$(mktemp -d "$acceptance_state/.restore-quarantine.XXXXXX")"
+quarantine_before="$(mktemp -d "$restore_state/.restore-quarantine.XXXXXX")"
 captured_before="$quarantine_before/pending.json"
 temporary_before="$(mktemp "$acceptance_state/.restore-verify.XXXXXX")"
 evidence_before="$acceptance_state/restore-verify-before.json"
@@ -202,3 +208,38 @@ else
 fi
 [[ ! -e "$evidence_before" ]] || fail 'failed capture validation left published evidence'
 printf 'PASS fixture pre-capture-source-replacement-fails-closed\n'
+
+# systemd exposes each ReadWritePaths entry as an independent mount root. The
+# capture therefore stays beside the pending source, while the validated copy
+# and final rename stay inside the publication filesystem.
+[[ "$(stat -Lc '%d' "$fixture_root")" != "$(stat -Lc '%d' "$cross_filesystem_root")" ]] ||
+  fail 'cross-filesystem publication fixture does not span two filesystems'
+cross_restore="$fixture_root/cross-restore"
+cross_acceptance="$cross_filesystem_root/cross-acceptance"
+mkdir -m 0700 -- "$cross_restore" "$cross_acceptance"
+cross_direct_pending="$cross_restore/direct.pending.json"
+cross_direct_capture="$cross_acceptance/direct.capture.json"
+cp -- "$good" "$cross_direct_pending"
+if mv --no-copy --no-clobber --no-target-directory -- "$cross_direct_pending" "$cross_direct_capture" 2>/dev/null; then
+  fail 'cross-filesystem negative control unexpectedly allowed direct capture'
+fi
+[[ -f "$cross_direct_pending" && ! -e "$cross_direct_capture" ]] ||
+  fail 'cross-filesystem negative control did not fail before mutation'
+cross_pending="$cross_restore/restore-verify.backup-20260711T000002Z-0011223344556677.pending.json"
+cross_quarantine="$(mktemp -d "$cross_restore/.restore-quarantine.XXXXXX")"
+cross_captured="$cross_quarantine/pending.json"
+cross_temporary="$(mktemp "$cross_acceptance/.restore-verify.XXXXXX")"
+cross_evidence="$cross_acceptance/restore-verify.json"
+cp -- "$good" "$cross_pending"
+mv --no-copy --no-clobber --no-target-directory -- "$cross_pending" "$cross_captured"
+cp --no-dereference --reflink=never -- "$cross_captured" "$cross_temporary"
+publish_validated_temp "$cross_temporary" "$good_sha256" "$cross_evidence" ||
+  fail 'cross-filesystem validated copy could not be published'
+cmp --silent -- "$good" "$cross_evidence" ||
+  fail 'cross-filesystem publication changed the captured evidence bytes'
+[[ ! -e "$cross_pending" ]] || fail 'cross-filesystem capture retained the pending pathname'
+rm -f -- "$cross_captured"
+rmdir -- "$cross_quarantine"
+sync -f "$cross_restore"
+[[ ! -e "$cross_quarantine" ]] || fail 'cross-filesystem publication retained its source quarantine'
+printf 'PASS fixture cross-filesystem-capture-and-publication\n'

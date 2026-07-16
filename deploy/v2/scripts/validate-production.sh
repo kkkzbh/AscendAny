@@ -3759,8 +3759,6 @@ check_backup_schedule() {
         ! -f "$restore_lock_directory/publication.lock" || -L "$restore_lock_directory/publication.lock" ||
         "$(stat -Lc '%U:%G:%a:%h' "$restore_lock_directory/publication.lock" 2>/dev/null || true)" != "root:root:600:1" ]]; then
     fail "restore verifier stable operator/publication lock inodes violate the tmpfiles contract"
-  elif [[ "$(stat -Lc '%d' /var/lib/ascendany-restore)" != "$(stat -Lc '%d' "$evidence_parent")" ]]; then
-    fail "restore pending and acceptance directories are not on one atomic-rename filesystem"
   elif find /run -mindepth 1 -maxdepth 1 -type d -name 'ascendany-restore-verify-*' -print -quit | grep -q .; then
     fail "inactive restore verifier retains a per-instance RuntimeDirectory"
   else

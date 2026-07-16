@@ -41,15 +41,12 @@ restore_uid="$(id -u "$restore_user")" || fail "restore service identity is unav
    -f "$publication_lock" && ! -L "$publication_lock" &&
    "$(stat -Lc '%U:%G:%a:%h' "$publication_lock")" == "root:root:600:1" ]] ||
   fail "restore publication locks violate the stable inode contract"
-[[ "$(stat -Lc '%d' "$restore_parent")" == "$(stat -Lc '%d' "$evidence_directory")" ]] ||
-  fail "restore pending and acceptance directories must share one filesystem"
-
 exec 8<>"$operator_lock"
 flock -n 8 || fail "another restore verification is active"
 exec 9<>"$publication_lock"
 flock -n 9 || fail "another restore evidence publication is active"
 
-quarantine="$(mktemp -d "$evidence_directory/.restore-quarantine.XXXXXX")"
+quarantine="$(mktemp -d "$restore_parent/.restore-quarantine.XXXXXX")"
 captured="$quarantine/pending.json"
 temporary="$(mktemp "$evidence_directory/.restore-verify.XXXXXX")"
 cleanup() {
@@ -182,4 +179,5 @@ temporary=""
 sync -f "$evidence_directory"
 rm -f -- "$captured"
 rmdir -- "$quarantine"
+sync -f "$restore_parent"
 trap - EXIT
