@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "vite",
     "web:dev": "vite --config vite.web.config.ts --host 0.0.0.0 --port 4173",
-    "typecheck": "tsc -b && node scripts/check-typecheck-clean.mjs",
+    "typecheck": "tsc -b --force && node scripts/check-typecheck-clean.mjs",
     "build": "pnpm run typecheck && vite build",
     "web:build": "pnpm run typecheck && vite build --config vite.web.config.ts",
     "test": "pnpm run test:unit && pnpm run test:electron",

@@ -4,6 +4,8 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+packageExtensionsChecksum: 4e0034a185df8acc9c7b6b49054fbf01
+
 importers:
 
   .:
@@ -71,7 +73,7 @@ importers:
         version: 6.4.1(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.30.2)
       vite-plugin-electron:
         specifier: ^0.28.8
-        version: 0.28.8(vite-plugin-electron-renderer@0.14.6)
+        version: 0.28.8(vite-plugin-electron-renderer@0.14.6)(vite@6.4.1(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.30.2))
       vitest:
         specifier: ^3.2.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.17)(jiti@2.6.1)(jsdom@25.0.1)(lightningcss@1.30.2)
@@ -3636,6 +3638,7 @@ packages:
   vite-plugin-electron@0.28.8:
     resolution: {integrity: sha512-ir+B21oSGK9j23OEvt4EXyco9xDCaF6OGFe0V/8Zc0yL2+HMyQ6mmNQEIhXsEsZCSfIowBpwQBeHH4wVsfraeg==}
     peerDependencies:
+      vite: ^6.1.0
       vite-plugin-electron-renderer: '*'
     peerDependenciesMeta:
       vite-plugin-electron-renderer:
@@ -7761,7 +7764,9 @@ snapshots:
   vite-plugin-electron-renderer@0.14.6:
     optional: true
 
-  vite-plugin-electron@0.28.8(vite-plugin-electron-renderer@0.14.6):
+  vite-plugin-electron@0.28.8(vite-plugin-electron-renderer@0.14.6)(vite@6.4.1(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.30.2)):
+    dependencies:
+      vite: 6.4.1(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.30.2)
     optionalDependencies:
       vite-plugin-electron-renderer: 0.14.6
 
