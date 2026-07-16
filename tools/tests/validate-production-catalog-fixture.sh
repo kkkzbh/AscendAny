@@ -198,6 +198,15 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   [[ "$failures" == 0 ]]
 
   reset_initial_fixture
+  validation_phase=production
+  observed_forward_model_head_revision=2
+  fixture_target_state="1|1|1|1|$TARGET_MODEL_SHA256|1|1|2"
+  fixture_activation_state='2||2|1|2|2|0|1|1|0'
+  failures=0
+  check_catalog_publication_binding
+  [[ "$failures" == 0 ]]
+
+  reset_initial_fixture
   printf '\n' >>"$catalog_receipt_root/1.json"
   failures=0
   check_catalog_publication_binding
