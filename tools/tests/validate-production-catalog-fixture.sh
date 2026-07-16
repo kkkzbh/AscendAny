@@ -140,6 +140,8 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
 
   fixture_database_match=1
   fixture_database_ids=1
+  fixture_expected_prior_revision=1
+  fixture_expected_prior_sha="$TARGET_MODEL_SHA256"
   fixture_target_state="1|1|1|1|$TARGET_MODEL_SHA256|1|0|0"
   fixture_activation_state='1|1|1|1|1|0|1|1|0'
   run_runtime_psql() {
@@ -164,7 +166,12 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
         printf '%s\n' "$fixture_database_ids"
         ;;
       *ascendany-validator:catalog-publication-target*)
-        printf '%s\n' "$fixture_target_state"
+        if [[ "$arguments" == *"-v expected_prior_revision=$fixture_expected_prior_revision"* &&
+              "$arguments" == *"-v expected_prior_sha=$fixture_expected_prior_sha"* ]]; then
+          printf '%s\n' "$fixture_target_state"
+        else
+          return 1
+        fi
         ;;
       *ascendany-validator:catalog-publication-activation-state*)
         printf '%s\n' "$fixture_activation_state"
@@ -185,6 +192,8 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
     expected_forward_model_artifact_sha256=''
     fixture_database_match=1
     fixture_database_ids=1
+    fixture_expected_prior_revision=1
+    fixture_expected_prior_sha="$TARGET_MODEL_SHA256"
     fixture_target_state="1|1|1|1|$TARGET_MODEL_SHA256|1|0|0"
     fixture_activation_state='1|1|1|1|1|1|0|1|1|0'
     fixture_root_owner=ascendany-catalog-publisher:ascendany-catalog-readers
@@ -205,6 +214,15 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   failures=0
   check_catalog_publication_binding
   [[ "$failures" == 0 ]]
+
+  reset_initial_fixture
+  validation_phase=production
+  observed_forward_model_head_revision=3
+  fixture_target_state="1|1|1|1|$TARGET_MODEL_SHA256|1|1|2"
+  fixture_activation_state='3||3|1|3|3|0|1|2|0'
+  failures=0
+  check_catalog_publication_binding
+  [[ "$failures" -ge 1 ]]
 
   reset_initial_fixture
   printf '\n' >>"$catalog_receipt_root/1.json"
@@ -285,6 +303,8 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   validation_phase=catalog
   expected_forward_model_head_revision=2
   expected_forward_model_artifact_sha256="$PRIOR_MODEL_SHA256"
+  fixture_expected_prior_revision=2
+  fixture_expected_prior_sha="$PRIOR_MODEL_SHA256"
   fixture_database_ids=$'1\n2'
   fixture_target_state="1|2|2|2|$PRIOR_MODEL_SHA256|1|0|0"
   fixture_activation_state='2|2|2|1|2|2|0|1|2|0'

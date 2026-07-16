@@ -4427,8 +4427,8 @@ ORDER BY knowledge_catalog_publication_id')" || database_ids=""
   if forward_transition; then
     expected_prior_revision="$expected_forward_model_head_revision"
     expected_prior_sha="$expected_forward_model_artifact_sha256"
-  elif production_phase; then
-    expected_prior_revision="$((observed_forward_model_head_revision - 1))"
+  elif initial_transition && production_phase; then
+    expected_prior_revision=1
     expected_prior_sha="$observed_forward_model_artifact_sha256"
   else
     expected_prior_revision="$observed_forward_model_head_revision"
