@@ -51,6 +51,7 @@ import {
   type ModelConnectionProbeResult,
   type RecommendationKnowledgeCatalogV1,
   type RecommendationReviewContext,
+  type SelfStudentAnalytics,
   type Version,
 } from "../packages/sdk/src/index";
 
@@ -70,6 +71,7 @@ const agentUpdateNotesTool = "update_notes";
 const agentReplyAcceptanceSchema = "ascendany.production-agent-reply-acceptance.v1";
 const agentReplyAcceptanceInstruction = "Read my current learning data, update my current notes with a concise progress summary by calling update_notes, and briefly explain my learning progress.";
 const agentAcceptanceInitialNotes = "# Production acceptance\n\nAwaiting the current learning-progress summary.";
+const agentAcceptanceRoleId = "xiaoD";
 const agentProviderTimeoutMilliseconds = 120_000;
 const agentMaxCompletionTokens = 4_096;
 const agentAcceptanceTimeoutMilliseconds = 180_000;
@@ -622,6 +624,32 @@ export function agentReplyAcceptanceContent(
     targetApplicationCommit: targetApplication.commit,
     targetApplicationVersion: targetApplication.version,
   });
+}
+
+export function buildAgentAutoAnalysisAcceptancePayload(
+  analytics: SelfStudentAnalytics,
+): Record<string, unknown> {
+  if (
+    analytics.state !== "ready"
+    || analytics.examHistory.length === 0
+    || analytics.examHistory.length !== analytics.ratingHistory.length
+  ) {
+    throw new Error("Agent auto-analysis acceptance requires aligned student exam analytics");
+  }
+  const latestIndex = analytics.ratingHistory.length - 1;
+  const latestRating = analytics.ratingHistory[latestIndex]!;
+  const latestExam = analytics.examHistory[latestIndex]!;
+  if (
+    latestRating.examId !== latestExam.examId
+    || latestRating.snapshotId !== latestExam.snapshotId
+    || !canonicalUUIDv4Pattern.test(latestRating.examId)
+  ) {
+    throw new Error("Agent auto-analysis acceptance latest exam identity is invalid");
+  }
+  return {
+    roleId: agentAcceptanceRoleId,
+    latestExamId: latestRating.examId,
+  };
 }
 
 export function buildAgentAcceptanceReceipt(
@@ -2513,6 +2541,16 @@ async function agent(inputs: AgentInputs): Promise<AgentAcceptanceReceipt> {
   ) {
     throw new Error("Agent acceptance student session differs from the protected credential binding");
   }
+  const studentClient = authenticatedClient(
+    inputs.baseUrl,
+    inputs.origin,
+    studentSession.accessToken,
+  );
+  const analytics = assertAPIResult(
+    "Agent acceptance student analytics",
+    await getSelfStudentAnalytics({ client: studentClient, query: { limit: 1 } }),
+  );
+  const autoAnalysisPayload = buildAgentAutoAnalysisAcceptancePayload(analytics);
   const reply = await runAgentFrontendSSEAcceptance(
     inputs,
     studentSession,
@@ -2533,7 +2571,7 @@ async function agent(inputs: AgentInputs): Promise<AgentAcceptanceReceipt> {
     inputs,
     studentSession,
     "/api/v1/chat/auto-analysis/stream",
-    {},
+    autoAnalysisPayload,
   );
   return buildAgentAcceptanceReceipt({
     acceptedAt: new Date().toISOString(),

@@ -18,6 +18,7 @@ import {
   assertCanonicalDeploymentTransition,
   assertCatalogCoverage,
   buildAgentAcceptanceReceipt,
+  buildAgentAutoAnalysisAcceptancePayload,
   parseAgentSSEAcceptance,
   planAgentConfiguration,
   readAllCursorPages,
@@ -342,6 +343,52 @@ describe("production Agent configuration and SSE acceptance", () => {
       targetApplicationCommit: "e".repeat(40),
       targetApplicationVersion: "0.2.1",
     });
+  });
+
+  it("builds the frozen minimal auto-analysis identity from current analytics", () => {
+    const values = {
+      knowledge: 0.5,
+      accuracy: 0.6,
+      quality: 0.7,
+      flexibility: 0.8,
+      proficiency: 0.9,
+    };
+    const first = {
+      examId: "00000000-0000-4000-8000-000000000211",
+      snapshotId: "00000000-0000-4000-8000-000000000212",
+      title: "First exam",
+      eventTime: "2026-07-17T01:00:00Z",
+    };
+    const latest = {
+      examId: "00000000-0000-4000-8000-000000000213",
+      snapshotId: "00000000-0000-4000-8000-000000000214",
+      title: "Latest exam",
+      eventTime: "2026-07-18T01:00:00Z",
+    };
+    const analytics = {
+      state: "ready" as const,
+      headRevision: 3,
+      referenceTime: "2026-07-18T02:00:00Z",
+      rating: 1510,
+      current: values,
+      examHistory: [
+        { ...first, values },
+        { ...latest, values },
+      ],
+      ratingHistory: [
+        { ...first, rank: 2, oldRating: 1500, delta: 5, newRating: 1505, seed: 1500, performance: 1510 },
+        { ...latest, rank: 1, oldRating: 1505, delta: 5, newRating: 1510, seed: 1505, performance: 1520 },
+      ],
+    };
+
+    expect(buildAgentAutoAnalysisAcceptancePayload(analytics)).toEqual({
+      roleId: "xiaoD",
+      latestExamId: latest.examId,
+    });
+    expect(() => buildAgentAutoAnalysisAcceptancePayload({
+      state: "no_observations",
+      headRevision: 3,
+    })).toThrow("requires aligned student exam analytics");
   });
 });
 
