@@ -373,6 +373,17 @@ func TestAgentFrontendV1ReplyRejectsContextAboveMessageBoundary(t *testing.T) {
 
 func TestAgentFrontendV1AutoAnalysisBindsPublishedHeadAndFrozenFrontendContext(t *testing.T) {
 	now := testChatTime()
+	storedContext := chatagent.AutoAnalysisFrontendContext{
+		StudentID:        "student-1",
+		PTANickname:      "pta-user",
+		RoleID:           chatagent.DefaultAutoAnalysisRoleID,
+		RoleName:         "Stored mentor",
+		RoleSystemPrompt: "Stored prompt.",
+		LatestExamID:     testExamID,
+		Notes:            "stored note",
+		NotesTitle:       "Stored notebook",
+		NotesLocked:      true,
+	}
 	input := chatagent.Message{
 		ID: testChatMessageID, ThreadID: testAgentFrontendV1AutoThreadID, Sequence: 1,
 		Kind: chatagent.MessageAutoAnalysisRequest, Content: chatagent.AutoAnalysisInputContent, CreatedAt: now,
@@ -381,26 +392,36 @@ func TestAgentFrontendV1AutoAnalysisBindsPublishedHeadAndFrozenFrontendContext(t
 	service := completedAgentFrontendV1ChatService(now, testAgentFrontendV1AutoThreadID, input, output)
 	service.enqueue = nil
 	service.autoAnalysis = func(_ context.Context, token string, request chatagent.AutoAnalysisRequest) (chatagent.EnqueueResult, error) {
-		wantContext := chatagent.AutoAnalysisFrontendContext{
+		currentContext := chatagent.AutoAnalysisFrontendContext{
 			StudentID:        "student-1",
 			PTANickname:      "pta-user",
 			RoleID:           chatagent.DefaultAutoAnalysisRoleID,
 			RoleName:         "Mentor",
 			RoleSystemPrompt: "Be concise.",
 			LatestExamID:     testExamID,
-			Notes:            "note",
+			Notes:            "changed local note",
 			NotesTitle:       "Notebook",
 			NotesLocked:      true,
 		}
 		if token != "chat-token" || request.PromptConfigurationKey != agentFrontendV1PromptConfigurationKey ||
 			request.ModelConfigurationKey != agentFrontendV1ModelConfigurationKey || request.ExpectedAnalyticsHeadRevision != 7 ||
 			request.Identity != (chatagent.AutoAnalysisIdentity{ExamID: testExamID, RoleID: chatagent.DefaultAutoAnalysisRoleID}) ||
-			request.FrontendContext != wantContext {
+			request.FrontendContext != currentContext {
 			t.Fatalf("auto analysis token=%q request=%#v", token, request)
 		}
 		result := agentFrontendV1QueuedResult(testAgentFrontendV1AutoThreadID, input)
+		result.Run.Kind = chatagent.RunAutoAnalysis
 		result.Created = false
+		result.AutoAnalysisContext = &storedContext
 		return result, nil
+	}
+	service.readRunEvents = func(context.Context, string, string, int64, int) (chatagent.RunEventBatch, error) {
+		return chatagent.RunEventBatch{Events: []chatagent.RunEvent{
+			{Sequence: 1, Type: "queued", Payload: []byte(`{"analyticsHeadRevision":7,"autoAnalysisExamId":"` + testExamID + `","autoAnalysisRoleId":"` + chatagent.DefaultAutoAnalysisRoleID + `","messageSequence":1,"model":"deepseek-chat","provider":"openai_compatible","requestMode":"chat_completions","runKind":"auto_analysis"}`), CreatedAt: now},
+			{Sequence: 2, Type: "notes_update", Payload: []byte(`{"mode":"replace","next":"durable updated note","patch":null,"previous":"stored note","toolCallKey":"call-notes","toolName":"update_notes","toolSequence":1}`), CreatedAt: now},
+			{Sequence: 3, Type: "tool.succeeded", Payload: []byte(`{"toolCallKey":"call-notes","toolName":"update_notes","toolSequence":1}`), CreatedAt: now},
+			{Sequence: 4, Type: "completed", Payload: []byte(`{"messageId":"` + output.ID + `","messageSequence":2}`), CreatedAt: now},
+		}, LastSequence: 4, Terminal: true}, nil
 	}
 	analytics := agentFrontendV1AnalyticsStub{getSelf: func(_ context.Context, token string, limit int) (studentanalytics.Result, error) {
 		if token != "chat-token" || limit != 1 {
@@ -416,39 +437,24 @@ func TestAgentFrontendV1AutoAnalysisBindsPublishedHeadAndFrozenFrontendContext(t
 	response := newTestResponseRecorder()
 	handler.ServeHTTP(response, chatAgentRequest(http.MethodPost, "/api/v1/chat/auto-analysis/stream", `{
 		"studentId":"student-1","ptaNickname":"pta-user","roleName":"Mentor",
-		"roleSystemPrompt":"Be concise.","latestExamId":"`+testExamID+`","notes":"note",
+		"roleSystemPrompt":"Be concise.","latestExamId":"`+testExamID+`","notes":"changed local note",
 		"notesTitle":"Notebook","notesLocked":true
 	}`))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"reply":""`) ||
-		!strings.Contains(response.Body.String(), `"provider":"none"`) ||
-		strings.Contains(response.Body.String(), "Automatic analysis.") {
+	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+	assertOrderedSubstrings(t, response.Body.String(),
+		`"type":"notes_update","mode":"replace","previous":"stored note","next":"durable updated note","patch":null`,
+		`"type":"delta","text":"Automatic analysis."`,
+		`"type":"done","reply":"Automatic analysis.","runId":"123e4567-e89b-42d3-a456-426614174051","threadId":"223e4567-e89b-42d3-a456-426614174051","inputMessageId":"123e4567-e89b-42d3-a456-426614174052","outputMessageId":"223e4567-e89b-42d3-a456-426614174052","created":false,"updatedNotes":"durable updated note","provider":"openai_compatible","model":"deepseek-chat","requestMode":"chat_completions"`,
+	)
 }
 
-func TestAgentFrontendV1AutoAnalysisDefaultsCurrentExamAndRole(t *testing.T) {
-	service := chatAgentServiceStub{autoAnalysis: func(_ context.Context, token string, request chatagent.AutoAnalysisRequest) (chatagent.EnqueueResult, error) {
-		if token != "chat-token" || request.Identity.ExamID != testExamID ||
-			request.Identity.RoleID != chatagent.DefaultAutoAnalysisRoleID ||
-			request.FrontendContext.LatestExamID != testExamID ||
-			request.FrontendContext.RoleID != chatagent.DefaultAutoAnalysisRoleID {
-			t.Fatalf("token=%q request=%#v", token, request)
-		}
-		result := agentFrontendV1QueuedResult(testAgentFrontendV1AutoThreadID, chatagent.Message{
-			ID: testChatMessageID, ThreadID: testAgentFrontendV1AutoThreadID, Sequence: 1,
-			Kind: chatagent.MessageAutoAnalysisRequest, Content: chatagent.AutoAnalysisInputContent,
-		})
-		result.Run.Kind = chatagent.RunAutoAnalysis
-		result.Created = false
-		return result, nil
-	}}
+func TestAgentFrontendV1AutoAnalysisStreamReturnsEmptyDoneWhenNoCurrentExam(t *testing.T) {
 	analytics := agentFrontendV1AnalyticsStub{getSelf: func(context.Context, string, int) (studentanalytics.Result, error) {
-		return studentanalytics.Result{
-			State: studentanalytics.StateReady, HeadRevision: 7,
-			Ready: &studentanalytics.ReadyResult{ExamHistory: []studentanalytics.ExamHistoryPoint{{ExamID: testExamID}}},
-		}, nil
+		return studentanalytics.Result{State: studentanalytics.StateNoObservations, HeadRevision: 7}, nil
 	}}
-	handler := newAgentFrontendV1ChatTestHandler(t, service, analytics)
+	handler := newAgentFrontendV1ChatTestHandler(t, unusedChatAgentService{}, analytics)
 	response := newTestResponseRecorder()
 	handler.ServeHTTP(response, chatAgentRequest(http.MethodPost, "/api/v1/chat/auto-analysis/stream", `{}`))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"type":"done"`) ||
@@ -500,8 +506,11 @@ func TestAgentFrontendV1AutoAnalysisNonStreamEmptyUsesServerDefault(t *testing.T
 	}
 }
 
-func TestAgentFrontendV1AutoAnalysisNonStreamReturnsDurableProviderMetadata(t *testing.T) {
+func TestAgentFrontendV1AutoAnalysisNonStreamReplaysDurableRunWithStoredNotes(t *testing.T) {
 	now := testChatTime()
+	storedContext := chatagent.AutoAnalysisFrontendContext{
+		RoleID: "mentor", LatestExamID: testExamID, Notes: "stored note",
+	}
 	input := chatagent.Message{
 		ID: testChatMessageID, ThreadID: testAgentFrontendV1AutoThreadID, Sequence: 1,
 		Kind: chatagent.MessageAutoAnalysisRequest, Content: chatagent.AutoAnalysisInputContent, CreatedAt: now,
@@ -509,7 +518,8 @@ func TestAgentFrontendV1AutoAnalysisNonStreamReturnsDurableProviderMetadata(t *t
 	output := agentFrontendV1OutputMessage(testAgentFrontendV1AutoThreadID, "Durable automatic analysis.", nil)
 	service := chatAgentServiceStub{
 		autoAnalysis: func(_ context.Context, _ string, request chatagent.AutoAnalysisRequest) (chatagent.EnqueueResult, error) {
-			if request.Identity != (chatagent.AutoAnalysisIdentity{ExamID: testExamID, RoleID: "mentor"}) {
+			if request.Identity != (chatagent.AutoAnalysisIdentity{ExamID: testExamID, RoleID: "mentor"}) ||
+				request.FrontendContext.Notes != "changed local note" {
 				t.Fatalf("request=%#v", request)
 			}
 			return chatagent.EnqueueResult{
@@ -517,14 +527,16 @@ func TestAgentFrontendV1AutoAnalysisNonStreamReturnsDurableProviderMetadata(t *t
 					ID: testAgentRunID, ThreadID: input.ThreadID, ClientRequestID: testChatRequestID,
 					Kind: chatagent.RunAutoAnalysis, InputMessageID: input.ID, Status: chatagent.RunQueued,
 				},
-				Message: input, Created: true,
+				Message: input, Created: false, AutoAnalysisContext: &storedContext,
 			}, nil
 		},
 		readRunEvents: func(context.Context, string, string, int64, int) (chatagent.RunEventBatch, error) {
 			return chatagent.RunEventBatch{Events: []chatagent.RunEvent{
 				{Sequence: 1, Type: "queued", Payload: []byte(`{"analyticsHeadRevision":7,"autoAnalysisExamId":"` + testExamID + `","autoAnalysisRoleId":"mentor","messageSequence":1,"model":"deepseek-chat","provider":"openai_compatible","requestMode":"chat_completions","runKind":"auto_analysis"}`), CreatedAt: now},
-				{Sequence: 2, Type: "completed", Payload: []byte(`{"messageId":"` + output.ID + `","messageSequence":2}`), CreatedAt: now},
-			}, LastSequence: 2, Terminal: true}, nil
+				{Sequence: 2, Type: "notes_update", Payload: []byte(`{"mode":"replace","next":"durable updated note","patch":null,"previous":"stored note","toolCallKey":"call-notes","toolName":"update_notes","toolSequence":1}`), CreatedAt: now},
+				{Sequence: 3, Type: "tool.succeeded", Payload: []byte(`{"toolCallKey":"call-notes","toolName":"update_notes","toolSequence":1}`), CreatedAt: now},
+				{Sequence: 4, Type: "completed", Payload: []byte(`{"messageId":"` + output.ID + `","messageSequence":2}`), CreatedAt: now},
+			}, LastSequence: 4, Terminal: true}, nil
 		},
 		getRun: func(context.Context, string, string) (chatagent.Run, bool, error) {
 			outputID := output.ID
@@ -548,9 +560,9 @@ func TestAgentFrontendV1AutoAnalysisNonStreamReturnsDurableProviderMetadata(t *t
 	handler.ServeHTTP(response, chatAgentRequest(
 		http.MethodPost,
 		"/api/v1/chat/auto-analysis",
-		`{"roleId":"mentor","latestExamId":"`+testExamID+`"}`,
+		`{"roleId":"mentor","latestExamId":"`+testExamID+`","notes":"changed local note"}`,
 	))
-	want := `{"reply":"Durable automatic analysis.","provider":"openai_compatible","model":"deepseek-chat","requestMode":"chat_completions"}` + "\n"
+	want := `{"reply":"Durable automatic analysis.","provider":"openai_compatible","model":"deepseek-chat","requestMode":"chat_completions","updatedNotes":"durable updated note"}` + "\n"
 	if response.Code != http.StatusOK || response.Body.String() != want {
 		t.Fatalf("status=%d body=%s want=%s", response.Code, response.Body.String(), want)
 	}
@@ -573,7 +585,7 @@ func TestAgentFrontendV1AutoAnalysisStreamProjectsDurableProviderMetadata(t *tes
 					ID: testAgentRunID, ThreadID: input.ThreadID, ClientRequestID: testChatRequestID,
 					Kind: chatagent.RunAutoAnalysis, InputMessageID: input.ID, Status: chatagent.RunQueued,
 				},
-				Message: input, Created: true,
+				Message: input, Created: true, AutoAnalysisContext: &request.FrontendContext,
 			}, nil
 		},
 		readRunEvents: func(context.Context, string, string, int64, int) (chatagent.RunEventBatch, error) {

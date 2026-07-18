@@ -155,7 +155,7 @@ func TestServiceOwnsAllAutomaticAnalysisIdentityAndContent(t *testing.T) {
 		Identity: AutoAnalysisIdentity{ExamID: frontendContext.LatestExamID, RoleID: frontendContext.RoleID}, FrontendContext: frontendContext,
 	}
 	result, err := service.EnqueueAutoAnalysis(context.Background(), input)
-	if err != nil || !result.Created {
+	if err != nil || !result.Created || result.AutoAnalysisContext == nil || *result.AutoAnalysisContext != frontendContext {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
 	if repository.autoCommand.ThreadID != autoThreadID || repository.autoCommand.RunID != testRunID ||
@@ -203,7 +203,8 @@ func TestServiceAcceptsStoredAutomaticAnalysisReplayWithChangedPresentationConte
 		FrontendContext: changedContext,
 	}
 	result, err := service.EnqueueAutoAnalysis(context.Background(), input)
-	if err != nil || result.Created || result.Message.Content != storedContent {
+	if err != nil || result.Created || result.Message.Content != storedContent ||
+		result.AutoAnalysisContext == nil || *result.AutoAnalysisContext != storedContext {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
 }

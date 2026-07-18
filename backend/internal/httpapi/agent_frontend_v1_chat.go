@@ -387,11 +387,11 @@ func (handler *Handler) agentFrontendV1StreamAutoAnalysis(writer http.ResponseWr
 		handler.handleChatAgentError(writer, request, err)
 		return
 	}
-	if !result.Created {
-		handler.writeAgentFrontendV1EmptySSE(writer)
+	if result.AutoAnalysisContext == nil {
+		handler.handleChatAgentError(writer, request, errors.New("automatic-analysis enqueue result is missing its stored frontend context"))
 		return
 	}
-	handler.agentFrontendV1StreamRun(writer, request, access, result, streamDeadline, valueOrEmpty(input.Notes), nil)
+	handler.agentFrontendV1StreamRun(writer, request, access, result, streamDeadline, result.AutoAnalysisContext.Notes, nil)
 }
 
 func (handler *Handler) agentFrontendV1AutoAnalysis(writer http.ResponseWriter, request *http.Request) {
@@ -445,12 +445,12 @@ func (handler *Handler) agentFrontendV1AutoAnalysis(writer http.ResponseWriter, 
 		handler.handleChatAgentError(writer, request, err)
 		return
 	}
-	if !result.Created {
-		writeJSON(writer, http.StatusOK, agentFrontendV1AutoAnalysisResponse{Reply: "", Provider: "server_default"})
+	if result.AutoAnalysisContext == nil {
+		handler.handleChatAgentError(writer, request, errors.New("automatic-analysis enqueue result is missing its stored frontend context"))
 		return
 	}
 	terminal, err := handler.agentFrontendV1AwaitRun(
-		request.Context(), access, result, time.Now().Add(handler.sseMaxDuration), valueOrEmpty(input.Notes),
+		request.Context(), access, result, time.Now().Add(handler.sseMaxDuration), result.AutoAnalysisContext.Notes,
 	)
 	if err != nil {
 		handler.handleChatAgentError(writer, request, err)

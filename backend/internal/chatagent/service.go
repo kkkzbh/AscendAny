@@ -288,6 +288,13 @@ func (service *Service) EnqueueAutoAnalysis(ctx context.Context, input AutoAnaly
 		result.Run.ThreadID != result.Message.ThreadID || result.Message.Kind != MessageAutoAnalysisRequest {
 		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis run", errors.New("repository returned a run that violates the automatic analysis contract"))
 	}
+	storedContext, err := decodeAutoAnalysisInputContent(result.Message.Content)
+	if err != nil {
+		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis frontend context", err)
+	}
+	if storedContext.LatestExamID != input.Identity.ExamID || storedContext.RoleID != input.Identity.RoleID {
+		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis frontend context", errors.New("stored automatic-analysis context disagrees with its durable identity"))
+	}
 	if result.Created && result.Message.Content != inputContent {
 		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis run", errors.New("repository returned newly created automatic analysis with different content"))
 	}
@@ -295,6 +302,7 @@ func (service *Service) EnqueueAutoAnalysis(ctx context.Context, input AutoAnaly
 		result.Run.ClientRequestID != clientRequestID || result.Run.Status != RunQueued) {
 		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis run", errors.New("repository returned invalid creation identity or state"))
 	}
+	result.AutoAnalysisContext = &storedContext
 	return result, nil
 }
 

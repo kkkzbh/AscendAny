@@ -159,9 +159,10 @@ type EnqueueCommand struct {
 }
 
 type EnqueueResult struct {
-	Run     Run     `json:"run"`
-	Message Message `json:"message"`
-	Created bool    `json:"created"`
+	Run                 Run                          `json:"run"`
+	Message             Message                      `json:"message"`
+	Created             bool                         `json:"created"`
+	AutoAnalysisContext *AutoAnalysisFrontendContext `json:"-"`
 }
 
 type CreateThreadCommand struct {
