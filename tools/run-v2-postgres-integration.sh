@@ -977,6 +977,7 @@ run_go_test() {
 
 readonly -a TEST_CASES=(
   'fresh-migrator|./internal/migrate|TestPostgresFreshMigrationAndIdempotentReentry|none'
+  'upgrade-migrator|./internal/migrate|TestPostgresSchemaSevenUpgradePreservesDataAndContracts|none'
   'runtime|./internal/achievement|TestPostgresAchievementReadMatchesCurrentDatabaseSnapshot|none'
   'runtime|./internal/administration|TestPostgresAdministrationReadModelsUseOneActiveAdminPrincipal|admin'
   'runtime|./internal/administration|TestPostgresAccountDisableOrdersAfterConcurrentLoginSession|none'
@@ -1001,6 +1002,7 @@ readonly -a TEST_CASES=(
   'runtime|./internal/oj|TestPostgresOJProblemSubmissionAndFencedJudgeLifecycle|none'
   'runtime|./internal/oj|TestPostgresOJConcurrentNewSlugConvergesOnOneHead|none'
   'runtime|./internal/recommendation|TestPostgresModelBindingMatchesVerifiedArtifact|admin'
+  'runtime|./internal/recommendation|TestPostgresRecommendationKnowledgeActivityUsesBoundVerdicts|catalog'
   'publisher|./internal/recommendation|TestPostgresRecommendationCatalogPublicationFencesAnalyticsReview|publication'
   'runtime|./internal/studentanalytics|TestPostgresSelfAnalyticsReadPath|none'
 )
@@ -1079,10 +1081,12 @@ main() {
     printf '\nFresh exact %s for %s\n' "${DATABASE_NAME}" "${test_name}"
     reset_exact_database
 
-    if [[ "${mode}" == "fresh-migrator" ]]; then
+    if [[ "${mode}" == "fresh-migrator" || "${mode}" == "upgrade-migrator" ]]; then
       run_go_test migrator "${package_path}" "${test_name}"
       assert_schema_roles_and_ports
-      assert_role_drift_repair
+      if [[ "${mode}" == "fresh-migrator" ]]; then
+        assert_role_drift_repair
+      fi
       continue
     fi
 

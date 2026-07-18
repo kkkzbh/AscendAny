@@ -440,8 +440,22 @@ func TestAgentV1ProgressUsesFrozenNullableAndRoundedDeltaSemantics(t *testing.T)
 		progress.KeyImprovements[0] != "质量 +4，说明代码实现质量更稳，边界处理更扎实" ||
 		len(progress.KeySetbacks) != 1 ||
 		progress.KeySetbacks[0] != "灵活 -4，说明切题策略偏保守，建议优化做题节奏" ||
-		progress.Summary != "本场有进步也有波动，建议保留有效策略并优先修正退步项。" {
+		progress.Summary != "本场 Rating 持平，能力结构有变化，建议保留有效策略并修正波动点。" {
 		t.Fatalf("progress = %#v", progress)
+	}
+	if summary := agentV1ProgressSummary(nil, progress.KeyImprovements, progress.KeySetbacks, false); summary != "本场有进步也有波动，建议保留有效策略并优先修正退步项。" {
+		t.Fatalf("summary without rating = %q", summary)
+	}
+}
+
+func TestAgentV1PeerPercentileUsesFrozenHalfEvenRounding(t *testing.T) {
+	t.Parallel()
+	peer := agentV1PeerFromLatest(&studentanalytics.ReadyResult{
+		LatestPeer:  &studentanalytics.LatestExamPeer{TotalParticipants: 16, Position: 4, Rank: 4},
+		ExamHistory: []studentanalytics.ExamHistoryPoint{{}},
+	})
+	if peer.PercentileBand.MyPercentile == nil || *peer.PercentileBand.MyPercentile != 81.2 {
+		t.Fatalf("peer percentile = %#v", peer.PercentileBand.MyPercentile)
 	}
 }
 

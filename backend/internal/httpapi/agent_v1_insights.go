@@ -822,7 +822,7 @@ func agentV1PeerFromLatest(ready *studentanalytics.ReadyResult) agentV1PeerCompa
 	response.Available = true
 	response.PercentileBand.TotalParticipants = peer.TotalParticipants
 	response.PercentileBand.MyRank = &peer.Rank
-	percentile := math.Round(((float64(peer.TotalParticipants-peer.Position+1)/float64(peer.TotalParticipants))*100)*10) / 10
+	percentile := math.RoundToEven(((float64(peer.TotalParticipants-peer.Position+1)/float64(peer.TotalParticipants))*100)*10) / 10
 	response.PercentileBand.MyPercentile = &percentile
 	code, label := agentV1PeerBand(peer.TotalParticipants, peer.Position)
 	response.PercentileBand.BandCode = &code
@@ -1120,7 +1120,7 @@ func agentV1ProgressFromLatest(
 		response.KeySetbacks = append(response.KeySetbacks,
 			fmt.Sprintf("%s %+d，%s", item.label, item.delta, agentV1ProgressReason(item.key, false)))
 	}
-	response.Summary = agentV1ProgressSummary(rating.Delta, response.KeyImprovements, response.KeySetbacks, firstExam)
+	response.Summary = agentV1ProgressSummary(&rating.Delta, response.KeyImprovements, response.KeySetbacks, firstExam)
 	return response
 }
 
@@ -1139,24 +1139,28 @@ func agentV1ProgressReason(key string, improvement bool) string {
 	}[key]
 }
 
-func agentV1ProgressSummary(ratingDelta int64, improvements, setbacks []string, firstExam bool) string {
+func agentV1ProgressSummary(ratingDelta *int64, improvements, setbacks []string, firstExam bool) string {
 	firstLabel := func(values []string) string {
 		if len(values) == 0 {
 			return ""
 		}
 		return strings.SplitN(values[0], "，", 2)[0]
 	}
-	if ratingDelta > 0 {
-		if len(improvements) > 0 {
-			return fmt.Sprintf("本场整体向好，Rating +%d，关键增益来自%s。", ratingDelta, firstLabel(improvements))
+	if ratingDelta != nil {
+		delta := *ratingDelta
+		if delta > 0 {
+			if len(improvements) > 0 {
+				return fmt.Sprintf("本场整体向好，Rating +%d，关键增益来自%s。", delta, firstLabel(improvements))
+			}
+			return fmt.Sprintf("本场 Rating +%d，整体趋势在上行。", delta)
 		}
-		return fmt.Sprintf("本场 Rating +%d，整体趋势在上行。", ratingDelta)
-	}
-	if ratingDelta < 0 {
-		if len(setbacks) > 0 {
-			return fmt.Sprintf("本场出现回落，Rating %d，主要波动在%s。", ratingDelta, firstLabel(setbacks))
+		if delta < 0 {
+			if len(setbacks) > 0 {
+				return fmt.Sprintf("本场出现回落，Rating %d，主要波动在%s。", delta, firstLabel(setbacks))
+			}
+			return fmt.Sprintf("本场 Rating %d，建议先稳住做题节奏。", delta)
 		}
-		return fmt.Sprintf("本场 Rating %d，建议先稳住做题节奏。", ratingDelta)
+		return "本场 Rating 持平，能力结构有变化，建议保留有效策略并修正波动点。"
 	}
 	if len(improvements) > 0 && len(setbacks) == 0 {
 		prefix := "本场能力表现向好"

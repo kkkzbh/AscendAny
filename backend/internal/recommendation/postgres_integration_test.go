@@ -23,6 +23,102 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/modelrelease"
 )
 
+func TestPostgresRecommendationKnowledgeActivityUsesBoundVerdicts(t *testing.T) {
+	databaseURL := os.Getenv("ASCENDANY_TEST_DATABASE_URL")
+	databasePassword := os.Getenv("ASCENDANY_TEST_DATABASE_PASSWORD")
+	analyticsConfigPath := os.Getenv("ASCENDANY_REAL_ANALYTICS_CONFIG_PATH")
+	if databaseURL == "" || databasePassword == "" || analyticsConfigPath == "" {
+		t.Skip("runtime database and real analytics config integration inputs are not configured")
+	}
+	configurationJSON, err := os.ReadFile(analyticsConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := analytics.ParseConfig(configurationJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := openRecommendationIntegrationPool(t, ctx, databaseURL, databasePassword)
+	defer pool.Close()
+	assertRecommendationIntegrationIdentity(t, ctx, pool, "ascendanyd_login")
+
+	var generationID, actorID int64
+	var algorithmVersion, configSHA256 string
+	if err := pool.QueryRow(ctx, `
+SELECT generation.analytics_generation_id,
+       generation.algorithm_version,
+       generation.config_sha256
+FROM ascendany.analytics_head AS head
+JOIN ascendany.analytics_generations AS generation
+  ON generation.analytics_generation_id = head.current_generation_id
+WHERE head.singleton`).Scan(&generationID, &algorithmVersion, &configSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if algorithmVersion != configuration.Value.AlgorithmVersion || configSHA256 != configuration.SHA256 {
+		t.Fatalf("current analytics binding = %q/%q, runtime = %q/%q", algorithmVersion, configSHA256, configuration.Value.AlgorithmVersion, configuration.SHA256)
+	}
+	if err := pool.QueryRow(ctx, `
+SELECT submission.actor_id
+FROM ascendany.analytics_generation_snapshots AS generation_snapshot
+JOIN ascendany.pintia_snapshot_submissions AS submission
+  ON submission.snapshot_id = generation_snapshot.snapshot_id
+ AND submission.exam_id = generation_snapshot.exam_id
+WHERE generation_snapshot.analytics_generation_id = $1
+GROUP BY submission.actor_id
+HAVING bool_or(submission.verdict = ANY($2::text[]))
+ORDER BY count(*) DESC, submission.actor_id
+LIMIT 1`, generationID, configuration.Value.AcceptedVerdicts).Scan(&actorID); err != nil {
+		t.Fatal(err)
+	}
+
+	configured, err := queryProblemActivity(ctx, pool, generationID, actorID, configuration.Value.AcceptedVerdicts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	excluded, err := queryProblemActivity(ctx, pool, generationID, actorID, []string{"__ascendany_test_never_accepted__"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configured) == 0 || len(configured) != len(excluded) {
+		t.Fatalf("configured/excluded activity counts = %d/%d", len(configured), len(excluded))
+	}
+	configuredCorrect := false
+	for index := range configured {
+		if configured[index].Identity != excluded[index].Identity ||
+			!configured[index].LastSubmittedAt.Equal(excluded[index].LastSubmittedAt) {
+			t.Fatalf("activity identity drift at %d: %#v/%#v", index, configured[index], excluded[index])
+		}
+		configuredCorrect = configuredCorrect || configured[index].Correct
+		if excluded[index].Correct {
+			t.Fatalf("verdict outside the generation-bound accepted set was counted correct: %#v", excluded[index])
+		}
+	}
+	if !configuredCorrect {
+		t.Fatal("real fixture contains no correctness evidence for the generation-bound accepted verdicts")
+	}
+	configuredRecent, err := queryRecentActivity(ctx, pool, generationID, actorID, configuration.Value.AcceptedVerdicts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	excludedRecent, err := queryRecentActivity(ctx, pool, generationID, actorID, []string{"__ascendany_test_never_accepted__"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configuredRecent) != len(excludedRecent) {
+		t.Fatalf("configured/excluded recent activity counts = %d/%d", len(configuredRecent), len(excludedRecent))
+	}
+	for index := range configuredRecent {
+		if configuredRecent[index].Identity != excludedRecent[index].Identity ||
+			configuredRecent[index].Date != excludedRecent[index].Date ||
+			configuredRecent[index].Attempted != excludedRecent[index].Attempted ||
+			excludedRecent[index].Correct != 0 {
+			t.Fatalf("recent verdict projection drift at %d: %#v/%#v", index, configuredRecent[index], excludedRecent[index])
+		}
+	}
+}
+
 func TestPostgresRecommendationCatalogPublicationFencesAnalyticsReview(t *testing.T) {
 	databaseURL := os.Getenv("ASCENDANY_TEST_DATABASE_URL")
 	databasePassword := os.Getenv("ASCENDANY_TEST_DATABASE_PASSWORD")
