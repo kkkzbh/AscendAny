@@ -585,7 +585,9 @@ func decodeOpenAIResponse(body []byte, enabledTools []string) (ProviderResponse,
 	}
 	choice := response.Choices[0]
 	if len(choice.Message.ToolCalls) > 0 {
-		if *choice.FinishReason != "tool_calls" || len(choice.Message.ToolCalls) > MaxProviderToolCallsPerTurn || !jsonNullOrEmptyString(choice.Message.Content) {
+		_, contentValid := decodeBoundedOptionalString(choice.Message.Content, MaxMessageBytes)
+		_, reasoningValid := decodeBoundedOptionalString(choice.Message.ReasoningContent, MaxReasoningBytes)
+		if *choice.FinishReason != "tool_calls" || len(choice.Message.ToolCalls) > MaxProviderToolCallsPerTurn || !contentValid || !reasoningValid {
 			return ProviderResponse{}, providerError("provider_response_invalid", "model response violated the protocol", errors.New("tool response metadata is invalid"))
 		}
 		enabled := make(map[string]struct{}, len(enabledTools))
@@ -616,11 +618,11 @@ func decodeOpenAIResponse(body []byte, enabledTools []string) (ProviderResponse,
 	if *choice.FinishReason != "stop" {
 		return ProviderResponse{}, providerError("provider_output_incomplete", "model output was incomplete", errors.New("terminal finish reason is not stop"))
 	}
-	content, ok := decodeOptionalString(choice.Message.Content)
+	content, ok := decodeBoundedOptionalString(choice.Message.Content, MaxMessageBytes)
 	if !ok || content == nil {
 		return ProviderResponse{}, providerError("provider_response_invalid", "model response violated the protocol", errors.New("assistant content is absent"))
 	}
-	reasoning, ok := decodeOptionalString(choice.Message.ReasoningContent)
+	reasoning, ok := decodeBoundedOptionalString(choice.Message.ReasoningContent, MaxReasoningBytes)
 	if !ok {
 		return ProviderResponse{}, providerError("provider_response_invalid", "model response violated the protocol", errors.New("reasoning content is invalid"))
 	}
@@ -631,20 +633,18 @@ func decodeOpenAIResponse(body []byte, enabledTools []string) (ProviderResponse,
 	return ProviderResponse{Assistant: &output}, nil
 }
 
-func decodeOptionalString(raw json.RawMessage) (*string, bool) {
+func decodeBoundedOptionalString(raw json.RawMessage, maximumBytes int) (*string, bool) {
+	if maximumBytes < 0 {
+		return nil, false
+	}
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil, true
 	}
 	var value string
-	if err := json.Unmarshal(raw, &value); err != nil || !utf8.ValidString(value) {
+	if err := json.Unmarshal(raw, &value); err != nil || len(value) > maximumBytes || !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
 		return nil, false
 	}
 	return &value, true
-}
-
-func jsonNullOrEmptyString(raw json.RawMessage) bool {
-	value, ok := decodeOptionalString(raw)
-	return ok && (value == nil || *value == "")
 }
 
 func providerError(code, detail string, cause error) *ProviderFailure {

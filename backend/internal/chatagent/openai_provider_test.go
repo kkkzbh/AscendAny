@@ -298,6 +298,60 @@ func TestOpenAICompatibleProviderMapsEnabledToolCallsToOwnedSchemas(t *testing.T
 	}
 }
 
+func TestOpenAICompatibleProviderNormalizesDeepSeekToolCallPreamble(t *testing.T) {
+	t.Parallel()
+	provider := mustOpenAIProvider(t, &providerCredentialResolver{secret: "token"}, providerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return providerHTTPResponse(200, `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"I will inspect the published analytics first.","reasoning_content":"The analytics tool is required before producing the final answer.","tool_calls":[{"id":"call:deepseek-1","type":"function","function":{"name":"analytics_get_self","arguments":"{\"historyLimit\":10}"}}]}}]}`), nil
+	}))
+	response, err := provider.Generate(context.Background(), validProviderRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Assistant != nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Key != "call:deepseek-1" || response.ToolCalls[0].Name != ToolAnalyticsGetSelf {
+		t.Fatalf("response=%#v", response)
+	}
+}
+
+func TestOpenAICompatibleProviderRejectsInvalidToolCallPreambleAndReasoning(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		field string
+		value any
+	}{
+		{name: "content type", field: "content", value: true},
+		{name: "reasoning type", field: "reasoning_content", value: []string{"invalid"}},
+		{name: "content NUL", field: "content", value: "invalid\x00content"},
+		{name: "reasoning NUL", field: "reasoning_content", value: "invalid\x00reasoning"},
+		{name: "content oversized", field: "content", value: strings.Repeat("c", MaxMessageBytes+1)},
+		{name: "reasoning oversized", field: "reasoning_content", value: strings.Repeat("r", MaxReasoningBytes+1)},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			message := map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "call:1", "type": "function",
+					"function": map[string]any{"name": "analytics_get_self", "arguments": `{"historyLimit":10}`},
+				}},
+			}
+			message[test.field] = test.value
+			body, err := json.Marshal(map[string]any{"choices": []any{map[string]any{
+				"index": 0, "finish_reason": "tool_calls", "message": message,
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = decodeOpenAIResponse(body, []string{ToolAnalyticsGetSelf})
+			var failure *ProviderFailure
+			if !errors.As(err, &failure) || failure.Code != "provider_response_invalid" {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestOpenAICompatibleProviderReplaysDurableToolRecordsAsProtocolPairs(t *testing.T) {
 	t.Parallel()
 	request := validProviderRequest()
