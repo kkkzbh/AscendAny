@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +37,36 @@ const (
 	maximumProviderResponseBytes       = 4 << 20
 	maximumProviderResponseHeaderBytes = 32 << 10
 	maximumCompletionTokens            = int64(65_536)
+	maximumOpenAIToolWireNameBytes     = 64
 )
+
+var openAIToolWireNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+var openAIToolWireNames = map[string]string{
+	ToolAnalyticsGetSelf:     "analytics_get_self",
+	ToolAgentNotesListActive: "agent_notes_list_active",
+	ToolAgentNotesGetActive:  "agent_notes_get_active",
+	ToolUpdateNotes:          "update_notes",
+}
+
+var runtimeToolNamesByOpenAIWireName = buildRuntimeToolNamesByOpenAIWireName()
+
+func buildRuntimeToolNamesByOpenAIWireName() map[string]string {
+	if len(openAIToolWireNames) != len(runtimeToolDefinitions) {
+		panic("OpenAI tool wire-name catalog differs from the runtime tool catalog")
+	}
+	reverse := make(map[string]string, len(openAIToolWireNames))
+	for runtimeName, wireName := range openAIToolWireNames {
+		if _, supported := runtimeToolDefinitions[runtimeName]; !supported || len(wireName) > maximumOpenAIToolWireNameBytes || !openAIToolWireNamePattern.MatchString(wireName) {
+			panic("OpenAI tool wire-name catalog contains an invalid entry")
+		}
+		if _, duplicate := reverse[wireName]; duplicate {
+			panic("OpenAI tool wire-name catalog contains a duplicate wire name")
+		}
+		reverse[wireName] = runtimeName
+	}
+	return reverse
+}
 
 type modelConnectionConfiguration struct {
 	Endpoint            string
@@ -462,13 +492,14 @@ func encodeOpenAIRequest(request ProviderRequest, model modelConnectionConfigura
 	}
 	for _, record := range request.ToolCalls {
 		definition, exists := runtimeToolDefinitions[record.Name]
+		wireName, mapped := openAIToolWireNames[record.Name]
 		_, enabled := enabledTools[record.Name]
-		if !exists || !enabled || record.ArgumentsSchema != definition.ArgumentsSchema || !toolCallKeyPattern.MatchString(record.Key) ||
+		if !exists || !mapped || !enabled || record.ArgumentsSchema != definition.ArgumentsSchema || !toolCallKeyPattern.MatchString(record.Key) ||
 			record.Outcome == ToolSucceeded && (record.ResultSchema == nil || *record.ResultSchema != definition.ResultSchema) {
 			return nil, providerError("provider_request_invalid", "provider request is invalid", errors.New("stored tool call is invalid"))
 		}
 		messages = append(messages, openAIRequestMessage{Role: "assistant", ToolCalls: []openAIRequestToolCall{{
-			ID: record.Key, Type: "function", Function: openAIRequestToolFunction{Name: record.Name, Arguments: string(record.Arguments)},
+			ID: record.Key, Type: "function", Function: openAIRequestToolFunction{Name: wireName, Arguments: string(record.Arguments)},
 		}}})
 		result, failure := encodeToolHistoryResult(record)
 		if failure != nil {
@@ -479,8 +510,12 @@ func encodeOpenAIRequest(request ProviderRequest, model modelConnectionConfigura
 	tools := make([]openAITool, 0, len(prompt.EnabledTools))
 	for _, name := range prompt.EnabledTools {
 		definition := runtimeToolDefinitions[name]
+		wireName, mapped := openAIToolWireNames[name]
+		if !mapped {
+			return nil, providerError("provider_request_invalid", "provider request is invalid", errors.New("enabled tool has no provider wire name"))
+		}
 		tools = append(tools, openAITool{Type: "function", Function: openAIToolFunction{
-			Name: name, Description: definition.Description, Parameters: definition.Parameters,
+			Name: wireName, Description: definition.Description, Parameters: definition.Parameters,
 		}})
 	}
 	payload := openAIRequest{Model: model.Model, Messages: messages, Tools: tools, MaxCompletionTokens: model.MaxCompletionTokens}
@@ -560,9 +595,10 @@ func decodeOpenAIResponse(body []byte, enabledTools []string) (ProviderResponse,
 		calls := make([]ProviderToolCall, 0, len(choice.Message.ToolCalls))
 		seen := make(map[string]struct{}, len(choice.Message.ToolCalls))
 		for _, call := range choice.Message.ToolCalls {
-			definition, supported := runtimeToolDefinitions[call.Function.Name]
-			_, permitted := enabled[call.Function.Name]
-			if call.Type != "function" || !toolCallKeyPattern.MatchString(call.ID) || !supported || !permitted {
+			runtimeName, mapped := runtimeToolNamesByOpenAIWireName[call.Function.Name]
+			definition, supported := runtimeToolDefinitions[runtimeName]
+			_, permitted := enabled[runtimeName]
+			if call.Type != "function" || !toolCallKeyPattern.MatchString(call.ID) || !mapped || !supported || !permitted {
 				return ProviderResponse{}, providerError("provider_response_invalid", "model response violated the protocol", errors.New("tool call is unsupported or invalid"))
 			}
 			if _, duplicate := seen[call.ID]; duplicate {
@@ -573,7 +609,7 @@ func decodeOpenAIResponse(body []byte, enabledTools []string) (ProviderResponse,
 			if err != nil {
 				return ProviderResponse{}, providerError("provider_response_invalid", "model response violated the protocol", errors.New("tool arguments are invalid"))
 			}
-			calls = append(calls, ProviderToolCall{Key: call.ID, Name: call.Function.Name, ArgumentsSchema: definition.ArgumentsSchema, Arguments: arguments})
+			calls = append(calls, ProviderToolCall{Key: call.ID, Name: runtimeName, ArgumentsSchema: definition.ArgumentsSchema, Arguments: arguments})
 		}
 		return ProviderResponse{ToolCalls: calls}, nil
 	}

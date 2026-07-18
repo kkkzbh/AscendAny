@@ -49,12 +49,28 @@ func TestOpenAICompatibleProviderSendsBoundedHTTPSRequestAndReturnsAssistant(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		var payload map[string]any
+		var payload struct {
+			Model      string `json:"model"`
+			ToolChoice string `json:"tool_choice"`
+			Stream     bool   `json:"stream"`
+			Messages   []any  `json:"messages"`
+			Tools      []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
 		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["model"] != "reasoner-v1" || payload["tool_choice"] != "auto" || payload["stream"] != false || len(payload["messages"].([]any)) != 2 || len(payload["tools"].([]any)) != 3 {
+		if payload.Model != "reasoner-v1" || payload.ToolChoice != "auto" || payload.Stream || len(payload.Messages) != 2 || len(payload.Tools) != 3 {
 			t.Fatalf("payload=%s", body)
+		}
+		expectedToolNames := []string{"analytics_get_self", "agent_notes_list_active", "agent_notes_get_active"}
+		for index, tool := range payload.Tools {
+			if tool.Function.Name != expectedToolNames[index] || len(tool.Function.Name) > maximumOpenAIToolWireNameBytes || !openAIToolWireNamePattern.MatchString(tool.Function.Name) {
+				t.Fatalf("provider tool %d name=%q expected=%q", index, tool.Function.Name, expectedToolNames[index])
+			}
 		}
 		if strings.Contains(string(body), "20260001") {
 			t.Fatalf("student identity leaked into model body: %s", body)
@@ -222,16 +238,61 @@ func TestOpenAICompatibleProviderProbeRejectsProtocolAndSanitizesFailures(t *tes
 	}
 }
 
+func TestOpenAICompatibleProviderOwnsExactToolWireNameBoundary(t *testing.T) {
+	t.Parallel()
+	expected := map[string]string{
+		ToolAnalyticsGetSelf:     "analytics_get_self",
+		ToolAgentNotesListActive: "agent_notes_list_active",
+		ToolAgentNotesGetActive:  "agent_notes_get_active",
+		ToolUpdateNotes:          "update_notes",
+	}
+	if len(openAIToolWireNames) != len(expected) || len(runtimeToolNamesByOpenAIWireName) != len(expected) {
+		t.Fatalf("forward=%#v reverse=%#v", openAIToolWireNames, runtimeToolNamesByOpenAIWireName)
+	}
+	for runtimeName, wireName := range expected {
+		if openAIToolWireNames[runtimeName] != wireName || runtimeToolNamesByOpenAIWireName[wireName] != runtimeName ||
+			len(wireName) > maximumOpenAIToolWireNameBytes || !openAIToolWireNamePattern.MatchString(wireName) {
+			t.Fatalf("runtime=%q wire=%q forward=%#v reverse=%#v", runtimeName, wireName, openAIToolWireNames, runtimeToolNamesByOpenAIWireName)
+		}
+	}
+}
+
+func TestOpenAICompatibleProviderEncodesUpdateNotesWireName(t *testing.T) {
+	t.Parallel()
+	request := validProviderRequest()
+	request.Prompt.Document = json.RawMessage(`{"systemPrompt":"You are a precise student coach.","enabledTools":["update_notes"]}`)
+	provider := mustOpenAIProvider(t, &providerCredentialResolver{secret: "token"}, providerRoundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(httpRequest.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Tools []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil || len(payload.Tools) != 1 || payload.Tools[0].Function.Name != "update_notes" {
+			t.Fatalf("payload=%s error=%v", body, err)
+		}
+		return providerHTTPResponse(200, `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Done"}}]}`), nil
+	}))
+	if _, err := provider.Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpenAICompatibleProviderMapsEnabledToolCallsToOwnedSchemas(t *testing.T) {
 	t.Parallel()
 	provider := mustOpenAIProvider(t, &providerCredentialResolver{secret: "token"}, providerRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return providerHTTPResponse(200, `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call:1","type":"function","function":{"name":"analytics.get_self","arguments":"{\"historyLimit\":10}"}}]}}]}`), nil
+		return providerHTTPResponse(200, `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call:1","type":"function","function":{"name":"analytics_get_self","arguments":"{\"historyLimit\":10}"}}]}}]}`), nil
 	}))
 	response, err := provider.Generate(context.Background(), validProviderRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Assistant != nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Key != "call:1" ||
+	if response.Assistant != nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Key != "call:1" || response.ToolCalls[0].Name != ToolAnalyticsGetSelf ||
 		response.ToolCalls[0].ArgumentsSchema != AnalyticsGetSelfArgumentsSchema || string(response.ToolCalls[0].Arguments) != `{"historyLimit":10}` {
 		t.Fatalf("response=%#v", response)
 	}
@@ -253,7 +314,10 @@ func TestOpenAICompatibleProviderReplaysDurableToolRecordsAsProtocolPairs(t *tes
 				Role       string `json:"role"`
 				ToolCallID string `json:"tool_call_id"`
 				ToolCalls  []struct {
-					ID string `json:"id"`
+					ID       string `json:"id"`
+					Function struct {
+						Name string `json:"name"`
+					} `json:"function"`
 				} `json:"tool_calls"`
 			} `json:"messages"`
 		}
@@ -261,6 +325,7 @@ func TestOpenAICompatibleProviderReplaysDurableToolRecordsAsProtocolPairs(t *tes
 			t.Fatal(err)
 		}
 		if len(payload.Messages) != 4 || payload.Messages[2].Role != "assistant" || payload.Messages[2].ToolCalls[0].ID != "call:1" ||
+			payload.Messages[2].ToolCalls[0].Function.Name != "analytics_get_self" ||
 			payload.Messages[3].Role != "tool" || payload.Messages[3].ToolCallID != "call:1" {
 			t.Fatalf("messages=%#v body=%s", payload.Messages, body)
 		}
@@ -343,12 +408,13 @@ func TestOpenAICompatibleProviderSanitizesCredentialTransportAndHTTPFailures(t *
 func TestOpenAICompatibleProviderRejectsAmbiguousOrIncompleteResponses(t *testing.T) {
 	t.Parallel()
 	responses := map[string]string{
-		"duplicate key":     `{"choices":[{"index":0,"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}}]}`,
-		"multiple choices":  `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}},{"index":1,"finish_reason":"stop","message":{"role":"assistant","content":"y"}}]}`,
-		"length finish":     `{"choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"partial"}}]}`,
-		"disabled tool":     `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call:1","type":"function","function":{"name":"unknown.tool","arguments":"{}"}}]}}]}`,
-		"duplicate tool id": `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call:1","type":"function","function":{"name":"analytics.get_self","arguments":"{\"historyLimit\":1}"}},{"id":"call:1","type":"function","function":{"name":"analytics.get_self","arguments":"{\"historyLimit\":2}"}}]}}]}`,
-		"nul assistant":     `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"invalid\u0000content"}}]}`,
+		"duplicate key":      `{"choices":[{"index":0,"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}}]}`,
+		"multiple choices":   `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"x"}},{"index":1,"finish_reason":"stop","message":{"role":"assistant","content":"y"}}]}`,
+		"length finish":      `{"choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"partial"}}]}`,
+		"disabled tool":      `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call:1","type":"function","function":{"name":"unknown_tool","arguments":"{}"}}]}}]}`,
+		"internal tool name": `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call:1","type":"function","function":{"name":"analytics.get_self","arguments":"{\"historyLimit\":1}"}}]}}]}`,
+		"duplicate tool id":  `{"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call:1","type":"function","function":{"name":"analytics_get_self","arguments":"{\"historyLimit\":1}"}},{"id":"call:1","type":"function","function":{"name":"analytics_get_self","arguments":"{\"historyLimit\":2}"}}]}}]}`,
+		"nul assistant":      `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"invalid\u0000content"}}]}`,
 	}
 	for name, body := range responses {
 		name, body := name, body
