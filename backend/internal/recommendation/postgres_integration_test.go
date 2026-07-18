@@ -98,17 +98,33 @@ LIMIT 1`, generationID, configuration.Value.AcceptedVerdicts).Scan(&actorID); er
 	if !configuredCorrect {
 		t.Fatal("real fixture contains no correctness evidence for the generation-bound accepted verdicts")
 	}
-	configuredRecent, err := queryRecentActivity(ctx, pool, generationID, actorID, configuration.Value.AcceptedVerdicts)
+	const fixtureCoverageDays int32 = 36500
+	configuredRecent, err := queryRecentActivity(
+		ctx,
+		pool,
+		generationID,
+		actorID,
+		configuration.Value.AcceptedVerdicts,
+		fixtureCoverageDays,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	excludedRecent, err := queryRecentActivity(ctx, pool, generationID, actorID, []string{"__ascendany_test_never_accepted__"})
+	excludedRecent, err := queryRecentActivity(
+		ctx,
+		pool,
+		generationID,
+		actorID,
+		[]string{"__ascendany_test_never_accepted__"},
+		fixtureCoverageDays,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(configuredRecent) != len(excludedRecent) {
+	if len(configuredRecent) == 0 || len(configuredRecent) != len(excludedRecent) {
 		t.Fatalf("configured/excluded recent activity counts = %d/%d", len(configuredRecent), len(excludedRecent))
 	}
+	var configuredRecentCorrect int64
 	for index := range configuredRecent {
 		if configuredRecent[index].Identity != excludedRecent[index].Identity ||
 			configuredRecent[index].Date != excludedRecent[index].Date ||
@@ -116,6 +132,10 @@ LIMIT 1`, generationID, configuration.Value.AcceptedVerdicts).Scan(&actorID); er
 			excludedRecent[index].Correct != 0 {
 			t.Fatalf("recent verdict projection drift at %d: %#v/%#v", index, configuredRecent[index], excludedRecent[index])
 		}
+		configuredRecentCorrect += configuredRecent[index].Correct
+	}
+	if configuredRecentCorrect == 0 {
+		t.Fatal("real fixture contains no recent correctness evidence for the generation-bound accepted verdicts")
 	}
 }
 

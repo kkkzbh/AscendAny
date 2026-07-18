@@ -83,7 +83,14 @@ func (repository *PostgresRepository) ReadCurrent(ctx context.Context, principal
 		if err != nil {
 			return err
 		}
-		recentActivity, err := queryRecentActivity(ctx, tx, *analyticsState.GenerationID, *resolved.ActorID, repository.acceptedVerdicts)
+		recentActivity, err := queryRecentActivity(
+			ctx,
+			tx,
+			*analyticsState.GenerationID,
+			*resolved.ActorID,
+			repository.acceptedVerdicts,
+			recommendationRecentActivityDays,
+		)
 		if err != nil {
 			return err
 		}

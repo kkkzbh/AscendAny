@@ -420,12 +420,18 @@ type recentActivityRow struct {
 	Correct   int64
 }
 
+const recommendationRecentActivityDays int32 = 7
+
 func queryRecentActivity(
 	ctx context.Context,
 	tx recommendationQuery,
 	generationID, actorID int64,
 	acceptedVerdicts []string,
+	recentDays int32,
 ) ([]recentActivityRow, error) {
+	if recentDays <= 0 {
+		return nil, domainError(ErrorInvalidInput, true, "query recent recommendation knowledge activity", errors.New("recent activity days must be positive"))
+	}
 	rows, err := tx.Query(ctx, `
 SELECT generation_snapshot.snapshot_id,
 	   submission.problem_set_problem_id,
@@ -445,11 +451,11 @@ JOIN ascendany.pintia_submission_identities AS identity
  AND identity.actor_id = submission.actor_id
  AND identity.problem_set_problem_id = submission.problem_set_problem_id
 WHERE generation_snapshot.analytics_generation_id = $1
-	  AND identity.submitted_at >= transaction_timestamp() - interval '7 days'
+	  AND identity.submitted_at >= transaction_timestamp() - $4::integer * interval '1 day'
 GROUP BY generation_snapshot.snapshot_id, submission.problem_set_problem_id,
 	         (identity.submitted_at AT TIME ZONE 'UTC')::date
 ORDER BY generation_snapshot.snapshot_id, submission.problem_set_problem_id,
-	         (identity.submitted_at AT TIME ZONE 'UTC')::date`, generationID, actorID, acceptedVerdicts)
+	         (identity.submitted_at AT TIME ZONE 'UTC')::date`, generationID, actorID, acceptedVerdicts, recentDays)
 	if err != nil {
 		return nil, databaseError("query recent recommendation knowledge activity", err)
 	}
