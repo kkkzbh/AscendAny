@@ -1532,6 +1532,14 @@ fi
     "$fixture_root/agent-acceptance-query.sql" >/dev/null
   grep -F "tool.tool_name = 'analytics.get_self'" \
     "$fixture_root/agent-acceptance-query.sql" >/dev/null
+  if grep -F 'jsonb_object_length' "$fixture_root/agent-acceptance-query.sql" >/dev/null; then
+    printf 'Agent acceptance query uses an unavailable PostgreSQL JSONB function\n' >&2
+    exit 1
+  fi
+  grep -F "'patch', tool.arguments -> 'patch'" \
+    "$fixture_root/agent-acceptance-query.sql" >/dev/null
+  grep -F "'content', tool.arguments -> 'content'" \
+    "$fixture_root/agent-acceptance-query.sql" >/dev/null
 
   agent_provider_credential_sha256="$(printf 'd%.0s' {1..64})"
   failures=0

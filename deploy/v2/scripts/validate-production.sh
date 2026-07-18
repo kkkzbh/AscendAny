@@ -4603,11 +4603,17 @@ WHERE run.public_id = :'reply_run_id'::uuid
       AND tool.arguments ->> 'mode' IN ('patch', 'replace')
       AND (
         (tool.arguments ->> 'mode' = 'patch' AND
-         jsonb_object_length(tool.arguments) = 2 AND
+         tool.arguments = jsonb_build_object(
+           'mode', 'patch',
+           'patch', tool.arguments -> 'patch'
+         ) AND
          jsonb_typeof(tool.arguments -> 'patch') = 'string')
         OR
         (tool.arguments ->> 'mode' = 'replace' AND
-         jsonb_object_length(tool.arguments) = 2 AND
+         tool.arguments = jsonb_build_object(
+           'mode', 'replace',
+           'content', tool.arguments -> 'content'
+         ) AND
          jsonb_typeof(tool.arguments -> 'content') = 'string')
       )
       AND tool.result_schema = 'ascendany.agent_tool.update_notes_result.v1'
