@@ -24,10 +24,20 @@ import (
 const testWebOrigin = "https://ascendany.example"
 
 type stubAuthService struct {
-	login   func(context.Context, auth.LoginInput) (auth.AuthResult, error)
-	refresh func(context.Context, auth.RefreshInput) (auth.AuthResult, error)
-	logout  func(context.Context, auth.LogoutInput) error
-	me      func(context.Context, string) (auth.Account, error)
+	register               func(context.Context, auth.RegistrationInput) (auth.AuthResult, error)
+	login                  func(context.Context, auth.LoginInput) (auth.AuthResult, error)
+	exchangeSSO            func(context.Context, auth.SSOExchangeInput) (auth.AuthResult, error)
+	refresh                func(context.Context, auth.RefreshInput) (auth.AuthResult, error)
+	logout                 func(context.Context, auth.LogoutInput) error
+	me                     func(context.Context, string) (auth.Account, error)
+	bootstrapLocalPassword func(context.Context, auth.LocalPasswordBootstrapInput) error
+}
+
+func (service stubAuthService) Register(ctx context.Context, input auth.RegistrationInput) (auth.AuthResult, error) {
+	if service.register == nil {
+		panic("unexpected Register call")
+	}
+	return service.register(ctx, input)
 }
 
 func (service stubAuthService) Login(ctx context.Context, input auth.LoginInput) (auth.AuthResult, error) {
@@ -35,6 +45,13 @@ func (service stubAuthService) Login(ctx context.Context, input auth.LoginInput)
 		panic("unexpected Login call")
 	}
 	return service.login(ctx, input)
+}
+
+func (service stubAuthService) ExchangeSSO(ctx context.Context, input auth.SSOExchangeInput) (auth.AuthResult, error) {
+	if service.exchangeSSO == nil {
+		panic("unexpected ExchangeSSO call")
+	}
+	return service.exchangeSSO(ctx, input)
 }
 
 func (service stubAuthService) Refresh(ctx context.Context, input auth.RefreshInput) (auth.AuthResult, error) {
@@ -56,6 +73,13 @@ func (service stubAuthService) Me(ctx context.Context, token string) (auth.Accou
 		panic("unexpected Me call")
 	}
 	return service.me(ctx, token)
+}
+
+func (service stubAuthService) BootstrapLocalPassword(ctx context.Context, input auth.LocalPasswordBootstrapInput) error {
+	if service.bootstrapLocalPassword == nil {
+		panic("unexpected BootstrapLocalPassword call")
+	}
+	return service.bootstrapLocalPassword(ctx, input)
 }
 
 type captureRateLimiter struct {
@@ -511,6 +535,9 @@ func TestTrustedProxyMissingClientHeaderFailsBeforeAuth(t *testing.T) {
 		AllowedOrigins:            []string{testWebOrigin},
 		RateLimiter:               limiter,
 		RequestIDRandom:           bytes.NewReader([]byte("abcdefgh")),
+		AgentV1EnvelopeKey:        []byte("0123456789abcdef0123456789abcdef"),
+		AgentV1AccessTTL:          15 * time.Minute,
+		AgentV1RefreshTTL:         24 * time.Hour,
 		TrustedProxyCIDRs:         []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
 		ClientIPHeader:            "CF-Connecting-IP",
 		Artifacts:                 unusedArtifactPublisher{},
@@ -578,6 +605,9 @@ func newAuthTestHandler(
 		AllowedOrigins:            []string{testWebOrigin},
 		RateLimiter:               limiter,
 		RequestIDRandom:           bytes.NewReader([]byte("abcdefgh")),
+		AgentV1EnvelopeKey:        []byte("0123456789abcdef0123456789abcdef"),
+		AgentV1AccessTTL:          15 * time.Minute,
+		AgentV1RefreshTTL:         24 * time.Hour,
 		Artifacts:                 unusedArtifactPublisher{},
 		Imports:                   unusedImportQueue{},
 		ImportReader:              unusedImportReader{},

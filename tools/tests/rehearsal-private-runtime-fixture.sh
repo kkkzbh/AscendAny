@@ -9,9 +9,9 @@ readonly postgres_integration="${repository_root}/tools/run-v2-postgres-integrat
 readonly backup_rehearsal="${repository_root}/tools/run-v2-backup-restore-podman-rehearsal.sh"
 readonly full_e2e="${repository_root}/tools/run-v2-full-e2e.sh"
 readonly recommendation_catalog_fixture="${repository_root}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json"
-readonly recommendation_catalog_sha256="a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
+readonly recommendation_catalog_sha256="c164a2a0af654574a3855d6937dd888bbd9212c8081d50e4292cd05521f72351"
 readonly recommendation_model_fixture="${repository_root}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json"
-readonly recommendation_model_sha256="5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
+readonly recommendation_model_sha256="392c9470556af563de09a971d501ab507d87b055847dcd78c5aaafc8cb452619"
 
 fixture_root=""
 private_fixture_root=""

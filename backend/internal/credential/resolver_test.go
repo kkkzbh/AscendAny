@@ -24,7 +24,7 @@ func TestFileEnvironmentVariableIsCollisionFreeAndAuthorityBound(t *testing.T) {
 	}
 }
 
-func TestEnvironmentFileResolverReadsExactBoundedBearer(t *testing.T) {
+func TestEnvironmentFileResolverReadsExactBoundedOpaqueSecret(t *testing.T) {
 	t.Parallel()
 	name, err := FileEnvironmentVariable("models.primary", "models.example:443")
 	if err != nil {
@@ -39,13 +39,13 @@ func TestEnvironmentFileResolverReadsExactBoundedBearer(t *testing.T) {
 		if path != "/run/credentials/ascendanyd/model" {
 			t.Fatalf("path=%q", path)
 		}
-		return []byte("sk_exact-token+value"), nil
+		return []byte(`{"username":"sender@example.test","password":"secret with spaces"}`), nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secret, err := resolver.Resolve(context.Background(), "models.primary", "models.example:443")
-	if err != nil || secret != "sk_exact-token+value" {
+	if err != nil || secret != `{"username":"sender@example.test","password":"secret with spaces"}` {
 		t.Fatalf("secret=%q error=%v", secret, err)
 	}
 }
@@ -77,7 +77,7 @@ func TestEnvironmentFileResolverFailsClosedWithoutLeakingReadErrors(t *testing.T
 	}
 }
 
-func TestEnvironmentFileResolverHonorsCancellationAndBearerContract(t *testing.T) {
+func TestEnvironmentFileResolverHonorsCancellationAndOpaqueSecretBound(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -89,6 +89,18 @@ func TestEnvironmentFileResolverHonorsCancellationAndBearerContract(t *testing.T
 	if _, err := resolver.Resolve(ctx, "models.primary", "models.example:443"); !errors.Is(err, context.Canceled) || called {
 		t.Fatalf("error=%v called=%t", err, called)
 	}
+	for _, secret := range [][]byte{nil, []byte(strings.Repeat("s", MaxSecretBytes+1))} {
+		resolver, _ := NewEnvironmentFileResolver(func(string) (string, bool) { return "/secret", true }, func(string) ([]byte, error) {
+			return secret, nil
+		})
+		if _, err := resolver.Resolve(context.Background(), "models.primary", "models.example:443"); err == nil {
+			t.Fatalf("accepted opaque secret with %d bytes", len(secret))
+		}
+	}
+}
+
+func TestValidBearerOwnsBearerGrammar(t *testing.T) {
+	t.Parallel()
 	for _, secret := range [][]byte{nil, []byte("="), []byte("===="), []byte(" token"), []byte("to ken"), []byte("令牌"), []byte(strings.Repeat("t", MaxBearerBytes+1))} {
 		if ValidBearer(secret) {
 			t.Fatalf("accepted %q", secret)

@@ -102,9 +102,11 @@ var (
 	replaceFunctionPattern = regexp.MustCompile(`(?ms)^CREATE OR REPLACE FUNCTION ascendany\.([a-z][a-z0-9_]*)\((.*?)\)\nRETURNS\b`)
 	functionArguments      = regexp.MustCompile(`^(?:[a-z][a-z0-9_]* (?:uuid|bigint|boolean|text)(?:, [a-z][a-z0-9_]* (?:uuid|bigint|boolean|text))*)?$`)
 	createIndexPattern     = regexp.MustCompile(`(?m)^CREATE (?:UNIQUE )?INDEX ([a-z][a-z0-9_]*)$`)
+	dropIndexPattern       = regexp.MustCompile(`(?m)^DROP INDEX ascendany\.([a-z][a-z0-9_]*);$`)
 	createTriggerPattern   = regexp.MustCompile(`(?ms)^CREATE (CONSTRAINT )?TRIGGER ([a-z][a-z0-9_]*)\n(.*?);`)
 	triggerTablePattern    = regexp.MustCompile(`\bON ascendany\.([a-z][a-z0-9_]*)\b`)
 	namedConstraintPattern = regexp.MustCompile(`(?s)\bCONSTRAINT\s+([a-z][a-z0-9_]*)\s+(CHECK|UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|EXCLUDE)\b`)
+	dropConstraintPattern  = regexp.MustCompile(`(?m)^ALTER TABLE ascendany\.[a-z][a-z0-9_]*\nDROP CONSTRAINT ([a-z][a-z0-9_]*);$`)
 	primaryKeyPattern      = regexp.MustCompile(`\bPRIMARY\s+KEY\b`)
 	inlineUniquePattern    = regexp.MustCompile(`(?m)^    ([a-z][a-z0-9_]*) [^\n]*\bUNIQUE\b`)
 	identityPattern        = regexp.MustCompile(`(?m)^    ([a-z][a-z0-9_]*) [^\n]*\bGENERATED ALWAYS AS IDENTITY\b`)
@@ -239,19 +241,11 @@ func addMigrationInventory(keys map[string]struct{}, sql string) error {
 			return fmt.Errorf("CREATE OR REPLACE FUNCTION does not replace an earlier routine: %s", key)
 		}
 	}
-	for _, match := range createIndexPattern.FindAllStringSubmatch(sql, -1) {
-		if err := addInventoryKey(keys, "index:"+match[1]); err != nil {
-			return err
-		}
+	if err := applyExplicitIndexTransitions(keys, sql); err != nil {
+		return err
 	}
-	for _, match := range namedConstraintPattern.FindAllStringSubmatch(sql, -1) {
-		kind := strings.Join(strings.Fields(match[2]), " ")
-		constraintType := map[string]string{
-			"CHECK": "c", "UNIQUE": "u", "PRIMARY KEY": "p", "FOREIGN KEY": "f", "EXCLUDE": "x",
-		}[kind]
-		if err := addConstraintAndIndex(keys, constraintType, match[1], constraintType == "p" || constraintType == "u" || constraintType == "x"); err != nil {
-			return err
-		}
+	if err := applyNamedConstraintTransitions(keys, sql); err != nil {
+		return err
 	}
 	for _, match := range createTriggerPattern.FindAllStringSubmatch(sql, -1) {
 		if triggerTablePattern.FindStringSubmatch(match[3]) == nil {
@@ -278,6 +272,90 @@ func addMigrationInventory(keys map[string]struct{}, sql string) error {
 	return nil
 }
 
+type explicitIndexTransition struct {
+	position int
+	name     string
+	drop     bool
+}
+
+func applyExplicitIndexTransitions(keys map[string]struct{}, sql string) error {
+	transitions := make([]explicitIndexTransition, 0)
+	for _, match := range createIndexPattern.FindAllStringSubmatchIndex(sql, -1) {
+		transitions = append(transitions, explicitIndexTransition{
+			position: match[0],
+			name:     sql[match[2]:match[3]],
+		})
+	}
+	for _, match := range dropIndexPattern.FindAllStringSubmatchIndex(sql, -1) {
+		transitions = append(transitions, explicitIndexTransition{
+			position: match[0],
+			name:     sql[match[2]:match[3]],
+			drop:     true,
+		})
+	}
+	sort.Slice(transitions, func(left, right int) bool {
+		return transitions[left].position < transitions[right].position
+	})
+	for _, transition := range transitions {
+		key := "index:" + transition.name
+		if transition.drop {
+			if _, exists := keys[key]; !exists {
+				return fmt.Errorf("DROP INDEX does not remove an earlier index: %s", transition.name)
+			}
+			delete(keys, key)
+			continue
+		}
+		if err := addInventoryKey(keys, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type namedConstraintTransition struct {
+	position       int
+	name           string
+	constraintType string
+	drop           bool
+}
+
+func applyNamedConstraintTransitions(keys map[string]struct{}, sql string) error {
+	transitions := make([]namedConstraintTransition, 0)
+	for _, match := range namedConstraintPattern.FindAllStringSubmatchIndex(sql, -1) {
+		kind := strings.Join(strings.Fields(sql[match[4]:match[5]]), " ")
+		transitions = append(transitions, namedConstraintTransition{
+			position: match[0],
+			name:     sql[match[2]:match[3]],
+			constraintType: map[string]string{
+				"CHECK": "c", "UNIQUE": "u", "PRIMARY KEY": "p", "FOREIGN KEY": "f", "EXCLUDE": "x",
+			}[kind],
+		})
+	}
+	for _, match := range dropConstraintPattern.FindAllStringSubmatchIndex(sql, -1) {
+		transitions = append(transitions, namedConstraintTransition{
+			position: match[0],
+			name:     sql[match[2]:match[3]],
+			drop:     true,
+		})
+	}
+	sort.Slice(transitions, func(left, right int) bool {
+		return transitions[left].position < transitions[right].position
+	})
+	for _, transition := range transitions {
+		if transition.drop {
+			if err := removeConstraintAndIndex(keys, transition.name); err != nil {
+				return err
+			}
+			continue
+		}
+		indexed := transition.constraintType == "p" || transition.constraintType == "u" || transition.constraintType == "x"
+		if err := addConstraintAndIndex(keys, transition.constraintType, transition.name, indexed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func addConstraintAndIndex(keys map[string]struct{}, constraintType, name string, hasIndex bool) error {
 	if err := addInventoryKey(keys, "constraint:"+constraintType+":"+name); err != nil {
 		return err
@@ -285,6 +363,35 @@ func addConstraintAndIndex(keys map[string]struct{}, constraintType, name string
 	if hasIndex {
 		return addInventoryKey(keys, "index:"+name)
 	}
+	return nil
+}
+
+func removeConstraintAndIndex(keys map[string]struct{}, name string) error {
+	var constraintKey string
+	indexed := false
+	for _, constraintType := range []string{"c", "f", "p", "t", "u", "x"} {
+		key := "constraint:" + constraintType + ":" + name
+		if _, exists := keys[key]; !exists {
+			continue
+		}
+		if constraintKey != "" {
+			return fmt.Errorf("DROP CONSTRAINT %s is ambiguous in the release inventory", name)
+		}
+		constraintKey = key
+		indexed = constraintType == "p" || constraintType == "u" || constraintType == "x"
+	}
+	if constraintKey == "" {
+		return fmt.Errorf("DROP CONSTRAINT does not remove an earlier constraint: %s", name)
+	}
+	delete(keys, constraintKey)
+	if !indexed {
+		return nil
+	}
+	indexKey := "index:" + name
+	if _, exists := keys[indexKey]; !exists {
+		return fmt.Errorf("indexed constraint %s has no release inventory index", name)
+	}
+	delete(keys, indexKey)
 	return nil
 }
 

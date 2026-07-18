@@ -49,8 +49,8 @@ Production receives one externally trained, immutable `ascendany.recommendation.
 | Path | Contents |
 | --- | --- |
 | `backend/` | Go services, workers, CLIs, migrations, and domain tests. |
-| `apps/web/` | Student Web application. |
-| `apps/desktop/` | Electron student application. |
+| `apps/web/` | Retired replacement Web package; excluded from product delivery. |
+| `apps/desktop/` | Agent frontend for Electron and the production `/app/` Web build. |
 | `apps/mobile/` | Capacitor mobile application. |
 | `apps/import-console/` | Administrator console. |
 | `apps/site/` | Product website. |
@@ -73,11 +73,12 @@ cd ..
 pnpm install --frozen-lockfile
 pnpm --filter @ascendany/sdk check
 pnpm --filter @ascendany/pintia-exporter check
-pnpm --filter @ascendany/web check
+pnpm public-assets:test
+pnpm public-assets:check
 pnpm --filter @ascendany/mobile check
 pnpm --filter @ascendany/import-console check
 pnpm --filter @ascendany/desktop test
-pnpm --filter @ascendany/desktop build
+pnpm build
 ```
 
 ### Rootless PostgreSQL rehearsal

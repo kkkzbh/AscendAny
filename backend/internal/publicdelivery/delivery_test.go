@@ -36,6 +36,13 @@ func TestEmbeddedPublicAssetsMatchManifest(t *testing.T) {
 	}
 }
 
+func TestTrueTypeFontContentType(t *testing.T) {
+	contentType, ok := contentTypeForPath("app/assets/KaTeX_Main-Regular-12345678.ttf")
+	if !ok || contentType != "font/ttf" {
+		t.Fatalf("TrueType content type = %q, supported=%t", contentType, ok)
+	}
+}
+
 func TestPublicDeliveryOwnsOnlyStaticRoutes(t *testing.T) {
 	handler := fixtureHandler(t, http.NotFoundHandler())
 	tests := []struct {
@@ -109,7 +116,7 @@ func TestPublicDeliveryPassesAPIHealthSSEAndWebSocketUnchanged(t *testing.T) {
 	})
 	handler := fixtureHandler(t, api)
 
-	for _, path := range []string{"/api/v2/capabilities", "/livez", "/readyz", "/version"} {
+	for _, path := range []string{"/api/v1/auth/policy", "/api/v2/capabilities", "/livez", "/readyz", "/version"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK || response.Header().Get("Content-Security-Policy") != "" {
@@ -132,7 +139,7 @@ func TestPublicDeliveryPassesAPIHealthSSEAndWebSocketUnchanged(t *testing.T) {
 	if websocketResponse.Code != http.StatusSwitchingProtocols || websocketWriter != websocketResponse {
 		t.Fatalf("WebSocket status = %d", websocketResponse.Code)
 	}
-	if len(calls) != 6 {
+	if len(calls) != 7 {
 		t.Fatalf("API calls = %v", calls)
 	}
 }
@@ -178,6 +185,9 @@ func TestPublicDeliverySetsDeterministicCacheContentAndSecurityHeaders(t *testin
 		if got := response.Header().Get(name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
+	}
+	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "font-src 'self' data:") {
+		t.Fatalf("Agent app CSP blocks its embedded data font: %q", response.Header().Get("Content-Security-Policy"))
 	}
 	etag := response.Header().Get("ETag")
 	if etag == "" {

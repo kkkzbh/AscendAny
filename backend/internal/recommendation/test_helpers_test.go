@@ -7,10 +7,26 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kkkzbh/AscendAny/backend/internal/analytics"
 	"github.com/kkkzbh/AscendAny/backend/internal/canonicaljson"
 	"github.com/kkkzbh/AscendAny/backend/internal/inferencemodel"
 	"github.com/kkkzbh/AscendAny/backend/internal/modelrelease"
 )
+
+func testAnalyticsConfig(t *testing.T) analytics.ParsedConfig {
+	t.Helper()
+	configuration, err := analytics.ParseConfig([]byte(`{
+  "algorithmVersion": "ascendany_analytics_v1",
+  "acceptedVerdicts": ["ACCEPTED"],
+  "winsor": {"low": 0.05, "high": 0.95},
+  "halfLifeDays": {"knowledge": 45, "accuracy": 21, "quality": 45, "flexibility": 21, "proficiency": 21},
+  "rating": {"initial": 800, "binarySearchMin": -2000, "binarySearchMax": 8000, "binarySearchSteps": 30}
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return configuration
+}
 
 func testCatalogDocument(t *testing.T, assignments []any) json.RawMessage {
 	t.Helper()

@@ -1,14 +1,17 @@
-import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import electron from "vite-plugin-electron";
-
-const apiProxyTarget =
-  process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:18000";
+import renderer from "vite-plugin-electron-renderer";
+import tailwindcss from "@tailwindcss/vite";
+import path from "path";
 
 export default defineConfig({
+  define: {
+    __ASCENDANY_WEB_BUILD__: JSON.stringify(false),
+  },
   plugins: [
     react(),
+    tailwindcss(),
     electron([
       {
         entry: "electron/main.ts",
@@ -36,18 +39,11 @@ export default defineConfig({
         },
       },
     ]),
+    renderer(),
   ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-    },
-  },
-  server: {
-    proxy: {
-      "/api": {
-        target: apiProxyTarget,
-        changeOrigin: true,
-      },
     },
   },
 });

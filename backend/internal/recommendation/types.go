@@ -1,5 +1,7 @@
 package recommendation
 
+import "time"
+
 const (
 	ResultSchemaV1 = "ascendany.recommendation.inference-result.v1"
 
@@ -30,6 +32,24 @@ type CurrentRecommendation struct {
 	ModelHeadRevision            int64                                 `json:"modelHeadRevision"`
 	Model                        *ModelProvenance                      `json:"model"`
 	Result                       *StudentRecommendationInferenceResult `json:"result,omitempty"`
+	// KnowledgeActivity is an online projection for the frozen Agent frontend.
+	// It is derived from the same analytics generation and knowledge catalog as
+	// Result, while remaining outside the immutable inference-result artifact.
+	KnowledgeActivity []RecommendationKnowledgeActivity `json:"-"`
+}
+
+type RecommendationKnowledgeActivity struct {
+	KnowledgePointID string
+	Attempted        int64
+	Correct          int64
+	LastTriedAt      *time.Time
+	RecentSeries     []RecommendationKnowledgeActivityDay
+}
+
+type RecommendationKnowledgeActivityDay struct {
+	Date      string
+	Attempted int64
+	Correct   int64
 }
 
 type ModelProvenance struct {

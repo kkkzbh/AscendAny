@@ -9,11 +9,16 @@ import (
 )
 
 const (
-	MaxTitleBytes      = 800
-	MaxContentBytes    = 40000
-	MaxPlatformBytes   = 320
-	MaxAppVersionBytes = 320
-	MaxUserAgentBytes  = 2048
+	MaxTitleBytes              = 800
+	MaxContentBytes            = 40000
+	MaxPlatformBytes           = 320
+	MaxAppVersionBytes         = 320
+	MaxUserAgentBytes          = 2048
+	MaxImages                  = 8
+	MaxImageBytes              = 8 << 20
+	MaxImageDataURLBytes       = 12 << 20
+	MaxImageNameRunes          = 160
+	MaxAttachmentFilenameBytes = 640
 )
 
 type Policy struct {
@@ -30,6 +35,7 @@ type SubmitInput struct {
 	Platform        *string
 	AppVersion      *string
 	UserAgent       *string
+	Attachments     []Attachment
 }
 
 type SubmitCommand struct {
@@ -49,6 +55,23 @@ type Submission struct {
 type SubmitResult struct {
 	Submission Submission `json:"submission"`
 	Created    bool       `json:"created"`
+}
+
+// ImageInput is the frozen Agent frontend image object before data-URL decoding.
+type ImageInput struct {
+	Name    string
+	DataURL string
+}
+
+// Attachment is the immutable content-addressed manifest persisted with one
+// feedback submission. Sequence is one-based and preserves frontend order.
+type Attachment struct {
+	Sequence   int16  `json:"sequence"`
+	Filename   string `json:"filename"`
+	SHA256     string `json:"sha256"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	MediaType  string `json:"mediaType"`
+	StorageKey string `json:"storageKey"`
 }
 
 func (command SubmitCommand) subjectHex() string {

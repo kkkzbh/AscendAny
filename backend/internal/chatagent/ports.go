@@ -10,15 +10,17 @@ import (
 )
 
 type ProviderRequest struct {
-	RunID         string
-	Kind          RunKind
-	ThreadID      string
-	StudentNumber string
-	Analytics     *AnalyticsSnapshot
-	Prompt        ConfigurationSnapshot
-	Model         ConfigurationSnapshot
-	Conversation  []Message
-	ToolCalls     []ToolCallRecord
+	RunID               string
+	Kind                RunKind
+	ThreadID            string
+	StudentNumber       string
+	InputMessageID      string
+	Analytics           *AnalyticsSnapshot
+	AutoAnalysisContext *AutoAnalysisFrontendContext
+	Prompt              ConfigurationSnapshot
+	Model               ConfigurationSnapshot
+	Conversation        []Message
+	ToolCalls           []ToolCallRecord
 }
 
 type ProviderToolCall struct {
@@ -61,6 +63,7 @@ type ToolRequest struct {
 	RunID           string
 	StudentNumber   string
 	Analytics       *AnalyticsSnapshot
+	FrontendNotes   *FrontendNotesState
 	Key             string
 	Name            string
 	ArgumentsSchema string
@@ -85,7 +88,7 @@ type WorkerRepository interface {
 	Claim(context.Context, string, string, time.Duration) (*Claim, error)
 	RenewLease(context.Context, Claim, time.Duration) error
 	LoadWork(context.Context, Claim, int) (Work, error)
-	RecordToolCall(context.Context, Claim, ToolCallRecord) (ToolCallRecord, error)
+	RecordToolCall(context.Context, Claim, ToolCallRecord, *NotesUpdate) (ToolCallRecord, error)
 	Complete(context.Context, Claim, Completion) error
 	Fail(context.Context, Claim, string, string) error
 }
@@ -188,6 +191,10 @@ func cloneProviderRequest(request ProviderRequest) ProviderRequest {
 		analytics := *request.Analytics
 		request.Analytics = &analytics
 	}
+	if request.AutoAnalysisContext != nil {
+		frontendContext := *request.AutoAnalysisContext
+		request.AutoAnalysisContext = &frontendContext
+	}
 	request.Conversation = append([]Message(nil), request.Conversation...)
 	for index := range request.Conversation {
 		request.Conversation[index] = cloneMessage(request.Conversation[index])
@@ -219,6 +226,7 @@ func cloneToolRequest(request ToolRequest) ToolRequest {
 		analytics := *request.Analytics
 		request.Analytics = &analytics
 	}
+	request.FrontendNotes = cloneFrontendNotesState(request.FrontendNotes)
 	return request
 }
 

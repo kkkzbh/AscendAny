@@ -8,7 +8,7 @@ readonly REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly BACKEND_ROOT="${REPOSITORY_ROOT}/backend"
 readonly DATABASE_NAME="ascendany_v2"
 readonly EXPECTED_POSTGRES_MAJOR="17"
-readonly EXPECTED_SCHEMA_VERSION="7"
+readonly EXPECTED_SCHEMA_VERSION="10"
 readonly MIGRATOR_TEST_PASSWORD="local-rehearsal-password"
 readonly RESTORE_TEST_PASSWORD="local-restore-rehearsal-password"
 
@@ -984,7 +984,9 @@ readonly -a TEST_CASES=(
   'runtime|./internal/agentnotes|TestPostgresAgentNoteOwnedLifecycleAndFencing|none'
   'runtime|./internal/analytics|TestPostgresAnalyticsClaimReclaimPublishAndReplacementReuse|none'
   'runtime|./internal/auth|TestPostgresEnrollmentIssueConcurrentClaimAndRevocation|none'
+  'runtime|./internal/auth|TestPostgresRegistrationSerializesCurrentNicknameAndPersistsOwnerProjection|none'
   'runtime|./internal/chatagent|TestPostgresAgentRunIsIdempotentFencedAndAtomicallyPublished|none'
+  'runtime|./internal/chatagent|TestPostgresFrontendNotesMutationsRemainReplayableAcrossLeaseReclaim|none'
   'runtime|./internal/configuration|TestPostgresConfigurationVersionLifecycle|admin'
   'runtime|./internal/configuration|TestPostgresRejectsReservedCatalogKeyWithWrongKind|none'
   'runtime|./internal/examcatalog|TestPostgresCatalogReadsOneImportedSnapshot|catalog'

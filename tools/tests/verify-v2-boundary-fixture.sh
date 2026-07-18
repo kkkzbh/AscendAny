@@ -151,7 +151,7 @@ printf '%s\n' '#!/usr/bin/env bash' 'exec python3 -m uvicorn apps.api.main:app' 
   >"$retired_shell_runtime/deploy/v2/scripts/runtime.sh"
 expect_failure \
   retired-shell-runtime \
-  'a production shell path references a Python, trainer, API-v1, or retired application runtime' \
+  'a production shell path references a Python, trainer, or retired application runtime' \
   bash "$retired_shell_runtime/tools/verify-v2-boundary.sh"
 
 retired_validator_absence="$fixture_parent/retired-validator-absence"
@@ -195,7 +195,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
   >"$retired_absence_outside_validator/deploy/v2/scripts/retired-absence.sh"
 expect_failure \
   retired-absence-outside-validator \
-  'a production shell path references a Python, trainer, API-v1, or retired application runtime' \
+  'a production shell path references a Python, trainer, or retired application runtime' \
   bash "$retired_absence_outside_validator/tools/verify-v2-boundary.sh"
 
 retired_api_service="$fixture_parent/retired-api-service"

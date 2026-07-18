@@ -24,20 +24,65 @@ const committedAssets = join(packageRoot, "assets");
 const flockBinary = "/usr/bin/flock";
 const lockHeldEnvironmentName = "ASCENDANY_PUBLIC_ASSET_LOCK_HELD";
 const manifestSchema = "ascendany.public-assets.v1";
-const maximumFiles = 256;
+const maximumFiles = 512;
 const maximumAssetBytes = 4 * 1024 * 1024;
-const maximumManifestBytes = 64 * 1024;
+const maximumManifestBytes = 96 * 1024;
 const maximumTotalBytes = 16 * 1024 * 1024;
 
-const sources = [
-  { packageName: "@ascendany/site", source: "apps/site/dist", target: "site" },
-  { packageName: "@ascendany/web", source: "apps/web/dist", target: "app" },
-  {
-    packageName: "@ascendany/import-console",
-    source: "apps/import-console/dist",
-    target: "admin",
-  },
-];
+export function productionApplicationBuildPlan(desktopOutputRoot) {
+  const desktopOutput = resolve(desktopOutputRoot);
+  return [
+    {
+      packageName: "@ascendany/site",
+      source: "apps/site/dist",
+      target: "site",
+      commands: [
+        ["pnpm", "--filter", "@ascendany/site", "build"],
+      ],
+    },
+    {
+      packageName: "@ascendany/desktop",
+      source: desktopOutput,
+      target: "app",
+      commands: [
+        [
+          "pnpm",
+          "--dir",
+          "apps/desktop",
+          "exec",
+          "tsc",
+          "--noEmit",
+          "-p",
+          "tsconfig.json",
+          "--preserveSymlinks",
+        ],
+        [
+          "pnpm",
+          "--dir",
+          "apps/desktop",
+          "exec",
+          "vite",
+          "build",
+          "--config",
+          "vite.web.config.ts",
+          "--base",
+          "/app/",
+          "--outDir",
+          desktopOutput,
+          "--emptyOutDir",
+        ],
+      ],
+    },
+    {
+      packageName: "@ascendany/import-console",
+      source: "apps/import-console/dist",
+      target: "admin",
+      commands: [
+        ["pnpm", "--filter", "@ascendany/import-console", "build"],
+      ],
+    },
+  ];
+}
 
 function usage() {
   process.stderr.write(
@@ -59,23 +104,25 @@ function canonicalBuildEnvironment() {
   return environment;
 }
 
-function buildApplications() {
+function buildApplications(desktopOutputRoot) {
   const environment = canonicalBuildEnvironment();
-  for (const source of sources) {
-    const result = spawnSync(
-      "pnpm",
-      ["--filter", source.packageName, "build"],
-      {
+  const plan = productionApplicationBuildPlan(desktopOutputRoot);
+  for (const application of plan) {
+    for (const [command, ...args] of application.commands) {
+      const result = spawnSync(command, args, {
         cwd: repositoryRoot,
         env: environment,
         stdio: "inherit",
-      },
-    );
-    if (result.error) throw result.error;
-    if (result.status !== 0) {
-      throw new Error(`${source.packageName} build exited with ${result.status}`);
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(
+          `${application.packageName} build command exited with ${result.status}`,
+        );
+      }
     }
   }
+  return plan.map(({ source, target }) => ({ source, target }));
 }
 
 function portablePath(root, path) {
@@ -309,20 +356,39 @@ function validateHTMLDocument(owner, name, document, assetPaths) {
 }
 
 function validateStylesheet(path, stylesheet, assetPaths) {
-  if (/@import\b/iu.test(stylesheet)) {
+  const comments = Array.from(stylesheet.matchAll(/\/\*[\s\S]*?\*\//gu));
+  const commentMarkers = Array.from(stylesheet.matchAll(/\/\*|\*\//gu));
+  if (commentMarkers.length !== comments.length * 2) {
+    throw new Error(`stylesheet contains an unterminated comment: ${path}`);
+  }
+  for (const comment of comments) {
+    if (!/^\/\*! tailwindcss v[0-9]+\.[0-9]+\.[0-9]+ \| MIT License \| https:\/\/tailwindcss\.com \*\/$/u.test(comment[0])) {
+      throw new Error(`stylesheet contains a comment outside the closed CSS grammar: ${path}`);
+    }
+  }
+  const activeStylesheet = stylesheet.replace(/\/\*[\s\S]*?\*\//gu, "");
+  if (/@import\b/iu.test(activeStylesheet)) {
     throw new Error(`stylesheet contains @import outside the asset closure: ${path}`);
   }
-  if (stylesheet.includes("\\")) {
-    throw new Error(`stylesheet contains an escaped token outside the closed CSS grammar: ${path}`);
+  for (let index = 0; index < activeStylesheet.length; index += 1) {
+    if (activeStylesheet[index] !== "\\") continue;
+    const escaped = activeStylesheet.codePointAt(index + 1);
+    const isASCIIPunctuation = escaped !== undefined && (
+      (escaped >= 0x21 && escaped <= 0x2f)
+      || (escaped >= 0x3a && escaped <= 0x40)
+      || (escaped >= 0x5b && escaped <= 0x60)
+      || (escaped >= 0x7b && escaped <= 0x7e)
+    );
+    if (!isASCIIPunctuation) {
+      throw new Error(`stylesheet contains an encoded token outside the closed CSS grammar: ${path}`);
+    }
+    index += 1;
   }
-  if (stylesheet.includes("/*") || stylesheet.includes("*/")) {
-    throw new Error(`stylesheet contains a comment outside the closed CSS grammar: ${path}`);
-  }
-  if (/(?:-webkit-)?image-set\s*\(/iu.test(stylesheet)) {
+  if (/(?:-webkit-)?image-set\s*\(/iu.test(activeStylesheet)) {
     throw new Error(`stylesheet contains image-set outside the closed CSS grammar: ${path}`);
   }
-  const functionCount = Array.from(stylesheet.matchAll(/\burl\s*\(/giu)).length;
-  const matches = Array.from(stylesheet.matchAll(/\burl\s*\(\s*(["']?)([^"')]+)\1\s*\)/giu));
+  const functionCount = Array.from(activeStylesheet.matchAll(/\burl\s*\(/giu)).length;
+  const matches = Array.from(activeStylesheet.matchAll(/\burl\s*\(\s*(["']?)([^"')]+)\1\s*\)/giu));
   if (matches.length !== functionCount) {
     throw new Error(`stylesheet contains an invalid url() outside the closed CSS grammar: ${path}`);
   }
@@ -354,6 +420,7 @@ function validateAssetPath(path) {
     ".json",
     ".png",
     ".svg",
+    ".ttf",
     ".webp",
     ".woff",
     ".woff2",
@@ -380,7 +447,7 @@ export async function assertBuildBaseContracts(root) {
   const assetPaths = new Set(await listRegularFiles(root));
   for (const [owner, name, document] of [
     ["site", "site", siteIndex],
-    ["app", "student web", appIndex],
+    ["app", "Agent frontend", appIndex],
     ["admin", "import console", adminIndex],
   ]) {
     validateHTMLDocument(owner, name, document, assetPaths);
@@ -393,11 +460,14 @@ export async function assertBuildBaseContracts(root) {
   }
 }
 
-export async function composeAssetTree(root, sourceDefinitions = sources, sourceRoot = repositoryRoot) {
+export async function composeAssetTree(root, sourceDefinitions, sourceRoot = repositoryRoot) {
+  if (sourceDefinitions === undefined) {
+    throw new Error("public asset source definitions are required");
+  }
   await chmod(root, 0o755);
   for (const source of sourceDefinitions) {
     await copyClosedTree(
-      join(sourceRoot, source.source),
+      resolve(sourceRoot, source.source),
       join(root, source.target),
     );
   }
@@ -535,19 +605,26 @@ async function main() {
     return;
   }
 
-  buildApplications();
-  const generatedRoot = await mkdtemp(join(packageRoot, ".assets-build-"));
+  const applicationBuildRoot = await mkdtemp(
+    join(packageRoot, ".application-build-"),
+  );
   try {
-    await composeAssetTree(generatedRoot);
-    if (mode === "--check") {
-      await compareTrees(generatedRoot, committedAssets);
-      process.stdout.write("AscendAny v2 public assets match the canonical builds.\n");
-      return;
+    const generatedRoot = await mkdtemp(join(packageRoot, ".assets-build-"));
+    try {
+      const builtSources = buildApplications(join(applicationBuildRoot, "app"));
+      await composeAssetTree(generatedRoot, builtSources);
+      if (mode === "--check") {
+        await compareTrees(generatedRoot, committedAssets);
+        process.stdout.write("AscendAny v2 public assets match the canonical builds.\n");
+        return;
+      }
+      await publishGeneratedTree(generatedRoot);
+      process.stdout.write("AscendAny v2 public assets regenerated.\n");
+    } finally {
+      await rm(generatedRoot, { recursive: true, force: true });
     }
-    await publishGeneratedTree(generatedRoot);
-    process.stdout.write("AscendAny v2 public assets regenerated.\n");
   } finally {
-    await rm(generatedRoot, { recursive: true, force: true });
+    await rm(applicationBuildRoot, { recursive: true, force: true });
   }
 }
 

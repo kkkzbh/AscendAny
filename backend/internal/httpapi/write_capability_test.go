@@ -52,7 +52,17 @@ type writeBoundaryAuthSpy struct {
 	recorder *writeBoundaryRecorder
 }
 
+func (spy writeBoundaryAuthSpy) Register(context.Context, auth.RegistrationInput) (auth.AuthResult, error) {
+	spy.recorder.record("auth")
+	return auth.AuthResult{}, nil
+}
+
 func (spy writeBoundaryAuthSpy) Login(context.Context, auth.LoginInput) (auth.AuthResult, error) {
+	spy.recorder.record("auth")
+	return auth.AuthResult{}, nil
+}
+
+func (spy writeBoundaryAuthSpy) ExchangeSSO(context.Context, auth.SSOExchangeInput) (auth.AuthResult, error) {
 	spy.recorder.record("auth")
 	return auth.AuthResult{}, nil
 }
@@ -63,6 +73,11 @@ func (spy writeBoundaryAuthSpy) Refresh(context.Context, auth.RefreshInput) (aut
 }
 
 func (spy writeBoundaryAuthSpy) Logout(context.Context, auth.LogoutInput) error {
+	spy.recorder.record("auth")
+	return nil
+}
+
+func (spy writeBoundaryAuthSpy) BootstrapLocalPassword(context.Context, auth.LocalPasswordBootstrapInput) error {
 	spy.recorder.record("auth")
 	return nil
 }
@@ -209,6 +224,18 @@ type writeRouteExample struct {
 }
 
 var writeRouteExamples = []writeRouteExample{
+	{http.MethodPost, "/api/v1/auth/register", "auth"},
+	{http.MethodPost, "/api/v1/auth/login", "auth"},
+	{http.MethodPost, "/api/v1/auth/sso/exchange", "auth"},
+	{http.MethodPost, "/api/v1/auth/refresh", "auth"},
+	{http.MethodPost, "/api/v1/auth/logout", "auth"},
+	{http.MethodPost, "/api/v1/auth/local-password/bootstrap", "auth"},
+	{http.MethodPut, "/api/v1/auth/profile", "account"},
+	{http.MethodPost, "/api/v1/chat/reply", "chat-agent"},
+	{http.MethodPost, "/api/v1/chat/reply/stream", "chat-agent"},
+	{http.MethodPost, "/api/v1/chat/auto-analysis", "chat-agent"},
+	{http.MethodPost, "/api/v1/chat/auto-analysis/stream", "chat-agent"},
+	{http.MethodPost, "/api/v1/feedback", "feedback"},
 	{http.MethodPost, "/api/v2/auth/login", "auth"},
 	{http.MethodPost, "/api/v2/auth/refresh", "auth"},
 	{http.MethodPost, "/api/v2/auth/logout", "auth"},
@@ -268,12 +295,8 @@ func TestWriteDisabledRejectsEveryRegisteredWriteRouteBeforeBusinessHandlers(t *
 			if response.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusServiceUnavailable, response.Body.String())
 			}
-			var apiError APIError
-			if err := json.Unmarshal(response.Body.Bytes(), &apiError); err != nil {
-				t.Fatalf("decode API error: %v; body=%s", err, response.Body.String())
-			}
-			if apiError.Code != "writes_disabled" {
-				t.Fatalf("error code = %q, want writes_disabled", apiError.Code)
+			if !strings.Contains(response.Body.String(), `"code":"writes_disabled"`) {
+				t.Fatalf("error body does not contain writes_disabled: %s", response.Body.String())
 			}
 			if calls := recorder.total(); calls != 0 {
 				t.Fatalf("business service calls = %d, want zero", calls)

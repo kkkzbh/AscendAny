@@ -234,21 +234,20 @@ WHERE run.agent_run_id = $1
 		if err != nil {
 			return databaseFailure("load agent work", err)
 		}
-		if work.Kind == RunReply {
-			if analyticsGenerationID != nil || analyticsHeadRevision != nil || analyticsStatus != nil {
-				return domainError(ErrorStoredDataInvalid, true, "validate agent analytics snapshot", errors.New("reply run unexpectedly references analytics"))
-			}
-		} else if work.Kind == RunAutoAnalysis {
-			if analyticsGenerationID == nil || analyticsHeadRevision == nil || *analyticsHeadRevision < 1 ||
-				analyticsStatus == nil || *analyticsStatus != "succeeded" {
-				return domainError(ErrorStoredDataInvalid, true, "validate agent analytics snapshot", errors.New("auto-analysis run does not reference a succeeded generation"))
-			}
+		if work.Kind != RunReply && work.Kind != RunAutoAnalysis {
+			return domainError(ErrorStoredDataInvalid, true, "validate agent run kind", fmt.Errorf("stored run kind %q is invalid", work.Kind))
+		}
+		analyticsAbsent := analyticsGenerationID == nil && analyticsHeadRevision == nil && analyticsStatus == nil
+		analyticsBound := analyticsGenerationID != nil && analyticsHeadRevision != nil && *analyticsHeadRevision > 0 &&
+			analyticsStatus != nil && *analyticsStatus == "succeeded"
+		if !analyticsAbsent && !analyticsBound || work.Kind == RunAutoAnalysis && !analyticsBound {
+			return domainError(ErrorStoredDataInvalid, true, "validate agent analytics snapshot", errors.New("agent analytics provenance is incomplete or invalid"))
+		}
+		if analyticsBound {
 			work.Analytics = &AnalyticsSnapshot{
 				GenerationDatabaseID: *analyticsGenerationID,
 				HeadRevision:         *analyticsHeadRevision,
 			}
-		} else {
-			return domainError(ErrorStoredDataInvalid, true, "validate agent run kind", fmt.Errorf("stored run kind %q is invalid", work.Kind))
 		}
 		if err := loadConfigurationDocument(&work.Prompt, promptDocument, "prompt"); err != nil {
 			return err
@@ -266,14 +265,42 @@ WHERE run.agent_run_id = $1
 		if err != nil {
 			return err
 		}
-		inputPresent := false
+		var inputMessage *Message
 		for _, message := range messages {
 			if message.ID == work.InputMessageID {
-				inputPresent = true
+				owned := message
+				inputMessage = &owned
 			}
 		}
-		if !inputPresent {
+		if inputMessage == nil {
 			return domainError(ErrorStoredDataInvalid, true, "validate agent conversation", errors.New("run input message is absent from its context"))
+		}
+		if work.Kind == RunReply && inputMessage.Kind != MessageUser {
+			return domainError(ErrorStoredDataInvalid, true, "validate agent conversation", errors.New("reply input message has an invalid kind"))
+		}
+		if work.Kind == RunReply {
+			frontendNotes, found, err := decodeReplyFrontendNotes(inputMessage.Content)
+			if err != nil {
+				return domainError(ErrorStoredDataInvalid, true, "validate Agent frontend notes context", err)
+			}
+			if found {
+				work.FrontendNotes = frontendNotes
+			}
+		}
+		if work.Kind == RunAutoAnalysis {
+			if inputMessage.Kind != MessageAutoAnalysisRequest {
+				return domainError(ErrorStoredDataInvalid, true, "validate agent conversation", errors.New("automatic analysis input message has an invalid kind"))
+			}
+			frontendContext, err := decodeAutoAnalysisInputContent(inputMessage.Content)
+			if err != nil {
+				return domainError(ErrorStoredDataInvalid, true, "validate automatic analysis frontend context", err)
+			}
+			work.AutoAnalysisContext = &frontendContext
+			work.FrontendNotes = &FrontendNotesState{
+				Content: frontendContext.Notes,
+				Title:   frontendContext.NotesTitle,
+				Locked:  frontendContext.NotesLocked,
+			}
 		}
 		work.Conversation = messages
 		toolCalls, err := loadToolCalls(ctx, tx, claim.DatabaseID)
@@ -441,7 +468,7 @@ func validateStoredToolRecord(record *ToolCallRecord) error {
 	return nil
 }
 
-func (repository *PostgresRepository) RecordToolCall(ctx context.Context, claim Claim, record ToolCallRecord) (stored ToolCallRecord, resultErr error) {
+func (repository *PostgresRepository) RecordToolCall(ctx context.Context, claim Claim, record ToolCallRecord, notesUpdate *NotesUpdate) (stored ToolCallRecord, resultErr error) {
 	if err := validateClaim(claim); err != nil {
 		return ToolCallRecord{}, err
 	}
@@ -450,6 +477,13 @@ func (repository *PostgresRepository) RecordToolCall(ctx context.Context, claim 
 	}
 	if err := validateNewToolRecord(&record); err != nil {
 		return ToolCallRecord{}, err
+	}
+	if record.Name == ToolUpdateNotes && record.Outcome == ToolSucceeded {
+		if notesUpdate == nil || validateNotesUpdateEvent(record, *notesUpdate) != nil {
+			return ToolCallRecord{}, domainError(ErrorInvalidInput, true, "validate update_notes event", errors.New("a successful update_notes call requires its exact mutation event"))
+		}
+	} else if notesUpdate != nil {
+		return ToolCallRecord{}, domainError(ErrorInvalidInput, true, "validate update_notes event", errors.New("only a successful update_notes call may publish a mutation event"))
 	}
 	resultErr = repository.transaction(ctx, "record agent tool call", pgx.TxOptions{}, func(tx postgresTx) error {
 		if err := lockActiveRun(ctx, tx, claim); err != nil {
@@ -487,6 +521,19 @@ VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11, $12, $13, $1
 			record.ResultSchema, resultJSON, record.ResultSHA256, string(record.Outcome), record.ErrorCode, record.StartedAt, record.FinishedAt)
 		if err != nil {
 			return databaseFailure("insert agent tool call", err)
+		}
+		if notesUpdate != nil {
+			if err := appendRunEvent(ctx, tx, claim.DatabaseID, "notes_update", map[string]any{
+				"mode":         notesUpdate.Mode,
+				"next":         notesUpdate.Next,
+				"patch":        notesUpdate.Patch,
+				"previous":     notesUpdate.Previous,
+				"toolCallKey":  record.Key,
+				"toolName":     record.Name,
+				"toolSequence": record.Sequence,
+			}); err != nil {
+				return err
+			}
 		}
 		if err := appendRunEvent(ctx, tx, claim.DatabaseID, "tool."+string(record.Outcome), map[string]any{
 			"toolCallKey":  record.Key,

@@ -34,6 +34,7 @@ type Components struct {
 func New(
 	database Database,
 	configuration config.Config,
+	analyticsConfiguration analytics.ParsedConfig,
 	feedbackProvider feedback.DeliveryProvider,
 	logger *slog.Logger,
 ) (*Components, error) {
@@ -49,13 +50,9 @@ func New(
 	if feedbackProvider == nil {
 		return nil, errors.New("feedback delivery provider is required")
 	}
-	analyticsJSON, err := readAnalyticsConfig(configuration.Analytics.ConfigPath)
+	parsedAnalytics, err := analytics.VerifyParsedConfig(analyticsConfiguration)
 	if err != nil {
-		return nil, err
-	}
-	parsedAnalytics, err := analytics.ParseConfig(analyticsJSON)
-	if err != nil {
-		return nil, fmt.Errorf("parse analytics runtime configuration: %w", err)
+		return nil, fmt.Errorf("verify analytics runtime configuration: %w", err)
 	}
 	artifacts, err := artifact.NewStore(configuration.Artifact.Root, configuration.Artifact.MaxBytes)
 	if err != nil {
@@ -92,7 +89,7 @@ func New(
 	analyticsWorker, err := analytics.NewWorker(database, analytics.WorkerConfig{
 		Owner:         configuration.Analytics.WorkerOwner,
 		LeaseDuration: configuration.Analytics.LeaseDuration,
-		AnalyticsJSON: analyticsJSON,
+		AnalyticsJSON: parsedAnalytics.Canonical,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize analytics worker: %w", err)
@@ -101,7 +98,7 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("initialize feedback repository: %w", err)
 	}
-	feedbackWorker, err := feedback.NewDeliveryWorker(feedbackRepository, feedbackProvider, feedback.DeliveryWorkerConfig{
+	feedbackWorker, err := feedback.NewDeliveryWorker(feedbackRepository, artifacts, feedbackProvider, feedback.DeliveryWorkerConfig{
 		Owner:         configuration.Feedback.WorkerOwner,
 		LeaseDuration: configuration.Feedback.LeaseDuration,
 		RetryDelay:    configuration.Feedback.RetryDelay,
@@ -131,21 +128,25 @@ func New(
 	}, nil
 }
 
-func readAnalyticsConfig(path string) ([]byte, error) {
+func LoadAnalyticsConfig(path string) (analytics.ParsedConfig, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open analytics configuration: %w", err)
+		return analytics.ParsedConfig{}, fmt.Errorf("open analytics configuration: %w", err)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(file, analytics.MaxConfigBytes+1))
 	closeErr := file.Close()
 	if readErr != nil {
-		return nil, fmt.Errorf("read analytics configuration: %w", readErr)
+		return analytics.ParsedConfig{}, fmt.Errorf("read analytics configuration: %w", readErr)
 	}
 	if closeErr != nil {
-		return nil, fmt.Errorf("close analytics configuration: %w", closeErr)
+		return analytics.ParsedConfig{}, fmt.Errorf("close analytics configuration: %w", closeErr)
 	}
 	if len(data) > analytics.MaxConfigBytes {
-		return nil, fmt.Errorf("analytics configuration exceeds %d bytes", analytics.MaxConfigBytes)
+		return analytics.ParsedConfig{}, fmt.Errorf("analytics configuration exceeds %d bytes", analytics.MaxConfigBytes)
 	}
-	return data, nil
+	parsed, err := analytics.ParseConfig(data)
+	if err != nil {
+		return analytics.ParsedConfig{}, fmt.Errorf("parse analytics runtime configuration: %w", err)
+	}
+	return parsed, nil
 }

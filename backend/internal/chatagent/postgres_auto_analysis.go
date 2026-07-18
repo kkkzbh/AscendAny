@@ -3,6 +3,7 @@ package chatagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -10,8 +11,6 @@ import (
 
 type existingAutoAnalysis struct {
 	result     EnqueueResult
-	promptKey  string
-	modelKey   string
 	threadKind ThreadKind
 }
 
@@ -26,30 +25,48 @@ func (repository *PostgresRepository) EnqueueAutoAnalysis(
 		!canonicalUUIDv4.MatchString(command.MessageID) || !canonicalUUIDv4.MatchString(command.ClientRequestID) {
 		return EnqueueResult{}, domainError(ErrorInvalidInput, true, "enqueue automatic analysis", errors.New("canonical generated IDs are required"))
 	}
+	inputContent, err := canonicalAutoAnalysisInputContent(command.FrontendContext)
+	if err != nil {
+		return EnqueueResult{}, domainError(ErrorInvalidInput, true, "encode automatic analysis frontend context", err)
+	}
 
 	resultErr = repository.transaction(ctx, "enqueue automatic analysis", pgx.TxOptions{}, func(tx postgresTx) error {
 		resolved, err := resolveStudent(ctx, tx, command.Principal, true)
 		if err != nil {
 			return err
 		}
-		analyticsGenerationID, err := resolveAnalyticsSnapshot(ctx, tx, command.ExpectedAnalyticsHeadRevision)
-		if err != nil {
-			return err
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+			autoAnalysisLockKey(resolved.AccountDatabaseID, command.Identity.ExamID, command.Identity.RoleID)); err != nil {
+			return databaseFailure("lock automatic analysis identity", err)
 		}
-		existing, found, err := loadExistingAutoAnalysis(ctx, tx, resolved.AccountDatabaseID, analyticsGenerationID)
+		existing, found, err := loadExistingAutoAnalysis(
+			ctx,
+			tx,
+			resolved.AccountDatabaseID,
+			command.Identity.ExamID,
+			command.Identity.RoleID,
+		)
 		if err != nil {
 			return err
 		}
 		if found {
-			if existing.threadKind != ThreadAutoAnalysis || existing.result.Message.Content != AutoAnalysisInputContent {
+			if existing.threadKind != ThreadAutoAnalysis {
 				return domainError(ErrorStoredDataInvalid, true, "validate stored automatic analysis", errors.New("stored automatic analysis violates its dedicated thread contract"))
 			}
-			if existing.promptKey != command.PromptConfigurationKey || existing.modelKey != command.ModelConfigurationKey {
-				return domainError(ErrorAutoAnalysisConflict, true, "replay automatic analysis", errors.New("analytics generation already owns different configuration keys"))
+			storedContext, err := decodeAutoAnalysisInputContent(existing.result.Message.Content)
+			if err != nil {
+				return domainError(ErrorStoredDataInvalid, true, "validate stored automatic analysis frontend context", err)
+			}
+			if storedContext.LatestExamID != command.Identity.ExamID || storedContext.RoleID != command.Identity.RoleID {
+				return domainError(ErrorStoredDataInvalid, true, "validate stored automatic analysis identity", errors.New("stored automatic-analysis input disagrees with its durable identity"))
 			}
 			result = existing.result
 			result.Created = false
 			return nil
+		}
+		analyticsGenerationID, err := resolveAnalyticsSnapshot(ctx, tx, command.ExpectedAnalyticsHeadRevision)
+		if err != nil {
+			return err
 		}
 
 		promptVersionID, err := resolveActiveConfiguration(ctx, tx, command.PromptConfigurationKey, "prompt")
@@ -57,6 +74,10 @@ func (repository *PostgresRepository) EnqueueAutoAnalysis(
 			return err
 		}
 		modelVersionID, err := resolveActiveConfiguration(ctx, tx, command.ModelConfigurationKey, "model_connection")
+		if err != nil {
+			return err
+		}
+		providerMetadata, hasProviderMetadata, err := loadFrontendProviderMetadata(ctx, tx, modelVersionID)
 		if err != nil {
 			return err
 		}
@@ -99,8 +120,8 @@ INSERT INTO ascendany.chat_messages (
     created_at
 )
 VALUES ($1::uuid, $2, $3, $4, 'auto_analysis_request', $5, $6, $7)
-RETURNING chat_message_id`, command.MessageID, threadDatabaseID, resolved.AccountDatabaseID, messageSequence,
-			AutoAnalysisInputContent, resolved.SessionDatabaseID, mutationTime).Scan(&messageDatabaseID); err != nil {
+		RETURNING chat_message_id`, command.MessageID, threadDatabaseID, resolved.AccountDatabaseID, messageSequence,
+			inputContent, resolved.SessionDatabaseID, mutationTime).Scan(&messageDatabaseID); err != nil {
 			return databaseFailure("insert automatic analysis message", err)
 		}
 		tag, err := tx.Exec(ctx, `
@@ -128,22 +149,31 @@ INSERT INTO ascendany.agent_runs (
     input_message_id,
     input_message_kind,
     prompt_configuration_version_id,
-    model_configuration_version_id,
-    analytics_generation_id,
-    status,
+	    model_configuration_version_id,
+	    analytics_generation_id,
+	    auto_analysis_exam_id,
+	    auto_analysis_role_id,
+	    status,
     created_at,
     updated_at
 )
-VALUES ($1::uuid, $2, $3, $4, $5::uuid, 'auto_analysis', $6, 'auto_analysis_request', $7, $8, $9, 'queued', $10, $10)
+VALUES ($1::uuid, $2, $3, $4, $5::uuid, 'auto_analysis', $6, 'auto_analysis_request', $7, $8, $9, $10::uuid, $11, 'queued', $12, $12)
 RETURNING agent_run_id`, command.RunID, threadDatabaseID, resolved.AccountDatabaseID, resolved.SessionDatabaseID,
-			command.ClientRequestID, messageDatabaseID, promptVersionID, modelVersionID, analyticsGenerationID, mutationTime).Scan(&runDatabaseID); err != nil {
+			command.ClientRequestID, messageDatabaseID, promptVersionID, modelVersionID, analyticsGenerationID,
+			command.Identity.ExamID, command.Identity.RoleID, mutationTime).Scan(&runDatabaseID); err != nil {
 			return databaseFailure("insert automatic analysis run", err)
 		}
-		if err := appendRunEvent(ctx, tx, runDatabaseID, "queued", map[string]any{
+		queuedPayload := map[string]any{
 			"analyticsHeadRevision": command.ExpectedAnalyticsHeadRevision,
+			"autoAnalysisExamId":    command.Identity.ExamID,
+			"autoAnalysisRoleId":    command.Identity.RoleID,
 			"messageSequence":       messageSequence,
 			"runKind":               RunAutoAnalysis,
-		}); err != nil {
+		}
+		if hasProviderMetadata {
+			addFrontendProviderMetadata(queuedPayload, providerMetadata)
+		}
+		if err := appendRunEvent(ctx, tx, runDatabaseID, "queued", queuedPayload); err != nil {
 			return err
 		}
 
@@ -162,7 +192,7 @@ WHERE chat_thread_id = $1`, threadDatabaseID).Scan(&threadPublicID); err != nil 
 			},
 			Message: Message{
 				ID: command.MessageID, ThreadID: threadPublicID, Sequence: messageSequence,
-				Kind: MessageAutoAnalysisRequest, Content: AutoAnalysisInputContent, CreatedAt: mutationTime,
+				Kind: MessageAutoAnalysisRequest, Content: inputContent, CreatedAt: mutationTime,
 			},
 			Created: true,
 		}
@@ -171,11 +201,16 @@ WHERE chat_thread_id = $1`, threadDatabaseID).Scan(&threadPublicID); err != nil 
 	return result, resultErr
 }
 
+func autoAnalysisLockKey(accountDatabaseID int64, examID, roleID string) string {
+	return fmt.Sprintf("auto-analysis:%d:%d:%s:%d:%s", accountDatabaseID, len(examID), examID, len(roleID), roleID)
+}
+
 func loadExistingAutoAnalysis(
 	ctx context.Context,
 	tx postgresTx,
 	ownerDatabaseID int64,
-	analyticsGenerationID int64,
+	examID string,
+	roleID string,
 ) (existingAutoAnalysis, bool, error) {
 	var existing existingAutoAnalysis
 	var inputKind MessageKind
@@ -199,9 +234,7 @@ SELECT run.public_id::text,
        input.message_kind,
        input.content,
        input.created_at,
-       prompt_item.configuration_key,
-       model_item.configuration_key,
-       thread.thread_kind
+	       thread.thread_kind
 FROM ascendany.agent_runs AS run
 JOIN ascendany.chat_threads AS thread
   ON thread.chat_thread_id = run.chat_thread_id
@@ -209,17 +242,10 @@ JOIN ascendany.chat_messages AS input
   ON input.chat_message_id = run.input_message_id
 LEFT JOIN ascendany.chat_messages AS output
   ON output.chat_message_id = run.output_message_id
-JOIN ascendany.configuration_versions AS prompt_version
-  ON prompt_version.configuration_version_id = run.prompt_configuration_version_id
-JOIN ascendany.configuration_items AS prompt_item
-  ON prompt_item.configuration_item_id = prompt_version.configuration_item_id
-JOIN ascendany.configuration_versions AS model_version
-  ON model_version.configuration_version_id = run.model_configuration_version_id
-JOIN ascendany.configuration_items AS model_item
-  ON model_item.configuration_item_id = model_version.configuration_item_id
 WHERE run.owner_account_id = $1
-  AND run.analytics_generation_id = $2
-  AND run.run_kind = 'auto_analysis'`, ownerDatabaseID, analyticsGenerationID).Scan(
+  AND run.auto_analysis_exam_id = $2
+  AND run.auto_analysis_role_id = $3
+	  AND run.run_kind = 'auto_analysis'`, ownerDatabaseID, examID, roleID).Scan(
 		&existing.result.Run.ID,
 		&existing.result.Run.ThreadID,
 		&existing.result.Run.ClientRequestID,
@@ -238,8 +264,6 @@ WHERE run.owner_account_id = $1
 		&inputKind,
 		&existing.result.Message.Content,
 		&createdAt,
-		&existing.promptKey,
-		&existing.modelKey,
 		&existing.threadKind,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

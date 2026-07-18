@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type {
   CatalogPublicationAuthorizationResult,
+  CreateConfigurationVersionResult,
   CatalogPublicationIntent,
   ExamSummary,
   ImportJob,
@@ -8,13 +10,340 @@ import type {
   RecommendationReviewContext,
 } from "../src";
 import {
+  agentPromptConfiguration,
+  agentModelConfiguration,
+  agentReplyAcceptanceContent,
+  assertAgentConfigurationResult,
   assertCatalogPublicationAuthorization,
   assertCanonicalDeploymentTransition,
   assertCatalogCoverage,
+  buildAgentAcceptanceReceipt,
+  parseAgentSSEAcceptance,
+  planAgentConfiguration,
   readAllCursorPages,
   selectSnapshotImportBinding,
   strictlyUTF8BytewiseOrdered,
 } from "../../../tools/v2-production-initialization-client";
+
+describe("production Agent configuration and SSE acceptance", () => {
+  it("pins both frontend-context prompts to analytics and local notes mutation tools", () => {
+    const prompt = agentPromptConfiguration();
+    expect(prompt).toMatchObject({
+      key: "agent.prompt.default",
+      kind: "prompt",
+      schemaId: "ascendany.prompt.chat.v1",
+      credentialRef: null,
+      document: { enabledTools: ["analytics.get_self", "update_notes"] },
+    });
+    expect(prompt.document.systemPrompt).toEqual(expect.stringContaining(
+      "ascendany.agent.frontend-context.v1",
+    ));
+    expect(prompt.document.systemPrompt).toEqual(expect.stringContaining(
+      "ascendany.agent.auto-analysis.frontend-context.v1",
+    ));
+    expect(prompt.document.systemPrompt).toEqual(expect.stringContaining("context.roleSystemPrompt"));
+    expect(prompt.document.systemPrompt).toEqual(expect.stringContaining("latestExamId"));
+    expect(prompt.document.systemPrompt).toEqual(expect.stringContaining("notesLocked"));
+    expect(prompt.document.systemPrompt).toEqual(expect.stringContaining("analytics.get_self"));
+    expect(prompt.document.systemPrompt).toEqual(expect.stringContaining("update_notes"));
+    expect(createHash("sha256").update(JSON.stringify(prompt.document)).digest("hex")).toBe(
+      "1e7fc27df0bedfb43126579204833750e36877940d921cbb01afeb116d9d59f2",
+    );
+  });
+
+  it("pins the model document and emits the exact closed acceptance receipt", () => {
+    const model = agentModelConfiguration({
+      modelEndpoint: "https://models.example/v1/chat/completions",
+      model: "reasoner-v1",
+      modelCredentialRef: "models.primary",
+    });
+    expect(model).toEqual({
+      key: "agent.model.default",
+      kind: "model_connection",
+      schemaId: "ascendany.model_connection.openai_compatible.v1",
+      document: {
+        endpoint: "https://models.example/v1/chat/completions",
+        maxCompletionTokens: 4096,
+        model: "reasoner-v1",
+        timeoutMilliseconds: 120000,
+      },
+      credentialRef: "models.primary",
+    });
+
+    const promptDocumentSha256 = createHash("sha256")
+      .update(JSON.stringify(agentPromptConfiguration().document))
+      .digest("hex");
+    const modelDocumentSha256 = createHash("sha256")
+      .update(JSON.stringify(model.document))
+      .digest("hex");
+    const acceptance = {
+      runId: "00000000-0000-4000-8000-000000000205",
+      threadId: "00000000-0000-4000-8000-000000000206",
+      inputMessageId: "00000000-0000-4000-8000-000000000207",
+      outputMessageId: "00000000-0000-4000-8000-000000000208",
+      created: true,
+      replySha256: "a".repeat(64),
+      eventCount: 1,
+      terminalDoneCount: 1 as const,
+    };
+    const receipt = buildAgentAcceptanceReceipt({
+      acceptedAt: "2026-07-18T01:02:04.000Z",
+      administratorAccountId: "00000000-0000-4000-8000-000000000201",
+      acceptanceStudentAccountId: "00000000-0000-4000-8000-000000000202",
+      acceptanceStudentUsername: "acceptance_student",
+      acceptanceStudentNumber: "20260001",
+      targetApplicationVersion: "0.2.0",
+      targetApplicationCommit: "e".repeat(40),
+      targetApplicationBuildTime: "2026-07-18T01:00:00Z",
+      providerCredentialSha256: "f".repeat(64),
+      promptConfiguration: {
+        key: "agent.prompt.default",
+        configurationId: "00000000-0000-4000-8000-000000000203",
+        headRevision: 1,
+        versionId: "1",
+        versionNumber: 1,
+        schemaId: "ascendany.prompt.chat.v1",
+        documentSha256: promptDocumentSha256,
+        credentialRef: null,
+        state: "created",
+      },
+      modelConfiguration: {
+        key: "agent.model.default",
+        configurationId: "00000000-0000-4000-8000-000000000204",
+        headRevision: 1,
+        versionId: "2",
+        versionNumber: 1,
+        schemaId: "ascendany.model_connection.openai_compatible.v1",
+        documentSha256: modelDocumentSha256,
+        credentialRef: "models.primary",
+        state: "created",
+      },
+      modelProbe: {
+        configurationKey: "agent.model.default",
+        configurationHeadRevision: 1,
+        configurationVersion: 1,
+        configurationSha256: modelDocumentSha256,
+        authority: "models.example:443",
+        model: "reasoner-v1",
+        checkedAt: "2026-07-18T01:02:03Z",
+        latencyMilliseconds: 25,
+      },
+      replyAcceptance: acceptance,
+      autoAnalysisAcceptance: {
+        ...acceptance,
+        runId: "00000000-0000-4000-8000-000000000209",
+        threadId: "00000000-0000-4000-8000-000000000210",
+        inputMessageId: "00000000-0000-4000-8000-000000000211",
+        outputMessageId: "00000000-0000-4000-8000-000000000212",
+        created: false,
+        replySha256: "b".repeat(64),
+      },
+    });
+
+    expect(Object.keys(receipt).sort()).toEqual([
+      "acceptanceStudentAccountId",
+      "acceptanceStudentNumber",
+      "acceptanceStudentUsername",
+      "acceptedAt",
+      "administratorAccountId",
+      "autoAnalysisAcceptance",
+      "modelConfiguration",
+      "modelProbe",
+      "promptConfiguration",
+      "providerCredentialSha256",
+      "replyAcceptance",
+      "schema",
+      "targetApplicationBuildTime",
+      "targetApplicationCommit",
+      "targetApplicationVersion",
+    ]);
+    expect(receipt.schema).toBe("ascendany.production-agent-acceptance-receipt.v1");
+    expect(receipt.modelProbe).toMatchObject({
+      configurationKey: receipt.modelConfiguration.key,
+      configurationHeadRevision: receipt.modelConfiguration.headRevision,
+      configurationVersion: receipt.modelConfiguration.versionNumber,
+      configurationSha256: receipt.modelConfiguration.documentSha256,
+    });
+  });
+
+  it("accepts exact initial and forward Agent configuration transitions", () => {
+    const spec = agentPromptConfiguration();
+    const serialized = JSON.stringify(spec.document);
+    const documentSha256 = createHash("sha256").update(serialized).digest("hex");
+    const result: CreateConfigurationVersionResult = {
+      idempotent: false,
+      item: {
+        id: "00000000-0000-4000-8000-000000000201",
+        key: spec.key,
+        kind: spec.kind,
+        headRevision: 1,
+        activeVersion: {
+          id: "1",
+          number: 1,
+          schemaId: spec.schemaId,
+          document: spec.document,
+          documentSha256,
+          credentialRef: null,
+          createdByAccountId: "00000000-0000-4000-8000-000000000202",
+          createdBySessionId: "00000000-0000-4000-8000-000000000203",
+          createdAt: "2026-07-18T01:02:03Z",
+        },
+        createdAt: "2026-07-18T01:02:03Z",
+        updatedAt: "2026-07-18T01:02:03Z",
+      },
+    };
+    expect(assertAgentConfigurationResult(spec, result)).toMatchObject({
+      key: spec.key,
+      headRevision: 1,
+      versionNumber: 1,
+      documentSha256,
+      state: "created",
+    });
+    const advanced = {
+      ...result,
+      item: {
+        ...result.item,
+        headRevision: 2,
+        activeVersion: { ...result.item.activeVersion!, id: "2", number: 2 },
+      },
+    };
+    expect(assertAgentConfigurationResult(spec, advanced, 1)).toMatchObject({
+      headRevision: 2,
+      versionNumber: 2,
+      state: "advanced",
+    });
+    expect(() => assertAgentConfigurationResult(spec, advanced, 0)).toThrow("head transition");
+    expect(() => assertAgentConfigurationResult(spec, { ...result, idempotent: true })).toThrow(
+      "head transition",
+    );
+
+	const oldDocument = { enabledTools: ["analytics.get_self"], systemPrompt: "old prompt" };
+	const differing = {
+		...result.item,
+		activeVersion: {
+			...result.item.activeVersion!,
+			document: oldDocument,
+			documentSha256: createHash("sha256").update(JSON.stringify(oldDocument)).digest("hex"),
+		},
+	};
+	expect(planAgentConfiguration(spec, differing)).toEqual({ action: "publish", expectedHeadRevision: 1 });
+	expect(planAgentConfiguration(spec, result.item)).toMatchObject({ action: "matched", provenance: { state: "matched" } });
+	expect(planAgentConfiguration(spec, null)).toEqual({ action: "publish", expectedHeadRevision: 0 });
+  });
+
+  it("requires exactly one durable terminal done event and records its immutable identity", () => {
+    const receipt = parseAgentSSEAcceptance([
+      "event: meta",
+      'data: {"type":"meta","summary":"prior context","provider":"openai_compatible","model":"deepseek-chat","requestMode":"chat_completions"}',
+      "",
+      "event: tool_activity_start",
+      'data: {"type":"tool_activity_start","activityId":"call-1","label":"analytics.get_self","status":"running"}',
+      "",
+      "event: tool_activity_done",
+      'data: {"type":"tool_activity_done","activityId":"call-1","label":"analytics.get_self","status":"done"}',
+      "",
+      "event: delta",
+      'data: {"type":"delta","text":"Accepted answer."}',
+      "",
+      "event: done",
+      'data: {"type":"done","reply":"Accepted answer.","summary":"bound","runId":"00000000-0000-4000-8000-000000000205","threadId":"00000000-0000-4000-8000-000000000206","inputMessageId":"00000000-0000-4000-8000-000000000207","outputMessageId":"00000000-0000-4000-8000-000000000208","created":true,"provider":"openai_compatible","model":"deepseek-chat","requestMode":"chat_completions"}',
+      "",
+      "",
+    ].join("\n"));
+    expect(receipt).toEqual({
+      runId: "00000000-0000-4000-8000-000000000205",
+      threadId: "00000000-0000-4000-8000-000000000206",
+      inputMessageId: "00000000-0000-4000-8000-000000000207",
+      outputMessageId: "00000000-0000-4000-8000-000000000208",
+      created: true,
+      replySha256: createHash("sha256").update("Accepted answer.").digest("hex"),
+      eventCount: 5,
+      terminalDoneCount: 1,
+    });
+    expect(receipt).not.toHaveProperty("reply");
+  });
+
+  it("rejects incomplete or inconsistent Agent provider metadata", () => {
+    const identity = '"runId":"00000000-0000-4000-8000-000000000205","threadId":"00000000-0000-4000-8000-000000000206","inputMessageId":"00000000-0000-4000-8000-000000000207","outputMessageId":"00000000-0000-4000-8000-000000000208","created":true';
+    expect(() => parseAgentSSEAcceptance(
+      `event: meta\ndata: {"type":"meta","provider":"openai_compatible","model":"deepseek-chat","requestMode":"chat_completions"}\n\nevent: done\ndata: {"type":"done","reply":"Accepted.",${identity},"provider":"openai_compatible","model":"other","requestMode":"chat_completions"}\n\n`,
+    )).toThrow("invalid durable identity or reply");
+    expect(() => parseAgentSSEAcceptance(
+      `event: done\ndata: {"type":"done","reply":"Accepted.",${identity},"provider":"openai_compatible"}\n\n`,
+    )).toThrow("invalid durable identity or reply");
+  });
+
+  it("requires an ordered notes mutation when production acceptance requests it", () => {
+    const initial = "# initial";
+    const updated = "# initial\n\nProgress is improving.";
+    const receipt = parseAgentSSEAcceptance([
+      "event: tool_activity_start",
+      'data: {"type":"tool_activity_start","activityId":"call-notes","label":"更新学习笔记","status":"running"}',
+      "",
+      "event: notes_update",
+      `data: ${JSON.stringify({ type: "notes_update", mode: "replace", previous: initial, next: updated, patch: null })}`,
+      "",
+      "event: tool_activity_done",
+      'data: {"type":"tool_activity_done","activityId":"call-notes","label":"更新学习笔记","status":"done"}',
+      "",
+      "event: done",
+      `data: ${JSON.stringify({ type: "done", reply: "Updated.", updatedNotes: updated, runId: "00000000-0000-4000-8000-000000000205", threadId: "00000000-0000-4000-8000-000000000206", inputMessageId: "00000000-0000-4000-8000-000000000207", outputMessageId: "00000000-0000-4000-8000-000000000208", created: true })}`,
+      "",
+      "",
+    ].join("\n"), initial);
+    expect(receipt.eventCount).toBe(4);
+    expect(() => parseAgentSSEAcceptance([
+      "event: done",
+      'data: {"type":"done","reply":"Skipped.","runId":"00000000-0000-4000-8000-000000000205","threadId":"00000000-0000-4000-8000-000000000206","inputMessageId":"00000000-0000-4000-8000-000000000207","outputMessageId":"00000000-0000-4000-8000-000000000208","created":true}',
+      "",
+      "",
+    ].join("\n"), initial)).toThrow("exactly one durable");
+  });
+
+  it("retains created=false for an immutable automatic-analysis replay", () => {
+    expect(parseAgentSSEAcceptance(
+      'event: done\ndata: {"type":"done","reply":"Replay.","runId":"00000000-0000-4000-8000-000000000205","threadId":"00000000-0000-4000-8000-000000000206","inputMessageId":"00000000-0000-4000-8000-000000000207","outputMessageId":"00000000-0000-4000-8000-000000000208","created":false}\n\n',
+    )).toMatchObject({ created: false, runId: "00000000-0000-4000-8000-000000000205" });
+  });
+
+  it("rejects error, empty, duplicated, and unterminated Agent streams", () => {
+    expect(() => parseAgentSSEAcceptance(
+      'event: error\ndata: {"type":"error","code":"failed","message":"failed"}\n\n',
+    )).toThrow("error event");
+    expect(() => parseAgentSSEAcceptance(
+      'event: done\ndata: {"type":"done","reply":"   ","runId":"00000000-0000-4000-8000-000000000205","threadId":"00000000-0000-4000-8000-000000000206","inputMessageId":"00000000-0000-4000-8000-000000000207","outputMessageId":"00000000-0000-4000-8000-000000000208","created":true}\n\n',
+    )).toThrow("invalid durable identity or reply");
+    expect(() => parseAgentSSEAcceptance(
+      'event: done\ndata: {"type":"done","reply":"one","runId":"00000000-0000-4000-8000-000000000205","threadId":"00000000-0000-4000-8000-000000000206","inputMessageId":"00000000-0000-4000-8000-000000000207","outputMessageId":"00000000-0000-4000-8000-000000000208","created":true}\n\nevent: done\ndata: {"type":"done","reply":"two","runId":"00000000-0000-4000-8000-000000000215","threadId":"00000000-0000-4000-8000-000000000216","inputMessageId":"00000000-0000-4000-8000-000000000217","outputMessageId":"00000000-0000-4000-8000-000000000218","created":true}\n\n',
+    )).toThrow("event/data contract");
+    expect(() => parseAgentSSEAcceptance(
+      'event: delta\ndata: {"type":"delta","text":"partial"}\n\n',
+    )).toThrow("exactly one durable nonempty terminal done");
+    expect(() => parseAgentSSEAcceptance([
+      "event: tool_activity_start",
+      'data: {"type":"tool_activity_start","activityId":"call-1","label":"analytics.get_self","status":"running"}',
+      "",
+      "event: done",
+      'data: {"type":"done","reply":"unfinished tool","runId":"00000000-0000-4000-8000-000000000205","threadId":"00000000-0000-4000-8000-000000000206","inputMessageId":"00000000-0000-4000-8000-000000000207","outputMessageId":"00000000-0000-4000-8000-000000000208","created":true}',
+      "",
+      "",
+    ].join("\n"))).toThrow("invalid durable identity or reply");
+  });
+
+  it("builds one closed target-bound reply acceptance marker", () => {
+    expect(JSON.parse(agentReplyAcceptanceContent({
+      version: "0.2.1",
+      commit: "e".repeat(40),
+      buildTime: "2026-07-18T01:00:00Z",
+    }))).toEqual({
+      schema: "ascendany.production-agent-reply-acceptance.v1",
+      instruction: "Read my current learning data, update my current notes with a concise progress summary by calling update_notes, and briefly explain my learning progress.",
+      targetApplicationBuildTime: "2026-07-18T01:00:00Z",
+      targetApplicationCommit: "e".repeat(40),
+      targetApplicationVersion: "0.2.1",
+    });
+  });
+});
 
 const publicationIntent: CatalogPublicationIntent = {
   schema: "ascendany.knowledge_catalog.publication-request.v1",

@@ -20,7 +20,7 @@ func TestDomainHashGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "d4310900fde625c06e896d5e6900a794d8e9fcfe7f5e3c35efb807128dfa7058"
+	const want = "6582875727744c1d33f8559fc35b3ff0b5b8c0009b18ea374f7b5f41b51ff48a"
 	if digest != want {
 		t.Fatalf("DomainHash() = %q, want %q", digest, want)
 	}

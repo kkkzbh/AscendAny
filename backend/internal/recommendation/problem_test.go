@@ -39,7 +39,11 @@ func TestPintiaV2IdentifiersDriveProblemAndCatalogKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := buildCandidates([]problemRow{row}, catalog, []string{"arrays", "graphs"}, map[string]struct{}{})
+	facts, err := buildProblemFactIndex([]problemRow{row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := buildCandidates([]problemRow{row}, facts, catalog, []string{"arrays", "graphs"}, map[string]struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,5 +61,17 @@ func TestPintiaProblemKeyUsesLengthFramedIdentity(t *testing.T) {
 	}
 	if pintiaSourceProblemKey("a:b") == pintiaSourceProblemKey("a:b:") {
 		t.Fatal("distinct Pintia IDs produced an equal source problem key")
+	}
+}
+
+func TestBuildProblemFactIndexRejectsDuplicateSnapshotProblemIdentity(t *testing.T) {
+	t.Parallel()
+	row := problemRow{
+		SnapshotID: 1, ProblemSetID: "problem-set-100", ProblemSetProblemID: "problem-set:item:100",
+		SourceURL: "https://pintia.cn/problem-sets/problem-set-100/problems/type/7", Platform: "pintia",
+		ProblemID: "problem:100", Title: "Pintia identifier contract",
+	}
+	if _, err := buildProblemFactIndex([]problemRow{row, row}); err == nil || !strings.Contains(err.Error(), "duplicates snapshot problem identity") {
+		t.Fatalf("duplicate problem identity error = %v", err)
 	}
 }

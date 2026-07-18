@@ -116,6 +116,96 @@ func TestReleaseInventoryRejectsIdentifiersPostgreSQLWouldTruncate(t *testing.T)
 	}
 }
 
+func TestMigrationInventoryReplacesNamedConstraint(t *testing.T) {
+	t.Parallel()
+	keys := map[string]struct{}{
+		"constraint:c:messages_content_valid": {},
+	}
+	err := addMigrationInventory(keys, `ALTER TABLE ascendany.messages
+DROP CONSTRAINT messages_content_valid;
+
+ALTER TABLE ascendany.messages
+ADD CONSTRAINT messages_content_valid CHECK (content <> '');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := keys["constraint:c:messages_content_valid"]; !exists {
+		t.Fatal("replacement constraint is absent from the final inventory")
+	}
+}
+
+func TestMigrationInventoryDropsConstraintOwnedIndex(t *testing.T) {
+	t.Parallel()
+	keys := map[string]struct{}{
+		"constraint:u:accounts_email_key": {},
+		"index:accounts_email_key":        {},
+	}
+	err := addMigrationInventory(keys, `ALTER TABLE ascendany.accounts
+DROP CONSTRAINT accounts_email_key;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"constraint:u:accounts_email_key", "index:accounts_email_key"} {
+		if _, exists := keys[key]; exists {
+			t.Errorf("dropped inventory object remains: %s", key)
+		}
+	}
+}
+
+func TestMigrationInventoryAppliesExplicitIndexTransitionsInOrder(t *testing.T) {
+	t.Parallel()
+	keys := map[string]struct{}{
+		"index:agent_runs_owner_analytics_auto_analysis_unique": {},
+	}
+	err := addMigrationInventory(keys, `DROP INDEX ascendany.agent_runs_owner_analytics_auto_analysis_unique;
+
+CREATE UNIQUE INDEX agent_runs_owner_exam_role_auto_analysis_unique
+ON ascendany.agent_runs (owner_account_id, auto_analysis_exam_id, auto_analysis_role_id)
+WHERE kind = 'auto_analysis';`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := keys["index:agent_runs_owner_analytics_auto_analysis_unique"]; exists {
+		t.Fatal("dropped explicit index remains in the final inventory")
+	}
+	if _, exists := keys["index:agent_runs_owner_exam_role_auto_analysis_unique"]; !exists {
+		t.Fatal("replacement explicit index is absent from the final inventory")
+	}
+}
+
+func TestMigrationInventoryRejectsUnknownDroppedIndex(t *testing.T) {
+	t.Parallel()
+	err := addMigrationInventory(map[string]struct{}{}, `DROP INDEX ascendany.missing_index;`)
+	if err == nil || !strings.Contains(err.Error(), "does not remove an earlier index") {
+		t.Fatalf("addMigrationInventory() error = %v", err)
+	}
+}
+
+func TestMigrationInventoryKeepsAddThenDropConstraintAbsent(t *testing.T) {
+	t.Parallel()
+	keys := map[string]struct{}{}
+	err := addMigrationInventory(keys, `ALTER TABLE ascendany.messages
+ADD CONSTRAINT messages_content_valid CHECK (content <> '');
+
+ALTER TABLE ascendany.messages
+DROP CONSTRAINT messages_content_valid;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := keys["constraint:c:messages_content_valid"]; exists {
+		t.Fatal("constraint added then dropped remains in the final inventory")
+	}
+}
+
+func TestMigrationInventoryRejectsUnknownDroppedConstraint(t *testing.T) {
+	t.Parallel()
+	err := addMigrationInventory(map[string]struct{}{}, `ALTER TABLE ascendany.messages
+DROP CONSTRAINT messages_content_valid;`)
+	if err == nil || !strings.Contains(err.Error(), "does not remove an earlier constraint") {
+		t.Fatalf("addMigrationInventory() error = %v", err)
+	}
+}
+
 func TestReleaseInventoryCoversMigrationObjectClasses(t *testing.T) {
 	t.Parallel()
 	inventory, err := expectedInventory()
@@ -164,6 +254,7 @@ func TestReleaseInventoryCoversMigrationObjectClasses(t *testing.T) {
 		"constraint:u:recommendation_model_releases_model_id_key",
 		"index:recommendation_model_releases_model_id_key",
 		"index:recommendation_knowledge_catalog_digest_idx",
+		"index:agent_runs_owner_exam_role_auto_analysis_unique",
 		"trigger:agent_note_revisions_immutable_rows",
 		"trigger:agent_note_revisions_immutable_truncate",
 	} {
@@ -176,6 +267,7 @@ func TestReleaseInventoryCoversMigrationObjectClasses(t *testing.T) {
 		"sequence:knowledge_catalog_publication_authorization_ids_seq",
 		"trigger:knowledge_catalog_publication_authorizations_immutable_rows",
 		"constraint:u:knowledge_catalog_publications_publication_authorization_id_key",
+		"index:agent_runs_owner_analytics_auto_analysis_unique",
 	} {
 		if containsInventoryKey(inventory, removed) {
 			t.Errorf("release inventory retains removed migration object %q", removed)

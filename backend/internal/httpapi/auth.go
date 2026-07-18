@@ -157,6 +157,18 @@ func (handler *Handler) handleAuthError(writer http.ResponseWriter, request *htt
 		writer.Header().Set("Retry-After", "1")
 		handler.writeAPIError(writer, request, http.StatusTooManyRequests, "rate_limit_exceeded", "Request rate limit was exceeded.")
 		return
+	case auth.ErrorRegistrationUsername:
+		handler.writeAPIError(writer, request, http.StatusConflict, string(code), "Registration username is unavailable.")
+		return
+	case auth.ErrorRegistrationIdentity:
+		handler.writeAPIError(writer, request, http.StatusConflict, string(code), "Registration identity is unavailable.")
+		return
+	case auth.ErrorSSODisabled:
+		handler.writeAPIError(writer, request, http.StatusServiceUnavailable, string(code), "SSO is disabled on this server.")
+		return
+	case auth.ErrorLocalPasswordEnabled:
+		handler.writeAPIError(writer, request, http.StatusConflict, string(code), "Local password login is already enabled for this account.")
+		return
 	case auth.ErrorForbidden:
 		handler.writeAPIError(writer, request, http.StatusForbidden, string(code), "Authorization was rejected.")
 		return

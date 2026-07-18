@@ -38,6 +38,19 @@ type SelfQuery struct {
 	Principal auth.AccessPrincipal
 }
 
+// StudentNumberQuery identifies one student through the canonical Pintia
+// student-number binding. It is a read-only selector and carries no authority.
+type StudentNumberQuery struct {
+	StudentNumber string
+}
+
+// StudentIdentityQuery identifies one active student account through the exact
+// durable student-number and PTA nickname binding. It carries no authority.
+type StudentIdentityQuery struct {
+	StudentNumber string
+	PTANickname   string
+}
+
 type Rule struct {
 	Code         string
 	Title        string

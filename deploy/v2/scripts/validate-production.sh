@@ -7,7 +7,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   while IFS= read -r -d '' entry; do
     name="${entry%%=*}"
     case "$name" in
-      PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_VALIDATOR_CLEAN_ENV|ASCENDANY_VALIDATION_PHASE|ASCENDANY_DEPLOYMENT_TRANSITION|ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS|ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256|ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256|ASCENDANY_FORWARD_MODEL_HEAD_REVISION|ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256)
+      PATH|LC_ALL|PWD|SHLVL|_|ASCENDANY_VALIDATOR_CLEAN_ENV|ASCENDANY_VALIDATION_PHASE|ASCENDANY_DEPLOYMENT_TRANSITION|ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS|ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH|ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256|ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256|ASCENDANY_FORWARD_MODEL_HEAD_REVISION|ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256)
         ;;
       PGPASSFILE)
         [[ "${ASCENDANY_VALIDATION_PHASE-}" == "staged" ||
@@ -24,7 +24,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
         "$validator_environment_is_clean" != "1" ]]; then
     validation_phase_input="${ASCENDANY_VALIDATION_PHASE-}"
     deployment_transition_input="${ASCENDANY_DEPLOYMENT_TRANSITION-}"
-    feedback_bindings_input="${ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS-}"
+    provider_bindings_input="${ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS-}"
+    agent_acceptance_receipt_input="${ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH-}"
     forward_database_fingerprint_input="${ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256-}"
     forward_business_fingerprint_input="${ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256-}"
     forward_model_head_revision_input="${ASCENDANY_FORWARD_MODEL_HEAD_REVISION-}"
@@ -37,7 +38,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       ASCENDANY_VALIDATOR_CLEAN_ENV=1
       "ASCENDANY_VALIDATION_PHASE=$validation_phase_input"
       "ASCENDANY_DEPLOYMENT_TRANSITION=$deployment_transition_input"
-      "ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS=$feedback_bindings_input"
+      "ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS=$provider_bindings_input"
+      "ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH=$agent_acceptance_receipt_input"
       "ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256=$forward_database_fingerprint_input"
       "ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256=$forward_business_fingerprint_input"
       "ASCENDANY_FORWARD_MODEL_HEAD_REVISION=$forward_model_head_revision_input"
@@ -118,7 +120,9 @@ expected_forward_model_artifact_sha256="${ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA25
 expected_write_mode=""
 ascendanyd_active="0"
 smoke_dropin="/etc/systemd/system/ascendanyd.service.d/40-read-only-smoke.conf"
-expected_runtime_feedback_credential_bindings="${ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS:-}"
+expected_runtime_provider_credential_bindings="${ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS:-}"
+agent_acceptance_receipt_path="${ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH-}"
+agent_prompt_document_sha256="1e7fc27df0bedfb43126579204833750e36877940d921cbb01afeb116d9d59f2"
 temporary_pgpass=""
 release_manifest_commit=""
 release_manifest_version=""
@@ -132,9 +136,9 @@ observed_forward_business_fingerprint=""
 observed_forward_model_head_revision=""
 observed_forward_model_artifact_sha256=""
 
-declare -a runtime_feedback_bindings=()
-declare -a runtime_feedback_credential_ids=()
-declare -a runtime_feedback_environment=()
+declare -a runtime_provider_bindings=()
+declare -a runtime_provider_credential_ids=()
+declare -a runtime_provider_environment=()
 
 failures=0
 
@@ -165,6 +169,21 @@ canonical_path() {
   realpath -m -- "$1"
 }
 
+decode_upper_hex_ascii() {
+  local hex="$1" output="" pair character decimal index
+  [[ "$hex" =~ ^([0-9A-F]{2})+$ ]] || return 1
+  for ((index = 0; index < ${#hex}; index += 2)); do
+    pair="${hex:index:2}"
+    decimal=$((16#$pair))
+    if (( decimal < 33 || decimal > 126 )); then
+      return 1
+    fi
+    printf -v character '%b' "\\x$pair"
+    output+="$character"
+  done
+  printf '%s' "$output"
+}
+
 is_under() {
   local child parent
   child="$(canonical_path "$1")"
@@ -181,72 +200,72 @@ normalize_word_set() {
   tr '[:space:]' '\n' | sed '/^$/d' | LC_ALL=C sort
 }
 
-parse_runtime_feedback_bindings() {
+parse_runtime_provider_bindings() {
   local binding variable credential_id
   local invalid=0
   local -a unsorted=()
   local -A seen_variables=() seen_ids=()
-  runtime_feedback_bindings=()
-  runtime_feedback_credential_ids=()
-  runtime_feedback_environment=()
+  runtime_provider_bindings=()
+  runtime_provider_credential_ids=()
+  runtime_provider_environment=()
 
-  if [[ -n "$expected_runtime_feedback_credential_bindings" ]]; then
+  if [[ -n "$expected_runtime_provider_credential_bindings" ]]; then
     mapfile -t unsorted < <(
-      printf '%s' "$expected_runtime_feedback_credential_bindings" |
+      printf '%s' "$expected_runtime_provider_credential_bindings" |
         tr '[:space:]' '\n' |
         sed '/^$/d'
     )
   fi
   for binding in "${unsorted[@]}"; do
     if [[ "$binding" != *=* || "${binding#*=}" == *"="* ]]; then
-      fail "ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS contains a malformed binding"
+      fail "ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS contains a malformed binding"
       invalid=1
       continue
     fi
     variable="${binding%%=*}"
     credential_id="${binding#*=}"
     if [[ ! "$variable" =~ ^ASCENDANY_CREDENTIAL_FILE_REF_HEX_([0-9A-F]{2})+_AUTHORITY_HEX_([0-9A-F]{2})+$ ]]; then
-      fail "feedback credential binding has a noncanonical credential path variable: $variable"
+      fail "runtime provider credential binding has a noncanonical credential path variable: $variable"
       invalid=1
       continue
     fi
     if [[ ! "$credential_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
-      fail "feedback credential binding has a noncanonical credential ID"
+      fail "runtime provider credential binding has a noncanonical credential ID"
       invalid=1
       continue
     fi
     case "$credential_id" in
       admin_access_token|admin_password|catalog_publication_request|catalog_publisher_db_password|db_password|runtime_db_password|backup_db_password|migrator_db_password|restore_db_password|jwt_signing_private_key|jwt_verification_public_key|password_pepper)
-        fail "feedback credential binding reuses a core runtime credential ID: $credential_id"
+        fail "runtime provider credential binding reuses a core runtime credential ID: $credential_id"
         invalid=1
         continue
         ;;
     esac
     if [[ -n "${seen_variables[$variable]:-}" ]]; then
-      fail "feedback credential path variable is repeated: $variable"
+      fail "runtime provider credential path variable is repeated: $variable"
       invalid=1
       continue
     fi
     if [[ -n "${seen_ids[$credential_id]:-}" ]]; then
-      fail "feedback credential ID is bound more than once: $credential_id"
+      fail "runtime provider credential ID is bound more than once: $credential_id"
       invalid=1
       continue
     fi
     seen_variables["$variable"]=1
     seen_ids["$credential_id"]=1
-    runtime_feedback_bindings+=("$binding")
+    runtime_provider_bindings+=("$binding")
   done
 
-  if (( ${#runtime_feedback_bindings[@]} > 0 )); then
-    mapfile -t runtime_feedback_bindings < <(
-      printf '%s\n' "${runtime_feedback_bindings[@]}" | LC_ALL=C sort
+  if (( ${#runtime_provider_bindings[@]} > 0 )); then
+    mapfile -t runtime_provider_bindings < <(
+      printf '%s\n' "${runtime_provider_bindings[@]}" | LC_ALL=C sort
     )
   fi
-  for binding in "${runtime_feedback_bindings[@]}"; do
+  for binding in "${runtime_provider_bindings[@]}"; do
     variable="${binding%%=*}"
     credential_id="${binding#*=}"
-    runtime_feedback_credential_ids+=("$credential_id")
-    runtime_feedback_environment+=("$variable=%d/$credential_id")
+    runtime_provider_credential_ids+=("$credential_id")
+    runtime_provider_environment+=("$variable=%d/$credential_id")
   done
   (( invalid == 0 ))
 }
@@ -286,6 +305,13 @@ validate_input_contract() {
       fail "ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, catalog, or production"
       ;;
   esac
+  if [[ "$validation_phase" == production ]]; then
+    if [[ -z "$agent_acceptance_receipt_path" ]]; then
+      fail "production phase requires ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH"
+    fi
+  elif [[ -n "$agent_acceptance_receipt_path" ]]; then
+    fail "staged, smoke, catalog, and activation phases forbid ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH"
+  fi
   case "$deployment_transition" in
     initial)
       if [[ -n "$expected_forward_database_fingerprint" ||
@@ -314,7 +340,7 @@ validate_input_contract() {
       fail "ASCENDANY_DEPLOYMENT_TRANSITION must be exactly initial or forward"
       ;;
   esac
-  parse_runtime_feedback_bindings || true
+  parse_runtime_provider_bindings || true
   (( failures == starting_failures ))
 }
 
@@ -460,10 +486,10 @@ check_unit_effective_shape() {
   check_effective_directive_sequence "$unit" Environment "$expected_environment"
 }
 
-render_runtime_feedback_dropin() {
+render_runtime_provider_dropin() {
   local binding variable credential_id
   printf '[Service]\n'
-  for binding in "${runtime_feedback_bindings[@]}"; do
+  for binding in "${runtime_provider_bindings[@]}"; do
     variable="${binding%%=*}"
     credential_id="${binding#*=}"
     printf 'LoadCredentialEncrypted=%s:/etc/ascendany/credentials/%s.cred\n' \
@@ -472,34 +498,34 @@ render_runtime_feedback_dropin() {
   done
 }
 
-check_runtime_feedback_dropin_bytes() {
+check_runtime_provider_dropin_bytes() {
   local dropin="$1"
-  if ! cmp --silent -- "$dropin" <(render_runtime_feedback_dropin); then
-    fail "ascendanyd feedback credential drop-in bytes differ from the canonical binding contract"
+  if ! cmp --silent -- "$dropin" <(render_runtime_provider_dropin); then
+    fail "ascendanyd runtime provider credential drop-in bytes differ from the canonical binding contract"
   else
-    pass "ascendanyd feedback credential drop-in has exact canonical bytes"
+    pass "ascendanyd runtime provider credential drop-in has exact canonical bytes"
   fi
 }
 
-check_runtime_feedback_dropin_file() {
+check_runtime_provider_dropin_file() {
   local dropin="$1"
   if [[ ! -f "$dropin" || -L "$dropin" ||
         "$dropin" != "$(realpath -m -- "$dropin")" ||
         "$dropin" != "$(realpath -e -- "$dropin" 2>/dev/null || true)" ||
         "$(stat -Lc '%u:%g:%a:%h' "$dropin" 2>/dev/null || true)" != "0:0:644:1" ]] ||
      ! check_root_owned_ancestry "$dropin" 1; then
-    fail "ascendanyd feedback credential drop-in must be a canonical root:root 0644 single-link file with protected ancestry"
+    fail "ascendanyd runtime provider credential drop-in must be a canonical root:root 0644 single-link file with protected ancestry"
   else
-    check_runtime_feedback_dropin_bytes "$dropin"
+    check_runtime_provider_dropin_bytes "$dropin"
   fi
 }
 
-check_runtime_feedback_dropin() {
-  local dropin="/etc/systemd/system/ascendanyd.service.d/50-feedback-credentials.conf"
-  if (( ${#runtime_feedback_bindings[@]} == 0 )); then
+check_runtime_provider_dropin() {
+  local dropin="/etc/systemd/system/ascendanyd.service.d/50-runtime-provider-credentials.conf"
+  if (( ${#runtime_provider_bindings[@]} == 0 )); then
     return
   fi
-  check_runtime_feedback_dropin_file "$dropin"
+  check_runtime_provider_dropin_file "$dropin"
 }
 
 render_read_only_smoke_dropin() {
@@ -604,14 +630,14 @@ check_all_unit_effective_shapes() {
   if smoke_dropin_required; then
     ascendanyd_dropins+=$'\n'"$smoke_dropin"
   fi
-  if (( ${#runtime_feedback_bindings[@]} > 0 )); then
-    ascendanyd_dropins+=$'\n/etc/systemd/system/ascendanyd.service.d/50-feedback-credentials.conf'
+  if (( ${#runtime_provider_bindings[@]} > 0 )); then
+    ascendanyd_dropins+=$'\n/etc/systemd/system/ascendanyd.service.d/50-runtime-provider-credentials.conf'
   fi
 
   ascendanyd_start='/opt/ascendany/v2/bin/ascendanyd serve'
   ascendanyd_pre=$'/usr/bin/test -s %d/db_password\n/usr/bin/test -s %d/jwt_signing_private_key\n/usr/bin/test -s %d/password_pepper\n/opt/ascendany/v2/bin/ascendany-model verify-catalog --catalog /opt/ascendany/v2/models/recommendation-knowledge-catalog.json --catalog-sha256 ${ASCENDANY_KNOWLEDGE_CATALOG_SHA256} --model /opt/ascendany/v2/models/recommendation-model.json --model-sha256 ${ASCENDANY_RECOMMENDATION_MODEL_SHA256} --expected-purpose ${ASCENDANY_RECOMMENDATION_MODEL_PURPOSE}'
   ascendanyd_environment=$'SHELL=/usr/sbin/nologin\nASCENDANY_DATABASE_PASSWORD_FILE=%d/db_password\nASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE=%d/jwt_signing_private_key\nASCENDANY_PASSWORD_PEPPER_FILE=%d/password_pepper'
-  for environment in "${runtime_feedback_environment[@]}"; do
+  for environment in "${runtime_provider_environment[@]}"; do
     ascendanyd_environment+=$'\n'"$environment"
   done
   model_activate_start='/opt/ascendany/v2/bin/ascendanyd activate-model'
@@ -797,7 +823,7 @@ check_all_unit_effective_shapes() {
   check_backup_timer_effective_shape
   check_fedora_global_service_dropin
   check_read_only_smoke_dropin
-  check_runtime_feedback_dropin
+  check_runtime_provider_dropin
 }
 
 check_unit_identity() {
@@ -1355,7 +1381,7 @@ check_credentials() {
     jwt_signing_private_key
     password_pepper
   )
-  for credential_id in "${runtime_feedback_credential_ids[@]}"; do
+  for credential_id in "${runtime_provider_credential_ids[@]}"; do
     expected_ids+=("$credential_id")
   done
   check_unit_credentials "$unit" "${expected_ids[@]}"
@@ -1507,7 +1533,7 @@ check_catalog_publisher_config_contract() {
   expected="$(printf '%s\n' \
     'ASCENDANY_DATABASE_URL=postgresql://ascendany_catalog_publisher_login@127.0.0.1:6432/ascendany_v2' \
     'ASCENDANY_DATABASE_POOL_MODE=transaction' \
-    'ASCENDANY_DATABASE_SCHEMA_VERSION=7' \
+    'ASCENDANY_DATABASE_SCHEMA_VERSION=10' \
     'ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s' \
     'ASCENDANY_DATABASE_HEALTH_TIMEOUT=3s' \
     'ASCENDANY_AUTH_ISSUER=ascendany' \
@@ -1624,7 +1650,7 @@ check_active_ascendanyd_environment() {
   expected[ASCENDANY_DATABASE_PASSWORD_FILE]='/run/credentials/ascendanyd.service/db_password'
   expected[ASCENDANY_JWT_SIGNING_PRIVATE_KEY_FILE]='/run/credentials/ascendanyd.service/jwt_signing_private_key'
   expected[ASCENDANY_PASSWORD_PEPPER_FILE]='/run/credentials/ascendanyd.service/password_pepper'
-  for entry in "${runtime_feedback_bindings[@]}"; do
+  for entry in "${runtime_provider_bindings[@]}"; do
     name="${entry%%=*}"
     value="${entry#*=}"
     expected["$name"]="/run/credentials/ascendanyd.service/$value"
@@ -1763,11 +1789,11 @@ check_active_ascendanyd_health() {
       (.checks.database | type == "object" and keys == ["status"] and .status == "pass") and
       (.checks.migrations | type == "object" and
         keys == ["currentVersion", "expectedVersion", "status"] and
-        .status == "pass" and .currentVersion == 7 and .expectedVersion == 7)
+        .status == "pass" and .currentVersion == 10 and .expectedVersion == 10)
     ' <<<"$readiness" >/dev/null 2>&1; then
-    fail "active ascendanyd readiness violates the schema-v7 closed response contract"
+    fail "active ascendanyd readiness violates the schema-v10 closed response contract"
   else
-    pass "active ascendanyd database and migration readiness are healthy at schema v7"
+    pass "active ascendanyd database and migration readiness are healthy at schema v10"
   fi
 }
 
@@ -2436,7 +2462,7 @@ check_retired_generation_closure() {
     '/etc/ascendany/v2 configuration namespace' \
     $'analytics.json|f\nascendanyd-read-only-smoke.env|f\nascendanyd.env|f\nbackup.env|f\njudge.env|f\nmigrate.env|f\nrestore.env|f'
 
-  for credential_id in "${runtime_feedback_credential_ids[@]}"; do
+  for credential_id in "${runtime_provider_credential_ids[@]}"; do
     credential_entries+=("$credential_id.cred")
   done
   expected_credentials="$(printf '%s|f\n' "${credential_entries[@]}" | LC_ALL=C sort)"
@@ -2742,9 +2768,9 @@ check_postgres_schema_fingerprint() {
   if [[ ! "$actual" =~ ^[0-9a-f]{64}$ || "$actual" != "$expected" ]] ||
      ! /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C \
        "$helper" --verify-sha256 "$actual"; then
-    fail "PostgreSQL schema fingerprint differs from the canonical schema-v7 contract"
+    fail "PostgreSQL schema fingerprint differs from the canonical schema-v10 contract"
   elif (( failures == failures_before )); then
-    pass "PostgreSQL columns, constraints, indexes, triggers, and routines match the canonical schema-v7 fingerprint"
+    pass "PostgreSQL columns, constraints, indexes, triggers, and routines match the canonical schema-v10 fingerprint"
   fi
 }
 
@@ -2913,6 +2939,9 @@ migration|4|achievement_rules|3242ddfbdee0911d961ebe0f46237f6e2b8a6e7c5e09cf1d94
 migration|5|auto_analysis_once|40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17
 migration|6|inference_model_runtime|330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea
 migration|7|catalog_publication_provenance|a69c081d1b0eaa31df8490773d3feed355fdb4053925f84087552df9b5fc940b
+migration|8|auto_analysis_frontend_context|117d0eff2231d23929e91dda1f463d766b0d2dd7c8ff381266b5431f25cc4ed9
+migration|9|auth_pta_nickname|6ec2def4d4e433fd6d1dc915b582d724a445b79f5fa023260bb841a66e2e630e
+migration|10|feedback_duplicate_attachments|08cd0e1437ffa16c41ef4de0d1857acff38e15626770cd1dc2ec80dc2e7855e5
 MIGRATIONS
 }
 
@@ -3004,7 +3033,7 @@ check_initial_database_state() {
   actual="$(sed -n 's/^table:\([^|]*\)|.*$/\1/p' <<<"$snapshot" | LC_ALL=C sort)"
   expected="$(expected_initial_table_names)"
   if [[ "$actual" != "$expected" ]]; then
-    fail "initial fresh database base-table set differs from the schema-v7 contract"
+    fail "initial fresh database base-table set differs from the schema-v10 contract"
   fi
   while IFS='|' read -r label count; do
     [[ -n "$label" ]] || continue
@@ -3014,7 +3043,7 @@ check_initial_database_state() {
       continue
     fi
     case "$table" in
-      schema_migrations_v2) expected=7 ;;
+      schema_migrations_v2) expected=10 ;;
       achievement_rule_sets|achievement_rule_head|analytics_head) expected=1 ;;
       achievement_rules) expected=17 ;;
       recommendation_model_activation_events|recommendation_model_head|recommendation_model_releases)
@@ -3030,7 +3059,7 @@ check_initial_database_state() {
   actual="$(sed -n 's/^sequence:\([^|]*\)|.*$/\1/p' <<<"$snapshot" | LC_ALL=C sort)"
   expected="$(expected_initial_sequence_names)"
   if [[ "$actual" != "$expected" ]]; then
-    fail "initial fresh database sequence set differs from the schema-v7 contract"
+    fail "initial fresh database sequence set differs from the schema-v10 contract"
   fi
   while IFS='|' read -r label last_value is_called; do
     [[ -n "$label" ]] || continue
@@ -3049,7 +3078,7 @@ check_initial_database_state() {
 
   migration_rows="$(grep '^migration|' <<<"$snapshot" || true)"
   if [[ "$migration_rows" != "$(expected_initial_migration_rows)" ]]; then
-    fail "initial fresh database migration manifest differs from the embedded schema-v7 manifest"
+    fail "initial fresh database migration manifest differs from the embedded schema-v10 manifest"
   fi
   analytics_rows="$(grep '^analytics-head|' <<<"$snapshot" || true)"
   if [[ "$analytics_rows" != 'analytics-head|true||0' ]]; then
@@ -3060,7 +3089,7 @@ check_initial_database_state() {
     fail "initial fresh database achievement seed rows differ from migration v4"
   fi
   if (( failures == failures_before )); then
-    pass "initial $validation_phase database exactly matches all 54 base tables, 32 sequences, migrations, permitted seeds, and phase-owned model state"
+    pass "initial $validation_phase database exactly matches all 54 base tables, 31 sequences, migrations, permitted seeds, and phase-owned model state"
   fi
 }
 
@@ -3504,7 +3533,7 @@ check_retained_backup_model_provenance() {
             "knowledgeCatalogPublications", "migrations", "recommendationModel"
           ]) and
           $bundle.database.databaseName == "ascendany_v2" and
-          ($bundle.database.migrations | type == "array" and length == 7 and .[-1].version == 7) and
+	          ($bundle.database.migrations | type == "array" and length == 10 and .[-1].version == 10) and
           ($bundle.catalogPublicationReceipts | type == "object" and
             keys == ["count", "entries", "file", "totalBytes"] and
             (.count | type == "number" and floor == . and . > 0) and
@@ -3690,9 +3719,9 @@ check_backup_schedule() {
       .schema == "ascendany.backup.bundle.v2" and
       .backupId == $id and
       .database.databaseName == "ascendany_v2" and
-      (.database.migrations | length == 7 and .[-1].version == 7)
+      (.database.migrations | length == 10 and .[-1].version == 10)
     ' "$latest_manifest" >/dev/null 2>&1; then
-    fail "latest backup manifest is missing, malformed, or not schema v7: $latest_backup"
+    fail "latest backup manifest is missing, malformed, or not schema v10: $latest_backup"
   elif ! runuser -u ascendany-backup -- env -i \
       PATH=/usr/bin:/bin \
       ASCENDANY_BACKUP_ROOT="$backup_root" \
@@ -3705,7 +3734,7 @@ check_backup_schedule() {
       "$backup_binary" verify "$latest_backup" >/dev/null 2>&1; then
     fail "latest backup bundle failed live verification: $latest_backup"
   else
-    pass "latest schema-v7 backup passed live verification: $latest_backup"
+    pass "latest schema-v10 backup passed live verification: $latest_backup"
   fi
   evidence_parent="$(dirname -- "$restore_evidence")"
   if [[ "$restore_evidence" != /* || "$restore_evidence" != "$(realpath -m -- "$restore_evidence")" ||
@@ -3732,7 +3761,7 @@ check_backup_schedule() {
     if [[ -z "$evidence_epoch" || "$evidence_epoch" -gt "$now_epoch" || $((now_epoch - evidence_epoch)) -gt 2678400 ]]; then
       fail "restore verification evidence is invalid or older than 31 days"
     else
-      pass "recent destructive restore verification evidence binds the latest schema-v7 backup"
+      pass "recent destructive restore verification evidence binds the latest schema-v10 backup"
     fi
   fi
 
@@ -4128,6 +4157,706 @@ check_database_role() {
     fail "release-bound v2 database role and grant verification failed"
   else
     pass "release-bound v2 database role and grant contract is exact"
+  fi
+}
+
+check_agent_acceptance_receipt() {
+  production_phase || return 0
+
+  local failures_before="$failures"
+  local path="$agent_acceptance_receipt_path" metadata size canonical_receipt
+  local receipt_values accepted_at accepted_epoch probe_checked_at probe_epoch now_epoch
+  local administrator_account_id student_account_id student_username student_number
+  local target_application_version target_application_commit target_application_build_time
+  local provider_credential_sha256
+  local prompt_configuration_id prompt_head_revision prompt_version_id prompt_version_number
+  local prompt_schema_id prompt_document_sha256
+  local model_configuration_id model_head_revision model_version_id model_version_number
+  local model_schema_id model_document_sha256 model_credential_ref
+  local probe_authority probe_model reply_marker database_match
+  local reply_run_id reply_thread_id reply_input_message_id reply_output_message_id
+  local reply_sha256 reply_event_count
+  local auto_run_id auto_thread_id auto_input_message_id auto_output_message_id
+  local auto_created auto_sha256 auto_event_count
+  local binding variable encoded reference_hex authority_hex binding_reference binding_authority
+  local provider_credential_id provider_credential_source provider_source_sha256
+  local matching_provider_bindings=0
+
+  metadata="$(stat -Lc '%u:%g:%a:%h' -- "$path" 2>/dev/null || true)"
+  if [[ "$path" != /* || "$path" != "$(realpath -m -- "$path" 2>/dev/null || true)" ||
+        ! -f "$path" || -L "$path" ||
+        "$path" != "$(realpath -e -- "$path" 2>/dev/null || true)" ||
+        "$metadata" != 0:0:400:1 ]] || ! check_root_owned_ancestry "$path" 1; then
+    fail "Agent acceptance receipt must be one canonical root:root 0400 single-link file with protected root-owned ancestry"
+    return
+  fi
+  size="$(stat -Lc '%s' -- "$path" 2>/dev/null || true)"
+  if [[ ! "$size" =~ ^[1-9][0-9]*$ || "$size" -gt 32768 ]]; then
+    fail "Agent acceptance receipt violates the nonempty 32768-byte limit"
+    return
+  fi
+
+  canonical_receipt="$(mktemp)"
+  if ! jq -Scs 'if length == 1 then .[0] else empty end' -- "$path" >"$canonical_receipt" 2>/dev/null ||
+     ! cmp --silent -- "$path" "$canonical_receipt"; then
+    rm -f -- "$canonical_receipt"
+    fail "Agent acceptance receipt must contain exactly one canonical JSON object and one trailing newline"
+    return
+  fi
+  rm -f -- "$canonical_receipt"
+
+  if ! jq -e --arg promptDocumentSHA256 "$agent_prompt_document_sha256" \
+      --arg targetApplicationVersion "$release_manifest_version" \
+      --arg targetApplicationCommit "$release_manifest_commit" \
+      --arg targetApplicationBuildTime "$release_manifest_build_time" '
+      def safe_positive_integer:
+        type == "number" and floor == . and . >= 1 and . <= 9007199254740991;
+      def safe_nonnegative_integer:
+        type == "number" and floor == . and . >= 0 and . <= 9007199254740991;
+      def positive_int64_string:
+        type == "string" and test("^[1-9][0-9]{0,18}$") and
+        (length < 19 or (length == 19 and . <= "9223372036854775807"));
+      def sha256: type == "string" and test("^[0-9a-f]{64}$");
+      def uuid_v4:
+        type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+      def timestamp:
+        type == "string" and
+        test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.][0-9]{1,9})?Z$");
+      def printable_nonempty($maximum):
+        type == "string" and length >= 1 and length <= $maximum and
+        all(explode[]; . >= 32 and . != 127);
+      def semver:
+        type == "string" and length <= 128 and
+        test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)([.]((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?([+][0-9A-Za-z-]+([.][0-9A-Za-z-]+)*)?$");
+      def configuration($key; $schema; $credential):
+        type == "object" and
+        keys == [
+          "configurationId", "credentialRef", "documentSha256", "headRevision",
+          "key", "schemaId", "state", "versionId", "versionNumber"
+        ] and
+        .key == $key and (.configurationId | uuid_v4) and
+        (.headRevision | safe_positive_integer) and (.versionId | positive_int64_string) and
+        (.versionNumber | safe_positive_integer) and .versionNumber == .headRevision and .schemaId == $schema and
+        (.documentSha256 | sha256) and .credentialRef == $credential and
+        (.state == "advanced" or .state == "created" or .state == "matched");
+      def acceptance:
+        type == "object" and keys == [
+          "created", "eventCount", "inputMessageId", "outputMessageId", "replySha256",
+          "runId", "terminalDoneCount", "threadId"
+        ] and
+        (.created | type == "boolean") and (.runId | uuid_v4) and (.threadId | uuid_v4) and
+        (.inputMessageId | uuid_v4) and (.outputMessageId | uuid_v4) and
+        ([.runId, .threadId, .inputMessageId, .outputMessageId] | unique | length == 4) and
+        (.replySha256 | sha256) and (.eventCount | safe_positive_integer) and
+        .terminalDoneCount == 1;
+      type == "object" and
+      keys == [
+        "acceptanceStudentAccountId", "acceptanceStudentNumber", "acceptanceStudentUsername",
+        "acceptedAt", "administratorAccountId", "autoAnalysisAcceptance", "modelConfiguration",
+        "modelProbe", "promptConfiguration", "providerCredentialSha256", "replyAcceptance", "schema",
+        "targetApplicationBuildTime", "targetApplicationCommit", "targetApplicationVersion"
+      ] and
+      .schema == "ascendany.production-agent-acceptance-receipt.v1" and
+      (.acceptedAt | timestamp) and (.administratorAccountId | uuid_v4) and
+      (.acceptanceStudentAccountId | uuid_v4) and
+      (.acceptanceStudentUsername | type == "string" and test("^[a-z0-9_]{3,32}$") and . != "admin") and
+      (.acceptanceStudentNumber | printable_nonempty(64)) and
+      (.targetApplicationVersion | semver) and
+      (.targetApplicationCommit | type == "string" and test("^[0-9a-f]{40}$")) and
+      (.targetApplicationBuildTime | timestamp) and
+      .targetApplicationVersion == $targetApplicationVersion and
+      .targetApplicationCommit == $targetApplicationCommit and
+      .targetApplicationBuildTime == $targetApplicationBuildTime and
+      (.providerCredentialSha256 | sha256) and
+      (.promptConfiguration |
+        configuration("agent.prompt.default"; "ascendany.prompt.chat.v1"; null)) and
+      .promptConfiguration.documentSha256 == $promptDocumentSHA256 and
+      (.modelConfiguration.credentialRef |
+        type == "string" and test("^[a-z][a-z0-9_.-]{0,127}$")) and
+      (.modelConfiguration |
+        configuration(
+          "agent.model.default";
+          "ascendany.model_connection.openai_compatible.v1";
+          .credentialRef
+        )) and
+      (.modelProbe |
+        type == "object" and
+        keys == [
+          "authority", "checkedAt", "configurationHeadRevision", "configurationKey",
+          "configurationSha256", "configurationVersion", "latencyMilliseconds", "model"
+        ] and
+        .configurationKey == "agent.model.default" and
+        (.configurationHeadRevision | safe_positive_integer) and
+        (.configurationVersion | safe_positive_integer) and
+        (.configurationSha256 | sha256) and
+        (.authority | printable_nonempty(512)) and
+        (.authority | ascii_downcase == .) and
+        (.authority | test("^([^:/\\?#@[:space:]]+|\\[[0-9a-f:.]+\\]):[1-9][0-9]{0,4}$")) and
+        ((.authority | capture(":(?<port>[1-9][0-9]{0,4})$").port | tonumber) <= 65535) and
+        (.model | printable_nonempty(256)) and
+        (.checkedAt | timestamp) and (.latencyMilliseconds | safe_nonnegative_integer)) and
+      .modelProbe.configurationKey == .modelConfiguration.key and
+      .modelProbe.configurationHeadRevision == .modelConfiguration.headRevision and
+      .modelProbe.configurationVersion == .modelConfiguration.versionNumber and
+      .modelProbe.configurationSha256 == .modelConfiguration.documentSha256 and
+      (.replyAcceptance | acceptance) and .replyAcceptance.created == true and
+      (.autoAnalysisAcceptance | acceptance) and
+      ([
+        .replyAcceptance.runId, .replyAcceptance.threadId,
+        .replyAcceptance.inputMessageId, .replyAcceptance.outputMessageId,
+        .autoAnalysisAcceptance.runId, .autoAnalysisAcceptance.threadId,
+        .autoAnalysisAcceptance.inputMessageId, .autoAnalysisAcceptance.outputMessageId
+      ] | unique | length == 8)
+    ' -- "$path" >/dev/null 2>&1; then
+    fail "Agent acceptance receipt has a noncanonical, open, or non-production provenance schema"
+    return
+  fi
+
+  receipt_values="$(jq -er '[
+      .acceptedAt, .modelProbe.checkedAt,
+      .administratorAccountId, .acceptanceStudentAccountId,
+      .acceptanceStudentUsername, .acceptanceStudentNumber,
+      .targetApplicationVersion, .targetApplicationCommit, .targetApplicationBuildTime,
+      .providerCredentialSha256,
+      .promptConfiguration.configurationId, (.promptConfiguration.headRevision | tostring),
+      .promptConfiguration.versionId, (.promptConfiguration.versionNumber | tostring),
+      .promptConfiguration.schemaId, .promptConfiguration.documentSha256,
+      .modelConfiguration.configurationId, (.modelConfiguration.headRevision | tostring),
+      .modelConfiguration.versionId, (.modelConfiguration.versionNumber | tostring),
+      .modelConfiguration.schemaId, .modelConfiguration.documentSha256,
+      .modelConfiguration.credentialRef, .modelProbe.authority, .modelProbe.model,
+      .replyAcceptance.runId, .replyAcceptance.threadId,
+      .replyAcceptance.inputMessageId, .replyAcceptance.outputMessageId,
+      .replyAcceptance.replySha256, (.replyAcceptance.eventCount | tostring),
+      .autoAnalysisAcceptance.runId, .autoAnalysisAcceptance.threadId,
+      .autoAnalysisAcceptance.inputMessageId, .autoAnalysisAcceptance.outputMessageId,
+      (.autoAnalysisAcceptance.created | tostring), .autoAnalysisAcceptance.replySha256,
+      (.autoAnalysisAcceptance.eventCount | tostring)
+    ] | @tsv' -- "$path")"
+  IFS=$'\t' read -r accepted_at probe_checked_at \
+    administrator_account_id student_account_id student_username student_number \
+    target_application_version target_application_commit target_application_build_time \
+    provider_credential_sha256 \
+    prompt_configuration_id prompt_head_revision prompt_version_id prompt_version_number \
+    prompt_schema_id prompt_document_sha256 model_configuration_id model_head_revision \
+    model_version_id model_version_number model_schema_id model_document_sha256 \
+    model_credential_ref probe_authority probe_model \
+    reply_run_id reply_thread_id reply_input_message_id reply_output_message_id \
+    reply_sha256 reply_event_count \
+    auto_run_id auto_thread_id auto_input_message_id auto_output_message_id \
+    auto_created auto_sha256 auto_event_count <<<"$receipt_values"
+
+  accepted_epoch="$(date -u -d "$accepted_at" +%s 2>/dev/null || true)"
+  probe_epoch="$(date -u -d "$probe_checked_at" +%s 2>/dev/null || true)"
+  now_epoch="$(date -u +%s)"
+  if [[ ! "$accepted_epoch" =~ ^[0-9]+$ || ! "$probe_epoch" =~ ^[0-9]+$ ||
+        "$probe_epoch" -gt "$accepted_epoch" ||
+        $((accepted_epoch - probe_epoch)) -gt 900 ||
+        "$accepted_epoch" -gt $((now_epoch + 300)) ||
+        $((now_epoch - accepted_epoch)) -gt 86400 ]]; then
+    fail "Agent acceptance receipt probe/acceptance times are unordered, stale, or implausibly future-dated"
+    return
+  fi
+
+  for binding in "${runtime_provider_bindings[@]}"; do
+    variable="${binding%%=*}"
+    encoded="${variable#ASCENDANY_CREDENTIAL_FILE_REF_HEX_}"
+    reference_hex="${encoded%%_AUTHORITY_HEX_*}"
+    authority_hex="${encoded#*_AUTHORITY_HEX_}"
+    binding_reference="$(decode_upper_hex_ascii "$reference_hex" 2>/dev/null || true)"
+    binding_authority="$(decode_upper_hex_ascii "$authority_hex" 2>/dev/null || true)"
+    if [[ "$binding_reference" == "$model_credential_ref" &&
+          "$binding_authority" == "$probe_authority" ]]; then
+      matching_provider_bindings=$((matching_provider_bindings + 1))
+      provider_credential_id="${binding#*=}"
+    fi
+  done
+  if [[ "$matching_provider_bindings" != 1 ]]; then
+    fail "Agent model receipt credential reference and probe authority do not resolve to one expected runtime provider binding"
+    return
+  fi
+
+  provider_credential_source="/etc/ascendany/credentials/${provider_credential_id}.cred"
+  if ! provider_source_sha256="$(encrypted_credential_sha256 \
+      "$provider_credential_id" "$provider_credential_source")" ||
+     [[ "$provider_source_sha256" != "$provider_credential_sha256" ]]; then
+    fail "Agent acceptance receipt credential SHA-256 differs from the current host-encrypted provider credential"
+    return
+  fi
+
+  reply_marker="$(jq -Scn \
+    --arg schema 'ascendany.production-agent-reply-acceptance.v1' \
+    --arg instruction 'Read my current learning data, update my current notes with a concise progress summary by calling update_notes, and briefly explain my learning progress.' \
+    --arg targetApplicationVersion "$target_application_version" \
+    --arg targetApplicationCommit "$target_application_commit" \
+    --arg targetApplicationBuildTime "$target_application_build_time" \
+    '{schema: $schema, instruction: $instruction,
+      targetApplicationBuildTime: $targetApplicationBuildTime,
+      targetApplicationCommit: $targetApplicationCommit,
+      targetApplicationVersion: $targetApplicationVersion}')"
+
+  if ! database_match="$({
+    run_runtime_psql -A -t -v ON_ERROR_STOP=1 \
+      -v prompt_configuration_id="$prompt_configuration_id" \
+      -v prompt_head_revision="$prompt_head_revision" \
+      -v prompt_version_id="$prompt_version_id" \
+      -v prompt_version_number="$prompt_version_number" \
+      -v prompt_schema_id="$prompt_schema_id" \
+      -v prompt_document_sha256="$prompt_document_sha256" \
+      -v model_configuration_id="$model_configuration_id" \
+      -v model_head_revision="$model_head_revision" \
+      -v model_version_id="$model_version_id" \
+      -v model_version_number="$model_version_number" \
+      -v model_schema_id="$model_schema_id" \
+      -v model_document_sha256="$model_document_sha256" \
+      -v model_credential_ref="$model_credential_ref" \
+      -v probe_authority="$probe_authority" \
+      -v probe_model="$probe_model" \
+      -v administrator_account_id="$administrator_account_id" \
+      -v student_account_id="$student_account_id" \
+      -v student_username="$student_username" \
+      -v student_number="$student_number" \
+      -v probe_checked_at="$probe_checked_at" \
+      -v accepted_at="$accepted_at" \
+      -v reply_marker="$reply_marker" \
+      -v reply_run_id="$reply_run_id" \
+      -v reply_thread_id="$reply_thread_id" \
+      -v reply_input_message_id="$reply_input_message_id" \
+      -v reply_output_message_id="$reply_output_message_id" \
+      -v reply_sha256="$reply_sha256" \
+      -v reply_event_count="$reply_event_count" \
+      -v auto_run_id="$auto_run_id" \
+      -v auto_thread_id="$auto_thread_id" \
+      -v auto_input_message_id="$auto_input_message_id" \
+      -v auto_output_message_id="$auto_output_message_id" \
+      -v auto_created="$auto_created" \
+      -v auto_sha256="$auto_sha256" \
+      -v auto_event_count="$auto_event_count" <<'SQL'
+/* ascendany-validator:agent-acceptance-receipt */
+WITH prompt_configuration AS (
+SELECT prompt_version.configuration_version_id
+FROM ascendany.configuration_items AS prompt_item
+JOIN ascendany.configuration_versions AS prompt_version
+  ON prompt_version.configuration_item_id = prompt_item.configuration_item_id
+ AND prompt_version.configuration_version_id = prompt_item.active_version_id
+ AND prompt_version.configuration_kind = prompt_item.configuration_kind
+WHERE prompt_item.configuration_key = 'agent.prompt.default'
+  AND prompt_item.configuration_kind = 'prompt'
+  AND prompt_item.public_id = :'prompt_configuration_id'::uuid
+  AND prompt_item.head_revision = :'prompt_head_revision'::bigint
+  AND prompt_version.configuration_version_id = :'prompt_version_id'::bigint
+  AND prompt_version.version_number = :'prompt_version_number'::bigint
+  AND prompt_version.schema_id = :'prompt_schema_id'
+  AND prompt_version.schema_id = 'ascendany.prompt.chat.v1'
+  AND prompt_version.document_sha256 = :'prompt_document_sha256'
+  AND prompt_version.document_sha256 = '1e7fc27df0bedfb43126579204833750e36877940d921cbb01afeb116d9d59f2'
+  AND prompt_version.credential_ref IS NULL
+  AND prompt_version.created_by_role = 'admin'
+), model_configuration AS (
+SELECT model_version.configuration_version_id
+FROM ascendany.configuration_items AS model_item
+JOIN ascendany.configuration_versions AS model_version
+  ON model_version.configuration_item_id = model_item.configuration_item_id
+ AND model_version.configuration_version_id = model_item.active_version_id
+ AND model_version.configuration_kind = model_item.configuration_kind
+CROSS JOIN LATERAL regexp_match(
+  model_version.document ->> 'endpoint',
+  '^https://([a-z0-9][a-z0-9.-]*[a-z0-9]|[a-z0-9]|\[[0-9a-f:.]+\])(:([1-9][0-9]{0,4}))?(/[^?#]*)$'
+) AS endpoint_match(parts)
+WHERE model_item.configuration_key = 'agent.model.default'
+  AND model_item.configuration_kind = 'model_connection'
+  AND model_item.public_id = :'model_configuration_id'::uuid
+  AND model_item.head_revision = :'model_head_revision'::bigint
+  AND model_version.configuration_version_id = :'model_version_id'::bigint
+  AND model_version.version_number = :'model_version_number'::bigint
+  AND model_version.schema_id = :'model_schema_id'
+  AND model_version.schema_id = 'ascendany.model_connection.openai_compatible.v1'
+  AND model_version.document_sha256 = :'model_document_sha256'
+  AND model_version.credential_ref = :'model_credential_ref'
+  AND model_version.created_by_role = 'admin'
+  AND model_version.document = jsonb_build_object(
+    'endpoint', model_version.document ->> 'endpoint',
+    'maxCompletionTokens', 4096,
+    'model', :'probe_model'::text,
+    'timeoutMilliseconds', 120000
+  )
+  AND (endpoint_match.parts)[4] <> '/'
+  AND strpos((endpoint_match.parts)[4], '//') = 0
+  AND COALESCE((endpoint_match.parts)[3], '443')::integer BETWEEN 1 AND 65535
+  AND :'probe_authority' =
+    (endpoint_match.parts)[1] || ':' || COALESCE((endpoint_match.parts)[3], '443')
+), acceptance_identity AS (
+SELECT administrator.account_id AS administrator_account_id,
+       student.account_id AS student_account_id
+FROM ascendany.auth_accounts AS administrator
+CROSS JOIN ascendany.auth_accounts AS student
+WHERE administrator.public_id = :'administrator_account_id'::uuid
+  AND administrator.username = 'admin'
+  AND administrator.role = 'admin'
+  AND administrator.student_number IS NULL
+  AND administrator.disabled_at IS NULL
+  AND student.public_id = :'student_account_id'::uuid
+  AND student.username = :'student_username'
+  AND student.student_number = :'student_number'
+  AND student.role = 'student'
+  AND student.disabled_at IS NULL
+), current_analytics AS (
+SELECT generation.analytics_generation_id, head.head_revision
+FROM ascendany.analytics_head AS head
+JOIN ascendany.analytics_generations AS generation
+  ON generation.analytics_generation_id = head.current_generation_id
+WHERE head.singleton
+  AND head.head_revision > 0
+  AND generation.status = 'succeeded'
+), reply_acceptance AS (
+SELECT run.agent_run_id, run.finished_at
+FROM acceptance_identity AS identity
+CROSS JOIN current_analytics AS analytics
+CROSS JOIN prompt_configuration AS prompt
+CROSS JOIN model_configuration AS model
+JOIN ascendany.agent_runs AS run
+  ON run.owner_account_id = identity.student_account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.session_id = run.request_session_id
+ AND session.account_id = run.owner_account_id
+JOIN ascendany.chat_threads AS thread
+  ON thread.chat_thread_id = run.chat_thread_id
+ AND thread.owner_account_id = run.owner_account_id
+JOIN ascendany.chat_messages AS input
+  ON input.chat_message_id = run.input_message_id
+ AND input.chat_thread_id = run.chat_thread_id
+ AND input.owner_account_id = run.owner_account_id
+JOIN ascendany.chat_messages AS output
+  ON output.chat_message_id = run.output_message_id
+ AND output.agent_run_id = run.agent_run_id
+ AND output.chat_thread_id = run.chat_thread_id
+ AND output.owner_account_id = run.owner_account_id
+WHERE run.public_id = :'reply_run_id'::uuid
+  AND thread.public_id = :'reply_thread_id'::uuid
+  AND input.public_id = :'reply_input_message_id'::uuid
+  AND output.public_id = :'reply_output_message_id'::uuid
+  AND thread.thread_kind = 'conversation'
+  AND run.run_kind = 'reply'
+  AND run.input_message_kind = 'user'
+  AND input.message_kind = 'user'
+  AND input.author_session_id = run.request_session_id
+  AND output.message_kind = 'assistant'
+  AND run.status = 'succeeded'
+  AND run.error_code IS NULL
+  AND run.error_detail IS NULL
+  AND run.prompt_configuration_version_id = prompt.configuration_version_id
+  AND run.model_configuration_version_id = model.configuration_version_id
+  AND run.analytics_generation_id = analytics.analytics_generation_id
+  AND run.created_at = input.created_at
+  AND run.created_at >= :'probe_checked_at'::timestamptz
+  AND run.started_at >= run.created_at
+  AND run.finished_at >= run.started_at
+  AND run.finished_at = output.created_at
+  AND run.finished_at <= :'accepted_at'::timestamptz
+  AND input.content::jsonb = jsonb_build_object(
+    'currentUser', jsonb_build_object(
+      'content', :'reply_marker'::text, 'messageIndex', 0,
+      'ptaNickname', '', 'studentId', ''
+    ),
+    'messages', jsonb_build_array(jsonb_build_object(
+      'content', :'reply_marker'::text, 'reasoningContent', NULL, 'role', 'user'
+    )),
+    'notes', jsonb_build_object(
+      'content', E'# Production acceptance\n\nAwaiting the current learning-progress summary.',
+      'locked', false,
+      'title', 'Production acceptance'
+    ),
+    'role', jsonb_build_object('id', '', 'name', '', 'systemPrompt', ''),
+    'schema', 'ascendany.agent.frontend-context.v1',
+    'summary', ''
+  )
+  AND encode(sha256(convert_to(output.content, 'UTF8')), 'hex') = :'reply_sha256'
+  AND :'reply_event_count'::bigint = 8 +
+    CASE WHEN COALESCE(output.reasoning_content, '') = '' THEN 0 ELSE 1 END
+  AND (SELECT count(*) FROM ascendany.agent_tool_calls AS tool
+       WHERE tool.agent_run_id = run.agent_run_id) = 2
+  AND EXISTS (
+    SELECT 1
+    FROM ascendany.agent_tool_calls AS tool
+    WHERE tool.agent_run_id = run.agent_run_id
+      AND tool.tool_sequence = 1
+      AND tool.tool_name = 'analytics.get_self'
+      AND tool.arguments_schema = 'ascendany.agent_tool.analytics_get_self_arguments.v1'
+      AND tool.arguments = '{"historyLimit":50}'::jsonb
+      AND tool.arguments_sha256 = '6f074b108ee51e8bf0b7ef1bbbe4bab2ca6bd4b01b5817dc49a8348f99d4f09b'
+      AND tool.result_schema = 'ascendany.agent_tool.analytics_get_self_result.v1'
+      AND tool.result ->> 'state' = 'ready'
+      AND (tool.result ->> 'headRevision')::bigint = analytics.head_revision
+      AND tool.outcome = 'succeeded'
+      AND tool.error_code IS NULL
+      AND tool.started_at >= run.started_at
+      AND tool.finished_at >= tool.started_at
+      AND tool.finished_at <= run.finished_at
+  )
+  AND EXISTS (
+    SELECT 1
+    FROM ascendany.agent_tool_calls AS tool
+    WHERE tool.agent_run_id = run.agent_run_id
+      AND tool.tool_sequence = 2
+      AND tool.tool_name = 'update_notes'
+      AND tool.arguments_schema = 'ascendany.agent_tool.update_notes_arguments.v1'
+      AND tool.arguments ->> 'mode' IN ('patch', 'replace')
+      AND (
+        (tool.arguments ->> 'mode' = 'patch' AND
+         jsonb_object_length(tool.arguments) = 2 AND
+         jsonb_typeof(tool.arguments -> 'patch') = 'string')
+        OR
+        (tool.arguments ->> 'mode' = 'replace' AND
+         jsonb_object_length(tool.arguments) = 2 AND
+         jsonb_typeof(tool.arguments -> 'content') = 'string')
+      )
+      AND tool.result_schema = 'ascendany.agent_tool.update_notes_result.v1'
+      AND tool.result ->> 'ok' = 'true'
+      AND tool.result ->> 'mode' = tool.arguments ->> 'mode'
+      AND (tool.result ->> 'length')::bigint >= 0
+      AND tool.result ->> 'previousSha256' = encode(
+        sha256(convert_to(E'# Production acceptance\n\nAwaiting the current learning-progress summary.', 'UTF8')),
+        'hex'
+      )
+      AND tool.result ->> 'nextSha256' = encode(
+        sha256(convert_to(tool.result ->> 'updatedNotes', 'UTF8')),
+        'hex'
+      )
+      AND tool.outcome = 'succeeded'
+      AND tool.error_code IS NULL
+      AND tool.started_at >= run.started_at
+      AND tool.finished_at >= tool.started_at
+      AND tool.finished_at <= run.finished_at
+  )
+  AND (SELECT count(*) FROM ascendany.agent_run_events AS event
+       WHERE event.agent_run_id = run.agent_run_id) =
+      (SELECT max(event.event_sequence) FROM ascendany.agent_run_events AS event
+       WHERE event.agent_run_id = run.agent_run_id)
+  AND (SELECT count(*) FROM ascendany.agent_run_events AS event
+       WHERE event.agent_run_id = run.agent_run_id
+         AND event.event_type IN ('claimed', 'reclaimed')) = run.attempt_count
+  AND EXISTS (
+    SELECT 1 FROM ascendany.agent_run_events AS event
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_sequence = 1
+      AND event.event_type = 'queued'
+      AND event.payload = jsonb_build_object(
+        'analyticsHeadRevision', analytics.head_revision,
+        'messageSequence', input.message_sequence,
+        'model', :'probe_model'::text,
+        'provider', 'openai_compatible',
+        'requestMode', 'chat_completions',
+        'runKind', 'reply'
+      )
+  )
+  AND (SELECT count(*)
+       FROM ascendany.agent_run_events AS event
+       JOIN ascendany.agent_tool_calls AS tool
+         ON tool.agent_run_id = event.agent_run_id
+        AND event.payload = jsonb_build_object(
+          'toolCallKey', tool.tool_call_key,
+          'toolName', tool.tool_name,
+          'toolSequence', tool.tool_sequence
+        )
+       WHERE event.agent_run_id = run.agent_run_id
+         AND event.event_type = 'tool.succeeded') = 2
+  AND EXISTS (
+    SELECT 1
+    FROM ascendany.agent_run_events AS event
+    JOIN ascendany.agent_tool_calls AS tool
+      ON tool.agent_run_id = event.agent_run_id
+     AND tool.tool_sequence = 2
+     AND tool.tool_name = 'update_notes'
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_type = 'notes_update'
+      AND event.payload = jsonb_build_object(
+        'mode', tool.result ->> 'mode',
+        'next', tool.result ->> 'updatedNotes',
+        'patch', CASE WHEN tool.result ->> 'mode' = 'patch' THEN tool.arguments -> 'patch' ELSE 'null'::jsonb END,
+        'previous', E'# Production acceptance\n\nAwaiting the current learning-progress summary.',
+        'toolCallKey', tool.tool_call_key,
+        'toolName', tool.tool_name,
+        'toolSequence', tool.tool_sequence
+      )
+  )
+  AND EXISTS (
+    SELECT 1 FROM ascendany.agent_run_events AS event
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_sequence = (
+        SELECT max(terminal.event_sequence)
+        FROM ascendany.agent_run_events AS terminal
+        WHERE terminal.agent_run_id = run.agent_run_id
+      )
+      AND event.event_type = 'completed'
+      AND event.payload = jsonb_build_object(
+        'messageId', output.public_id::text,
+        'messageSequence', output.message_sequence
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM ascendany.agent_run_events AS event
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_type NOT IN ('queued', 'claimed', 'reclaimed', 'notes_update', 'tool.succeeded', 'completed')
+  )
+), auto_acceptance AS (
+SELECT run.agent_run_id
+FROM acceptance_identity AS identity
+CROSS JOIN current_analytics AS analytics
+CROSS JOIN prompt_configuration AS prompt
+CROSS JOIN model_configuration AS model
+CROSS JOIN reply_acceptance AS reply
+JOIN ascendany.agent_runs AS run
+  ON run.owner_account_id = identity.student_account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.session_id = run.request_session_id
+ AND session.account_id = run.owner_account_id
+JOIN ascendany.chat_threads AS thread
+  ON thread.chat_thread_id = run.chat_thread_id
+ AND thread.owner_account_id = run.owner_account_id
+JOIN ascendany.chat_messages AS input
+  ON input.chat_message_id = run.input_message_id
+ AND input.chat_thread_id = run.chat_thread_id
+ AND input.owner_account_id = run.owner_account_id
+JOIN ascendany.chat_messages AS output
+  ON output.chat_message_id = run.output_message_id
+ AND output.agent_run_id = run.agent_run_id
+ AND output.chat_thread_id = run.chat_thread_id
+ AND output.owner_account_id = run.owner_account_id
+WHERE run.public_id = :'auto_run_id'::uuid
+  AND thread.public_id = :'auto_thread_id'::uuid
+  AND input.public_id = :'auto_input_message_id'::uuid
+  AND output.public_id = :'auto_output_message_id'::uuid
+  AND thread.thread_kind = 'auto_analysis'
+  AND run.run_kind = 'auto_analysis'
+  AND run.input_message_kind = 'auto_analysis_request'
+  AND run.auto_analysis_exam_id IS NOT NULL
+  AND run.auto_analysis_role_id = 'xiaoD'
+  AND input.message_kind = 'auto_analysis_request'
+  AND input.author_session_id = run.request_session_id
+  AND output.message_kind = 'assistant'
+  AND run.status = 'succeeded'
+  AND run.error_code IS NULL
+  AND run.error_detail IS NULL
+  AND run.prompt_configuration_version_id = prompt.configuration_version_id
+  AND run.model_configuration_version_id = model.configuration_version_id
+  AND run.analytics_generation_id = analytics.analytics_generation_id
+  AND run.created_at = input.created_at
+  AND run.started_at >= run.created_at
+  AND run.finished_at >= run.started_at
+  AND run.finished_at = output.created_at
+  AND run.finished_at <= :'accepted_at'::timestamptz
+  AND (
+    (:'auto_created'::boolean AND run.created_at >= reply.finished_at)
+    OR (NOT :'auto_created'::boolean AND run.created_at < :'probe_checked_at'::timestamptz)
+  )
+  AND input.content::jsonb = jsonb_build_object(
+    'context', jsonb_build_object(
+      'latestExamId', run.auto_analysis_exam_id::text,
+      'notes', '', 'notesLocked', false, 'notesTitle', '',
+      'ptaNickname', '', 'roleId', run.auto_analysis_role_id,
+      'roleName', '', 'roleSystemPrompt', '', 'studentId', ''
+    ),
+    'instruction', 'Analyze the student''s current published analytics snapshot and provide a concise, actionable progress review.',
+    'schema', 'ascendany.agent.auto-analysis.frontend-context.v1'
+  )
+  AND encode(sha256(convert_to(output.content, 'UTF8')), 'hex') = :'auto_sha256'
+  AND :'auto_event_count'::bigint = 5 +
+    CASE WHEN COALESCE(output.reasoning_content, '') = '' THEN 0 ELSE 1 END
+  AND (SELECT count(*) FROM ascendany.agent_tool_calls AS tool
+       WHERE tool.agent_run_id = run.agent_run_id) = 1
+  AND EXISTS (
+    SELECT 1
+    FROM ascendany.agent_tool_calls AS tool
+    WHERE tool.agent_run_id = run.agent_run_id
+      AND tool.tool_sequence = 1
+      AND tool.tool_name = 'analytics.get_self'
+      AND tool.arguments_schema = 'ascendany.agent_tool.analytics_get_self_arguments.v1'
+      AND tool.arguments = '{"historyLimit":50}'::jsonb
+      AND tool.arguments_sha256 = '6f074b108ee51e8bf0b7ef1bbbe4bab2ca6bd4b01b5817dc49a8348f99d4f09b'
+      AND tool.result_schema = 'ascendany.agent_tool.analytics_get_self_result.v1'
+      AND tool.result ->> 'state' = 'ready'
+      AND (tool.result ->> 'headRevision')::bigint = analytics.head_revision
+      AND tool.outcome = 'succeeded'
+      AND tool.error_code IS NULL
+      AND tool.started_at >= run.started_at
+      AND tool.finished_at >= tool.started_at
+      AND tool.finished_at <= run.finished_at
+  )
+  AND (SELECT count(*) FROM ascendany.agent_run_events AS event
+       WHERE event.agent_run_id = run.agent_run_id) =
+      (SELECT max(event.event_sequence) FROM ascendany.agent_run_events AS event
+       WHERE event.agent_run_id = run.agent_run_id)
+  AND (SELECT count(*) FROM ascendany.agent_run_events AS event
+       WHERE event.agent_run_id = run.agent_run_id
+         AND event.event_type IN ('claimed', 'reclaimed')) = run.attempt_count
+  AND EXISTS (
+    SELECT 1 FROM ascendany.agent_run_events AS event
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_sequence = 1
+      AND event.event_type = 'queued'
+      AND event.payload = jsonb_build_object(
+        'analyticsHeadRevision', analytics.head_revision,
+        'autoAnalysisExamId', run.auto_analysis_exam_id::text,
+        'autoAnalysisRoleId', run.auto_analysis_role_id,
+        'messageSequence', input.message_sequence,
+        'model', :'probe_model'::text,
+        'provider', 'openai_compatible',
+        'requestMode', 'chat_completions',
+        'runKind', 'auto_analysis'
+      )
+  )
+  AND EXISTS (
+    SELECT 1 FROM ascendany.agent_run_events AS event
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_type = 'tool.succeeded'
+      AND event.payload = (
+        SELECT jsonb_build_object(
+          'toolCallKey', tool.tool_call_key,
+          'toolName', tool.tool_name,
+          'toolSequence', tool.tool_sequence
+        )
+        FROM ascendany.agent_tool_calls AS tool
+        WHERE tool.agent_run_id = run.agent_run_id
+      )
+  )
+  AND EXISTS (
+    SELECT 1 FROM ascendany.agent_run_events AS event
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_sequence = (
+        SELECT max(terminal.event_sequence)
+        FROM ascendany.agent_run_events AS terminal
+        WHERE terminal.agent_run_id = run.agent_run_id
+      )
+      AND event.event_type = 'completed'
+      AND event.payload = jsonb_build_object(
+        'messageId', output.public_id::text,
+        'messageSequence', output.message_sequence
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM ascendany.agent_run_events AS event
+    WHERE event.agent_run_id = run.agent_run_id
+      AND event.event_type NOT IN ('queued', 'claimed', 'reclaimed', 'tool.succeeded', 'completed')
+  )
+)
+SELECT count(*)
+FROM prompt_configuration
+CROSS JOIN model_configuration
+CROSS JOIN acceptance_identity
+CROSS JOIN current_analytics
+CROSS JOIN reply_acceptance
+CROSS JOIN auto_acceptance
+SQL
+  } 2>/dev/null)"; then
+    database_match=""
+  fi
+  if [[ "$database_match" != 1 ]]; then
+    fail "Agent acceptance receipt does not match active configuration, account, analytics, run, message, tool, and event provenance"
+    return
+  fi
+
+  if (( failures == failures_before )); then
+    pass "Agent acceptance receipt is fresh, release/provider-bound, and matches immutable database execution provenance"
   fi
 }
 
@@ -4672,7 +5401,7 @@ LEFT JOIN ascendany.configuration_versions AS catalog_version
 WHERE head.singleton
 SQL
   )"; then
-    fail "durable recommendation model binding query failed; schema v7 model activation is required"
+    fail "durable recommendation model binding query failed; schema v10 model activation is required"
     return
   fi
   IFS='|' read -r stored_model_id stored_sha stored_size stored_mode stored_schema stored_purpose stored_algorithm stored_contract \
@@ -4894,6 +5623,7 @@ main() {
   check_postgres_schema_fingerprint
   check_initial_database_state
   check_admin_bootstrap_database
+  check_agent_acceptance_receipt
   check_recommendation_model_binding
   check_catalog_publication_binding
   check_forward_database_state

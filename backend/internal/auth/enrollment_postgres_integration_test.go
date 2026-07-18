@@ -363,7 +363,7 @@ WHERE enrollment.public_id = $1::uuid
 			_ = blockerTransaction.Rollback(context.Background())
 		}
 	}()
-	if _, err := blockerTransaction.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, enrollmentAdvisoryLock); err != nil {
+	if _, err := blockerTransaction.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, studentAccountProvisioningAdvisoryLock); err != nil {
 		t.Fatal(err)
 	}
 	expiringClaim := make(chan error, 1)

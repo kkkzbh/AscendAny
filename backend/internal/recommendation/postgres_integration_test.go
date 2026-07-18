@@ -72,7 +72,7 @@ func TestPostgresRecommendationCatalogPublicationFencesAnalyticsReview(t *testin
 	if err != nil || h1Binding.HeadRevision != 1 {
 		t.Fatalf("initial H1 runtime binding=%#v error=%v", h1Binding, err)
 	}
-	h1Repository, err := NewPostgresRepository(runtimePool, loadedModel.Model, h1Binding)
+	h1Repository, err := NewPostgresRepository(runtimePool, loadedModel.Model, h1Binding, testAnalyticsConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ WHERE singleton`).Scan(&pendingCleared); err != nil {
 	if _, err := modelReleases.RequireCurrent(ctx, loadedModel, targetApplication); err != nil {
 		t.Fatalf("H2 startup binding rejected consumed publication: %v", err)
 	}
-	h2Repository, err := NewPostgresRepository(runtimePool, loadedModel.Model, binding)
+	h2Repository, err := NewPostgresRepository(runtimePool, loadedModel.Model, binding, testAnalyticsConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1054,7 +1054,7 @@ SELECT (SELECT count(*) FROM ascendany.recommendation_model_releases),
 	if releaseCount != 1 || activationCount != 1 || headCount != 1 || storedHeadRevision != 1 {
 		t.Fatalf("releaseCount=%d activationCount=%d headCount=%d headRevision=%d", releaseCount, activationCount, headCount, storedHeadRevision)
 	}
-	repository, err := NewPostgresRepository(pool, loaded.Model, binding)
+	repository, err := NewPostgresRepository(pool, loaded.Model, binding, testAnalyticsConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}

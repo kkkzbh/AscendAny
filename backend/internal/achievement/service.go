@@ -8,6 +8,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/analytics"
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
@@ -20,6 +21,8 @@ var (
 
 type Repository interface {
 	LoadSelf(context.Context, SelfQuery) (RepositorySnapshot, error)
+	LoadByStudentNumber(context.Context, StudentNumberQuery) (RepositorySnapshot, error)
+	LoadByStudentIdentity(context.Context, StudentIdentityQuery) (RepositorySnapshot, error)
 }
 
 type Service struct {
@@ -38,6 +41,26 @@ func (service *Service) GetSelf(ctx context.Context, query SelfQuery) (Result, e
 		return Result{}, err
 	}
 	snapshot, err := service.repository.LoadSelf(ctx, query)
+	return validatedResult(snapshot, err)
+}
+
+func (service *Service) GetByStudentNumber(ctx context.Context, query StudentNumberQuery) (Result, error) {
+	if err := validateStudentNumberQuery(ctx, query); err != nil {
+		return Result{}, err
+	}
+	snapshot, err := service.repository.LoadByStudentNumber(ctx, query)
+	return validatedResult(snapshot, err)
+}
+
+func (service *Service) GetByStudentIdentity(ctx context.Context, query StudentIdentityQuery) (Result, error) {
+	if err := validateStudentIdentityQuery(ctx, query); err != nil {
+		return Result{}, err
+	}
+	snapshot, err := service.repository.LoadByStudentIdentity(ctx, query)
+	return validatedResult(snapshot, err)
+}
+
+func validatedResult(snapshot RepositorySnapshot, err error) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
@@ -63,6 +86,30 @@ func validateSelfQuery(ctx context.Context, query SelfQuery) error {
 	}
 	if principal.Role != auth.RoleStudent {
 		return achievementError(ErrorForbidden, "validate achievement self query", errors.New("student role is required"))
+	}
+	return nil
+}
+
+func validateStudentNumberQuery(ctx context.Context, query StudentNumberQuery) error {
+	if ctx == nil {
+		return achievementError(ErrorInvalidQuery, "validate achievement student-number query", errors.New("context is required"))
+	}
+	studentNumber := query.StudentNumber
+	if len(studentNumber) < auth.MinStudentNumberBytes || len(studentNumber) > auth.MaxStudentNumberBytes ||
+		strings.TrimSpace(studentNumber) != studentNumber || !utf8.ValidString(studentNumber) || strings.IndexByte(studentNumber, 0) >= 0 {
+		return achievementError(ErrorInvalidQuery, "validate achievement student-number query", errors.New("student number is invalid"))
+	}
+	return nil
+}
+
+func validateStudentIdentityQuery(ctx context.Context, query StudentIdentityQuery) error {
+	if err := validateStudentNumberQuery(ctx, StudentNumberQuery{StudentNumber: query.StudentNumber}); err != nil {
+		return err
+	}
+	ptaNickname := query.PTANickname
+	if len(ptaNickname) < auth.MinPTANicknameBytes || len(ptaNickname) > auth.MaxPTANicknameBytes ||
+		strings.TrimSpace(ptaNickname) != ptaNickname || !utf8.ValidString(ptaNickname) || strings.IndexByte(ptaNickname, 0) >= 0 {
+		return achievementError(ErrorInvalidQuery, "validate achievement student identity query", errors.New("PTA nickname is invalid"))
 	}
 	return nil
 }

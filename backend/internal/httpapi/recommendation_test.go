@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/health"
 	"github.com/kkkzbh/AscendAny/backend/internal/recommendation"
@@ -123,6 +124,43 @@ func TestRecommendationHTTPRejectsInvalidDomainOutputAndRemovedTrainingRoutes(t 
 	}
 }
 
+func TestRecommendationHTTPRejectsInvalidKnowledgeActivityProjection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*recommendation.CurrentRecommendation)
+	}{
+		{name: "missing point", mutate: func(value *recommendation.CurrentRecommendation) {
+			value.KnowledgeActivity = value.KnowledgeActivity[:1]
+		}},
+		{name: "duplicate point", mutate: func(value *recommendation.CurrentRecommendation) {
+			value.KnowledgeActivity[1].KnowledgePointID = value.KnowledgeActivity[0].KnowledgePointID
+		}},
+		{name: "correct exceeds attempted", mutate: func(value *recommendation.CurrentRecommendation) {
+			value.KnowledgeActivity[0].Correct = value.KnowledgeActivity[0].Attempted + 1
+		}},
+		{name: "non canonical recent date", mutate: func(value *recommendation.CurrentRecommendation) {
+			value.KnowledgeActivity[0].RecentSeries[0].Date = "2026-7-18"
+		}},
+		{name: "non UTC last attempt", mutate: func(value *recommendation.CurrentRecommendation) {
+			last := time.Date(2026, 7, 18, 16, 30, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+			value.KnowledgeActivity[0].LastTriedAt = &last
+		}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			value := testFreshRecommendation(recommendation.RecommendationResultReady)
+			test.mutate(&value)
+			if validCurrentRecommendation(value) {
+				t.Fatalf("invalid activity was accepted: %#v", value.KnowledgeActivity)
+			}
+		})
+	}
+}
+
 func TestRecommendationReviewContextUsesCanonicalStringGenerationID(t *testing.T) {
 	t.Parallel()
 
@@ -220,9 +258,17 @@ func testFreshRecommendation(status recommendation.RecommendationResultStatus) r
 	generationID := "73"
 	model := testRecommendationModel()
 	result := testRecommendationResult(status)
+	lastTriedAt := time.Date(2026, 7, 18, 8, 30, 0, 0, time.UTC)
 	return recommendation.CurrentRecommendation{
 		State: recommendation.RecommendationFresh, CurrentAnalyticsGenerationID: &generationID,
 		CurrentAnalyticsHeadRevision: 9, ModelHeadRevision: 4, Model: &model, Result: &result,
+		KnowledgeActivity: []recommendation.RecommendationKnowledgeActivity{
+			{
+				KnowledgePointID: "arrays", Attempted: 3, Correct: 2, LastTriedAt: &lastTriedAt,
+				RecentSeries: []recommendation.RecommendationKnowledgeActivityDay{{Date: "2026-07-18", Attempted: 4, Correct: 2}},
+			},
+			{KnowledgePointID: "graphs", Attempted: 1, Correct: 0, RecentSeries: []recommendation.RecommendationKnowledgeActivityDay{}},
+		},
 	}
 }
 

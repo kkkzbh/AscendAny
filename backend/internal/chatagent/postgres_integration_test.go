@@ -50,7 +50,7 @@ WHERE (status = 'queued' AND next_attempt_at <= clock_timestamp())
 		json.RawMessage(`{"instruction":"version-one"}`))
 	modelKey, _ := seedAgentConfiguration(t, ctx, pool, adminAccountID, adminSessionID, suffix, "model_connection", stringPointer("agent.integration.credential"),
 		json.RawMessage(`{"model":"deterministic"}`))
-	analyticsGenerationID, analyticsHeadRevision := seedPublishedAnalytics(t, ctx, pool, suffix)
+	analyticsGenerationID, analyticsHeadRevision, analyticsExamPublicID := seedPublishedAnalytics(t, ctx, pool, suffix)
 	repository, err := NewPostgresRepository(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +66,7 @@ WHERE (status = 'queued' AND next_attempt_at <= clock_timestamp())
 	input := EnqueueInput{
 		Principal: principal, ThreadID: thread.ID, ClientRequestID: mustIntegrationUUID(t), Kind: RunReply,
 		Content: "Explain my latest progress.", PromptConfigurationKey: promptKey, ModelConfigurationKey: modelKey,
+		ExpectedAnalyticsHeadRevision: chatAgentTestInt64Pointer(analyticsHeadRevision),
 	}
 
 	type enqueueAttempt struct {
@@ -88,6 +89,42 @@ WHERE (status = 'queued' AND next_attempt_at <= clock_timestamp())
 	enqueued := first.result
 	if !enqueued.Created {
 		enqueued = second.result
+	}
+	var storedReplyAnalyticsGenerationID, storedReplyAnalyticsHeadRevision int64
+	if err := pool.QueryRow(ctx, `
+SELECT run.analytics_generation_id,
+       (queued.payload ->> 'analyticsHeadRevision')::bigint
+FROM ascendany.agent_runs AS run
+JOIN ascendany.agent_run_events AS queued
+  ON queued.agent_run_id = run.agent_run_id
+ AND queued.event_sequence = 1
+ AND queued.event_type = 'queued'
+WHERE run.public_id = $1::uuid`, enqueued.Run.ID).Scan(
+		&storedReplyAnalyticsGenerationID,
+		&storedReplyAnalyticsHeadRevision,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if storedReplyAnalyticsGenerationID != analyticsGenerationID || storedReplyAnalyticsHeadRevision != analyticsHeadRevision {
+		t.Fatalf(
+			"reply analytics binding=%d/%d want=%d/%d",
+			storedReplyAnalyticsGenerationID,
+			storedReplyAnalyticsHeadRevision,
+			analyticsGenerationID,
+			analyticsHeadRevision,
+		)
+	}
+	advancedAnalyticsGenerationID, advancedAnalyticsHeadRevision := advancePublishedAnalytics(t, ctx, pool, suffix)
+	replayedAfterHeadAdvance, err := service.Enqueue(ctx, input)
+	if err != nil || replayedAfterHeadAdvance.Created || replayedAfterHeadAdvance.Run.ID != enqueued.Run.ID ||
+		replayedAfterHeadAdvance.Message.ID != enqueued.Message.ID {
+		t.Fatalf("reply replay after analytics head advance=%#v error=%v", replayedAfterHeadAdvance, err)
+	}
+	freshStaleAnalytics := input
+	freshStaleAnalytics.ClientRequestID = mustIntegrationUUID(t)
+	freshStaleAnalytics.Content = "Reject a fresh run against a stale analytics head."
+	if _, err := service.Enqueue(ctx, freshStaleAnalytics); CodeOf(err) != ErrorAnalyticsConflict {
+		t.Fatalf("fresh stale analytics enqueue error=%v code=%q", err, CodeOf(err))
 	}
 	notesRepository, err := agentnotes.NewPostgresRepository(pool)
 	if err != nil {
@@ -129,12 +166,21 @@ WHERE (status = 'queued' AND next_attempt_at <= clock_timestamp())
 	if _, err := service.Enqueue(ctx, changed); CodeOf(err) != ErrorIdempotencyConflict {
 		t.Fatalf("changed replay error=%v code=%q", err, CodeOf(err))
 	}
+	changedRevision := input
+	changedRevision.ExpectedAnalyticsHeadRevision = chatAgentTestInt64Pointer(advancedAnalyticsHeadRevision)
+	if _, err := service.Enqueue(ctx, changedRevision); CodeOf(err) != ErrorIdempotencyConflict {
+		t.Fatalf("changed reply analytics revision error=%v code=%q", err, CodeOf(err))
+	}
 
-	mismatchedRevision := analyticsHeadRevision + 1
+	mismatchedRevision := advancedAnalyticsHeadRevision + 1
 	autoInput := AutoAnalysisInput{
 		Principal: principal, PromptConfigurationKey: promptKey, ModelConfigurationKey: modelKey,
 		ExpectedAnalyticsHeadRevision: mismatchedRevision,
+		FrontendContext:               testAutoAnalysisFrontendContext(),
 	}
+	autoInput.FrontendContext.LatestExamID = analyticsExamPublicID
+	autoInput.Identity = AutoAnalysisIdentity{ExamID: autoInput.FrontendContext.LatestExamID, RoleID: autoInput.FrontendContext.RoleID}
+	autoInputContent := mustAutoAnalysisInputContent(t, autoInput.FrontendContext)
 	if _, err := service.EnqueueAutoAnalysis(ctx, autoInput); CodeOf(err) != ErrorAnalyticsConflict {
 		t.Fatalf("auto-analysis mismatch error=%v code=%q", err, CodeOf(err))
 	}
@@ -196,6 +242,8 @@ WHERE agent_run_id = $1`, staleClaim.DatabaseID); err != nil || tag.RowsAffected
 	}
 	requests := provider.Requests()
 	if len(requests) != 2 || string(requests[0].Prompt.Document) != `{"instruction":"version-one"}` || len(requests[0].Conversation) != 1 ||
+		requests[0].Analytics == nil || requests[0].Analytics.GenerationDatabaseID != analyticsGenerationID ||
+		requests[0].Analytics.HeadRevision != analyticsHeadRevision || requests[0].AutoAnalysisContext != nil ||
 		len(requests[1].ToolCalls) != 1 || requests[1].ToolCalls[0].Sequence != 1 {
 		t.Fatalf("provider requests=%#v", requests)
 	}
@@ -219,7 +267,7 @@ WHERE agent_run_id = $1`, staleClaim.DatabaseID); err != nil || tag.RowsAffected
 			t.Fatalf("events=%#v", events)
 		}
 	}
-	autoHeadRevision := analyticsHeadRevision
+	autoHeadRevision := advancedAnalyticsHeadRevision
 	autoInput.ExpectedAnalyticsHeadRevision = autoHeadRevision
 	secondDeviceInput := autoInput
 	secondDeviceInput.Principal = seedAdditionalStudentSession(t, ctx, pool, principal)
@@ -259,10 +307,10 @@ JOIN ascendany.auth_accounts AS account
   ON account.account_id = run.owner_account_id
 WHERE account.public_id = $1::uuid
   AND run.analytics_generation_id = $2
-  AND run.run_kind = 'auto_analysis'`, principal.AccountID, analyticsGenerationID).Scan(&autoRunCount); err != nil {
+  AND run.run_kind = 'auto_analysis'`, principal.AccountID, advancedAnalyticsGenerationID).Scan(&autoRunCount); err != nil {
 		t.Fatal(err)
 	}
-	if autoThreadCount != 1 || autoRunCount != 1 || autoResult.Message.Content != AutoAnalysisInputContent {
+	if autoThreadCount != 1 || autoRunCount != 1 || autoResult.Message.Content != autoInputContent {
 		t.Fatalf("auto thread count=%d run count=%d result=%#v", autoThreadCount, autoRunCount, autoResult)
 	}
 	_, err = pool.Exec(ctx, `
@@ -279,7 +327,7 @@ JOIN ascendany.auth_sessions AS session
   ON session.account_id = account.account_id
 WHERE thread.public_id = $2::uuid
   AND account.public_id = $3::uuid
-  AND session.public_id = $4::uuid`, mustIntegrationUUID(t), thread.ID, principal.AccountID, principal.SessionID, AutoAnalysisInputContent)
+  AND session.public_id = $4::uuid`, mustIntegrationUUID(t), thread.ID, principal.AccountID, principal.SessionID, autoInputContent)
 	assertChatPostgresCode(t, err, "23514")
 	_, err = pool.Exec(ctx, `
 INSERT INTO ascendany.chat_messages (
@@ -287,7 +335,27 @@ INSERT INTO ascendany.chat_messages (
     message_kind, content, author_session_id
 )
 SELECT $1::uuid, thread.chat_thread_id, account.account_id, thread.head_revision + 1,
-       'auto_analysis_request', 'client-owned automatic analysis content', session.session_id
+	       'auto_analysis_request', 'Analyze the student''s current published analytics snapshot and provide a concise, actionable progress review.', session.session_id
+FROM ascendany.chat_threads AS thread
+JOIN ascendany.auth_accounts AS account
+  ON account.account_id = thread.owner_account_id
+JOIN ascendany.auth_sessions AS session
+  ON session.account_id = account.account_id
+WHERE thread.public_id = $2::uuid
+	  AND account.public_id = $3::uuid
+	  AND session.public_id = $4::uuid`, mustIntegrationUUID(t), autoResult.Run.ThreadID, principal.AccountID, principal.SessionID)
+	assertChatPostgresCode(t, err, "23514")
+	invalidTypedAutoContent := strings.Replace(autoInputContent, `"notesLocked":true`, `"notesLocked":"true"`, 1)
+	if invalidTypedAutoContent == autoInputContent {
+		t.Fatal("automatic analysis fixture has no notesLocked boolean")
+	}
+	_, err = pool.Exec(ctx, `
+INSERT INTO ascendany.chat_messages (
+    public_id, chat_thread_id, owner_account_id, message_sequence,
+    message_kind, content, author_session_id
+)
+SELECT $1::uuid, thread.chat_thread_id, account.account_id, thread.head_revision + 1,
+       'auto_analysis_request', $5, session.session_id
 FROM ascendany.chat_threads AS thread
 JOIN ascendany.auth_accounts AS account
   ON account.account_id = thread.owner_account_id
@@ -295,22 +363,22 @@ JOIN ascendany.auth_sessions AS session
   ON session.account_id = account.account_id
 WHERE thread.public_id = $2::uuid
   AND account.public_id = $3::uuid
-  AND session.public_id = $4::uuid`, mustIntegrationUUID(t), autoResult.Run.ThreadID, principal.AccountID, principal.SessionID)
+  AND session.public_id = $4::uuid`, mustIntegrationUUID(t), autoResult.Run.ThreadID, principal.AccountID, principal.SessionID, invalidTypedAutoContent)
 	assertChatPostgresCode(t, err, "23514")
 	boundAnalytics, err := runtimeTools.Execute(ctx, ToolRequest{
 		RunID: autoResult.Run.ID, StudentNumber: "chat-" + suffix,
-		Analytics: &AnalyticsSnapshot{GenerationDatabaseID: analyticsGenerationID, HeadRevision: analyticsHeadRevision},
+		Analytics: &AnalyticsSnapshot{GenerationDatabaseID: advancedAnalyticsGenerationID, HeadRevision: advancedAnalyticsHeadRevision},
 		Key:       "integration:analytics:self", Name: ToolAnalyticsGetSelf, ArgumentsSchema: AnalyticsGetSelfArgumentsSchema,
 		Arguments: json.RawMessage(`{"historyLimit":10}`),
 	})
-	if err != nil || boundAnalytics.Outcome != ToolSucceeded || !strings.Contains(string(boundAnalytics.Result), fmt.Sprintf(`"headRevision":%d`, analyticsHeadRevision)) ||
+	if err != nil || boundAnalytics.Outcome != ToolSucceeded || !strings.Contains(string(boundAnalytics.Result), fmt.Sprintf(`"headRevision":%d`, advancedAnalyticsHeadRevision)) ||
 		!strings.Contains(string(boundAnalytics.Result), `"rating":1500`) || !strings.Contains(string(boundAnalytics.Result), `"state":"ready"`) ||
 		strings.Contains(string(boundAnalytics.Result), `"examId"`) || strings.Contains(string(boundAnalytics.Result), `"snapshotId"`) {
 		t.Fatalf("bound analytics=%#v error=%v", boundAnalytics, err)
 	}
 	if _, err := runtimeTools.Execute(ctx, ToolRequest{
 		RunID: autoResult.Run.ID, StudentNumber: "foreign-student",
-		Analytics: &AnalyticsSnapshot{GenerationDatabaseID: analyticsGenerationID, HeadRevision: analyticsHeadRevision},
+		Analytics: &AnalyticsSnapshot{GenerationDatabaseID: advancedAnalyticsGenerationID, HeadRevision: advancedAnalyticsHeadRevision},
 		Key:       "integration:analytics:foreign", Name: ToolAnalyticsGetSelf, ArgumentsSchema: AnalyticsGetSelfArgumentsSchema,
 		Arguments: json.RawMessage(`{"historyLimit":10}`),
 	}); CodeOf(err) != ErrorPrincipalRejected {
@@ -319,13 +387,22 @@ WHERE thread.public_id = $2::uuid
 	changedAutoRevision := autoHeadRevision + 1
 	changedAuto := autoInput
 	changedAuto.ExpectedAnalyticsHeadRevision = changedAutoRevision
-	if _, err := service.EnqueueAutoAnalysis(ctx, changedAuto); CodeOf(err) != ErrorAnalyticsConflict {
-		t.Fatalf("changed auto-analysis replay error=%v code=%q", err, CodeOf(err))
+	changedRevisionReplay, err := service.EnqueueAutoAnalysis(ctx, changedAuto)
+	if err != nil || changedRevisionReplay.Created || changedRevisionReplay.Run.ID != autoResult.Run.ID {
+		t.Fatalf("changed auto-analysis revision replay=%#v error=%v", changedRevisionReplay, err)
 	}
 	changedAuto = autoInput
 	changedAuto.PromptConfigurationKey = "agent.prompt.different"
-	if _, err := service.EnqueueAutoAnalysis(ctx, changedAuto); CodeOf(err) != ErrorAutoAnalysisConflict {
-		t.Fatalf("changed auto-analysis configuration error=%v code=%q", err, CodeOf(err))
+	changedConfigurationReplay, err := service.EnqueueAutoAnalysis(ctx, changedAuto)
+	if err != nil || changedConfigurationReplay.Created || changedConfigurationReplay.Run.ID != autoResult.Run.ID {
+		t.Fatalf("changed auto-analysis configuration replay=%#v error=%v", changedConfigurationReplay, err)
+	}
+	changedAuto = autoInput
+	changedAuto.FrontendContext.Notes = "changed frontend notes"
+	changedContextReplay, err := service.EnqueueAutoAnalysis(ctx, changedAuto)
+	if err != nil || changedContextReplay.Created || changedContextReplay.Run.ID != autoResult.Run.ID ||
+		changedContextReplay.Message.Content != autoInputContent {
+		t.Fatalf("changed auto-analysis context replay=%#v error=%v", changedContextReplay, err)
 	}
 	autoClaim, err := repository.Claim(ctx, "chat-agent-auto", mustIntegrationUUID(t), time.Minute)
 	if err != nil || autoClaim == nil || autoClaim.ID != autoResult.Run.ID {
@@ -352,18 +429,21 @@ WHERE thread.public_id = $2::uuid
 	}
 	autoRequests := autoProvider.Requests()
 	if len(autoRequests) != 2 || autoRequests[0].Kind != RunAutoAnalysis || autoRequests[0].Analytics == nil ||
-		autoRequests[0].Analytics.GenerationDatabaseID != analyticsGenerationID ||
-		autoRequests[0].Analytics.HeadRevision != analyticsHeadRevision || len(autoRequests[1].ToolCalls) != 1 ||
+		autoRequests[0].Analytics.GenerationDatabaseID != advancedAnalyticsGenerationID ||
+		autoRequests[0].Analytics.HeadRevision != advancedAnalyticsHeadRevision || autoRequests[0].AutoAnalysisContext == nil ||
+		*autoRequests[0].AutoAnalysisContext != autoInput.FrontendContext || len(autoRequests[1].ToolCalls) != 1 ||
 		autoRequests[1].ToolCalls[0].Outcome != ToolDenied {
 		t.Fatalf("auto-analysis provider requests=%#v", autoRequests)
 	}
 	autoMessages, err := service.ListMessages(ctx, MessageQuery{Principal: principal, ThreadID: autoResult.Run.ThreadID, Limit: 10})
-	if err != nil || len(autoMessages) != 2 || autoMessages[0].Kind != MessageAutoAnalysisRequest || autoMessages[1].Kind != MessageAssistant {
+	if err != nil || len(autoMessages) != 2 || autoMessages[0].Kind != MessageAutoAnalysisRequest ||
+		autoMessages[0].Content != autoInputContent || autoMessages[1].Kind != MessageAssistant {
 		t.Fatalf("messages after auto-analysis=%#v error=%v", autoMessages, err)
 	}
 	failedInput := input
 	failedInput.ClientRequestID = mustIntegrationUUID(t)
 	failedInput.Content = "Fail this durable run explicitly."
+	failedInput.ExpectedAnalyticsHeadRevision = chatAgentTestInt64Pointer(advancedAnalyticsHeadRevision)
 	failedResult, err := service.Enqueue(ctx, failedInput)
 	if err != nil || !failedResult.Created {
 		t.Fatalf("failed run enqueue=%#v error=%v", failedResult, err)
@@ -407,6 +487,7 @@ WHERE thread.public_id = $2::uuid
 	contextFirst := input
 	contextFirst.ClientRequestID = mustIntegrationUUID(t)
 	contextFirst.Content = "First interleaved context input."
+	contextFirst.ExpectedAnalyticsHeadRevision = chatAgentTestInt64Pointer(advancedAnalyticsHeadRevision)
 	contextFirstResult, err := service.Enqueue(ctx, contextFirst)
 	if err != nil || !contextFirstResult.Created {
 		t.Fatalf("first context enqueue=%#v error=%v", contextFirstResult, err)
@@ -414,6 +495,7 @@ WHERE thread.public_id = $2::uuid
 	contextSecond := input
 	contextSecond.ClientRequestID = mustIntegrationUUID(t)
 	contextSecond.Content = "Second interleaved context input."
+	contextSecond.ExpectedAnalyticsHeadRevision = chatAgentTestInt64Pointer(advancedAnalyticsHeadRevision)
 	contextSecondResult, err := service.Enqueue(ctx, contextSecond)
 	if err != nil || !contextSecondResult.Created {
 		t.Fatalf("second context enqueue=%#v error=%v", contextSecondResult, err)
@@ -480,9 +562,86 @@ WHERE thread.public_id = $2::uuid
 	if err != nil || len(thirdPage.Items) != 1 || thirdPage.Items[0].ID != autoResult.Run.ThreadID || thirdPage.NextCursor != nil {
 		t.Fatalf("third paged threads=%#v error=%v", thirdPage, err)
 	}
+
+	unboundInput := EnqueueInput{
+		Principal: principal, ThreadID: secondThread.ID, ClientRequestID: mustIntegrationUUID(t), Kind: RunReply,
+		Content:                "Answer a general question without published analytics context.",
+		PromptConfigurationKey: promptKey, ModelConfigurationKey: modelKey,
+	}
+	unboundResult, err := service.Enqueue(ctx, unboundInput)
+	if err != nil || !unboundResult.Created {
+		t.Fatalf("unbound reply enqueue=%#v error=%v", unboundResult, err)
+	}
+	var unboundAnalyticsGenerationID *int64
+	var unboundQueuedHasAnalyticsRevision bool
+	if err := pool.QueryRow(ctx, `
+SELECT run.analytics_generation_id,
+       queued.payload ? 'analyticsHeadRevision'
+FROM ascendany.agent_runs AS run
+JOIN ascendany.agent_run_events AS queued
+  ON queued.agent_run_id = run.agent_run_id
+ AND queued.event_sequence = 1
+ AND queued.event_type = 'queued'
+WHERE run.public_id = $1::uuid`, unboundResult.Run.ID).Scan(
+		&unboundAnalyticsGenerationID,
+		&unboundQueuedHasAnalyticsRevision,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if unboundAnalyticsGenerationID != nil || unboundQueuedHasAnalyticsRevision {
+		t.Fatalf("unbound reply stored analytics generation=%v queuedRevision=%t", unboundAnalyticsGenerationID, unboundQueuedHasAnalyticsRevision)
+	}
+	unboundClaim, err := repository.Claim(ctx, "chat-agent-unbound", mustIntegrationUUID(t), time.Minute)
+	if err != nil || unboundClaim == nil || unboundClaim.ID != unboundResult.Run.ID {
+		t.Fatalf("unbound reply claim=%#v error=%v", unboundClaim, err)
+	}
+	unboundProvider, err := NewDeterministicProvider([]DeterministicProviderStep{{
+		Response: ProviderResponse{Assistant: &AssistantOutput{Content: "General durable answer."}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unboundWorker, err := NewWorker(repository, unboundProvider, tools, WorkerConfig{
+		Owner: "chat-agent-unbound", LeaseDuration: time.Minute, MaximumContextItems: 100, MaximumToolRounds: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unboundOutcome, err := unboundWorker.Process(ctx, *unboundClaim); err != nil || unboundOutcome.Disposition != WorkerSucceeded {
+		t.Fatalf("unbound reply outcome=%#v error=%v", unboundOutcome, err)
+	}
+	unboundRequests := unboundProvider.Requests()
+	if len(unboundRequests) != 1 || unboundRequests[0].Analytics != nil || unboundRequests[0].AutoAnalysisContext != nil {
+		t.Fatalf("unbound reply provider requests=%#v", unboundRequests)
+	}
+
+	_, recomputedAnalyticsHeadRevision := advancePublishedAnalytics(t, ctx, pool, suffix)
+	recomputedReplay := autoInput
+	recomputedReplay.ExpectedAnalyticsHeadRevision = recomputedAnalyticsHeadRevision
+	recomputedReplay.FrontendContext.RoleName = "Changed role presentation"
+	recomputedReplay.FrontendContext.Notes = "Changed notes after analytics recomputation"
+	replayedAuto, err := service.EnqueueAutoAnalysis(ctx, recomputedReplay)
+	if err != nil || replayedAuto.Created || replayedAuto.Run.ID != autoResult.Run.ID || replayedAuto.Message.Content != autoInputContent {
+		t.Fatalf("automatic analysis replay after recomputation=%#v error=%v", replayedAuto, err)
+	}
+	differentRole := recomputedReplay
+	differentRole.Identity.RoleID = "role-alternate"
+	differentRole.FrontendContext.RoleID = differentRole.Identity.RoleID
+	differentRole.FrontendContext.RoleName = "Alternate role"
+	differentRoleResult, err := service.EnqueueAutoAnalysis(ctx, differentRole)
+	if err != nil || !differentRoleResult.Created || differentRoleResult.Run.ID == autoResult.Run.ID {
+		t.Fatalf("different-role automatic analysis=%#v error=%v", differentRoleResult, err)
+	}
+	differentRoleClaim, err := repository.Claim(ctx, "chat-agent-different-role", mustIntegrationUUID(t), time.Minute)
+	if err != nil || differentRoleClaim == nil || differentRoleClaim.ID != differentRoleResult.Run.ID {
+		t.Fatalf("different-role automatic analysis claim=%#v error=%v", differentRoleClaim, err)
+	}
+	if err := repository.Fail(ctx, *differentRoleClaim, "test_finished", "different-role identity verified"); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func seedPublishedAnalytics(t *testing.T, ctx context.Context, pool *pgxpool.Pool, suffix string) (int64, int64) {
+func seedPublishedAnalytics(t *testing.T, ctx context.Context, pool *pgxpool.Pool, suffix string) (int64, int64, string) {
 	t.Helper()
 	artifactDigest := sha256Hex("chat-agent-artifact-" + suffix)
 	var artifactID int64
@@ -513,11 +672,12 @@ SET stage = 'importing', updated_at = clock_timestamp()
 WHERE import_job_id = $1`, importJobID); err != nil || tag.RowsAffected() != 1 {
 		t.Fatalf("advance import fixture rows=%d error=%v", tag.RowsAffected(), err)
 	}
+	examPublicID := mustIntegrationUUID(t)
 	var examID int64
 	if err := pool.QueryRow(ctx, `
 INSERT INTO ascendany.logical_exams (public_id, platform, source_exam_id)
 VALUES ($1::uuid, 'pintia', $2)
-RETURNING exam_id`, mustIntegrationUUID(t), "chat-agent-exam-"+suffix).Scan(&examID); err != nil {
+RETURNING exam_id`, examPublicID, "chat-agent-exam-"+suffix).Scan(&examID); err != nil {
 		t.Fatal(err)
 	}
 	domainDigest := sha256Hex("chat-agent-domain-" + suffix)
@@ -640,6 +800,102 @@ UPDATE ascendany.analytics_head
 SET current_generation_id = $1, head_revision = $2, updated_at = clock_timestamp()
 WHERE singleton AND head_revision = $3`, generationID, newRevision, baseRevision); err != nil || tag.RowsAffected() != 1 {
 		t.Fatalf("publish analytics fixture rows=%d error=%v", tag.RowsAffected(), err)
+	}
+	return generationID, newRevision, examPublicID
+}
+
+func advancePublishedAnalytics(t *testing.T, ctx context.Context, pool *pgxpool.Pool, suffix string) (int64, int64) {
+	t.Helper()
+	var baseGenerationID, baseRevision, generationID int64
+	if err := pool.QueryRow(ctx, `
+SELECT current_generation_id, head_revision
+FROM ascendany.analytics_head
+WHERE singleton`).Scan(&baseGenerationID, &baseRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+INSERT INTO ascendany.analytics_generations (
+    status,
+    base_analytics_generation_id,
+    base_head_revision,
+    target_exam_id,
+    target_snapshot_id,
+    target_exam_head_revision,
+    input_manifest,
+    input_manifest_sha256,
+    algorithm_version,
+    config_sha256
+)
+SELECT 'queued',
+       $1,
+       $2,
+       target_exam_id,
+       target_snapshot_id,
+       target_exam_head_revision,
+       input_manifest,
+       $3,
+       algorithm_version,
+       $4
+FROM ascendany.analytics_generations
+WHERE analytics_generation_id = $1
+RETURNING analytics_generation_id`, baseGenerationID, baseRevision,
+		sha256Hex(fmt.Sprintf("chat-agent-advanced-manifest-%s-%d", suffix, baseRevision)),
+		sha256Hex(fmt.Sprintf("chat-agent-advanced-config-%s-%d", suffix, baseRevision))).Scan(&generationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO ascendany.analytics_generation_snapshots (
+    analytics_generation_id,
+    exam_id,
+    snapshot_id,
+    domain_hash
+)
+SELECT $1, exam_id, snapshot_id, domain_hash
+FROM ascendany.analytics_generation_snapshots
+WHERE analytics_generation_id = $2`, generationID, baseGenerationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO ascendany.student_analytics (
+    analytics_generation_id,
+    actor_id,
+    rating,
+    metrics
+)
+SELECT $1, actor_id, rating, metrics
+FROM ascendany.student_analytics
+WHERE analytics_generation_id = $2`, generationID, baseGenerationID); err != nil {
+		t.Fatal(err)
+	}
+	if tag, err := pool.Exec(ctx, `
+UPDATE ascendany.analytics_generations
+SET status = 'running',
+    attempt_count = 1,
+    lease_owner = 'chat-agent-integration-advance',
+    lease_expires_at = clock_timestamp() + interval '1 hour',
+    started_at = clock_timestamp()
+WHERE analytics_generation_id = $1`, generationID); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("claim advanced analytics fixture rows=%d error=%v", tag.RowsAffected(), err)
+	}
+	if tag, err := pool.Exec(ctx, `
+UPDATE ascendany.analytics_generations
+SET status = 'succeeded',
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    finished_at = clock_timestamp()
+WHERE analytics_generation_id = $1`, generationID); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("complete advanced analytics fixture rows=%d error=%v", tag.RowsAffected(), err)
+	}
+	newRevision := baseRevision + 1
+	if tag, err := pool.Exec(ctx, `
+UPDATE ascendany.analytics_head
+SET current_generation_id = $1,
+    head_revision = $2,
+    updated_at = clock_timestamp()
+WHERE singleton
+  AND current_generation_id = $3
+  AND head_revision = $4`, generationID, newRevision, baseGenerationID, baseRevision); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("publish advanced analytics fixture rows=%d error=%v", tag.RowsAffected(), err)
 	}
 	return generationID, newRevision
 }

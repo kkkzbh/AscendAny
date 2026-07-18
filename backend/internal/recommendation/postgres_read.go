@@ -36,6 +36,9 @@ func (repository *PostgresRepository) ReadCurrent(ctx context.Context, principal
 			value := analyticsIDString(*analyticsState.GenerationID)
 			result.CurrentAnalyticsGenerationID = &value
 		}
+		if err := repository.validateCurrentAnalyticsBinding(analyticsState); err != nil {
+			return err
+		}
 
 		catalogState, err := loadActiveCatalog(ctx, tx)
 		if err != nil {
@@ -72,6 +75,22 @@ func (repository *PostgresRepository) ReadCurrent(ctx context.Context, principal
 			setUnavailable(&result, *reason)
 			return nil
 		}
+		problemFacts, err := buildProblemFactIndex(problems)
+		if err != nil {
+			return domainError(ErrorStoredDataInvalid, true, "build current recommendation problem facts", err)
+		}
+		problemActivity, err := queryProblemActivity(ctx, tx, *analyticsState.GenerationID, *resolved.ActorID, repository.acceptedVerdicts)
+		if err != nil {
+			return err
+		}
+		recentActivity, err := queryRecentActivity(ctx, tx, *analyticsState.GenerationID, *resolved.ActorID, repository.acceptedVerdicts)
+		if err != nil {
+			return err
+		}
+		knowledgeActivity, err := buildKnowledgeActivity(catalogState.Catalog, problemFacts, problemActivity, recentActivity)
+		if err != nil {
+			return domainError(ErrorStoredDataInvalid, true, "build current recommendation knowledge activity", err)
+		}
 		actorFeatures, rating, err := buildActorFeatures(student.Rating, student.MetricsJSON)
 		if err != nil {
 			return domainError(ErrorStoredDataInvalid, true, "build current recommendation actor features", err)
@@ -80,7 +99,7 @@ func (repository *PostgresRepository) ReadCurrent(ctx context.Context, principal
 		if err != nil {
 			return domainError(ErrorStoredDataInvalid, true, "build current recommendation evidence", err)
 		}
-		candidates, err := buildCandidates(problems, catalogState.Catalog, manifest.KnowledgePointIDs, evidence.PassedSources)
+		candidates, err := buildCandidates(problems, problemFacts, catalogState.Catalog, manifest.KnowledgePointIDs, evidence.PassedSources)
 		if err != nil {
 			return domainError(ErrorStoredDataInvalid, true, "build current recommendation candidates", err)
 		}
@@ -94,9 +113,21 @@ func (repository *PostgresRepository) ReadCurrent(ctx context.Context, principal
 		}
 		result.State = RecommendationFresh
 		result.Result = &inference
+		result.KnowledgeActivity = knowledgeActivity
 		return nil
 	})
 	return result, resultErr
+}
+
+func (repository *PostgresRepository) validateCurrentAnalyticsBinding(state analyticsState) error {
+	if state.GenerationID == nil {
+		return nil
+	}
+	if state.AlgorithmVersion != repository.analyticsAlgorithmVersion ||
+		state.ConfigSHA256 != repository.analyticsConfigSHA256 {
+		return domainError(ErrorStoredDataInvalid, true, "bind current recommendation analytics configuration", errors.New("analytics generation algorithm or config SHA-256 differs from the runtime configuration"))
+	}
+	return nil
 }
 
 func activeCatalogUnavailableReason(state catalogState, manifest inferencemodel.Manifest) *UnavailableReason {

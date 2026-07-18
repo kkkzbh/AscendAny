@@ -13,6 +13,8 @@ type AccessPrincipalVerifier interface {
 
 type Reader interface {
 	GetSelf(context.Context, SelfQuery) (Result, error)
+	GetByStudentNumber(context.Context, StudentNumberQuery) (Result, error)
+	GetByStudentIdentity(context.Context, StudentIdentityQuery) (Result, error)
 }
 
 type ApplicationService struct {
@@ -37,4 +39,15 @@ func (service *ApplicationService) GetSelf(ctx context.Context, accessToken stri
 		return Result{}, err
 	}
 	return service.reader.GetSelf(ctx, SelfQuery{Principal: principal})
+}
+
+func (service *ApplicationService) GetByStudentNumber(ctx context.Context, studentNumber string) (Result, error) {
+	return service.reader.GetByStudentNumber(ctx, StudentNumberQuery{StudentNumber: studentNumber})
+}
+
+func (service *ApplicationService) GetByStudentIdentity(ctx context.Context, studentNumber, ptaNickname string) (Result, error) {
+	return service.reader.GetByStudentIdentity(ctx, StudentIdentityQuery{
+		StudentNumber: studentNumber,
+		PTANickname:   ptaNickname,
+	})
 }

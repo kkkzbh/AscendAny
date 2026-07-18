@@ -133,6 +133,7 @@ func TestServiceRejectsInvalidRepositoryReadyPayload(t *testing.T) {
 		{name: "wrong delta", mutate: func(result *Result) { result.Ready.RatingHistory[0].Delta++ }},
 		{name: "non finite performance", mutate: func(result *Result) { result.Ready.RatingHistory[0].Performance = math.Inf(1) }},
 		{name: "canonical rating mismatch", mutate: func(result *Result) { result.Ready.Rating++ }},
+		{name: "latest peer rank mismatch", mutate: func(result *Result) { result.Ready.LatestPeer.Rank = 2 }},
 		{name: "duplicate observation", mutate: func(result *Result) {
 			result.Ready.ExamHistory = append(result.Ready.ExamHistory, result.Ready.ExamHistory[0])
 			next := result.Ready.RatingHistory[0]
@@ -179,12 +180,17 @@ func withQuery(value SelfQuery, change func(*SelfQuery)) SelfQuery {
 
 func validReadyResult() Result {
 	eventTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	zero := 0.0
 	return Result{
 		State:        StateReady,
 		HeadRevision: 2,
 		Ready: &ReadyResult{
 			ReferenceTime: eventTime,
 			Rating:        1500,
+			LatestPeer: &LatestExamPeer{
+				TotalParticipants: 1, Position: 1, Rank: 1,
+				BandMedian: PeerValues{Solved: &zero},
+			},
 			ExamHistory: []ExamHistoryPoint{{
 				ExamID:     "22222222-2222-4222-8222-222222222222",
 				SnapshotID: "33333333-3333-4333-8333-333333333333",

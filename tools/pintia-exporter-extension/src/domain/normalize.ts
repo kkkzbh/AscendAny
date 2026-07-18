@@ -424,11 +424,9 @@ function participantAttributes(
     studentNumber: student === undefined
       ? null
       : nullableNonWhitespaceString(student.studentNumber, `participant ${userId}.studentNumber`),
-    displayName: student === undefined
-      ? user === undefined
-        ? null
-        : nullableString(user.nickname, `participant ${userId}.nickname`)
-      : nullableString(student.name, `participant ${userId}.name`),
+    displayName: user === undefined
+      ? null
+      : nullableString(user.nickname, `participant ${userId}.nickname`),
     groupName: userGroup === undefined
       ? null
       : requiredString(userGroup.name, `participant ${userId}.groupName`),

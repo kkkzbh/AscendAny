@@ -59,7 +59,7 @@ if /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C ASCENDANY_PROVISION_CLEAN_ENV=1 \
 fi
 require_literal "$forged_log" 'provisioning requires the canonical clean environment'
 
-if rg -n 'python|uvicorn|apps[./]api|/api/v1|ascendany-api|"AscendAny"|dbname=AscendAny([[:space:]]|$)|rollback|recovered|TCP ports? 8000|port 8000' \
+if rg -n 'python|uvicorn|apps[./]api|ascendany-api|"AscendAny"|dbname=AscendAny([[:space:]]|$)|rollback|recovered|TCP ports? 8000|port 8000' \
     "$PROVISIONER" "$POOL_CONFIG" "$POOL_HBA" "$POSTGRES_HBA" "$POSTGRES_IDENT" >/dev/null; then
   fail 'clean provisioning closure contains a retired runtime, database route or reverse path'
 fi

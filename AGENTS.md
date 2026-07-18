@@ -3,8 +3,10 @@
 ## Runtime ownership
 
 - `backend/` 是唯一在线后端、业务规则、事务、durable job、SSE/WebSocket 与 migration 实现，语言为 Go。
-- `apps/web/`、`apps/desktop/`、`apps/mobile/`、`apps/import-console/`、`apps/site/` 与 Pintia exporter 使用 TypeScript strict mode。
-- `packages/sdk/` 必须由 `contracts/openapi/ascendany-v2.yaml` 生成；first-party app 禁止手写 endpoint string 和重复 DTO。
+- `apps/desktop/` 是现有 Agent 前端的唯一 product source，同时生成 Electron 客户端和 production `/app/` Web build。该 source tree 保持用户原实现的界面、交互、本地状态与 `/api/v1` client contract；未经用户明确要求禁止替换或重设计。
+- `apps/web/` 是已停用的替换版 Web package，不进入 product delivery。`apps/mobile/`、`apps/import-console/`、`apps/site/` 与 Pintia exporter 使用 TypeScript strict mode。
+- Go 必须直接实现 Agent 前端已有的 canonical `/api/v1` JSON/SSE contract。该 contract 是当前 product boundary，不作为 legacy compatibility path 处理。
+- `packages/sdk/` 由 `contracts/openapi/ascendany-v2.yaml` 生成，用于新增 `/api/v2` clients。恢复的 `apps/desktop/` `/api/v1` client 是冻结的原前端边界，允许保留其已有 endpoint string 和 DTO。
 - Production repository 与 deploy release 禁止 Python source、Python runtime、trainer process、trainer credential、training API 和 training database role。模型训练由后续独立模块负责。
 - Production build 只接收已训练的 immutable `ascendany.recommendation.inference-model.v1` artifact；Go 负责 strict verification、immutable release binding 与 online inference。
 
@@ -36,7 +38,7 @@
 
 - Go 改动必须补测试；执行 `go test ./...`、`go vet ./...`，高并发/ownership 代码还需要 race test 与 PostgreSQL 17 integration test。
 - 大型 Go/Node build 使用 guarded heavy-run，避免无界并发和全局 OOM。
-- TypeScript app 改动必须通过对应 package 的 tests、strict typecheck 与 production build。
+- TypeScript app 改动必须通过对应 package 的 tests、strict typecheck 与 production build。`apps/desktop/` 还必须验证 Electron 与 `/app/` 两种 build，并确认 source tree 未偏离冻结的 Agent 前端 baseline。
 - OpenAPI 改动后执行 `pnpm --filter @ascendany/sdk generate` 和 `pnpm --filter @ascendany/sdk check`。
 - Pintia contract 改动必须覆盖 JSON Schema、semantic negative fixtures、domain hash 与真实形状脱敏 fixture。
 - 仓库 policy scan 必须证明 production tree、release manifest、systemd units、scripts 与 runtime closure 没有 Python 或 trainer execution path。

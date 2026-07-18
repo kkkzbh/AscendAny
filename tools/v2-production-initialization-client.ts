@@ -15,6 +15,7 @@ import {
   authorizeKnowledgeCatalogPublication,
   consumeEnrollmentClaim,
   createClient,
+  createConfigurationVersion,
   createPintiaImport,
   getCapabilities,
   getConfiguration,
@@ -34,15 +35,20 @@ import {
   listManagedStudents,
   loginAccount,
   revokeEnrollmentClaim,
+  testModelConnection,
   type AuditEvent,
   type AuthorizedCatalogPublicationRequest,
   type AuthSession,
   type CatalogPublicationAuthorizationResult,
   type CatalogPublicationIntent,
+  type ConfigurationItem,
+  type ConfigurationKind,
+  type CreateConfigurationVersionResult,
   type ExamAnalysisGeneration,
   type ExamSummary,
   type ImportJob,
   type ManagedStudent,
+  type ModelConnectionProbeResult,
   type RecommendationKnowledgeCatalogV1,
   type RecommendationReviewContext,
   type Version,
@@ -52,8 +58,33 @@ const requestSchema = "ascendany.knowledge_catalog.publication-request.v1";
 const publicationReceiptSchema = "ascendany.knowledge_catalog.publication-receipt.v1";
 const prepareReceiptSchema = "ascendany.production-initialization.prepare-receipt.v1";
 const verifyReceiptSchema = "ascendany.production-initialization.verify-receipt.v1";
+const agentAcceptanceReceiptSchema = "ascendany.production-agent-acceptance-receipt.v1";
 const catalogKey = "recommendation.catalog.active";
 const catalogSchema = "ascendany.knowledge_catalog.recommendation.v1";
+const agentPromptKey = "agent.prompt.default";
+const agentPromptSchema = "ascendany.prompt.chat.v1";
+const agentModelKey = "agent.model.default";
+const agentModelSchema = "ascendany.model_connection.openai_compatible.v1";
+const agentAnalyticsTool = "analytics.get_self";
+const agentUpdateNotesTool = "update_notes";
+const agentReplyAcceptanceSchema = "ascendany.production-agent-reply-acceptance.v1";
+const agentReplyAcceptanceInstruction = "Read my current learning data, update my current notes with a concise progress summary by calling update_notes, and briefly explain my learning progress.";
+const agentAcceptanceInitialNotes = "# Production acceptance\n\nAwaiting the current learning-progress summary.";
+const agentProviderTimeoutMilliseconds = 120_000;
+const agentMaxCompletionTokens = 4_096;
+const agentAcceptanceTimeoutMilliseconds = 180_000;
+const maximumAgentSSEBytes = 4 * 1024 * 1024;
+const agentSystemPrompt = [
+  "You are the AscendAny learning Agent.",
+  "When a user message is a JSON object whose schema is ascendany.agent.frontend-context.v1, parse it as the original Agent frontend context: currentUser is the current request, messages is the complete local conversation, summary is prior context, role contains the selected persona, and notes contains the user's local note context.",
+  "When a user message is a JSON object whose schema is ascendany.agent.auto-analysis.frontend-context.v1, execute its instruction as the automatic-analysis task and parse context as frozen frontend state: studentId and ptaNickname identify the current user, roleId, roleName, and roleSystemPrompt contain the selected persona, latestExamId identifies the triggering exam, notes and notesTitle contain the user's local note context, and notesLocked states whether those notes are locked.",
+  "Follow a non-empty role.systemPrompt or context.roleSystemPrompt when it does not conflict with this system prompt.",
+  "Before answering a learning-progress request, call analytics.get_self with historyLimit 50 and ground every claim about the student's current performance in that immutable analytics result.",
+  "When the user asks to organize, simplify, add to, remove from, or rewrite the current notes, you must call update_notes. Use mode patch with a unified diff whose filenames are notes.md for a focused edit, and use mode replace with the complete Markdown document for a substantial rewrite.",
+  "Never claim that notes were changed until update_notes succeeds. If notes.locked or context.notesLocked is true, do not attempt a notes mutation.",
+  "Preserve useful existing notes and keep every updated notes document within 32768 Unicode characters.",
+  "Explain the result clearly and concisely in the user's language.",
+].join(" ");
 const requestCredentialName = "catalog_publication_request";
 const accessTokenCredentialName = "admin_access_token";
 const snapshotMediaType = "application/vnd.ascendany.pintia.snapshot.v2+json";
@@ -106,7 +137,7 @@ const catalogPublicationAuthorizationResultKeys = [
   "publicationRequest",
 ] as const;
 
-type Phase = "prepare" | "verify";
+type Phase = "prepare" | "verify" | "agent";
 type ModelPurpose = "production" | "acceptance_test";
 export type DeploymentKind = "initial" | "forward";
 
@@ -144,7 +175,7 @@ type SnapshotIdentity = {
   }>;
 };
 
-type ApplicationIdentity = {
+export type ApplicationIdentity = {
   version: string;
   commit: string;
   buildTime: string;
@@ -179,6 +210,85 @@ type LoadedInputs = CommonInputs & {
   adminPassword: string;
   catalog: RecommendationKnowledgeCatalogV1;
   knowledgePointIDs: string[];
+};
+
+type AgentInputs = {
+  baseUrl: string;
+  origin: string;
+  targetApplication: ApplicationIdentity;
+  adminPassword: string;
+  studentCredentials: {
+    username: string;
+    password: string;
+    studentNumber: string;
+  };
+  modelEndpoint: string;
+  modelAuthority: string;
+  model: string;
+  modelCredentialRef: string;
+  modelCredentialSha256: string;
+};
+
+export type AgentConfigurationSpec = {
+  key: typeof agentPromptKey | typeof agentModelKey;
+  kind: Extract<ConfigurationKind, "prompt" | "model_connection">;
+  schemaId: typeof agentPromptSchema | typeof agentModelSchema;
+  document: Record<string, unknown>;
+  credentialRef: string | null;
+};
+
+export type AgentConfigurationPlan =
+  | { action: "matched"; provenance: AgentConfigurationProvenance }
+  | { action: "publish"; expectedHeadRevision: number };
+
+type AgentConfigurationProvenance = {
+  key: string;
+  configurationId: string;
+  headRevision: number;
+  versionId: string;
+  versionNumber: number;
+  schemaId: string;
+  documentSha256: string;
+  credentialRef: string | null;
+  state: "advanced" | "created" | "matched";
+};
+
+export type AgentSSEAcceptance = {
+  runId: string;
+  threadId: string;
+  inputMessageId: string;
+  outputMessageId: string;
+  created: boolean;
+  replySha256: string;
+  eventCount: number;
+  terminalDoneCount: 1;
+};
+
+export type AgentAcceptanceReceipt = {
+  schema: typeof agentAcceptanceReceiptSchema;
+  acceptedAt: string;
+  administratorAccountId: string;
+  acceptanceStudentAccountId: string;
+  acceptanceStudentUsername: string;
+  acceptanceStudentNumber: string;
+  targetApplicationVersion: string;
+  targetApplicationCommit: string;
+  targetApplicationBuildTime: string;
+  providerCredentialSha256: string;
+  promptConfiguration: AgentConfigurationProvenance;
+  modelConfiguration: AgentConfigurationProvenance;
+  modelProbe: {
+    configurationKey: string;
+    configurationHeadRevision: number;
+    configurationVersion: number;
+    configurationSha256: string;
+    authority: string;
+    model: string;
+    checkedAt: string;
+    latencyMilliseconds: number;
+  };
+  replyAcceptance: AgentSSEAcceptance;
+  autoAnalysisAcceptance: AgentSSEAcceptance;
 };
 
 type CatalogPublicationReceipt = {
@@ -469,6 +579,368 @@ function canonicalJSON(value: unknown): string {
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function agentPromptConfiguration(): AgentConfigurationSpec {
+  return {
+    key: agentPromptKey,
+    kind: "prompt",
+    schemaId: agentPromptSchema,
+    document: {
+      enabledTools: [agentAnalyticsTool, agentUpdateNotesTool],
+      systemPrompt: agentSystemPrompt,
+    },
+    credentialRef: null,
+  };
+}
+
+export function agentModelConfiguration(
+  inputs: Pick<AgentInputs, "modelEndpoint" | "model" | "modelCredentialRef">,
+): AgentConfigurationSpec {
+  return {
+    key: agentModelKey,
+    kind: "model_connection",
+    schemaId: agentModelSchema,
+    document: {
+      endpoint: inputs.modelEndpoint,
+      maxCompletionTokens: agentMaxCompletionTokens,
+      model: inputs.model,
+      timeoutMilliseconds: agentProviderTimeoutMilliseconds,
+    },
+    credentialRef: inputs.modelCredentialRef,
+  };
+}
+
+export function agentReplyAcceptanceContent(
+  targetApplication: ApplicationIdentity,
+): string {
+  validateApplicationIdentity(targetApplication, "Agent reply target application identity");
+  return canonicalJSON({
+    schema: agentReplyAcceptanceSchema,
+    instruction: agentReplyAcceptanceInstruction,
+    targetApplicationBuildTime: targetApplication.buildTime,
+    targetApplicationCommit: targetApplication.commit,
+    targetApplicationVersion: targetApplication.version,
+  });
+}
+
+export function buildAgentAcceptanceReceipt(
+  receipt: Omit<AgentAcceptanceReceipt, "schema">,
+): AgentAcceptanceReceipt {
+  return {
+    schema: agentAcceptanceReceiptSchema,
+    ...receipt,
+  };
+}
+
+function assertAgentConfigurationItemShape(
+  spec: AgentConfigurationSpec,
+  item: ConfigurationItem,
+): Omit<AgentConfigurationProvenance, "state"> & { matchesTarget: boolean } {
+  const active = item.activeVersion;
+  const targetDocumentSHA256 = sha256(Buffer.from(canonicalJSON(spec.document), "utf8"));
+  if (
+    item.key !== spec.key
+    || item.kind !== spec.kind
+    || !isSafePositiveInteger(item.headRevision)
+    || !canonicalUUIDv4Pattern.test(item.id)
+    || !isCanonicalRFC3339NanoUTC(item.createdAt)
+    || !isCanonicalRFC3339NanoUTC(item.updatedAt)
+    || active === null
+    || !isSafePositiveInteger(active.number)
+    || active.number !== item.headRevision
+    || !isCanonicalPositiveInt64(active.id)
+    || typeof active.schemaId !== "string"
+    || active.schemaId.length === 0
+    || active.documentSha256 !== sha256(Buffer.from(canonicalJSON(active.document), "utf8"))
+    || !canonicalUUIDv4Pattern.test(active.createdByAccountId)
+    || !canonicalUUIDv4Pattern.test(active.createdBySessionId)
+    || !isCanonicalRFC3339NanoUTC(active.createdAt)
+  ) {
+    throw new Error(`${spec.key} has invalid active configuration provenance`);
+  }
+  const matchesTarget = active.schemaId === spec.schemaId
+    && canonicalJSON(active.document) === canonicalJSON(spec.document)
+    && active.documentSha256 === targetDocumentSHA256
+    && active.credentialRef === spec.credentialRef;
+  return {
+    key: item.key,
+    configurationId: item.id,
+    headRevision: item.headRevision,
+    versionId: active.id,
+    versionNumber: active.number,
+    schemaId: active.schemaId,
+    documentSha256: active.documentSha256,
+    credentialRef: active.credentialRef,
+    matchesTarget,
+  };
+}
+
+export function assertAgentConfigurationResult(
+  spec: AgentConfigurationSpec,
+  value: CreateConfigurationVersionResult,
+  expectedHeadRevision = 0,
+): AgentConfigurationProvenance {
+  const item = assertAgentConfigurationItemShape(spec, value.item);
+  if (value.idempotent || !item.matchesTarget || item.headRevision !== expectedHeadRevision + 1) {
+	throw new Error(`${spec.key} publication differs from the requested head transition`);
+  }
+  const { matchesTarget: _, ...provenance } = item;
+  return {
+	...provenance,
+	state: expectedHeadRevision === 0 ? "created" : "advanced",
+  };
+}
+
+export function planAgentConfiguration(
+  spec: AgentConfigurationSpec,
+  current: ConfigurationItem | null,
+): AgentConfigurationPlan {
+  if (current === null) {
+    return { action: "publish", expectedHeadRevision: 0 };
+  }
+  const item = assertAgentConfigurationItemShape(spec, current);
+  if (!item.matchesTarget) {
+    return { action: "publish", expectedHeadRevision: item.headRevision };
+  }
+  const { matchesTarget: _, ...provenance } = item;
+  return { action: "matched", provenance: { ...provenance, state: "matched" } };
+}
+
+function exactAgentSSEKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return hasExactKeys(value, keys);
+}
+
+type AgentSSEProviderMetadata = {
+  provider: string;
+  model: string;
+  requestMode: string;
+};
+
+function validAgentSSEMetadataValue(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.trim() === value
+    && !value.includes("\0")
+    && Buffer.byteLength(value, "utf8") <= 4096;
+}
+
+export function parseAgentSSEAcceptance(
+  serialized: string,
+  expectedInitialNotes?: string,
+): AgentSSEAcceptance {
+  const normalized = serialized.replaceAll("\r\n", "\n");
+  if (
+    serialized.length === 0
+    || serialized.includes("\0")
+    || normalized.includes("\r")
+    || !normalized.endsWith("\n\n")
+  ) {
+    throw new Error("Agent SSE serialization is invalid");
+  }
+  const blocks = normalized.split("\n\n");
+  let eventCount = 0;
+  let terminalDoneCount = 0;
+  let terminalReply: string | null = null;
+  let terminalIdentity: Pick<AgentSSEAcceptance,
+    "runId" | "threadId" | "inputMessageId" | "outputMessageId" | "created"> | null = null;
+  let terminalSeen = false;
+  let activeToolActivity: { id: string; label: string } | null = null;
+  let lastUpdatedNotes: string | null = null;
+  let notesUpdateCount = 0;
+  let providerMetadata: AgentSSEProviderMetadata | null = null;
+  let providerMetaSeen = false;
+
+  for (const block of blocks) {
+    if (block === "") continue;
+    if (block === ": keep-alive") continue;
+    const lines = block.split("\n");
+    if (
+      lines.length !== 2
+      || !lines[0]!.startsWith("event: ")
+      || !lines[1]!.startsWith("data: ")
+      || terminalSeen
+    ) {
+      throw new Error("Agent SSE block violates the event/data contract");
+    }
+    const eventName = lines[0]!.slice("event: ".length);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(lines[1]!.slice("data: ".length)) as unknown;
+    } catch {
+      throw new Error("Agent SSE data is not valid JSON");
+    }
+    if (!isObject(payload) || payload.type !== eventName) {
+      throw new Error("Agent SSE event name differs from its payload type");
+    }
+    eventCount += 1;
+    switch (eventName) {
+      case "meta": {
+        const metadataFieldCount = ["provider", "model", "requestMode"]
+          .filter((key) => Object.hasOwn(payload, key)).length;
+        const allowedKeys = new Set(["model", "provider", "requestMode", "summary", "type"]);
+        if (
+          eventCount !== 1
+          || providerMetaSeen
+          || Object.keys(payload).some((key) => !allowedKeys.has(key))
+          || ("summary" in payload && (
+            typeof payload.summary !== "string"
+            || payload.summary.includes("\0")
+            || Buffer.byteLength(payload.summary, "utf8") > 65536
+          ))
+          || (metadataFieldCount !== 0 && metadataFieldCount !== 3)
+          || (metadataFieldCount === 3 && (
+            !validAgentSSEMetadataValue(payload.provider)
+            || !validAgentSSEMetadataValue(payload.model)
+            || !validAgentSSEMetadataValue(payload.requestMode)
+          ))
+        ) {
+          throw new Error("Agent SSE provider metadata event is invalid");
+        }
+        providerMetaSeen = true;
+        if (metadataFieldCount === 3) {
+          providerMetadata = {
+            provider: payload.provider as string,
+            model: payload.model as string,
+            requestMode: payload.requestMode as string,
+          };
+        }
+        break;
+      }
+      case "reasoning_delta":
+      case "delta":
+        if (
+          !exactAgentSSEKeys(payload, ["text", "type"])
+          || typeof payload.text !== "string"
+          || payload.text.length === 0
+        ) {
+          throw new Error("Agent SSE text event is invalid");
+        }
+        break;
+      case "tool_activity_start":
+        if (
+          !exactAgentSSEKeys(payload, ["activityId", "label", "status", "type"])
+          || typeof payload.activityId !== "string"
+          || payload.activityId.length === 0
+          || typeof payload.label !== "string"
+          || payload.label.length === 0
+          || payload.status !== "running"
+          || activeToolActivity !== null
+        ) {
+          throw new Error("Agent SSE tool event is invalid");
+        }
+        activeToolActivity = { id: payload.activityId, label: payload.label };
+        break;
+      case "tool_activity_done":
+        if (
+          !exactAgentSSEKeys(payload, ["activityId", "label", "status", "type"])
+          || typeof payload.activityId !== "string"
+          || typeof payload.label !== "string"
+          || payload.status !== "done"
+          || activeToolActivity === null
+          || payload.activityId !== activeToolActivity.id
+          || payload.label !== activeToolActivity.label
+        ) {
+          throw new Error("Agent SSE tool event is invalid");
+        }
+        activeToolActivity = null;
+        break;
+      case "notes_update":
+        if (
+          !exactAgentSSEKeys(payload, ["mode", "next", "patch", "previous", "type"])
+          || (payload.mode !== "patch" && payload.mode !== "replace")
+          || typeof payload.previous !== "string"
+          || typeof payload.next !== "string"
+          || (payload.mode === "replace" && payload.patch !== null)
+          || (payload.mode === "patch" && typeof payload.patch !== "string")
+          || activeToolActivity?.label !== "更新学习笔记"
+          || payload.previous !== (lastUpdatedNotes ?? expectedInitialNotes ?? payload.previous)
+        ) {
+          throw new Error("Agent SSE notes_update event is invalid");
+        }
+        lastUpdatedNotes = payload.next;
+        notesUpdateCount += 1;
+        break;
+      case "done": {
+        const requiredKeys = [
+          "created", "inputMessageId", "outputMessageId", "reply", "runId", "threadId", "type",
+        ];
+        const optionalKeys = ["model", "provider", "requestMode", "summary", "updatedNotes"];
+        const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+        const payloadKeys = Object.keys(payload);
+        if (
+          !requiredKeys.every((key) => Object.hasOwn(payload, key))
+          || payloadKeys.some((key) => !allowedKeys.has(key))
+        ) {
+          throw new Error("Agent SSE done event has an invalid shape");
+        }
+        const metadataFieldCount = ["provider", "model", "requestMode"]
+          .filter((key) => Object.hasOwn(payload, key)).length;
+        if (
+          typeof payload.reply !== "string"
+          || payload.reply.trim().length === 0
+          || ("summary" in payload && typeof payload.summary !== "string")
+          || ("updatedNotes" in payload && typeof payload.updatedNotes !== "string")
+          || (lastUpdatedNotes !== null && payload.updatedNotes !== lastUpdatedNotes)
+          || (lastUpdatedNotes === null && "updatedNotes" in payload)
+          || (metadataFieldCount !== 0 && metadataFieldCount !== 3)
+          || (providerMetadata === null && metadataFieldCount !== 0)
+          || (providerMetadata !== null && (
+            metadataFieldCount !== 3
+            || !validAgentSSEMetadataValue(payload.provider)
+            || !validAgentSSEMetadataValue(payload.model)
+            || !validAgentSSEMetadataValue(payload.requestMode)
+            || payload.provider !== providerMetadata.provider
+            || payload.model !== providerMetadata.model
+            || payload.requestMode !== providerMetadata.requestMode
+          ))
+          || typeof payload.created !== "boolean"
+          || !canonicalUUIDv4Pattern.test(String(payload.runId))
+          || !canonicalUUIDv4Pattern.test(String(payload.threadId))
+          || !canonicalUUIDv4Pattern.test(String(payload.inputMessageId))
+          || !canonicalUUIDv4Pattern.test(String(payload.outputMessageId))
+          || new Set([
+            payload.runId, payload.threadId, payload.inputMessageId, payload.outputMessageId,
+          ]).size !== 4
+          || activeToolActivity !== null
+        ) {
+          throw new Error("Agent SSE done event has an invalid durable identity or reply");
+        }
+        terminalDoneCount += 1;
+        terminalReply = payload.reply;
+        terminalIdentity = {
+          runId: String(payload.runId),
+          threadId: String(payload.threadId),
+          inputMessageId: String(payload.inputMessageId),
+          outputMessageId: String(payload.outputMessageId),
+          created: payload.created,
+        };
+        terminalSeen = true;
+        break;
+      }
+      case "error":
+      case "tool_activity_error":
+        throw new Error("Agent SSE contains an error event");
+      default:
+        throw new Error(`Agent SSE contains unsupported event type ${eventName}`);
+    }
+  }
+  if (
+    terminalDoneCount !== 1
+    || terminalReply === null
+    || terminalIdentity === null
+    || activeToolActivity !== null
+    || (expectedInitialNotes !== undefined && (notesUpdateCount < 1 || lastUpdatedNotes === null))
+    || eventCount < 1
+  ) {
+    throw new Error("Agent SSE must contain exactly one durable nonempty terminal done event");
+  }
+  return {
+    ...terminalIdentity,
+    replySha256: sha256(Buffer.from(terminalReply, "utf8")),
+    eventCount,
+    terminalDoneCount: 1,
+  };
 }
 
 function strictlyOrdered(values: readonly string[]): boolean {
@@ -1235,11 +1707,18 @@ async function loginAdministrator(
   inputs: LoadedInputs,
   client: ReturnType<typeof createClient>,
 ): Promise<AuthSession> {
+  return loginAdministratorWithPassword(inputs.adminPassword, client);
+}
+
+async function loginAdministratorWithPassword(
+  adminPassword: string,
+  client: ReturnType<typeof createClient>,
+): Promise<AuthSession> {
   const session = assertAPIResult<AuthSession>(
     "administrator login",
     await loginAccount({
       client,
-      body: { username: "admin", password: inputs.adminPassword },
+      body: { username: "admin", password: adminPassword },
     }),
   );
   if (session.account.role !== "admin") {
@@ -1776,13 +2255,323 @@ async function verify(inputs: LoadedInputs): Promise<Record<string, unknown>> {
   };
 }
 
+function parseAgentEndpoint(raw: string): { endpoint: string; authority: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("ASCENDANY_AGENT_MODEL_ENDPOINT must be one canonical absolute HTTPS URL");
+  }
+  if (
+    raw.length > 2_048
+    || parsed.protocol !== "https:"
+    || parsed.username !== ""
+    || parsed.password !== ""
+    || parsed.search !== ""
+    || parsed.hash !== ""
+    || parsed.hostname === ""
+    || parsed.hostname !== parsed.hostname.toLowerCase()
+    || parsed.hostname.endsWith(".")
+    || parsed.pathname === ""
+    || parsed.pathname === "/"
+    || parsed.pathname.includes("//")
+    || parsed.toString() !== raw
+  ) {
+    throw new Error("ASCENDANY_AGENT_MODEL_ENDPOINT must be one canonical absolute HTTPS URL");
+  }
+  const port = parsed.port === "" ? "443" : parsed.port;
+  if (!/^[1-9][0-9]{0,4}$/u.test(port) || Number(port) > 65_535) {
+    throw new Error("ASCENDANY_AGENT_MODEL_ENDPOINT contains an invalid authority port");
+  }
+  return { endpoint: raw, authority: `${parsed.hostname}:${port}` };
+}
+
+async function loadAgentInputs(): Promise<AgentInputs> {
+  const baseUrl = requiredEnvironment("ASCENDANY_AGENT_BASE_URL");
+  const origin = requiredEnvironment("ASCENDANY_AGENT_ORIGIN");
+  for (const [name, raw] of [
+    ["ASCENDANY_AGENT_BASE_URL", baseUrl],
+    ["ASCENDANY_AGENT_ORIGIN", origin],
+  ] as const) {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      throw new Error(`${name} must be one canonical HTTPS URL or a loopback HTTP URL`);
+    }
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+      || parsed.username !== ""
+      || parsed.password !== ""
+      || parsed.search !== ""
+      || parsed.hash !== ""
+      || parsed.pathname !== "/"
+      || (parsed.protocol === "http:" && !["127.0.0.1", "[::1]"].includes(parsed.hostname))
+    ) {
+      throw new Error(`${name} must be one canonical HTTPS URL or a loopback HTTP URL`);
+    }
+  }
+  const adminPasswordPath = requiredEnvironment("ASCENDANY_AGENT_ADMIN_PASSWORD_FILE");
+  const studentCredentialDirectory = requiredEnvironment(
+    "ASCENDANY_AGENT_STUDENT_CREDENTIAL_DIRECTORY",
+  );
+  const modelEndpointInput = requiredEnvironment("ASCENDANY_AGENT_MODEL_ENDPOINT");
+  const model = requiredEnvironment("ASCENDANY_AGENT_MODEL");
+  const modelCredentialRef = requiredEnvironment("ASCENDANY_AGENT_MODEL_CREDENTIAL_REF");
+  const modelCredentialPath = requiredEnvironment("ASCENDANY_AGENT_MODEL_CREDENTIAL_FILE");
+  const targetApplication: ApplicationIdentity = {
+    version: requiredEnvironment("ASCENDANY_AGENT_TARGET_APPLICATION_VERSION"),
+    commit: requiredEnvironment("ASCENDANY_AGENT_TARGET_APPLICATION_COMMIT"),
+    buildTime: requiredEnvironment("ASCENDANY_AGENT_TARGET_APPLICATION_BUILD_TIME"),
+  };
+  validateApplicationIdentity(targetApplication, "Agent target application identity");
+  const [
+    { endpoint: modelEndpoint, authority: modelAuthority },
+    adminPasswordBytes,
+    studentCredentials,
+    modelCredentialBytes,
+  ] = await Promise.all([
+    Promise.resolve(parseAgentEndpoint(modelEndpointInput)),
+    readStableFile(adminPasswordPath, 128, "administrator password", true),
+    readAcceptanceCredentials(studentCredentialDirectory),
+    readStableFile(modelCredentialPath, 8_192, "Agent model credential", true),
+  ]);
+  const adminPassword = new TextDecoder("utf-8", { fatal: true }).decode(adminPasswordBytes);
+  if (
+    adminPassword.length < 12
+    || adminPassword.length > 128
+    || adminPassword.trim() !== adminPassword
+  ) {
+    throw new Error("administrator password credential serialization is invalid");
+  }
+  if (
+    Buffer.byteLength(model, "utf8") > 256
+    || /[\u0000-\u001f\u007f]/u.test(model)
+    || !/^[a-z][a-z0-9_.-]{0,127}$/u.test(modelCredentialRef)
+    || studentCredentials.username === "admin"
+  ) {
+    throw new Error("Agent model or acceptance-student identity is invalid");
+  }
+  return {
+    baseUrl,
+    origin,
+    targetApplication,
+    adminPassword,
+    studentCredentials,
+    modelEndpoint,
+    modelAuthority,
+    model,
+    modelCredentialRef,
+    modelCredentialSha256: sha256(modelCredentialBytes),
+  };
+}
+
+async function ensureAgentConfiguration(
+  client: ReturnType<typeof createClient>,
+  spec: AgentConfigurationSpec,
+): Promise<AgentConfigurationProvenance> {
+  const current = await getConfiguration({ client, path: { key: spec.key } });
+  let currentItem: ConfigurationItem | null = null;
+  if (current.data !== undefined) {
+    currentItem = current.data;
+  } else if (current.response?.status !== 404) {
+    throw new Error(`${spec.key} read failed with HTTP ${current.response?.status ?? 0} (${apiErrorCode(current.error)})`);
+  }
+  const plan = planAgentConfiguration(spec, currentItem);
+  if (plan.action === "matched") {
+    return plan.provenance;
+  }
+  const { expectedHeadRevision } = plan;
+  const result = await createConfigurationVersion({
+    client,
+    body: {
+      key: spec.key,
+      kind: spec.kind,
+      expectedHeadRevision,
+      schemaId: spec.schemaId,
+      document: spec.document,
+      credentialRef: spec.credentialRef,
+    },
+  });
+  const value = assertAPIResult<CreateConfigurationVersionResult>(
+    `create or replay ${spec.key}`,
+    result,
+  );
+  if (result.response?.status !== 201) {
+    throw new Error(`${spec.key} returned an unexpected HTTP status`);
+  }
+  return assertAgentConfigurationResult(spec, value, expectedHeadRevision);
+}
+
+function assertAgentModelProbe(
+  inputs: AgentInputs,
+  modelConfiguration: AgentConfigurationProvenance,
+  probe: ModelConnectionProbeResult,
+): ModelConnectionProbeResult {
+  if (
+    probe.configurationKey !== modelConfiguration.key
+    || probe.configurationHeadRevision !== modelConfiguration.headRevision
+    || probe.configurationVersion !== modelConfiguration.versionNumber
+    || probe.configurationSha256 !== modelConfiguration.documentSha256
+    || probe.authority !== inputs.modelAuthority
+    || probe.model !== inputs.model
+    || !isCanonicalRFC3339NanoUTC(probe.checkedAt)
+    || !isSafeNonNegativeInteger(probe.latencyMilliseconds)
+  ) {
+    throw new Error("model probe provenance differs from the fixed Agent model connection");
+  }
+  return probe;
+}
+
+async function readBoundedAgentSSE(response: Response): Promise<string> {
+  if (response.body === null) {
+    throw new Error("Agent SSE response has no readable body");
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (value === undefined) {
+      throw new Error("Agent SSE reader returned an invalid chunk");
+    }
+    size += value.byteLength;
+    if (size > maximumAgentSSEBytes) {
+      await reader.cancel();
+      throw new Error("Agent SSE response exceeds the acceptance byte limit");
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, size));
+}
+
+async function runAgentFrontendSSEAcceptance(
+  inputs: AgentInputs,
+  studentSession: AuthSession,
+  path: "/api/v1/chat/reply/stream" | "/api/v1/chat/auto-analysis/stream",
+  body: Record<string, unknown>,
+  expectedInitialNotes?: string,
+): Promise<AgentSSEAcceptance> {
+  const response = await fetch(new URL(path, inputs.baseUrl), {
+    method: "POST",
+    redirect: "error",
+    signal: AbortSignal.timeout(agentAcceptanceTimeoutMilliseconds),
+    headers: {
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${studentSession.accessToken}`,
+      "CF-Connecting-IP": "203.0.113.19",
+      "Content-Type": "application/json",
+      Origin: inputs.origin,
+    },
+    body: canonicalJSON(body),
+  });
+  if (response.status !== 200) {
+    throw new Error(`${path} failed with HTTP ${response.status}`);
+  }
+  if (response.headers.get("content-type") !== "text/event-stream; charset=utf-8") {
+    throw new Error(`${path} returned an unexpected Content-Type`);
+  }
+  return parseAgentSSEAcceptance(await readBoundedAgentSSE(response), expectedInitialNotes);
+}
+
+async function agent(inputs: AgentInputs): Promise<AgentAcceptanceReceipt> {
+  const publicClient = authenticatedClient(inputs.baseUrl, inputs.origin);
+  await assertRuntime(publicClient, inputs.targetApplication);
+  const adminSession = await loginAdministratorWithPassword(inputs.adminPassword, publicClient);
+  const adminClient = authenticatedClient(inputs.baseUrl, inputs.origin, adminSession.accessToken);
+  const promptConfiguration = await ensureAgentConfiguration(
+    adminClient,
+    agentPromptConfiguration(),
+  );
+  const modelConfiguration = await ensureAgentConfiguration(
+    adminClient,
+    agentModelConfiguration(inputs),
+  );
+  const probe = assertAgentModelProbe(
+    inputs,
+    modelConfiguration,
+    assertAPIResult<ModelConnectionProbeResult>(
+      "Agent model connection probe",
+      await testModelConnection({ client: adminClient, path: { key: agentModelKey } }),
+    ),
+  );
+  const studentSession = assertAPIResult<AuthSession>(
+    "Agent acceptance student login",
+    await loginAccount({
+      client: publicClient,
+      body: {
+        username: inputs.studentCredentials.username,
+        password: inputs.studentCredentials.password,
+      },
+    }),
+  );
+  if (
+    studentSession.account.role !== "student"
+    || studentSession.account.username !== inputs.studentCredentials.username
+    || studentSession.account.studentNumber !== inputs.studentCredentials.studentNumber
+  ) {
+    throw new Error("Agent acceptance student session differs from the protected credential binding");
+  }
+  const reply = await runAgentFrontendSSEAcceptance(
+    inputs,
+    studentSession,
+    "/api/v1/chat/reply/stream",
+    {
+      messages: [{ role: "user", content: agentReplyAcceptanceContent(inputs.targetApplication) }],
+      notes: agentAcceptanceInitialNotes,
+      notesLocked: false,
+      notesTitle: "Production acceptance",
+      summary: "",
+    },
+    agentAcceptanceInitialNotes,
+  );
+  if (!reply.created) {
+    throw new Error("Agent reply acceptance must create a new durable run");
+  }
+  const autoAnalysis = await runAgentFrontendSSEAcceptance(
+    inputs,
+    studentSession,
+    "/api/v1/chat/auto-analysis/stream",
+    {},
+  );
+  return buildAgentAcceptanceReceipt({
+    acceptedAt: new Date().toISOString(),
+    administratorAccountId: adminSession.account.id,
+    acceptanceStudentAccountId: studentSession.account.id,
+    acceptanceStudentUsername: inputs.studentCredentials.username,
+    acceptanceStudentNumber: inputs.studentCredentials.studentNumber,
+    targetApplicationVersion: inputs.targetApplication.version,
+    targetApplicationCommit: inputs.targetApplication.commit,
+    targetApplicationBuildTime: inputs.targetApplication.buildTime,
+    providerCredentialSha256: inputs.modelCredentialSha256,
+    promptConfiguration,
+    modelConfiguration,
+    modelProbe: {
+      configurationKey: probe.configurationKey,
+      configurationHeadRevision: probe.configurationHeadRevision,
+      configurationVersion: probe.configurationVersion,
+      configurationSha256: probe.configurationSha256,
+      authority: probe.authority,
+      model: probe.model,
+      checkedAt: probe.checkedAt,
+      latencyMilliseconds: probe.latencyMilliseconds,
+    },
+    replyAcceptance: reply,
+    autoAnalysisAcceptance: autoAnalysis,
+  });
+}
+
 async function main(): Promise<void> {
   const phase = process.argv[2] as Phase | undefined;
-  if (process.argv.length !== 3 || (phase !== "prepare" && phase !== "verify")) {
-    throw new Error("usage: v2-production-initialization-client prepare|verify");
+  if (process.argv.length !== 3 || (phase !== "prepare" && phase !== "verify" && phase !== "agent")) {
+    throw new Error("usage: v2-production-initialization-client prepare|verify|agent");
   }
-  const inputs = await loadInputs();
-  const receipt = phase === "prepare" ? await prepare(inputs) : await verify(inputs);
+  const receipt = phase === "agent"
+    ? await agent(await loadAgentInputs())
+    : phase === "prepare"
+      ? await prepare(await loadInputs())
+      : await verify(await loadInputs());
   process.stdout.write(`${canonicalJSON(receipt)}\n`);
 }
 

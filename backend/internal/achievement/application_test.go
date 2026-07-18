@@ -20,15 +20,29 @@ func (verifier *fakeVerifier) VerifyAccessToken(token string) (auth.AccessPrinci
 }
 
 type fakeReader struct {
-	result Result
-	err    error
-	query  SelfQuery
-	calls  int
+	result               Result
+	err                  error
+	query                SelfQuery
+	studentNumberQuery   StudentNumberQuery
+	studentIdentityQuery StudentIdentityQuery
+	calls                int
 }
 
 func (reader *fakeReader) GetSelf(_ context.Context, query SelfQuery) (Result, error) {
 	reader.calls++
 	reader.query = query
+	return reader.result, reader.err
+}
+
+func (reader *fakeReader) GetByStudentNumber(_ context.Context, query StudentNumberQuery) (Result, error) {
+	reader.calls++
+	reader.studentNumberQuery = query
+	return reader.result, reader.err
+}
+
+func (reader *fakeReader) GetByStudentIdentity(_ context.Context, query StudentIdentityQuery) (Result, error) {
+	reader.calls++
+	reader.studentIdentityQuery = query
 	return reader.result, reader.err
 }
 
@@ -59,6 +73,38 @@ func TestApplicationDoesNotCallReaderAfterVerificationFailure(t *testing.T) {
 	}
 	if _, got := service.GetSelf(context.Background(), "bad"); !errors.Is(got, want) || reader.calls != 0 {
 		t.Fatalf("GetSelf() error/calls = %v/%d", got, reader.calls)
+	}
+}
+
+func TestApplicationForwardsStudentNumberWithoutAccessVerification(t *testing.T) {
+	t.Parallel()
+
+	verifier := &fakeVerifier{err: errors.New("must not verify selector reads")}
+	reader := &fakeReader{result: Result{State: StateNoObservations}}
+	service, err := NewApplicationService(verifier, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.GetByStudentNumber(context.Background(), "20260001")
+	if err != nil || result.State != StateNoObservations || verifier.token != "" || reader.calls != 1 ||
+		reader.studentNumberQuery.StudentNumber != "20260001" {
+		t.Fatalf("result/error/verifier/reader = %#v/%v/%#v/%#v", result, err, verifier, reader)
+	}
+}
+
+func TestApplicationForwardsExactStudentIdentityWithoutAccessVerification(t *testing.T) {
+	t.Parallel()
+
+	verifier := &fakeVerifier{err: errors.New("must not verify selector reads")}
+	reader := &fakeReader{result: Result{State: StateNoObservations}}
+	service, err := NewApplicationService(verifier, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.GetByStudentIdentity(context.Background(), "20260001", "Alice")
+	if err != nil || result.State != StateNoObservations || verifier.token != "" || reader.calls != 1 ||
+		reader.studentIdentityQuery != (StudentIdentityQuery{StudentNumber: "20260001", PTANickname: "Alice"}) {
+		t.Fatalf("result/error/verifier/reader = %#v/%v/%#v/%#v", result, err, verifier, reader)
 	}
 }
 

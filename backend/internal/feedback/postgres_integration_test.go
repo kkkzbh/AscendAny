@@ -1,17 +1,20 @@
 package feedback
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	artifactstore "github.com/kkkzbh/AscendAny/backend/internal/artifact"
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
 )
 
@@ -41,21 +44,76 @@ func TestPostgresAuthenticatedFeedbackIsIdempotentAndRateLimited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	artifacts, err := artifactstore.NewStore(filepath.Join(t.TempDir(), "artifacts"), MaxImageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachmentContent := []byte("duplicate feedback attachment")
+	publication, err := artifacts.Publish(ctx, bytes.NewReader(attachmentContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := Attachment{
+		Sequence: 1, Filename: "screenshot.png", SHA256: publication.Artifact.Hash,
+		SizeBytes: publication.Artifact.Size, MediaType: "image/png", StorageKey: publication.Artifact.StorageKey,
+	}
 	input := SubmitInput{
 		Principal:       principal,
 		ClientRequestID: integrationUUID(t),
 		Title:           "Feedback integration",
 		Content:         "The delivery job must be durable.",
+		Attachments: []Attachment{
+			attachment,
+			{
+				Sequence: 2, Filename: "screenshot-copy.png", SHA256: attachment.SHA256,
+				SizeBytes: attachment.SizeBytes, MediaType: attachment.MediaType, StorageKey: attachment.StorageKey,
+			},
+		},
 	}
 	first, err := service.SubmitAuthenticated(ctx, input)
+	releaseErr := publication.Release()
 	if err != nil || !first.Created {
 		t.Fatalf("first submission=%#v error=%v", first, err)
+	}
+	if releaseErr != nil {
+		t.Fatal(releaseErr)
+	}
+	var attachmentRows, distinctArtifacts int
+	var orderedAttachments string
+	if err := pool.QueryRow(ctx, `
+SELECT count(*)::integer,
+       count(DISTINCT attachment.artifact_id)::integer,
+       string_agg(attachment.attachment_sequence::text || ':' || attachment.filename, ',' ORDER BY attachment.attachment_sequence)
+FROM ascendany.feedback_submissions AS feedback
+JOIN ascendany.feedback_attachments AS attachment ON attachment.feedback_id = feedback.feedback_id
+WHERE feedback.public_id = $1::uuid`, first.Submission.ID).Scan(
+		&attachmentRows,
+		&distinctArtifacts,
+		&orderedAttachments,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if attachmentRows != 2 || distinctArtifacts != 1 || orderedAttachments != "1:screenshot.png,2:screenshot-copy.png" {
+		t.Fatalf("attachmentRows=%d distinctArtifacts=%d ordered=%q", attachmentRows, distinctArtifacts, orderedAttachments)
 	}
 	replayed, err := service.SubmitAuthenticated(ctx, input)
 	if err != nil || replayed.Created || replayed.Submission != first.Submission {
 		t.Fatalf("replayed submission=%#v error=%v", replayed, err)
 	}
-	worker, err := NewDeliveryWorker(repository, deliveryProviderFunc(func(context.Context, DeliveryRequest) ([]byte, error) {
+	providerCalls := 0
+	worker, err := NewDeliveryWorker(repository, artifacts, deliveryProviderFunc(func(_ context.Context, request DeliveryRequest) ([]byte, error) {
+		providerCalls++
+		if request.Sender.AccountID != principal.AccountID || request.Sender.Username == "" ||
+			request.Sender.DisplayName != "Feedback Admin" || request.Sender.Role != string(auth.RoleAdmin) ||
+			request.Sender.StudentNumber != nil || request.Sender.PTANickname != nil {
+			t.Fatalf("sender=%#v", request.Sender)
+		}
+		if len(request.Attachments) != 2 || request.Attachments[0].Sequence != 1 || request.Attachments[1].Sequence != 2 ||
+			request.Attachments[0].SHA256 != request.Attachments[1].SHA256 ||
+			!bytes.Equal(request.Attachments[0].Content, attachmentContent) ||
+			!bytes.Equal(request.Attachments[1].Content, attachmentContent) {
+			t.Fatalf("delivery attachments=%#v", request.Attachments)
+		}
 		return []byte("integration-receipt"), nil
 	}), DeliveryWorkerConfig{
 		Owner:         "feedback-integration",
@@ -67,7 +125,7 @@ func TestPostgresAuthenticatedFeedbackIsIdempotentAndRateLimited(t *testing.T) {
 	}
 	deliveryOutcome, err := worker.RunOne(ctx)
 	if err != nil || deliveryOutcome == nil || deliveryOutcome.JobID != first.Submission.DeliveryJobID ||
-		deliveryOutcome.Disposition != DeliverySucceeded || deliveryOutcome.ReceiptSHA256 == nil {
+		deliveryOutcome.Disposition != DeliverySucceeded || deliveryOutcome.ReceiptSHA256 == nil || providerCalls != 1 {
 		t.Fatalf("delivery outcome=%#v error=%v", deliveryOutcome, err)
 	}
 	changed := input

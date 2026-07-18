@@ -149,7 +149,7 @@ type EnqueueRequest struct {
 	Content                       string  `json:"content"`
 	PromptConfigurationKey        string  `json:"promptConfigurationKey"`
 	ModelConfigurationKey         string  `json:"modelConfigurationKey"`
-	ExpectedAnalyticsHeadRevision *int64  `json:"expectedAnalyticsHeadRevision"`
+	ExpectedAnalyticsHeadRevision *int64  `json:"expectedAnalyticsHeadRevision,omitempty"`
 }
 
 type EnqueueCommand struct {
@@ -171,9 +171,28 @@ type CreateThreadCommand struct {
 }
 
 type AutoAnalysisRequest struct {
-	PromptConfigurationKey        string `json:"promptConfigurationKey"`
-	ModelConfigurationKey         string `json:"modelConfigurationKey"`
-	ExpectedAnalyticsHeadRevision int64  `json:"expectedAnalyticsHeadRevision"`
+	PromptConfigurationKey        string                      `json:"promptConfigurationKey"`
+	ModelConfigurationKey         string                      `json:"modelConfigurationKey"`
+	ExpectedAnalyticsHeadRevision int64                       `json:"expectedAnalyticsHeadRevision"`
+	Identity                      AutoAnalysisIdentity        `json:"-"`
+	FrontendContext               AutoAnalysisFrontendContext `json:"frontendContext,omitempty"`
+}
+
+type AutoAnalysisIdentity struct {
+	ExamID string `json:"examId"`
+	RoleID string `json:"roleId"`
+}
+
+type AutoAnalysisFrontendContext struct {
+	StudentID        string `json:"studentId"`
+	PTANickname      string `json:"ptaNickname"`
+	RoleID           string `json:"roleId"`
+	RoleName         string `json:"roleName"`
+	RoleSystemPrompt string `json:"roleSystemPrompt"`
+	LatestExamID     string `json:"latestExamId"`
+	Notes            string `json:"notes"`
+	NotesTitle       string `json:"notesTitle"`
+	NotesLocked      bool   `json:"notesLocked"`
 }
 
 type AutoAnalysisInput struct {
@@ -181,6 +200,8 @@ type AutoAnalysisInput struct {
 	PromptConfigurationKey        string
 	ModelConfigurationKey         string
 	ExpectedAnalyticsHeadRevision int64
+	Identity                      AutoAnalysisIdentity
+	FrontendContext               AutoAnalysisFrontendContext
 }
 
 type AutoAnalysisCommand struct {
@@ -240,16 +261,18 @@ type ToolCallRecord struct {
 }
 
 type Work struct {
-	RunID          string
-	Kind           RunKind
-	ThreadID       string
-	StudentNumber  string
-	InputMessageID string
-	Analytics      *AnalyticsSnapshot
-	Prompt         ConfigurationSnapshot
-	Model          ConfigurationSnapshot
-	Conversation   []Message
-	ToolCalls      []ToolCallRecord
+	RunID               string
+	Kind                RunKind
+	ThreadID            string
+	StudentNumber       string
+	InputMessageID      string
+	Analytics           *AnalyticsSnapshot
+	AutoAnalysisContext *AutoAnalysisFrontendContext
+	FrontendNotes       *FrontendNotesState
+	Prompt              ConfigurationSnapshot
+	Model               ConfigurationSnapshot
+	Conversation        []Message
+	ToolCalls           []ToolCallRecord
 }
 
 type AssistantOutput struct {

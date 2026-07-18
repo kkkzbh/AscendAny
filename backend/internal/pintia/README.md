@@ -102,8 +102,14 @@ and completeness observations are transport/provenance metadata and are
 excluded. The artifact and snapshot records retain them separately. Any change
 to included fields or encoding requires a new protocol identifier.
 
+Official exporter provenance accepted by the registration nickname capability
+(strict SemVer `>=2.2.3` within major `2`) guarantees that
+`participant.displayName` is the exact nullable PTA `user.nickname`. Earlier
+snapshot-v2 exporter releases remain importable analytics input, while their
+`displayName` cannot authorize registration.
+
 The complete fixture currently has the following protocol golden hash:
 
 ```text
-d4310900fde625c06e896d5e6900a794d8e9fcfe7f5e3c35efb807128dfa7058
+6582875727744c1d33f8559fc35b3ff0b5b8c0009b18ea374f7b5f41b51ff48a
 ```

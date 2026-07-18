@@ -1,6 +1,6 @@
 export const SNAPSHOT_SCHEMA = "ascendany.pintia.snapshot.v2" as const;
 export const EXPORTER_NAME = "ascendany-pintia-exporter" as const;
-export const EXPORTER_VERSION = "2.2.2" as const;
+export const EXPORTER_VERSION = "2.2.3" as const;
 export const EXPORT_TASK_FORMAT_VERSION = 4 as const;
 export const EXPORT_COORDINATION_JOURNAL_ID = "global" as const;
 export const SCHEMA_SHA256 = "85b8277dc4485019499ff3bcceb1715ea73f58197ebdff9487c9a5fb8f3ccdfa" as const;
@@ -61,6 +61,7 @@ export interface PintiaParticipant {
   userId: string;
   studentUserId: string | null;
   studentNumber: string | null;
+  /** Exact nullable PTA user.nickname captured for this participant. */
   displayName: string | null;
   groupName: string | null;
   ranking: PintiaRanking | null;

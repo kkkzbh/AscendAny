@@ -116,7 +116,7 @@ func TestDefaultRateLimiterCoversEveryHTTPPolicyScope(t *testing.T) {
 		}
 	}
 	for _, secondary := range []string{
-		"auth.login.username", "auth.enrollment.claim.token",
+		"auth.login.username", "auth.register.username", "auth.enrollment.claim.token",
 	} {
 		if !limiter.Allow(secondary, "test-secondary").Allowed {
 			t.Fatalf("secondary rate scope %q is not configured", secondary)
@@ -140,12 +140,14 @@ func TestTrustedProxyRequiresExactCanonicalClientHeader(t *testing.T) {
 	resolver, err := newClientAddressResolver(
 		[]netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")},
 		"CF-Connecting-IP",
+		[]string{"http://127.0.0.1:5173", "http://localhost:5173", "https://ascendany.example"},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	valid := httptest.NewRequest("GET", "/api/v2/auth/me", nil)
 	valid.RemoteAddr = "127.0.0.1:43100"
+	valid.Header.Set("Origin", "https://ascendany.example")
 	valid.Header.Set("CF-Connecting-IP", "203.0.113.7")
 	address, err := resolver.Resolve(valid)
 	if err != nil || address != "203.0.113.7" {
@@ -153,7 +155,6 @@ func TestTrustedProxyRequiresExactCanonicalClientHeader(t *testing.T) {
 	}
 
 	tests := map[string][]string{
-		"missing":      nil,
 		"invalid":      {"client.example"},
 		"noncanonical": {"2001:0db8::1"},
 		"multiple":     {"203.0.113.7", "203.0.113.8"},
@@ -162,6 +163,7 @@ func TestTrustedProxyRequiresExactCanonicalClientHeader(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			request := httptest.NewRequest("GET", "/api/v2/auth/me", nil)
 			request.RemoteAddr = "127.0.0.1:43100"
+			request.Header.Set("Origin", "http://127.0.0.1:5173")
 			for _, value := range values {
 				request.Header.Add("CF-Connecting-IP", value)
 			}
@@ -173,6 +175,7 @@ func TestTrustedProxyRequiresExactCanonicalClientHeader(t *testing.T) {
 
 	untrusted := httptest.NewRequest("GET", "/api/v2/auth/me", nil)
 	untrusted.RemoteAddr = "192.0.2.25:43100"
+	untrusted.Header.Set("Origin", "http://127.0.0.1:5173")
 	untrusted.Header.Add("CF-Connecting-IP", "203.0.113.7")
 	untrusted.Header.Add("CF-Connecting-IP", "invalid-spoof")
 	address, err = resolver.Resolve(untrusted)
@@ -181,19 +184,72 @@ func TestTrustedProxyRequiresExactCanonicalClientHeader(t *testing.T) {
 	}
 }
 
+func TestTrustedLoopbackPeerAllowsOnlyConfiguredLoopbackHTTPOriginWithoutForwardingHeader(t *testing.T) {
+	resolver, err := newClientAddressResolver(
+		[]netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")},
+		"CF-Connecting-IP",
+		[]string{"http://127.0.0.1:5173", "http://localhost:5173", "https://ascendany.example"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, origin := range []string{"http://127.0.0.1:5173", "http://localhost:5173"} {
+		t.Run(origin, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "/api/v2/auth/me", nil)
+			request.RemoteAddr = "127.0.0.1:43100"
+			request.Header.Set("Origin", origin)
+			address, err := resolver.Resolve(request)
+			if err != nil || address != "127.0.0.1" {
+				t.Fatalf("loopback client = %q, err = %v", address, err)
+			}
+		})
+	}
+
+	for _, origin := range []string{"", "https://ascendany.example", "http://[::1]:5173"} {
+		t.Run("reject_"+origin, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "/api/v2/auth/me", nil)
+			request.RemoteAddr = "127.0.0.1:43100"
+			if origin != "" {
+				request.Header.Set("Origin", origin)
+			}
+			if _, err := resolver.Resolve(request); err == nil {
+				t.Fatal("trusted proxy request without a forwarding header unexpectedly succeeded")
+			}
+		})
+	}
+
+	nonLoopbackResolver, err := newClientAddressResolver(
+		[]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")},
+		"CF-Connecting-IP",
+		[]string{"http://127.0.0.1:5173"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonLoopbackRequest := httptest.NewRequest("GET", "/api/v2/auth/me", nil)
+	nonLoopbackRequest.RemoteAddr = "192.0.2.25:43100"
+	nonLoopbackRequest.Header.Set("Origin", "http://127.0.0.1:5173")
+	if _, err := nonLoopbackResolver.Resolve(nonLoopbackRequest); err == nil {
+		t.Fatal("trusted non-loopback peer unexpectedly used the loopback-origin capability")
+	}
+}
+
 func TestTrustedProxyConfigurationIsExplicit(t *testing.T) {
-	if _, err := newClientAddressResolver(nil, "CF-Connecting-IP"); err == nil {
+	if _, err := newClientAddressResolver(nil, "CF-Connecting-IP", nil); err == nil {
 		t.Fatal("client header without trusted proxy was accepted")
 	}
 	if _, err := newClientAddressResolver(
 		[]netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
 		"X-Forwarded-For",
+		nil,
 	); err == nil {
 		t.Fatal("unapproved proxy header was accepted")
 	}
 	if _, err := newClientAddressResolver(
 		[]netip.Prefix{netip.MustParsePrefix("192.0.2.1/24")},
 		"CF-Connecting-IP",
+		nil,
 	); err == nil {
 		t.Fatal("unmasked trusted proxy prefix was accepted")
 	}

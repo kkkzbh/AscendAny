@@ -2,6 +2,7 @@ package feedback
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -126,6 +127,50 @@ RETURNING feedback_id, created_at`,
 			return databaseFailure("insert feedback submission", err)
 		}
 
+		for _, attachment := range command.Attachments {
+			var artifactDatabaseID int64
+			var storedSHA256 string
+			var storedSizeBytes int64
+			var storedMediaType string
+			var storedStorageKey string
+			if err := tx.QueryRow(ctx, `
+WITH inserted AS (
+    INSERT INTO ascendany.artifacts (sha256, size_bytes, media_type, storage_key)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (sha256) DO NOTHING
+    RETURNING artifact_id, sha256, size_bytes, media_type, storage_key
+)
+SELECT artifact_id, sha256, size_bytes, media_type, storage_key
+FROM inserted
+UNION ALL
+SELECT artifact_id, sha256, size_bytes, media_type, storage_key
+FROM ascendany.artifacts
+WHERE sha256 = $1
+LIMIT 1`, attachment.SHA256, attachment.SizeBytes, attachment.MediaType, attachment.StorageKey).Scan(
+				&artifactDatabaseID,
+				&storedSHA256,
+				&storedSizeBytes,
+				&storedMediaType,
+				&storedStorageKey,
+			); err != nil {
+				return databaseFailure("register feedback attachment artifact", err)
+			}
+			if storedSHA256 != attachment.SHA256 || storedSizeBytes != attachment.SizeBytes ||
+				storedMediaType != attachment.MediaType || storedStorageKey != attachment.StorageKey {
+				return feedbackError(ErrorImageInvalid, true, "bind feedback attachment artifact", errors.New("artifact digest is already bound to different metadata"))
+			}
+			if _, err := tx.Exec(ctx, `
+INSERT INTO ascendany.feedback_attachments (
+    feedback_id,
+    attachment_sequence,
+    artifact_id,
+    filename
+)
+VALUES ($1, $2, $3, $4)`, feedbackDatabaseID, attachment.Sequence, artifactDatabaseID, attachment.Filename); err != nil {
+				return databaseFailure("insert feedback attachment", err)
+			}
+		}
+
 		var deliveryDatabaseID int64
 		if err := tx.QueryRow(ctx, `
 INSERT INTO ascendany.feedback_delivery_jobs (
@@ -145,7 +190,10 @@ INSERT INTO ascendany.feedback_delivery_events (
     event_type,
     payload
 )
-VALUES ($1, 1, 'queued', jsonb_build_object('configurationVersionId', $2::bigint))`, deliveryDatabaseID, deliveryConfigurationVersionID); err != nil {
+VALUES ($1, 1, 'queued', jsonb_build_object(
+    'configurationVersionId', $2::bigint,
+    'attachmentCount', $3::integer
+))`, deliveryDatabaseID, deliveryConfigurationVersionID, len(command.Attachments)); err != nil {
 			return databaseFailure("append feedback delivery queued event", err)
 		}
 		result = SubmitResult{
@@ -177,6 +225,7 @@ func loadExistingSubmission(
 	var platform *string
 	var appVersion *string
 	var userAgent *string
+	var attachmentsJSON string
 	err := tx.QueryRow(ctx, `
 SELECT feedback.public_id::text,
        delivery.public_id::text,
@@ -186,12 +235,31 @@ SELECT feedback.public_id::text,
        feedback.content,
        feedback.platform,
        feedback.app_version,
-       feedback.user_agent
+       feedback.user_agent,
+       COALESCE(
+           jsonb_agg(
+               jsonb_build_object(
+                   'sequence', attachment.attachment_sequence,
+                   'filename', attachment.filename,
+                   'sha256', artifact.sha256,
+                   'sizeBytes', artifact.size_bytes,
+                   'mediaType', artifact.media_type,
+                   'storageKey', artifact.storage_key
+               ) ORDER BY attachment.attachment_sequence
+           ) FILTER (WHERE attachment.feedback_id IS NOT NULL),
+           '[]'::jsonb
+       )::text
 FROM ascendany.feedback_submissions AS feedback
 JOIN ascendany.feedback_delivery_jobs AS delivery
   ON delivery.feedback_id = feedback.feedback_id
+LEFT JOIN ascendany.feedback_attachments AS attachment
+  ON attachment.feedback_id = feedback.feedback_id
+LEFT JOIN ascendany.artifacts AS artifact
+  ON artifact.artifact_id = attachment.artifact_id
 WHERE feedback.rate_limit_subject_digest = $1
-  AND feedback.client_request_id = $2::uuid`, command.SubjectDigest[:], command.ClientRequestID).Scan(
+  AND feedback.client_request_id = $2::uuid
+GROUP BY feedback.feedback_id,
+         delivery.feedback_delivery_job_id`, command.SubjectDigest[:], command.ClientRequestID).Scan(
 		&submission.ID,
 		&submission.DeliveryJobID,
 		&submission.CreatedAt,
@@ -201,6 +269,7 @@ WHERE feedback.rate_limit_subject_digest = $1
 		&platform,
 		&appVersion,
 		&userAgent,
+		&attachmentsJSON,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Submission{}, false, nil
@@ -208,12 +277,32 @@ WHERE feedback.rate_limit_subject_digest = $1
 	if err != nil {
 		return Submission{}, false, databaseFailure("load idempotent feedback submission", err)
 	}
+	var attachments []Attachment
+	if !json.Valid([]byte(attachmentsJSON)) || json.Unmarshal([]byte(attachmentsJSON), &attachments) != nil ||
+		validateAttachmentManifest(attachments) != nil {
+		return Submission{}, false, feedbackError(ErrorStoredDataInvalid, true, "load idempotent feedback submission", errors.New("stored feedback attachment manifest is invalid"))
+	}
 	if storedAccountID != accountDatabaseID || title != command.Title || content != command.Content ||
 		!equalOptional(platform, command.Platform) || !equalOptional(appVersion, command.AppVersion) || !equalOptional(userAgent, command.UserAgent) {
 		return Submission{}, false, feedbackError(ErrorIdempotencyConflict, true, "validate idempotent feedback submission", errors.New("client request ID was already used for different feedback"))
 	}
+	if !equalAttachments(attachments, command.Attachments) {
+		return Submission{}, false, feedbackError(ErrorIdempotencyConflict, true, "validate idempotent feedback submission", errors.New("client request ID was already used with a different attachment manifest"))
+	}
 	submission.CreatedAt = submission.CreatedAt.UTC()
 	return submission, true, nil
+}
+
+func equalAttachments(left, right []Attachment) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalOptional(left, right *string) bool {

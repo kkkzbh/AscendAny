@@ -24,9 +24,9 @@ import (
 
 const (
 	featureSchemaSHA256      = "09c18717b8de4b3dba6c8bd9341fb237176c6d22ab7f99e2e937bf7b387a060f"
-	knowledgeCatalogSHA256   = "a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
+	knowledgeCatalogSHA256   = "c164a2a0af654574a3855d6937dd888bbd9212c8081d50e4292cd05521f72351"
 	trainingProvenanceSHA256 = "a2513967a725e6a8ba8dcff3fdb6188a437c4a6eec74a668e48440ea651f19f7"
-	syntheticArtifactSHA256  = "5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
+	syntheticArtifactSHA256  = "392c9470556af563de09a971d501ab507d87b055847dcd78c5aaafc8cb452619"
 )
 
 type contractVectors struct {

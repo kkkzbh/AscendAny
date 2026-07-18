@@ -107,10 +107,18 @@ func (worker *Worker) processWithLease(ctx context.Context, claim Claim) (Worker
 		}
 		return WorkerOutcome{}, err
 	}
+	if err := validateRunExecutionContext(work.Kind, work.Analytics, work.AutoAnalysisContext); err != nil {
+		return worker.failRun(ctx, claim, "stored_data_invalid", "agent work execution context is invalid")
+	}
 	request := ProviderRequest{
 		RunID: work.RunID, Kind: work.Kind, ThreadID: work.ThreadID, StudentNumber: work.StudentNumber,
-		Analytics: work.Analytics, Prompt: work.Prompt, Model: work.Model,
+		InputMessageID: work.InputMessageID, Analytics: work.Analytics, AutoAnalysisContext: work.AutoAnalysisContext,
+		Prompt: work.Prompt, Model: work.Model,
 		Conversation: append([]Message(nil), work.Conversation...), ToolCalls: append([]ToolCallRecord(nil), work.ToolCalls...),
+	}
+	frontendNotes, err := replayFrontendNotes(work.FrontendNotes, work.ToolCalls)
+	if err != nil {
+		return worker.failRun(ctx, claim, "stored_data_invalid", "stored frontend notes mutation history is invalid")
 	}
 	maximumToolCalls := worker.maximumToolRounds * MaxProviderToolCallsPerTurn
 	if len(work.ToolCalls) > maximumToolCalls {
@@ -179,7 +187,8 @@ func (worker *Worker) processWithLease(ctx context.Context, claim Claim) (Worker
 			startedAt := worker.clock().UTC()
 			execution, err := worker.tools.Execute(ctx, ToolRequest{
 				RunID: work.RunID, StudentNumber: work.StudentNumber, Analytics: work.Analytics,
-				Key: normalized.Key, Name: normalized.Name, ArgumentsSchema: normalized.ArgumentsSchema, Arguments: normalized.Arguments,
+				FrontendNotes: cloneFrontendNotesState(frontendNotes),
+				Key:           normalized.Key, Name: normalized.Name, ArgumentsSchema: normalized.ArgumentsSchema, Arguments: normalized.Arguments,
 			})
 			finishedAt := worker.clock().UTC()
 			if contextErr := context.Cause(ctx); contextErr != nil {
@@ -192,10 +201,15 @@ func (worker *Worker) processWithLease(ctx context.Context, claim Claim) (Worker
 			if err != nil {
 				return worker.failRun(ctx, claim, "tool_contract_invalid", truncateDetail(err.Error()))
 			}
-			record, err = worker.repository.RecordToolCall(ctx, claim, record)
+			nextFrontendNotes, notesUpdate, err := notesUpdateForNewRecord(frontendNotes, record)
+			if err != nil {
+				return worker.failRun(ctx, claim, "tool_contract_invalid", "update_notes result is inconsistent with the run-local notes state")
+			}
+			record, err = worker.repository.RecordToolCall(ctx, claim, record, notesUpdate)
 			if err != nil {
 				return WorkerOutcome{}, err
 			}
+			frontendNotes = nextFrontendNotes
 			existing[record.Key] = record
 			request.ToolCalls = append(request.ToolCalls, record)
 		}
@@ -260,6 +274,32 @@ func validateAssistantOutput(output AssistantOutput) error {
 		output.ReasoningContent != nil && (len(*output.ReasoningContent) > MaxReasoningBytes || !utf8.ValidString(*output.ReasoningContent) || strings.IndexByte(*output.ReasoningContent, 0) >= 0) ||
 		output.ContextSummary != nil && (len(*output.ContextSummary) > MaxContextSummaryBytes || !utf8.ValidString(*output.ContextSummary) || strings.IndexByte(*output.ContextSummary, 0) >= 0) {
 		return errors.New("assistant output violates byte limits")
+	}
+	return nil
+}
+
+func validateRunExecutionContext(
+	kind RunKind,
+	analytics *AnalyticsSnapshot,
+	autoAnalysisContext *AutoAnalysisFrontendContext,
+) error {
+	switch kind {
+	case RunReply:
+		if autoAnalysisContext != nil {
+			return errors.New("reply execution context contains automatic-analysis frontend context")
+		}
+		if analytics != nil && (analytics.GenerationDatabaseID < 1 || analytics.HeadRevision < 1) {
+			return errors.New("reply analytics binding is incomplete")
+		}
+	case RunAutoAnalysis:
+		if analytics == nil || analytics.GenerationDatabaseID < 1 || analytics.HeadRevision < 1 || autoAnalysisContext == nil {
+			return errors.New("automatic-analysis execution context is missing frontend context")
+		}
+		if _, err := canonicalAutoAnalysisInputContent(*autoAnalysisContext); err != nil {
+			return fmt.Errorf("validate automatic-analysis frontend context: %w", err)
+		}
+	default:
+		return errors.New("run kind is invalid")
 	}
 	return nil
 }

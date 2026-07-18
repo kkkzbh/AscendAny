@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/kkkzbh/AscendAny/backend/internal/analytics"
@@ -16,6 +17,8 @@ type analyticsState struct {
 	GenerationID        *int64
 	HeadRevision        int64
 	InputManifestSHA256 string
+	AlgorithmVersion    string
+	ConfigSHA256        string
 }
 
 type analyticsGenerationState struct {
@@ -27,6 +30,8 @@ type analyticsGenerationState struct {
 	TargetExamHeadRevision    int64
 	InputManifest             string
 	InputManifestSHA256       string
+	AlgorithmVersion          string
+	ConfigSHA256              string
 }
 
 func loadAnalyticsState(ctx context.Context, tx recommendationQuery) (analyticsState, error) {
@@ -67,9 +72,11 @@ SELECT status,
        base_head_revision,
        target_exam_id,
        target_snapshot_id,
-       target_exam_head_revision,
-       input_manifest::text,
-       input_manifest_sha256
+	       target_exam_head_revision,
+	       input_manifest::text,
+	       input_manifest_sha256,
+	       algorithm_version,
+	       config_sha256
 FROM ascendany.analytics_generations
 WHERE analytics_generation_id = $1`, *state.GenerationID).Scan(
 		&generation.Status,
@@ -80,6 +87,8 @@ WHERE analytics_generation_id = $1`, *state.GenerationID).Scan(
 		&generation.TargetExamHeadRevision,
 		&generation.InputManifest,
 		&generation.InputManifestSHA256,
+		&generation.AlgorithmVersion,
+		&generation.ConfigSHA256,
 	); errors.Is(err, pgx.ErrNoRows) {
 		return analyticsState{}, domainError(ErrorStoredDataInvalid, true, "load recommendation analytics generation", errors.New("analytics head target is missing"))
 	} else if err != nil {
@@ -89,12 +98,15 @@ WHERE analytics_generation_id = $1`, *state.GenerationID).Scan(
 		return analyticsState{}, domainError(ErrorStoredDataInvalid, true, "validate recommendation analytics generation", err)
 	}
 	state.InputManifestSHA256 = generation.InputManifestSHA256
+	state.AlgorithmVersion = generation.AlgorithmVersion
+	state.ConfigSHA256 = generation.ConfigSHA256
 	return state, nil
 }
 
 func validateAnalyticsGenerationState(head analyticsState, generation analyticsGenerationState) error {
 	if head.GenerationID == nil || *head.GenerationID <= 0 || head.HeadRevision <= 0 ||
-		generation.Status != "succeeded" || !lowercaseSHA256Pattern.MatchString(generation.InputManifestSHA256) {
+		generation.Status != "succeeded" || !lowercaseSHA256Pattern.MatchString(generation.InputManifestSHA256) ||
+		generation.AlgorithmVersion == "" || !lowercaseSHA256Pattern.MatchString(generation.ConfigSHA256) {
 		return errors.New("analytics head target is not a succeeded canonical generation")
 	}
 	if generation.BaseHeadRevision != head.HeadRevision-1 ||
@@ -342,6 +354,122 @@ ORDER BY result.snapshot_id, result.problem_set_problem_id`, generationID, actor
 	}
 	if err := rows.Err(); err != nil {
 		return nil, databaseError("iterate current recommendation observations", err)
+	}
+	return result, nil
+}
+
+type problemActivityRow struct {
+	Identity        problemInstanceIdentity
+	Correct         bool
+	LastSubmittedAt time.Time
+}
+
+func queryProblemActivity(
+	ctx context.Context,
+	tx recommendationQuery,
+	generationID, actorID int64,
+	acceptedVerdicts []string,
+) ([]problemActivityRow, error) {
+	rows, err := tx.Query(ctx, `
+SELECT generation_snapshot.snapshot_id,
+	   submission.problem_set_problem_id,
+	   bool_or(submission.verdict = ANY($3::text[])),
+       max(identity.submitted_at)
+FROM ascendany.analytics_generation_snapshots AS generation_snapshot
+JOIN ascendany.pintia_snapshot_submissions AS submission
+  ON submission.snapshot_id = generation_snapshot.snapshot_id
+ AND submission.exam_id = generation_snapshot.exam_id
+ AND submission.actor_id = $2
+JOIN ascendany.pintia_submission_identities AS identity
+  ON identity.submission_identity_id = submission.submission_identity_id
+ AND identity.exam_id = submission.exam_id
+ AND identity.actor_id = submission.actor_id
+ AND identity.problem_set_problem_id = submission.problem_set_problem_id
+WHERE generation_snapshot.analytics_generation_id = $1
+GROUP BY generation_snapshot.snapshot_id, submission.problem_set_problem_id
+ORDER BY generation_snapshot.snapshot_id, submission.problem_set_problem_id`, generationID, actorID, acceptedVerdicts)
+	if err != nil {
+		return nil, databaseError("query recommendation knowledge activity", err)
+	}
+	defer rows.Close()
+	result := make([]problemActivityRow, 0)
+	for rows.Next() {
+		var value problemActivityRow
+		if err := rows.Scan(
+			&value.Identity.SnapshotID, &value.Identity.ProblemSetProblemID,
+			&value.Correct, &value.LastSubmittedAt,
+		); err != nil {
+			return nil, databaseError("scan recommendation knowledge activity", err)
+		}
+		if value.LastSubmittedAt.IsZero() {
+			return nil, domainError(ErrorStoredDataInvalid, true, "validate recommendation knowledge activity", errors.New("knowledge activity has no submission time"))
+		}
+		value.LastSubmittedAt = value.LastSubmittedAt.UTC()
+		result = append(result, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, databaseError("iterate recommendation knowledge activity", err)
+	}
+	return result, nil
+}
+
+type recentActivityRow struct {
+	Identity  problemInstanceIdentity
+	Date      string
+	Attempted int64
+	Correct   int64
+}
+
+func queryRecentActivity(
+	ctx context.Context,
+	tx recommendationQuery,
+	generationID, actorID int64,
+	acceptedVerdicts []string,
+) ([]recentActivityRow, error) {
+	rows, err := tx.Query(ctx, `
+SELECT generation_snapshot.snapshot_id,
+	   submission.problem_set_problem_id,
+	   to_char((identity.submitted_at AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD'),
+       count(*)::bigint,
+       count(*) FILTER (
+	       WHERE submission.verdict = ANY($3::text[])
+       )::bigint
+FROM ascendany.analytics_generation_snapshots AS generation_snapshot
+JOIN ascendany.pintia_snapshot_submissions AS submission
+  ON submission.snapshot_id = generation_snapshot.snapshot_id
+ AND submission.exam_id = generation_snapshot.exam_id
+ AND submission.actor_id = $2
+JOIN ascendany.pintia_submission_identities AS identity
+  ON identity.submission_identity_id = submission.submission_identity_id
+ AND identity.exam_id = submission.exam_id
+ AND identity.actor_id = submission.actor_id
+ AND identity.problem_set_problem_id = submission.problem_set_problem_id
+WHERE generation_snapshot.analytics_generation_id = $1
+	  AND identity.submitted_at >= transaction_timestamp() - interval '7 days'
+GROUP BY generation_snapshot.snapshot_id, submission.problem_set_problem_id,
+	         (identity.submitted_at AT TIME ZONE 'UTC')::date
+ORDER BY generation_snapshot.snapshot_id, submission.problem_set_problem_id,
+	         (identity.submitted_at AT TIME ZONE 'UTC')::date`, generationID, actorID, acceptedVerdicts)
+	if err != nil {
+		return nil, databaseError("query recent recommendation knowledge activity", err)
+	}
+	defer rows.Close()
+	result := make([]recentActivityRow, 0)
+	for rows.Next() {
+		var value recentActivityRow
+		if err := rows.Scan(
+			&value.Identity.SnapshotID, &value.Identity.ProblemSetProblemID,
+			&value.Date, &value.Attempted, &value.Correct,
+		); err != nil {
+			return nil, databaseError("scan recent recommendation knowledge activity", err)
+		}
+		if value.Attempted <= 0 || value.Correct < 0 || value.Correct > value.Attempted {
+			return nil, domainError(ErrorStoredDataInvalid, true, "validate recent recommendation knowledge activity", errors.New("recent activity counts are invalid"))
+		}
+		result = append(result, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, databaseError("iterate recent recommendation knowledge activity", err)
 	}
 	return result, nil
 }

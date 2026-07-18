@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -133,6 +134,20 @@ func ParseConfig(data []byte) (ParsedConfig, error) {
 		Canonical: canonical,
 		SHA256:    hex.EncodeToString(digest[:]),
 	}, nil
+}
+
+// VerifyParsedConfig reconstructs a parsed configuration from its canonical
+// bytes. Callers that retain a ParsedConfig across ownership boundaries use
+// this gate so mutable exported fields cannot drift from the bound SHA-256.
+func VerifyParsedConfig(configuration ParsedConfig) (ParsedConfig, error) {
+	parsed, err := ParseConfig(configuration.Canonical)
+	if err != nil {
+		return ParsedConfig{}, err
+	}
+	if !bytes.Equal(configuration.Canonical, parsed.Canonical) || configuration.SHA256 != parsed.SHA256 {
+		return ParsedConfig{}, analyticsError(ErrorInvalidConfiguration, true, "verify parsed config", errors.New("canonical analytics configuration or SHA-256 differs"))
+	}
+	return parsed, nil
 }
 
 func validateConfig(configuration *Config) error {

@@ -3,7 +3,7 @@
 BEGIN;
 
 -- The bootstrap has two valid entry states: a fresh template0 database, or
--- the exact embedded schema-v7 history. The second state makes ACL repair
+-- the exact embedded schema-v10 history. The second state makes ACL repair
 -- idempotent while preserving one closed v2 schema identity.
 DO $database_boundary$
 DECLARE
@@ -16,7 +16,10 @@ DECLARE
         '4:achievement_rules:3242ddfbdee0911d961ebe0f46237f6e2b8a6e7c5e09cf1d94f6ae98c4caaccb',
         '5:auto_analysis_once:40fed038bc7773f45e940de2880ca18427573e10555937afa202e684aecdaa17',
         '6:inference_model_runtime:330bd7bebdd6e67572a76fcb0c1e84c897df2a766f6e821312c46ecfc18e39ea',
-        '7:catalog_publication_provenance:a69c081d1b0eaa31df8490773d3feed355fdb4053925f84087552df9b5fc940b'
+        '7:catalog_publication_provenance:a69c081d1b0eaa31df8490773d3feed355fdb4053925f84087552df9b5fc940b',
+        '8:auto_analysis_frontend_context:117d0eff2231d23929e91dda1f463d766b0d2dd7c8ff381266b5431f25cc4ed9',
+        '9:auth_pta_nickname:6ec2def4d4e433fd6d1dc915b582d724a445b79f5fa023260bb841a66e2e630e',
+        '10:feedback_duplicate_attachments:08cd0e1437ffa16c41ef4de0d1857acff38e15626770cd1dc2ec80dc2e7855e5'
     ];
 BEGIN
     IF current_database() <> 'ascendany_v2' THEN
@@ -48,7 +51,7 @@ BEGIN
     INTO actual_history;
 
     IF actual_history IS DISTINCT FROM expected_history THEN
-        RAISE EXCEPTION 'non-empty ascendany schema does not match the embedded schema-v7 history';
+        RAISE EXCEPTION 'non-empty ascendany schema does not match the embedded schema-v10 history';
     END IF;
 END
 $database_boundary$;

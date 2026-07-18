@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"io"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Clock interface {
@@ -262,6 +264,29 @@ func (s *Service) Me(ctx context.Context, accessToken string) (Account, error) {
 		return Account{}, err
 	}
 	return authenticated.Account, nil
+}
+
+// ExchangeSSO exposes the frozen Agent frontend's explicit SSO capability.
+// This deployment has no external identity provider configured, so the
+// capability is closed deterministically before any account state is read.
+func (s *Service) ExchangeSSO(_ context.Context, input SSOExchangeInput) (AuthResult, error) {
+	if len(input.Token) < 32 || len(input.Token) > 4096 || !utf8.ValidString(input.Token) || strings.IndexByte(input.Token, 0) >= 0 {
+		return AuthResult{}, authError(ErrorInvalidInput, "SSO token is invalid.", nil)
+	}
+	return AuthResult{}, ssoDisabled()
+}
+
+// BootstrapLocalPassword is closed for the only provision source supported by
+// this deployment. Authentication and password validation still happen at the
+// service boundary so the endpoint cannot be used as an account oracle.
+func (s *Service) BootstrapLocalPassword(ctx context.Context, input LocalPasswordBootstrapInput) error {
+	if err := validatePassword(input.NewPassword); err != nil {
+		return err
+	}
+	if _, err := s.Me(ctx, input.AccessToken); err != nil {
+		return err
+	}
+	return localPasswordAlreadyEnabled()
 }
 
 // VerifyAccessToken verifies the signed access credential and returns its

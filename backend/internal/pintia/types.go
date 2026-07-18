@@ -63,12 +63,14 @@ type Problem struct {
 }
 
 type Participant struct {
-	UserID        string   `json:"userId"`
-	StudentUserID *string  `json:"studentUserId"`
-	StudentNumber *string  `json:"studentNumber"`
-	DisplayName   *string  `json:"displayName"`
-	GroupName     *string  `json:"groupName"`
-	Ranking       *Ranking `json:"ranking"`
+	UserID        string  `json:"userId"`
+	StudentUserID *string `json:"studentUserId"`
+	StudentNumber *string `json:"studentNumber"`
+	// DisplayName is exporter-defined snapshot data. Registration-capable official
+	// exporter provenance (SemVer >=2.2.3 within major 2) guarantees PTA user.nickname.
+	DisplayName *string  `json:"displayName"`
+	GroupName   *string  `json:"groupName"`
+	Ranking     *Ranking `json:"ranking"`
 }
 
 type Ranking struct {

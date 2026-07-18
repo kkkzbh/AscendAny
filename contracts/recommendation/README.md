@@ -17,8 +17,11 @@ trainer, imports a training library, or reads a training dataset.
 - `vectors/ascendany.recommendation.feature-extraction-vectors.v1.json`
   executes representative actor and problem aggregation, nullable-value,
   transform, and zero-denominator cases against the online Go implementation.
-- `fixtures/synthetic-test-only.inference-model.v1.json` is a complete
-  `acceptance_test` artifact used by parser and CLI tests.
+- `fixtures/synthetic-test-only.inference-model.v1.json` and
+  `fixtures/synthetic-test-only.knowledge-catalog.v1.json` are a matched
+  `acceptance_test` pair used by parser, CLI, and PostgreSQL rehearsal tests.
+  The catalog binds the exact problem facts in
+  `contracts/pintia/fixtures/valid/complete.json`.
 - `fixtures/e2e-test-only.inference-model.v1.json` and
   `fixtures/e2e-test-only.knowledge-catalog.v1.json` are a matched acceptance
   pair bound to the sanitized Pintia exporter fixture's exact problem facts.
@@ -149,8 +152,9 @@ ascendany-model verify \
   --expected-purpose production
 ```
 
-The synthetic fixture digest is
-`5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58`.
+The synthetic model/catalog digests are
+`392c9470556af563de09a971d501ab507d87b055847dcd78c5aaafc8cb452619` and
+`c164a2a0af654574a3855d6937dd888bbd9212c8081d50e4292cd05521f72351`.
 The full-E2E-only model/catalog digests are
 `26798ac81a219fd2e38aa5cf45f47eec460f75bd039aa8fc8db45dd11425e0a8` and
 `9db76af3f2b8e6fa018b6a955e674b0273bb457582981e67dfc159e12c7d43bf`.

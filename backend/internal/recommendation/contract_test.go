@@ -15,6 +15,7 @@ import (
 	"github.com/kkkzbh/AscendAny/backend/internal/canonicaljson"
 	"github.com/kkkzbh/AscendAny/backend/internal/configuration"
 	"github.com/kkkzbh/AscendAny/backend/internal/inferencemodel"
+	"github.com/kkkzbh/AscendAny/backend/internal/pintia"
 )
 
 func TestFeatureSchemaIsCanonicalAndClosed(t *testing.T) {
@@ -207,7 +208,11 @@ func TestFeatureExtractionVectorsMatchImplementation(t *testing.T) {
 					Knowledge: []catalogWeight{{KnowledgePointID: "arrays", Weight: 1, raw: "1"}},
 				}},
 			}
-			candidates, err := buildCandidates(rows, catalog, []string{"arrays"}, map[string]struct{}{})
+			facts, err := buildProblemFactIndex(rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidates, err := buildCandidates(rows, facts, catalog, []string{"arrays"}, map[string]struct{}{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,6 +338,78 @@ func TestKnowledgeCatalogPreservesCanonicalDecimalWeightContract(t *testing.T) {
 		if _, _, _, parseErr := parseKnowledgeCatalog(testCatalogDocument(t, assignments)); parseErr == nil {
 			t.Fatalf("noncanonical catalog weight %#v was accepted", invalid)
 		}
+	}
+}
+
+func TestSyntheticCatalogAssignmentsMatchSanitizedCompleteFixtureFacts(t *testing.T) {
+	t.Parallel()
+	repositoryRoot := filepath.Clean(filepath.Join(recommendationContractDirectory(t), "..", ".."))
+	snapshotBytes, err := os.ReadFile(filepath.Join(repositoryRoot, "contracts", "pintia", "fixtures", "valid", "complete.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot pintia.Snapshot
+	if err := decodeClosed(snapshotBytes, &snapshot); err != nil {
+		t.Fatalf("decode sanitized complete snapshot: %v", err)
+	}
+
+	integerPointer := func(value *pintia.NonNegativeInteger) *int64 {
+		if value == nil {
+			return nil
+		}
+		converted, conversionErr := value.Int64()
+		if conversionErr != nil {
+			t.Fatal(conversionErr)
+		}
+		return &converted
+	}
+	rows := make([]problemRow, len(snapshot.Problems))
+	for index, problem := range snapshot.Problems {
+		var maxScore *string
+		if problem.MaxScore != nil {
+			value := problem.MaxScore.String()
+			maxScore = &value
+		}
+		rows[index] = problemRow{
+			SnapshotID:          1,
+			ProblemSetID:        snapshot.Exam.ProblemSetID,
+			ProblemSetProblemID: problem.ProblemSetProblemID,
+			SourceURL:           snapshot.Exam.SourceURL,
+			Platform:            snapshot.Exam.Platform,
+			ProblemID:           problem.ProblemID,
+			Title:               problem.Title,
+			ContentHTML:         problem.ContentHTML,
+			MaxScore:            maxScore,
+			TimeLimitMS:         integerPointer(problem.TimeLimitMS),
+			MemoryLimitBytes:    integerPointer(problem.MemoryLimitBytes),
+		}
+	}
+	review, err := buildReviewCandidates(rows)
+	if err != nil {
+		t.Fatalf("build sanitized review candidates: %v", err)
+	}
+
+	catalogBytes, err := os.ReadFile(filepath.Join(
+		recommendationContractDirectory(t),
+		"fixtures",
+		"synthetic-test-only.knowledge-catalog.v1.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, canonical, _, err := parseKnowledgeCatalog(catalogBytes)
+	if err != nil || string(canonical) != string(catalogBytes) {
+		t.Fatalf("parse synthetic catalog: canonical=%s err=%v", canonical, err)
+	}
+	missing, dangling := catalogCoverageDifference(catalog, review)
+	if len(missing) != 0 || len(dangling) != 0 || len(catalog.Assignments) != len(review) {
+		t.Fatalf(
+			"synthetic catalog does not cover sanitized complete snapshot: assignments=%d review=%d missing=%v dangling=%v",
+			len(catalog.Assignments),
+			len(review),
+			missing,
+			dangling,
+		)
 	}
 }
 

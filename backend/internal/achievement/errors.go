@@ -12,6 +12,7 @@ const (
 	ErrorInvalidConfiguration ErrorCode = "achievement_invalid_configuration"
 	ErrorInvalidQuery         ErrorCode = "achievement_invalid_query"
 	ErrorForbidden            ErrorCode = "achievement_forbidden"
+	ErrorStudentNotFound      ErrorCode = "achievement_student_not_found"
 	ErrorPrincipalRejected    ErrorCode = "achievement_principal_rejected"
 	ErrorStoredDataInvalid    ErrorCode = "achievement_stored_data_invalid"
 	ErrorDatabase             ErrorCode = "achievement_database_failure"

@@ -98,6 +98,27 @@ func validateSubmitInput(ctx context.Context, input SubmitInput) error {
 			return feedbackError(ErrorInvalidInput, true, "validate authenticated feedback", errors.New("optional metadata violates byte limits or trimming rules"))
 		}
 	}
+	if err := validateAttachmentManifest(input.Attachments); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAttachmentManifest(attachments []Attachment) error {
+	if len(attachments) > MaxImages {
+		return feedbackError(ErrorTooManyImages, true, "validate feedback attachments", errors.New("feedback attachment count exceeds eight"))
+	}
+	for index, attachment := range attachments {
+		expectedSequence := int16(index + 1)
+		if attachment.Sequence != expectedSequence || strings.TrimSpace(attachment.Filename) != attachment.Filename ||
+			len(attachment.Filename) < 1 || len(attachment.Filename) > MaxAttachmentFilenameBytes ||
+			!lowercaseSHA256.MatchString(attachment.SHA256) || attachment.SizeBytes < 1 || attachment.SizeBytes > MaxImageBytes ||
+			attachment.MediaType != strings.ToLower(attachment.MediaType) ||
+			!imageDataURLMediaType(attachment.MediaType) ||
+			attachment.StorageKey != "sha256/"+attachment.SHA256[:2]+"/"+attachment.SHA256 {
+			return feedbackError(ErrorImageInvalid, true, "validate feedback attachments", errors.New("feedback attachment manifest is malformed"))
+		}
+	}
 	return nil
 }
 

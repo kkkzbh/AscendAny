@@ -125,5 +125,7 @@ func (service *ApplicationService) EnqueueAutoAnalysis(
 		PromptConfigurationKey:        request.PromptConfigurationKey,
 		ModelConfigurationKey:         request.ModelConfigurationKey,
 		ExpectedAnalyticsHeadRevision: request.ExpectedAnalyticsHeadRevision,
+		Identity:                      request.Identity,
+		FrontendContext:               request.FrontendContext,
 	})
 }

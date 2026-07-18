@@ -60,14 +60,31 @@ func TestSubmitAuthenticatedBuildsStableSubjectAndOwnedIDs(t *testing.T) {
 func TestSubmitAuthenticatedRejectsMalformedInputBeforeRepository(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name   string
-		mutate func(*SubmitInput)
+		name     string
+		expected ErrorCode
+		mutate   func(*SubmitInput)
 	}{
-		{name: "role", mutate: func(input *SubmitInput) { input.Principal.Role = "operator" }},
-		{name: "request", mutate: func(input *SubmitInput) { input.ClientRequestID = "bad" }},
-		{name: "title trim", mutate: func(input *SubmitInput) { input.Title = " title" }},
-		{name: "content limit", mutate: func(input *SubmitInput) { input.Content = strings.Repeat("x", MaxContentBytes+1) }},
-		{name: "metadata trim", mutate: func(input *SubmitInput) { value := " web"; input.Platform = &value }},
+		{name: "role", expected: ErrorInvalidInput, mutate: func(input *SubmitInput) { input.Principal.Role = "operator" }},
+		{name: "request", expected: ErrorInvalidInput, mutate: func(input *SubmitInput) { input.ClientRequestID = "bad" }},
+		{name: "title trim", expected: ErrorInvalidInput, mutate: func(input *SubmitInput) { input.Title = " title" }},
+		{name: "content limit", expected: ErrorInvalidInput, mutate: func(input *SubmitInput) { input.Content = strings.Repeat("x", MaxContentBytes+1) }},
+		{name: "metadata trim", expected: ErrorInvalidInput, mutate: func(input *SubmitInput) { value := " web"; input.Platform = &value }},
+		{name: "attachment sequence", expected: ErrorImageInvalid, mutate: func(input *SubmitInput) {
+			input.Attachments = []Attachment{validAttachment()}
+			input.Attachments[0].Sequence = 2
+		}},
+		{name: "attachment size", expected: ErrorImageInvalid, mutate: func(input *SubmitInput) {
+			input.Attachments = []Attachment{validAttachment()}
+			input.Attachments[0].SizeBytes = MaxImageBytes + 1
+		}},
+		{name: "attachment media", expected: ErrorImageInvalid, mutate: func(input *SubmitInput) {
+			input.Attachments = []Attachment{validAttachment()}
+			input.Attachments[0].MediaType = "text/plain"
+		}},
+		{name: "attachment storage", expected: ErrorImageInvalid, mutate: func(input *SubmitInput) {
+			input.Attachments = []Attachment{validAttachment()}
+			input.Attachments[0].StorageKey = "sha256/ff/invalid"
+		}},
 	}
 	for _, test := range tests {
 		test := test
@@ -80,13 +97,21 @@ func TestSubmitAuthenticatedRejectsMalformedInputBeforeRepository(t *testing.T) 
 			}
 			input := validSubmitInput()
 			test.mutate(&input)
-			if _, err := service.SubmitAuthenticated(context.Background(), input); CodeOf(err) != ErrorInvalidInput {
+			if _, err := service.SubmitAuthenticated(context.Background(), input); CodeOf(err) != test.expected {
 				t.Fatalf("error=%v code=%q", err, CodeOf(err))
 			}
 			if repository.command.ClientRequestID != "" {
 				t.Fatal("repository was called for invalid input")
 			}
 		})
+	}
+}
+
+func validAttachment() Attachment {
+	hash := strings.Repeat("a", 64)
+	return Attachment{
+		Sequence: 1, Filename: "screenshot.png", SHA256: hash, SizeBytes: 3,
+		MediaType: "image/png", StorageKey: "sha256/aa/" + hash,
 	}
 }
 

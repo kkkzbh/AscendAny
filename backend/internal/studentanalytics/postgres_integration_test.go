@@ -62,7 +62,11 @@ SELECT (SELECT count(*) FROM ascendany.auth_accounts),
 	if result.State != StateReady || result.HeadRevision != 1 || result.Ready == nil || result.Ready.Rating != 1510 ||
 		len(result.Ready.ExamHistory) != 1 || len(result.Ready.RatingHistory) != 1 ||
 		result.Ready.ExamHistory[0].ExamID != fixture.examPublicID || result.Ready.ExamHistory[0].SnapshotID != fixture.snapshotPublicID ||
-		result.Ready.ExamHistory[0].Title != "Student analytics integration" {
+		result.Ready.ExamHistory[0].Title != "Student analytics integration" || result.Ready.LatestPeer == nil ||
+		result.Ready.LatestPeer.TotalParticipants != 1 || result.Ready.LatestPeer.Position != 1 ||
+		result.Ready.LatestPeer.Rank != 1 || result.Ready.LatestPeer.Solved != 1 || result.Ready.LatestPeer.Previous != nil ||
+		result.Ready.LatestPeer.BandMedian.Values.Knowledge == nil ||
+		*result.Ready.LatestPeer.BandMedian.Values.Knowledge != 80 {
 		t.Fatalf("result = %#v", result)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -187,7 +191,7 @@ VALUES (
     'Student analytics integration', 'https://pintia.cn/problem-sets/student-analytics-integration',
     '2026-07-11T00:00:00Z', '2026-07-11T01:00:00Z', 100,
     1, 1, 1, true,
-    0, 0, 0, true,
+    1, 1, 1, true,
     0, 0, 0, true,
     1
 )
@@ -243,6 +247,21 @@ INSERT INTO ascendany.pintia_snapshot_participants (
     snapshot_id, actor_id, student_number, display_name
 )
 VALUES ($1, $2, '20260001', 'Integration Student')`, snapshotID, actorID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO ascendany.pintia_rankings (
+    snapshot_id, actor_id, rank, total_score, time_used_seconds
+)
+VALUES ($1, $2, 1, 100, 1800)`, snapshotID, actorID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO ascendany.pintia_ranking_problem_results (
+    snapshot_id, actor_id, problem_set_problem_id, score, passed,
+    valid_submission_count, accept_time_seconds
+)
+VALUES ($1, $2, 'p1', 100, true, 1, 1200)`, snapshotID, actorID); err != nil {
 		t.Fatal(err)
 	}
 

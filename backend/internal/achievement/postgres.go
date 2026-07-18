@@ -32,6 +32,13 @@ type PostgresRepository struct {
 	begin beginReadTransaction
 }
 
+type achievementSubject struct {
+	accountDatabaseID int64
+	actorID           int64
+}
+
+type resolveAchievementSubject func(context.Context, readTx) (achievementSubject, error)
+
 func NewPostgresRepository(pool PgxBeginner) (*PostgresRepository, error) {
 	if pool == nil {
 		return nil, achievementError(ErrorInvalidConfiguration, "construct achievement PostgreSQL repository", errors.New("database pool is required"))
@@ -52,14 +59,119 @@ func (repository *PostgresRepository) LoadSelf(ctx context.Context, query SelfQu
 	if err := validateSelfQuery(ctx, query); err != nil {
 		return RepositorySnapshot{}, err
 	}
-	var snapshot RepositorySnapshot
-	err := repository.readTransaction(ctx, "load student achievements", func(tx readTx) error {
+	return repository.loadSubjectSnapshot(ctx, "load self student achievements", func(ctx context.Context, tx readTx) (achievementSubject, error) {
 		resolved, err := principalguard.Resolve(ctx, tx, query.Principal, principalguard.Roles(auth.RoleStudent))
 		if err != nil {
-			return mapPrincipalError(err)
+			return achievementSubject{}, mapPrincipalError(err)
 		}
 		if resolved.ActorID == nil || *resolved.ActorID <= 0 {
-			return storedDataFailure("resolve achievement student actor", errors.New("student principal has no actor binding"))
+			return achievementSubject{}, storedDataFailure("resolve achievement student actor", errors.New("student principal has no actor binding"))
+		}
+		return achievementSubject{accountDatabaseID: resolved.AccountDatabaseID, actorID: *resolved.ActorID}, nil
+	})
+}
+
+func (repository *PostgresRepository) LoadByStudentNumber(ctx context.Context, query StudentNumberQuery) (RepositorySnapshot, error) {
+	if err := validateStudentNumberQuery(ctx, query); err != nil {
+		return RepositorySnapshot{}, err
+	}
+	return repository.loadSubjectSnapshot(ctx, "load student-number achievements", func(ctx context.Context, tx readTx) (achievementSubject, error) {
+		var subject achievementSubject
+		var accountStudentNumber string
+		var identifierActorID int64
+		var identifierStudentNumber string
+		err := tx.QueryRow(ctx, `
+SELECT account.account_id,
+       account.actor_id,
+       account.student_number,
+       identifier.actor_id,
+       identifier.identifier_value
+FROM ascendany.auth_accounts AS account
+JOIN ascendany.pintia_actor_identifiers AS identifier
+  ON identifier.actor_id = account.actor_id
+ AND identifier.identifier_kind = 'student_number'
+ AND identifier.identifier_value = account.student_number
+WHERE account.student_number = $1
+  AND account.role = 'student'
+  AND account.disabled_at IS NULL`, query.StudentNumber).Scan(
+			&subject.accountDatabaseID,
+			&subject.actorID,
+			&accountStudentNumber,
+			&identifierActorID,
+			&identifierStudentNumber,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return achievementSubject{}, achievementError(ErrorStudentNotFound, "resolve achievement student number", errors.New("student number has no active account binding"))
+		}
+		if err != nil {
+			return achievementSubject{}, databaseFailure("resolve achievement student number", err)
+		}
+		if subject.accountDatabaseID <= 0 || subject.actorID <= 0 || identifierActorID != subject.actorID ||
+			accountStudentNumber != query.StudentNumber || identifierStudentNumber != query.StudentNumber {
+			return achievementSubject{}, storedDataFailure("validate achievement student-number binding", errors.New("account and actor identifier binding is inconsistent"))
+		}
+		return subject, nil
+	})
+}
+
+func (repository *PostgresRepository) LoadByStudentIdentity(ctx context.Context, query StudentIdentityQuery) (RepositorySnapshot, error) {
+	if err := validateStudentIdentityQuery(ctx, query); err != nil {
+		return RepositorySnapshot{}, err
+	}
+	return repository.loadSubjectSnapshot(ctx, "load student-identity achievements", func(ctx context.Context, tx readTx) (achievementSubject, error) {
+		var subject achievementSubject
+		var accountStudentNumber string
+		var accountPTANickname string
+		var identifierActorID int64
+		var identifierStudentNumber string
+		err := tx.QueryRow(ctx, `
+SELECT account.account_id,
+       account.actor_id,
+       account.student_number,
+       account.pta_nickname,
+       identifier.actor_id,
+       identifier.identifier_value
+FROM ascendany.auth_accounts AS account
+JOIN ascendany.pintia_actor_identifiers AS identifier
+  ON identifier.actor_id = account.actor_id
+ AND identifier.identifier_kind = 'student_number'
+ AND identifier.identifier_value = account.student_number
+WHERE account.student_number = $1
+  AND account.pta_nickname = $2
+  AND account.role = 'student'
+  AND account.disabled_at IS NULL`, query.StudentNumber, query.PTANickname).Scan(
+			&subject.accountDatabaseID,
+			&subject.actorID,
+			&accountStudentNumber,
+			&accountPTANickname,
+			&identifierActorID,
+			&identifierStudentNumber,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return achievementSubject{}, achievementError(ErrorStudentNotFound, "resolve achievement student identity", errors.New("student identity has no active account binding"))
+		}
+		if err != nil {
+			return achievementSubject{}, databaseFailure("resolve achievement student identity", err)
+		}
+		if subject.accountDatabaseID <= 0 || subject.actorID <= 0 || identifierActorID != subject.actorID ||
+			accountStudentNumber != query.StudentNumber || identifierStudentNumber != query.StudentNumber ||
+			accountPTANickname != query.PTANickname {
+			return achievementSubject{}, storedDataFailure("validate achievement student-identity binding", errors.New("account and actor identity binding is inconsistent"))
+		}
+		return subject, nil
+	})
+}
+
+func (repository *PostgresRepository) loadSubjectSnapshot(
+	ctx context.Context,
+	operation string,
+	resolve resolveAchievementSubject,
+) (RepositorySnapshot, error) {
+	var snapshot RepositorySnapshot
+	err := repository.readTransaction(ctx, operation, func(tx readTx) error {
+		subject, err := resolve(ctx, tx)
+		if err != nil {
+			return err
 		}
 
 		var generationID *int64
@@ -115,7 +227,7 @@ SELECT count(*)::bigint
 FROM ascendany.agent_runs
 WHERE owner_account_id = $1
   AND run_kind = 'reply'
-  AND status = 'succeeded'`, resolved.AccountDatabaseID).Scan(&snapshot.AIDialogueCount)
+  AND status = 'succeeded'`, subject.accountDatabaseID).Scan(&snapshot.AIDialogueCount)
 		if err != nil {
 			return databaseFailure("count successful student reply runs", err)
 		}
@@ -131,7 +243,7 @@ WHERE owner_account_id = $1
 SELECT metrics::text
 FROM ascendany.student_analytics
 WHERE analytics_generation_id = $1
-  AND actor_id = $2`, *generationID, *resolved.ActorID).Scan(&metricsJSON)
+  AND actor_id = $2`, *generationID, subject.actorID).Scan(&metricsJSON)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}

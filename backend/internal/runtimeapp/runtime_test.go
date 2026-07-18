@@ -44,9 +44,10 @@ func (inertDatabase) Query(context.Context, string, ...any) (pgx.Rows, error) {
 func TestNewBuildsExactWriteRuntime(t *testing.T) {
 	t.Parallel()
 	configuration := testConfiguration(t)
+	analyticsConfiguration := testParsedAnalyticsConfig(t, configuration)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	components, err := New(inertDatabase{}, configuration, inertFeedbackProvider{}, logger)
+	components, err := New(inertDatabase{}, configuration, analyticsConfiguration, inertFeedbackProvider{}, logger)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -64,10 +65,11 @@ func TestNewRejectsDisabledWritesBeforeFilesystemMutation(t *testing.T) {
 	t.Parallel()
 	configuration := testConfiguration(t)
 	configuration.Write.Enabled = false
+	analyticsConfiguration := testParsedAnalyticsConfig(t, configuration)
 	root := configuration.Artifact.Root
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if _, err := New(inertDatabase{}, configuration, inertFeedbackProvider{}, logger); err == nil || err.Error() != "write runtime cannot start while writes are disabled" {
+	if _, err := New(inertDatabase{}, configuration, analyticsConfiguration, inertFeedbackProvider{}, logger); err == nil || err.Error() != "write runtime cannot start while writes are disabled" {
 		t.Fatalf("New() error = %v", err)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
@@ -75,20 +77,42 @@ func TestNewRejectsDisabledWritesBeforeFilesystemMutation(t *testing.T) {
 	}
 }
 
-func TestNewRejectsOversizedAnalyticsConfigBeforeArtifactInitialization(t *testing.T) {
+func TestLoadAnalyticsConfigRejectsOversizedInputBeforeArtifactInitialization(t *testing.T) {
 	t.Parallel()
 	configuration := testConfiguration(t)
 	if err := os.WriteFile(configuration.Analytics.ConfigPath, []byte(strings.Repeat("x", analytics.MaxConfigBytes+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := LoadAnalyticsConfig(configuration.Analytics.ConfigPath); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("LoadAnalyticsConfig() error = %v", err)
+	}
+	if _, err := os.Stat(configuration.Artifact.Root); !os.IsNotExist(err) {
+		t.Fatalf("artifact root exists after rejected analytics config: %v", err)
+	}
+}
+
+func TestNewRejectsDriftedParsedAnalyticsConfigBeforeArtifactInitialization(t *testing.T) {
+	t.Parallel()
+	configuration := testConfiguration(t)
+	analyticsConfiguration := testParsedAnalyticsConfig(t, configuration)
+	analyticsConfiguration.SHA256 = strings.Repeat("f", 64)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if _, err := New(inertDatabase{}, configuration, inertFeedbackProvider{}, logger); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := New(inertDatabase{}, configuration, analyticsConfiguration, inertFeedbackProvider{}, logger); err == nil || !strings.Contains(err.Error(), "SHA-256 differs") {
 		t.Fatalf("New() error = %v", err)
 	}
 	if _, err := os.Stat(configuration.Artifact.Root); !os.IsNotExist(err) {
 		t.Fatalf("artifact root exists after rejected analytics config: %v", err)
 	}
+}
+
+func testParsedAnalyticsConfig(t *testing.T, configuration config.Config) analytics.ParsedConfig {
+	t.Helper()
+	parsed, err := LoadAnalyticsConfig(configuration.Analytics.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
 
 func testConfiguration(t *testing.T) config.Config {

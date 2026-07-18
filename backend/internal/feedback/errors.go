@@ -11,6 +11,11 @@ type ErrorCode string
 const (
 	ErrorInvalidConfiguration ErrorCode = "feedback_invalid_configuration"
 	ErrorInvalidInput         ErrorCode = "feedback_invalid_input"
+	ErrorImageInvalid         ErrorCode = "feedback_image_invalid"
+	ErrorImageTooLarge        ErrorCode = "feedback_image_too_large"
+	ErrorTooManyImages        ErrorCode = "feedback_too_many_images"
+	ErrorArtifactFailure      ErrorCode = "feedback_artifact_failure"
+	ErrorWritesDisabled       ErrorCode = "feedback_writes_disabled"
 	ErrorPrincipalRejected    ErrorCode = "feedback_principal_rejected"
 	ErrorRateLimited          ErrorCode = "feedback_rate_limited"
 	ErrorIdempotencyConflict  ErrorCode = "feedback_idempotency_conflict"

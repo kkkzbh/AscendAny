@@ -63,7 +63,7 @@ func TestReadinessRequiresDatabaseAndExactSchemaVersion(t *testing.T) {
 		},
 		{
 			name:       "ready",
-			state:      database.MigrationState{Version: 7},
+			state:      database.MigrationState{Version: 10},
 			wantStatus: StatusReady,
 			wantCalls:  1,
 		},
@@ -74,7 +74,7 @@ func TestReadinessRequiresDatabaseAndExactSchemaVersion(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			migrations := &fakeMigrations{state: test.state, err: test.migrationErr}
-			readiness := NewReadiness(fakeDatabase{err: test.databaseError}, migrations, 7, time.Second)
+			readiness := NewReadiness(fakeDatabase{err: test.databaseError}, migrations, 10, time.Second)
 
 			report := readiness.Check(context.Background())
 			if report.Status != test.wantStatus {

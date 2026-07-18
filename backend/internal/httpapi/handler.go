@@ -35,10 +35,13 @@ type ReadinessChecker interface {
 }
 
 type AuthService interface {
+	Register(context.Context, auth.RegistrationInput) (auth.AuthResult, error)
 	Login(context.Context, auth.LoginInput) (auth.AuthResult, error)
+	ExchangeSSO(context.Context, auth.SSOExchangeInput) (auth.AuthResult, error)
 	Refresh(context.Context, auth.RefreshInput) (auth.AuthResult, error)
 	Logout(context.Context, auth.LogoutInput) error
 	Me(context.Context, string) (auth.Account, error)
+	BootstrapLocalPassword(context.Context, auth.LocalPasswordBootstrapInput) error
 }
 
 type EnrollmentService interface {
@@ -155,6 +158,9 @@ type Options struct {
 	AllowedOrigins            []string
 	RateLimiter               RequestRateLimiter
 	RequestIDRandom           io.Reader
+	AgentV1EnvelopeKey        []byte
+	AgentV1AccessTTL          time.Duration
+	AgentV1RefreshTTL         time.Duration
 	TrustedProxyCIDRs         []netip.Prefix
 	ClientIPHeader            string
 	Artifacts                 ArtifactPublisher
@@ -195,6 +201,7 @@ type Handler struct {
 	allowedOrigins            map[string]struct{}
 	rateLimiter               RequestRateLimiter
 	requestIDs                *requestIDGenerator
+	agentV1Tokens             *agentV1RefreshEnvelope
 	routes                    *routeRegistry
 	clientAddress             clientAddressResolver
 	artifacts                 ArtifactPublisher
@@ -267,7 +274,15 @@ func New(options Options) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	clientAddress, err := newClientAddressResolver(options.TrustedProxyCIDRs, options.ClientIPHeader)
+	agentV1Tokens, err := newAgentV1RefreshEnvelope(
+		options.AgentV1EnvelopeKey,
+		options.AgentV1AccessTTL,
+		options.AgentV1RefreshTTL,
+	)
+	if err != nil {
+		return nil, err
+	}
+	clientAddress, err := newClientAddressResolver(options.TrustedProxyCIDRs, options.ClientIPHeader, canonicalOrigins)
 	if err != nil {
 		return nil, err
 	}
@@ -301,6 +316,7 @@ func New(options Options) (http.Handler, error) {
 		allowedOrigins:            allowedOrigins,
 		rateLimiter:               options.RateLimiter,
 		requestIDs:                requestIDs,
+		agentV1Tokens:             agentV1Tokens,
 		clientAddress:             clientAddress,
 		artifacts:                 options.Artifacts,
 		imports:                   options.Imports,
@@ -391,6 +407,12 @@ func (handler *Handler) writeAPIError(
 	message string,
 ) {
 	abortUnreadRequestBody(writer, request)
+	if isAgentV1Path(request.URL.Path) {
+		writeJSON(writer, status, agentV1ErrorEnvelope{
+			Error: agentV1Error{Code: code, Message: message},
+		})
+		return
+	}
 	writeJSON(writer, status, APIError{
 		Code:      code,
 		Message:   message,
@@ -407,6 +429,12 @@ func (handler *Handler) writeAPIErrorDetails(
 	details map[string]any,
 ) {
 	abortUnreadRequestBody(writer, request)
+	if isAgentV1Path(request.URL.Path) {
+		writeJSON(writer, status, agentV1ErrorEnvelope{
+			Error: agentV1Error{Code: code, Message: message},
+		})
+		return
+	}
 	writeJSON(writer, status, APIError{Code: code, Message: message, RequestID: requestID(request.Context()), Details: details})
 }
 

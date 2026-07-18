@@ -52,7 +52,15 @@ func (*testResponseRecorder) SetWriteDeadline(time.Time) error {
 
 type unusedAuthService struct{}
 
+func (unusedAuthService) Register(context.Context, auth.RegistrationInput) (auth.AuthResult, error) {
+	panic("unused")
+}
+
 func (unusedAuthService) Login(context.Context, auth.LoginInput) (auth.AuthResult, error) {
+	panic("unexpected auth call")
+}
+
+func (unusedAuthService) ExchangeSSO(context.Context, auth.SSOExchangeInput) (auth.AuthResult, error) {
 	panic("unexpected auth call")
 }
 
@@ -65,6 +73,10 @@ func (unusedAuthService) Logout(context.Context, auth.LogoutInput) error {
 }
 
 func (unusedAuthService) Me(context.Context, string) (auth.Account, error) {
+	panic("unexpected auth call")
+}
+
+func (unusedAuthService) BootstrapLocalPassword(context.Context, auth.LocalPasswordBootstrapInput) error {
 	panic("unexpected auth call")
 }
 
@@ -138,6 +150,14 @@ type unusedAchievementService struct{}
 
 func (unusedAchievementService) GetSelf(context.Context, string) (achievement.Result, error) {
 	panic("unexpected achievement read")
+}
+
+func (unusedAchievementService) GetByStudentNumber(context.Context, string) (achievement.Result, error) {
+	panic("unexpected achievement student-number read")
+}
+
+func (unusedAchievementService) GetByStudentIdentity(context.Context, string, string) (achievement.Result, error) {
+	panic("unexpected achievement student-identity read")
 }
 
 type unusedRecommendationReader struct{}
@@ -425,6 +445,9 @@ func TestNewRejectsInvalidRequestLifetimeLimits(t *testing.T) {
 		mutate func(*Options)
 	}{
 		{name: "auth body timeout", mutate: func(options *Options) { options.AuthBodyTimeout = 0 }},
+		{name: "Agent v1 envelope key", mutate: func(options *Options) { options.AgentV1EnvelopeKey = nil }},
+		{name: "Agent v1 access lifetime", mutate: func(options *Options) { options.AgentV1AccessTTL = 0 }},
+		{name: "Agent v1 refresh lifetime", mutate: func(options *Options) { options.AgentV1RefreshTTL = options.AgentV1AccessTTL - time.Second }},
 		{name: "upload body timeout", mutate: func(options *Options) { options.UploadBodyTimeout = 0 }},
 		{name: "SSE maximum duration", mutate: func(options *Options) { options.SSEMaxDuration = 0 }},
 		{name: "SSE reauthorization interval", mutate: func(options *Options) { options.SSEReauthInterval = 0 }},
@@ -483,6 +506,9 @@ func testHandlerOptions(report health.Report) Options {
 		AllowedOrigins:            []string{"https://ascendany.example"},
 		RateLimiter:               allowAllRateLimiter{},
 		RequestIDRandom:           bytes.NewReader([]byte("12345678")),
+		AgentV1EnvelopeKey:        []byte("0123456789abcdef0123456789abcdef"),
+		AgentV1AccessTTL:          15 * time.Minute,
+		AgentV1RefreshTTL:         24 * time.Hour,
 		Artifacts:                 unusedArtifactPublisher{},
 		Imports:                   unusedImportQueue{},
 		ImportReader:              unusedImportReader{},

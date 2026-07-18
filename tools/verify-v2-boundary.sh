@@ -201,13 +201,13 @@ require_no_rg_match \
 
 require_no_rg_match \
   'retired runtime shell closure scan' \
-  'a production shell path references a Python, trainer, API-v1, or retired application runtime' \
+  'a production shell path references a Python, trainer, or retired application runtime' \
   -i -n \
   --glob '*.sh' \
   --glob '!tools/tests/**' \
   --glob '!tools/verify-v2-boundary.sh' \
   --glob '!deploy/v2/scripts/validate-production.sh' \
-  '(python([0-9.]*)?([[:space:]/]|$)|uvicorn|apps[./]api|/api/v1|ascendany-trainer)' \
+  '(python([0-9.]*)?([[:space:]/]|$)|uvicorn|apps[./]api|ascendany-trainer)' \
   deploy/v2/scripts tools
 
 # The production validator owns absence checks for the retired generation. It
@@ -219,7 +219,7 @@ require_no_rg_match \
   'the production validator contains an execution path for a retired Python or trainer runtime' \
   -i -n \
   --glob 'validate-production.sh' \
-  '(^|[;&|][[:space:]]*)(exec[[:space:]]+)?([^;&|[:space:]]*/)?(python([0-9.]*)?|uvicorn|ascendany-trainer-agent)([[:space:];&|]|$)|(bash|sh|env|xargs|systemd-run)[[:space:]][^;&|]*(python([0-9.]*)?|uvicorn|apps[./]api|/api/v1|ascendany-trainer)|(systemctl[[:space:]]+(start|restart|try-restart|reload|reload-or-restart|enable|reenable|unmask)[^;&|]*(ascendany-api|ascendany-trainer))' \
+  '(^|[;&|][[:space:]]*)(exec[[:space:]]+)?([^;&|[:space:]]*/)?(python([0-9.]*)?|uvicorn|ascendany-trainer-agent)([[:space:];&|]|$)|(bash|sh|env|xargs|systemd-run)[[:space:]][^;&|]*(python([0-9.]*)?|uvicorn|apps[./]api|ascendany-trainer)|(systemctl[[:space:]]+(start|restart|try-restart|reload|reload-or-restart|enable|reenable|unmask)[^;&|]*(ascendany-api|ascendany-trainer))' \
   deploy/v2/scripts
 
 require_no_rg_match \

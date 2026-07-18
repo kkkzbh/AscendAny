@@ -34,14 +34,19 @@ func TestValidateInferenceModelAndRuntimeBinding(t *testing.T) {
 	}
 	repository, err := newPostgresRepository(func(context.Context, pgx.TxOptions) (recommendationTx, error) {
 		return nil, errors.New("unused")
-	}, model, binding)
+	}, model, binding, testAnalyticsConfig(t))
 	if err != nil || repository.model != model || repository.binding.HeadRevision != binding.HeadRevision {
 		t.Fatalf("repository=%#v error=%v", repository, err)
+	}
+	if repository.analyticsAlgorithmVersion != analytics.AlgorithmV1 ||
+		repository.analyticsConfigSHA256 != testAnalyticsConfig(t).SHA256 ||
+		len(repository.acceptedVerdicts) != 1 || repository.acceptedVerdicts[0] != "ACCEPTED" {
+		t.Fatalf("analytics binding = algorithm %q config %q verdicts %#v", repository.analyticsAlgorithmVersion, repository.analyticsConfigSHA256, repository.acceptedVerdicts)
 	}
 	binding.ManifestSHA256 = strings.Repeat("f", 64)
 	if _, err := newPostgresRepository(func(context.Context, pgx.TxOptions) (recommendationTx, error) {
 		return nil, errors.New("unused")
-	}, model, binding); err == nil {
+	}, model, binding, testAnalyticsConfig(t)); err == nil {
 		t.Fatal("drifted runtime binding was accepted")
 	}
 }
@@ -82,6 +87,8 @@ func TestAnalyticsGenerationStateUsesOwnedManifestCanonicalization(t *testing.T)
 	head := analyticsState{GenerationID: &generationID, HeadRevision: 1}
 	generation := analyticsGenerationState{
 		Status:                 "succeeded",
+		AlgorithmVersion:       analytics.AlgorithmV1,
+		ConfigSHA256:           strings.Repeat("d", 64),
 		BaseHeadRevision:       0,
 		TargetExamID:           1,
 		TargetSnapshotID:       11,
@@ -107,6 +114,34 @@ func TestAnalyticsGenerationStateUsesOwnedManifestCanonicalization(t *testing.T)
 	headDrift.HeadRevision++
 	if err := validateAnalyticsGenerationState(headDrift, generation); err == nil || !strings.Contains(err.Error(), "scalar columns are inconsistent") {
 		t.Fatalf("head drift error=%v", err)
+	}
+}
+
+func TestCurrentAnalyticsBindingRequiresRuntimeAlgorithmAndConfigSHA(t *testing.T) {
+	t.Parallel()
+	configuration := testAnalyticsConfig(t)
+	repository := &PostgresRepository{
+		analyticsAlgorithmVersion: configuration.Value.AlgorithmVersion,
+		analyticsConfigSHA256:     configuration.SHA256,
+	}
+	generationID := int64(42)
+	state := analyticsState{
+		GenerationID:     &generationID,
+		AlgorithmVersion: configuration.Value.AlgorithmVersion,
+		ConfigSHA256:     configuration.SHA256,
+	}
+	if err := repository.validateCurrentAnalyticsBinding(state); err != nil {
+		t.Fatalf("valid analytics binding error = %v", err)
+	}
+	algorithmDrift := state
+	algorithmDrift.AlgorithmVersion = "future_algorithm"
+	if err := repository.validateCurrentAnalyticsBinding(algorithmDrift); CodeOf(err) != ErrorStoredDataInvalid {
+		t.Fatalf("algorithm drift error = %v", err)
+	}
+	configDrift := state
+	configDrift.ConfigSHA256 = strings.Repeat("f", 64)
+	if err := repository.validateCurrentAnalyticsBinding(configDrift); CodeOf(err) != ErrorStoredDataInvalid {
+		t.Fatalf("config drift error = %v", err)
 	}
 }
 
@@ -147,7 +182,7 @@ func TestRepositoryReadTransactionIsRepeatableReadOnly(t *testing.T) {
 	repository, err := newPostgresRepository(func(_ context.Context, value pgx.TxOptions) (recommendationTx, error) {
 		options = value
 		return tx, nil
-	}, model, binding)
+	}, model, binding, testAnalyticsConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}

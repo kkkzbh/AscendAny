@@ -2,11 +2,14 @@ package chatagent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
 )
+
+func chatAgentTestInt64Pointer(value int64) *int64 { return &value }
 
 const (
 	testAccountID = "11111111-1111-4111-8111-111111111111"
@@ -86,18 +89,17 @@ func TestServiceEnqueueOwnsGeneratedIDsAndRequestValidation(t *testing.T) {
 	}
 }
 
-func TestServiceRequiresAnalyticsRevisionOnlyForAutoAnalysis(t *testing.T) {
+func TestServiceRequiresPositiveAnalyticsRevisionForReply(t *testing.T) {
 	t.Parallel()
 	service, err := NewService(&repositoryStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*EnqueueInput){
-		"reply with analytics": func(input *EnqueueInput) {
-			revision := int64(1)
-			input.ExpectedAnalyticsHeadRevision = &revision
+		"zero analytics revision": func(input *EnqueueInput) {
+			input.ExpectedAnalyticsHeadRevision = chatAgentTestInt64Pointer(0)
 		},
-		"auto without analytics": func(input *EnqueueInput) {
+		"automatic analysis kind": func(input *EnqueueInput) {
 			input.Kind = RunAutoAnalysis
 		},
 		"admin principal": func(input *EnqueueInput) {
@@ -125,6 +127,8 @@ func TestServiceOwnsAllAutomaticAnalysisIdentityAndContent(t *testing.T) {
 	now := time.Date(2026, 7, 11, 1, 2, 3, 0, time.UTC)
 	autoThreadID := "88888888-8888-4888-8888-888888888888"
 	autoClientRequestID := "99999999-9999-4999-8999-999999999999"
+	frontendContext := testAutoAnalysisFrontendContext()
+	inputContent := mustAutoAnalysisInputContent(t, frontendContext)
 	repository := &repositoryStub{autoResult: EnqueueResult{
 		Run: Run{
 			ID: testRunID, ThreadID: autoThreadID, ClientRequestID: autoClientRequestID, Kind: RunAutoAnalysis,
@@ -132,7 +136,7 @@ func TestServiceOwnsAllAutomaticAnalysisIdentityAndContent(t *testing.T) {
 		},
 		Message: Message{
 			ID: testMessageID, ThreadID: autoThreadID, Sequence: 1, Kind: MessageAutoAnalysisRequest,
-			Content: AutoAnalysisInputContent, CreatedAt: now,
+			Content: inputContent, CreatedAt: now,
 		},
 		Created: true,
 	}}
@@ -148,6 +152,7 @@ func TestServiceOwnsAllAutomaticAnalysisIdentityAndContent(t *testing.T) {
 	input := AutoAnalysisInput{
 		Principal: validPrincipal(), PromptConfigurationKey: "agent.prompt.default",
 		ModelConfigurationKey: "agent.model.default", ExpectedAnalyticsHeadRevision: 7,
+		Identity: AutoAnalysisIdentity{ExamID: frontendContext.LatestExamID, RoleID: frontendContext.RoleID}, FrontendContext: frontendContext,
 	}
 	result, err := service.EnqueueAutoAnalysis(context.Background(), input)
 	if err != nil || !result.Created {
@@ -157,6 +162,49 @@ func TestServiceOwnsAllAutomaticAnalysisIdentityAndContent(t *testing.T) {
 		repository.autoCommand.MessageID != testMessageID || repository.autoCommand.ClientRequestID != autoClientRequestID ||
 		repository.autoCommand.AutoAnalysisInput != input {
 		t.Fatalf("command=%#v", repository.autoCommand)
+	}
+}
+
+func TestServiceAcceptsStoredAutomaticAnalysisReplayWithChangedPresentationContext(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 11, 1, 2, 3, 0, time.UTC)
+	storedContext := testAutoAnalysisFrontendContext()
+	storedContent := mustAutoAnalysisInputContent(t, storedContext)
+	autoThreadID := "88888888-8888-4888-8888-888888888888"
+	autoClientRequestID := "99999999-9999-4999-8999-999999999999"
+	repository := &repositoryStub{autoResult: EnqueueResult{
+		Run: Run{
+			ID: testRunID, ThreadID: autoThreadID, ClientRequestID: autoClientRequestID, Kind: RunAutoAnalysis,
+			InputMessageID: testMessageID, Status: RunQueued, CreatedAt: now, UpdatedAt: now,
+		},
+		Message: Message{
+			ID: testMessageID, ThreadID: autoThreadID, Sequence: 1, Kind: MessageAutoAnalysisRequest,
+			Content: storedContent, CreatedAt: now,
+		},
+		Created: false,
+	}}
+	identifiers := []string{autoThreadID, testRunID, testMessageID, autoClientRequestID}
+	service, err := newService(repository, func() (string, error) {
+		value := identifiers[0]
+		identifiers = identifiers[1:]
+		return value, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedContext := storedContext
+	changedContext.RoleName = "Changed presentation"
+	changedContext.RoleSystemPrompt = "Changed prompt presentation."
+	changedContext.Notes = "Changed local notes."
+	input := AutoAnalysisInput{
+		Principal: validPrincipal(), PromptConfigurationKey: "agent.prompt.changed",
+		ModelConfigurationKey: "agent.model.changed", ExpectedAnalyticsHeadRevision: 99,
+		Identity:        AutoAnalysisIdentity{ExamID: storedContext.LatestExamID, RoleID: storedContext.RoleID},
+		FrontendContext: changedContext,
+	}
+	result, err := service.EnqueueAutoAnalysis(context.Background(), input)
+	if err != nil || result.Created || result.Message.Content != storedContent {
+		t.Fatalf("result=%#v error=%v", result, err)
 	}
 }
 
@@ -173,12 +221,24 @@ func TestServiceRejectsInvalidAutomaticAnalysisInputBeforeGeneratingIDs(t *testi
 	valid := AutoAnalysisInput{
 		Principal: validPrincipal(), PromptConfigurationKey: "agent.prompt.default",
 		ModelConfigurationKey: "agent.model.default", ExpectedAnalyticsHeadRevision: 1,
+		Identity:        AutoAnalysisIdentity{ExamID: "99999999-9999-4999-8999-999999999999", RoleID: "role-7"},
+		FrontendContext: testAutoAnalysisFrontendContext(),
 	}
 	for name, mutate := range map[string]func(*AutoAnalysisInput){
 		"zero revision":  func(input *AutoAnalysisInput) { input.ExpectedAnalyticsHeadRevision = 0 },
 		"invalid prompt": func(input *AutoAnalysisInput) { input.PromptConfigurationKey = "UPPER" },
 		"invalid model":  func(input *AutoAnalysisInput) { input.ModelConfigurationKey = "" },
-		"admin":          func(input *AutoAnalysisInput) { input.Principal.Role = auth.RoleAdmin },
+		"invalid identity": func(input *AutoAnalysisInput) {
+			input.Identity.ExamID = "exam-9"
+		},
+		"identity context mismatch": func(input *AutoAnalysisInput) {
+			input.FrontendContext.RoleID = "other-role"
+		},
+		"invalid context": func(input *AutoAnalysisInput) {
+			input.FrontendContext.Notes = strings.Repeat("n", MaxMessageBytes)
+			input.FrontendContext.RoleSystemPrompt = "x"
+		},
+		"admin": func(input *AutoAnalysisInput) { input.Principal.Role = auth.RoleAdmin },
 	} {
 		name := name
 		mutate := mutate
@@ -256,6 +316,6 @@ func validEnqueueInput() EnqueueInput {
 	return EnqueueInput{
 		Principal: validPrincipal(), ThreadID: testThreadID, ClientRequestID: testRequestID,
 		Kind: RunReply, Content: "Explain this result.", PromptConfigurationKey: "agent.prompt.default",
-		ModelConfigurationKey: "agent.model.default",
+		ModelConfigurationKey: "agent.model.default", ExpectedAnalyticsHeadRevision: chatAgentTestInt64Pointer(7),
 	}
 }

@@ -11,7 +11,11 @@ import (
 	"time"
 )
 
-const refreshCookieName = "__Host-ascendany_refresh"
+const (
+	refreshCookieName             = "__Host-ascendany_refresh"
+	cloudflareClientAddressHeader = "CF-Connecting-IP"
+	opaqueBrowserOrigin           = "null"
+)
 
 var (
 	csrfTokenPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
@@ -28,21 +32,34 @@ type routePolicy struct {
 }
 
 type clientAddressResolver struct {
-	trustedProxyCIDRs []netip.Prefix
-	clientIPHeader    string
+	trustedProxyCIDRs                  []netip.Prefix
+	clientIPHeader                     string
+	allowedLoopbackHTTPOrigins         map[string]struct{}
+	opaqueAgentV1LoopbackOriginEnabled bool
 }
 
 func newClientAddressResolver(
 	trustedProxyCIDRs []netip.Prefix,
 	clientIPHeader string,
+	canonicalAllowedOrigins []string,
 ) (clientAddressResolver, error) {
+	allowedLoopbackHTTPOrigins := make(map[string]struct{})
+	for _, origin := range canonicalAllowedOrigins {
+		if strings.HasPrefix(origin, "http://") {
+			allowedLoopbackHTTPOrigins[origin] = struct{}{}
+		}
+	}
+	resolver := clientAddressResolver{
+		allowedLoopbackHTTPOrigins:         allowedLoopbackHTTPOrigins,
+		opaqueAgentV1LoopbackOriginEnabled: len(allowedLoopbackHTTPOrigins) > 0,
+	}
 	if len(trustedProxyCIDRs) == 0 {
 		if clientIPHeader != "" {
 			return clientAddressResolver{}, errInvalidClientAddressConfiguration
 		}
-		return clientAddressResolver{}, nil
+		return resolver, nil
 	}
-	if clientIPHeader != "CF-Connecting-IP" {
+	if clientIPHeader != cloudflareClientAddressHeader {
 		return clientAddressResolver{}, errInvalidClientAddressConfiguration
 	}
 	prefixes := make([]netip.Prefix, len(trustedProxyCIDRs))
@@ -52,10 +69,9 @@ func newClientAddressResolver(
 		}
 		prefixes[index] = prefix
 	}
-	return clientAddressResolver{
-		trustedProxyCIDRs: prefixes,
-		clientIPHeader:    clientIPHeader,
-	}, nil
+	resolver.trustedProxyCIDRs = prefixes
+	resolver.clientIPHeader = clientIPHeader
+	return resolver, nil
 }
 
 func (resolver clientAddressResolver) Resolve(request *http.Request) (string, error) {
@@ -74,7 +90,16 @@ func (resolver clientAddressResolver) Resolve(request *http.Request) (string, er
 		return direct.String(), nil
 	}
 	forwarded, present, valid := singleHeader(request.Header, resolver.clientIPHeader)
-	if !valid || !present {
+	if !valid {
+		return "", errInvalidClientAddress
+	}
+	if !present {
+		origin, originPresent, originValid := singleHeader(request.Header, "Origin")
+		_, originAllowed := resolver.allowedLoopbackHTTPOrigins[origin]
+		opaqueOriginAllowed := origin == opaqueBrowserOrigin && resolver.allowsOpaqueAgentV1OriginFrom(request, direct)
+		if direct.IsLoopback() && originValid && originPresent && (originAllowed || opaqueOriginAllowed) {
+			return direct.String(), nil
+		}
 		return "", errInvalidClientAddress
 	}
 	address, err := netip.ParseAddr(forwarded)
@@ -82,6 +107,19 @@ func (resolver clientAddressResolver) Resolve(request *http.Request) (string, er
 		return "", errInvalidClientAddress
 	}
 	return address.String(), nil
+}
+
+func (resolver clientAddressResolver) allowsOpaqueAgentV1Origin(request *http.Request) bool {
+	direct, err := parseDirectClientAddress(request.RemoteAddr)
+	return err == nil && resolver.allowsOpaqueAgentV1OriginFrom(request, direct)
+}
+
+func (resolver clientAddressResolver) allowsOpaqueAgentV1OriginFrom(request *http.Request, direct netip.Addr) bool {
+	if !resolver.opaqueAgentV1LoopbackOriginEnabled || !isAgentV1Path(request.URL.Path) || !direct.IsLoopback() {
+		return false
+	}
+	_, forwardedPresent, forwardedValid := singleHeader(request.Header, cloudflareClientAddressHeader)
+	return forwardedValid && !forwardedPresent
 }
 
 func (handler *Handler) policyForMethod(path, method string) (routePolicy, bool) {
@@ -129,7 +167,7 @@ func (handler *Handler) browserBoundary(next http.Handler) http.Handler {
 		}
 		if knownRoute {
 			origin, present, valid := singleHeader(request.Header, "Origin")
-			allowed := present && handler.originAllowed(origin)
+			allowed := present && handler.requestOriginAllowed(request, origin)
 			if !valid || (present && !allowed) || (policy.cookieMutation && !allowed) {
 				handler.writeAPIError(writer, request, http.StatusForbidden, "origin_rejected", "Request Origin was rejected.")
 				return
@@ -193,7 +231,7 @@ func (handler *Handler) handlePreflight(
 		return
 	}
 	origin, present, valid := singleHeader(request.Header, "Origin")
-	if !valid || !present || !handler.originAllowed(origin) {
+	if !valid || !present || !handler.requestOriginAllowed(request, origin) {
 		handler.writeAPIError(writer, request, http.StatusForbidden, "origin_rejected", "Request Origin was rejected.")
 		return
 	}
@@ -232,6 +270,13 @@ func (handler *Handler) handlePreflight(
 func (handler *Handler) originAllowed(origin string) bool {
 	_, allowed := handler.allowedOrigins[origin]
 	return allowed
+}
+
+func (handler *Handler) requestOriginAllowed(request *http.Request, origin string) bool {
+	if handler.originAllowed(origin) {
+		return true
+	}
+	return origin == opaqueBrowserOrigin && handler.clientAddress.allowsOpaqueAgentV1Origin(request)
 }
 
 func (handler *Handler) setCORSHeaders(header http.Header, origin string) {

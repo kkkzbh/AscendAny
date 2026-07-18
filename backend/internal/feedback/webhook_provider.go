@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,13 +24,13 @@ import (
 
 const (
 	WebhookConfigurationSchema = "ascendany.feedback_delivery.webhook.v1"
-	webhookPayloadSchema       = "ascendany.feedback.webhook_payload.v1"
+	webhookPayloadSchema       = "ascendany.feedback.webhook_payload.v2"
 
 	minWebhookTimeoutMilliseconds = int64(100)
 	maxWebhookTimeoutMilliseconds = int64(30_000)
 	maxWebhookConfigurationBytes  = 4096
 	maxWebhookURLBytes            = 2048
-	maxWebhookRequestBodyBytes    = 192 << 10
+	maxWebhookRequestBodyBytes    = 96 << 20
 	maxWebhookResponseBodyBytes   = 32 << 10
 	maxWebhookResponseHeaderBytes = 16 << 10
 	maxWebhookReceiptBytes        = 256
@@ -42,13 +43,24 @@ type webhookConfiguration struct {
 }
 
 type webhookPayload struct {
-	Schema     string  `json:"schema"`
-	FeedbackID string  `json:"feedbackId"`
-	Title      string  `json:"title"`
-	Content    string  `json:"content"`
-	Platform   *string `json:"platform,omitempty"`
-	AppVersion *string `json:"appVersion,omitempty"`
-	UserAgent  *string `json:"userAgent,omitempty"`
+	Schema      string              `json:"schema"`
+	FeedbackID  string              `json:"feedbackId"`
+	Title       string              `json:"title"`
+	Content     string              `json:"content"`
+	Platform    *string             `json:"platform,omitempty"`
+	AppVersion  *string             `json:"appVersion,omitempty"`
+	UserAgent   *string             `json:"userAgent,omitempty"`
+	Sender      DeliverySender      `json:"sender"`
+	Attachments []webhookAttachment `json:"attachments"`
+}
+
+type webhookAttachment struct {
+	Sequence      int16  `json:"sequence"`
+	Filename      string `json:"filename"`
+	MediaType     string `json:"mediaType"`
+	SizeBytes     int64  `json:"sizeBytes"`
+	SHA256        string `json:"sha256"`
+	ContentBase64 string `json:"contentBase64"`
 }
 
 type webhookReceipt struct {
@@ -131,14 +143,24 @@ func (provider *WebhookDeliveryProvider) Deliver(ctx context.Context, delivery D
 		return nil, providerFailure("webhook_credential_invalid", true, errors.New("resolved webhook credential violates the bearer contract"))
 	}
 
+	attachments := make([]webhookAttachment, len(delivery.Attachments))
+	for index, attachment := range delivery.Attachments {
+		attachments[index] = webhookAttachment{
+			Sequence: attachment.Sequence, Filename: attachment.Filename, MediaType: attachment.MediaType,
+			SizeBytes: attachment.SizeBytes, SHA256: attachment.SHA256,
+			ContentBase64: base64.StdEncoding.EncodeToString(attachment.Content),
+		}
+	}
 	payload, err := json.Marshal(webhookPayload{
-		Schema:     webhookPayloadSchema,
-		FeedbackID: delivery.FeedbackID,
-		Title:      delivery.Title,
-		Content:    delivery.Content,
-		Platform:   delivery.Platform,
-		AppVersion: delivery.AppVersion,
-		UserAgent:  delivery.UserAgent,
+		Schema:      webhookPayloadSchema,
+		FeedbackID:  delivery.FeedbackID,
+		Title:       delivery.Title,
+		Content:     delivery.Content,
+		Platform:    delivery.Platform,
+		AppVersion:  delivery.AppVersion,
+		UserAgent:   delivery.UserAgent,
+		Sender:      delivery.Sender,
+		Attachments: attachments,
 	})
 	if err != nil || len(payload) == 0 || len(payload) > maxWebhookRequestBodyBytes {
 		return nil, providerFailure("webhook_request_invalid", true, errors.New("webhook payload exceeds its encoding contract"))
@@ -328,6 +350,12 @@ func validateWebhookDelivery(delivery DeliveryRequest) *ProviderFailure {
 		if optional.value != nil && (len(*optional.value) > optional.limit || *optional.value != strings.TrimSpace(*optional.value)) {
 			return providerFailure("webhook_request_invalid", true, errors.New("stored feedback metadata violates its contract"))
 		}
+	}
+	if err := validateDeliverySender(delivery.Sender); err != nil {
+		return providerFailure("webhook_request_invalid", true, err)
+	}
+	if err := validateHydratedDeliveryAttachments(delivery.Attachments); err != nil {
+		return providerFailure("webhook_request_invalid", true, err)
 	}
 	return nil
 }

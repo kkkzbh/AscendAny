@@ -14,6 +14,7 @@ type memoryEnrollmentState struct {
 	grantsByID      map[string]*memoryEnrollmentGrant
 	grantIDByDigest map[[sha256.Size]byte]string
 	actorNumbers    map[string]bool
+	actorNicknames  map[string]string
 }
 
 type memoryEnrollmentGrant struct {
@@ -27,6 +28,7 @@ func newMemoryEnrollmentState() *memoryEnrollmentState {
 		grantsByID:      make(map[string]*memoryEnrollmentGrant),
 		grantIDByDigest: make(map[[sha256.Size]byte]string),
 		actorNumbers:    make(map[string]bool),
+		actorNicknames:  make(map[string]string),
 	}
 }
 

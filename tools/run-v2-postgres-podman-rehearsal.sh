@@ -16,9 +16,9 @@ readonly RELEASE_PGBOUNCER_CONFIG="${REPOSITORY_ROOT}/deploy/v2/config/pgbouncer
 readonly RELEASE_PGBOUNCER_HBA="${REPOSITORY_ROOT}/deploy/v2/config/pgbouncer-hba.conf"
 readonly PGBOUNCER_BINARY="/usr/bin/pgbouncer"
 readonly DEFAULT_RECOMMENDATION_CATALOG_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.knowledge-catalog.v1.json"
-readonly DEFAULT_RECOMMENDATION_CATALOG_SHA256="a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c"
+readonly DEFAULT_RECOMMENDATION_CATALOG_SHA256="c164a2a0af654574a3855d6937dd888bbd9212c8081d50e4292cd05521f72351"
 readonly DEFAULT_RECOMMENDATION_MODEL_PATH="${REPOSITORY_ROOT}/contracts/recommendation/fixtures/synthetic-test-only.inference-model.v1.json"
-readonly DEFAULT_RECOMMENDATION_MODEL_SHA256="5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
+readonly DEFAULT_RECOMMENDATION_MODEL_SHA256="392c9470556af563de09a971d501ab507d87b055847dcd78c5aaafc8cb452619"
 readonly LABEL_KEY="io.ascendany.v2-postgres-rehearsal"
 
 usage() {

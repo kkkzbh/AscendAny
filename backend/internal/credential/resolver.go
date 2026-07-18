@@ -19,6 +19,7 @@ const (
 	fileEnvironmentPrefix = "ASCENDANY_CREDENTIAL_FILE_REF_HEX_"
 	fileAuthorityMarker   = "_AUTHORITY_HEX_"
 	maxFilePathBytes      = 4096
+	MaxSecretBytes        = 16 << 10
 	MaxBearerBytes        = 8192
 )
 
@@ -80,8 +81,8 @@ func (resolver *EnvironmentFileResolver) Resolve(ctx context.Context, reference,
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if !ValidBearer(secret) {
-		return "", fmt.Errorf("credential file referenced by %s must contain one bounded bearer credential", environmentName)
+	if len(secret) == 0 || len(secret) > MaxSecretBytes {
+		return "", fmt.Errorf("credential file referenced by %s must contain one bounded opaque credential", environmentName)
 	}
 	return string(secret), nil
 }

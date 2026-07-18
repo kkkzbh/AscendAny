@@ -15,17 +15,18 @@ flowchart LR
 
 | Public path | Owner | Behavior |
 | --- | --- | --- |
-| `/api/v2` 与 `/api/v2/*` | Go API | HTTP、SSE 与 LSP WebSocket |
+| `/api/v1/*` | Go Agent frontend API | 原 Agent frontend 的 HTTP 与 SSE contract |
+| `/api/v2` 与 `/api/v2/*` | Go API | importer、operator、HTTP、SSE 与 LSP WebSocket |
 | `/livez`、`/readyz`、`/version` | Go API | public health 与 release identity |
 | `/` 与 site assets | TypeScript site bytes，由 Go 交付 | product site；无 SPA fallback |
-| `/app/` | TypeScript student web bytes，由 Go 交付 | BrowserRouter basename `/app`；HTML navigation 才允许 app index fallback |
+| `/app/` | TypeScript Agent frontend bytes，由 Go 交付 | 原 desktop Agent Web build；HTML navigation 才允许 app index fallback |
 | `/admin/` | TypeScript import console bytes，由 Go 交付 | BrowserRouter basename `/admin`；HTML navigation 才允许 admin index fallback |
 
 `/app` 与 `/admin` 永久重定向到带尾部 `/` 的 canonical route。Static handler 拒绝 non-canonical/encoded/traversal/duplicate-slash path、未知 asset extension 与 mutation method。SPA fallback 不处理带 extension 的 missing asset，也不处理缺少 `Accept: text/html` 的请求。API、health、SSE 与 WebSocket 在 static validation 前进入 Go handler。
 
 ## Same-release build closure
 
-三个 Vite package 使用固定 base：`@ascendany/site` → `/`、`@ascendany/web` → `/app/`、`@ascendany/import-console` → `/admin/`。
+三个 Vite source 使用固定 base：`@ascendany/site` → `/`、`@ascendany/desktop` 的 Agent Web build → `/app/`、`@ascendany/import-console` → `/admin/`。`apps/web` 不进入 production public asset closure。
 
 ```bash
 pnpm public-assets:generate

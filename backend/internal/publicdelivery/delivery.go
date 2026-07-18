@@ -20,15 +20,16 @@ import (
 )
 
 const (
-	manifestPath     = "assets/manifest.json"
-	manifestSchema   = "ascendany.public-assets.v1"
-	maximumFiles     = 256
-	maximumAssetSize = 4 << 20
-	maximumTotalSize = 16 << 20
+	manifestPath        = "assets/manifest.json"
+	manifestSchema      = "ascendany.public-assets.v1"
+	maximumFiles        = 512
+	maximumManifestSize = 96 << 10
+	maximumAssetSize    = 4 << 20
+	maximumTotalSize    = 16 << 20
 )
 
 const (
-	staticContentSecurityPolicy = "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; manifest-src 'self'; media-src 'none'; object-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; worker-src 'none'"
+	staticContentSecurityPolicy = "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; manifest-src 'self'; media-src 'none'; object-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; worker-src 'none'"
 	siteContentSecurityPolicy   = "default-src 'self'; base-uri 'self'; connect-src 'self' https://api.github.com; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; manifest-src 'self'; media-src 'none'; object-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; worker-src 'none'"
 )
 
@@ -88,7 +89,7 @@ func newHandler(api http.Handler, source fs.FS) (*Handler, error) {
 }
 
 func loadAssets(source fs.FS) (map[string]asset, error) {
-	document, err := readBoundedFile(source, manifestPath, 64<<10)
+	document, err := readBoundedFile(source, manifestPath, maximumManifestSize)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
@@ -263,6 +264,7 @@ func contentTypeForPath(name string) (string, bool) {
 		".json":  "application/json; charset=utf-8",
 		".png":   "image/png",
 		".svg":   "image/svg+xml",
+		".ttf":   "font/ttf",
 		".webp":  "image/webp",
 		".woff":  "font/woff",
 		".woff2": "font/woff2",
@@ -314,7 +316,8 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 }
 
 func apiPath(name string) bool {
-	return name == "/api/v2" || strings.HasPrefix(name, "/api/v2/") ||
+	return name == "/api/v1" || strings.HasPrefix(name, "/api/v1/") ||
+		name == "/api/v2" || strings.HasPrefix(name, "/api/v2/") ||
 		name == "/livez" || name == "/readyz" || name == "/version"
 }
 

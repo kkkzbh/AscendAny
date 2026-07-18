@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,13 @@ func TestWebhookDeliveryProviderSendsAuthenticatedBoundedPayloadAndReceipt(t *te
 	delivery.Platform = &platform
 	delivery.AppVersion = &appVersion
 	delivery.UserAgent = &userAgent
+	attachmentContent := []byte("png attachment")
+	attachmentHash := imageHash(attachmentContent)
+	delivery.Attachments = []DeliveryAttachment{{
+		Sequence: 1, Filename: "screen.png", SHA256: attachmentHash, SizeBytes: int64(len(attachmentContent)),
+		MediaType: "image/png", StorageKey: "sha256/" + attachmentHash[:2] + "/" + attachmentHash,
+		Content: attachmentContent,
+	}}
 
 	provider, err := newWebhookDeliveryProvider(
 		credentialResolverFunc(func(_ context.Context, reference, authority string) (string, error) {
@@ -92,7 +100,10 @@ func TestWebhookDeliveryProviderSendsAuthenticatedBoundedPayloadAndReceipt(t *te
 				payload.Title != "Desktop feedback" || payload.Content != "The import completed." ||
 				payload.Platform == nil || *payload.Platform != platform ||
 				payload.AppVersion == nil || *payload.AppVersion != appVersion ||
-				payload.UserAgent == nil || *payload.UserAgent != userAgent {
+				payload.UserAgent == nil || *payload.UserAgent != userAgent ||
+				payload.Sender.AccountID != testAccountID || payload.Sender.Username != "feedback_admin" ||
+				len(payload.Attachments) != 1 || payload.Attachments[0].SHA256 != attachmentHash ||
+				payload.Attachments[0].ContentBase64 != base64.StdEncoding.EncodeToString(attachmentContent) {
 				t.Fatalf("payload=%#v", payload)
 			}
 			return &http.Response{
@@ -294,26 +305,15 @@ func TestWebhookDeliveryProviderRejectsInvalidStoredDelivery(t *testing.T) {
 	}
 }
 
-func TestWebhookDeliveryProviderRejectsUnboundedEncodedPayload(t *testing.T) {
+func TestWebhookPayloadBoundCoversMaximumAttachmentEncoding(t *testing.T) {
 	t.Parallel()
-	provider := mustWebhookProvider(t,
-		credentialResolverFunc(func(context.Context, string, string) (string, error) { return "token", nil }),
-		roundTripperFunc(func(*http.Request) (*http.Response, error) {
-			t.Fatal("transport called for unbounded payload")
-			return nil, nil
-		}),
-	)
-	delivery := validWebhookDelivery("https://feedback.example.test/hook")
-	delivery.Title = strings.Repeat("\x01", MaxTitleBytes)
-	delivery.Content = strings.Repeat("\x01", MaxContentBytes)
-	platform := strings.Repeat("\x01", MaxPlatformBytes)
-	appVersion := strings.Repeat("\x01", MaxAppVersionBytes)
-	userAgent := strings.Repeat("\x01", MaxUserAgentBytes)
-	delivery.Platform = &platform
-	delivery.AppVersion = &appVersion
-	delivery.UserAgent = &userAgent
-	_, err := provider.Deliver(context.Background(), delivery)
-	assertProviderFailure(t, err, "webhook_request_invalid", true)
+	base64Bytes := MaxImages * base64.StdEncoding.EncodedLen(MaxImageBytes)
+	maximumEscapedMetadata := 6 * (MaxTitleBytes + MaxContentBytes + MaxPlatformBytes + MaxAppVersionBytes + MaxUserAgentBytes)
+	attachmentMetadata := MaxImages * (MaxAttachmentFilenameBytes + 1024)
+	minimumBound := base64Bytes + maximumEscapedMetadata + attachmentMetadata
+	if maxWebhookRequestBodyBytes < minimumBound || maxWebhookRequestBodyBytes != 96<<20 {
+		t.Fatalf("webhook request bound=%d minimum=%d", maxWebhookRequestBodyBytes, minimumBound)
+	}
 }
 
 func TestWebhookDeliveryProviderClassifiesCredentialAndContextFailures(t *testing.T) {
@@ -547,6 +547,9 @@ func validWebhookDelivery(endpoint string) DeliveryRequest {
 		ConfigurationSchema: WebhookConfigurationSchema,
 		Configuration:       webhookConfigurationJSON(endpoint, 1000),
 		CredentialRef:       &credentialReference,
+		Sender: DeliverySender{
+			AccountID: testAccountID, Username: "feedback_admin", DisplayName: "Feedback Admin", Role: "admin",
+		},
 	}
 }
 

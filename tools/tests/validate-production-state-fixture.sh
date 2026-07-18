@@ -197,8 +197,11 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
             {version: 3, name: "three", sha256: ("3" * 64)},
             {version: 4, name: "four", sha256: ("4" * 64)},
             {version: 5, name: "five", sha256: ("5" * 64)},
-            {version: 6, name: "six", sha256: ("6" * 64)},
-	            {version: 7, name: "seven", sha256: ("7" * 64)}
+	            {version: 6, name: "six", sha256: ("6" * 64)},
+	            {version: 7, name: "seven", sha256: ("7" * 64)},
+	            {version: 8, name: "eight", sha256: ("8" * 64)},
+	            {version: 9, name: "nine", sha256: ("9" * 64)},
+	            {version: 10, name: "ten", sha256: ("a" * 64)}
 	          ],
 	          knowledgeCatalogPublicationIds: ["1"],
 	          knowledgeCatalogPublications: [$publication],
@@ -488,20 +491,147 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   check_forward_database_state
   [[ "$failures" == 0 ]]
 
+  agent_receipt_fixture="$WORK_ROOT/agent-acceptance-receipt.json"
+  agent_model_document_sha256=ad58a2558e7a27fc624cf6d4166363d4ec0459072a015bc7f41fbc6e15cd4fc2
+  agent_provider_credential_sha256="$(printf 'c%.0s' {1..64})"
+  agent_probe_checked_at="$(date -u -d '1 second ago' '+%Y-%m-%dT%H:%M:%SZ')"
+  agent_accepted_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  jq -n -Sc \
+    --arg promptDocumentSHA256 "$agent_prompt_document_sha256" \
+    --arg modelDocumentSHA256 "$agent_model_document_sha256" \
+    --arg providerCredentialSHA256 "$agent_provider_credential_sha256" \
+    --arg acceptedAt "$agent_accepted_at" \
+    --arg probeCheckedAt "$agent_probe_checked_at" \
+    --arg targetApplicationVersion "$release_manifest_version" \
+    --arg targetApplicationCommit "$release_manifest_commit" \
+    --arg targetApplicationBuildTime "$release_manifest_build_time" '
+      {
+        schema: "ascendany.production-agent-acceptance-receipt.v1",
+        acceptedAt: $acceptedAt,
+        administratorAccountId: "00000000-0000-4000-8000-000000000201",
+        acceptanceStudentAccountId: "00000000-0000-4000-8000-000000000202",
+        acceptanceStudentUsername: "acceptance_student",
+        acceptanceStudentNumber: "20260001",
+        targetApplicationVersion: $targetApplicationVersion,
+        targetApplicationCommit: $targetApplicationCommit,
+        targetApplicationBuildTime: $targetApplicationBuildTime,
+        providerCredentialSha256: $providerCredentialSHA256,
+        promptConfiguration: {
+          key: "agent.prompt.default", configurationId: "00000000-0000-4000-8000-000000000203",
+          headRevision: 1, versionId: "41", versionNumber: 1,
+          schemaId: "ascendany.prompt.chat.v1", documentSha256: $promptDocumentSHA256,
+          credentialRef: null, state: "created"
+        },
+        modelConfiguration: {
+          key: "agent.model.default", configurationId: "00000000-0000-4000-8000-000000000204",
+          headRevision: 1, versionId: "42", versionNumber: 1,
+          schemaId: "ascendany.model_connection.openai_compatible.v1",
+          documentSha256: $modelDocumentSHA256, credentialRef: "models.primary", state: "created"
+        },
+        modelProbe: {
+          configurationKey: "agent.model.default", configurationHeadRevision: 1,
+          configurationVersion: 1, configurationSha256: $modelDocumentSHA256,
+          authority: "models.example:443", model: "reasoner-v1",
+          checkedAt: $probeCheckedAt, latencyMilliseconds: 25
+        },
+        replyAcceptance: {
+          created: true,
+          runId: "00000000-0000-4000-8000-000000000205",
+          threadId: "00000000-0000-4000-8000-000000000206",
+          inputMessageId: "00000000-0000-4000-8000-000000000207",
+          outputMessageId: "00000000-0000-4000-8000-000000000208",
+          replySha256: ("a" * 64), eventCount: 4, terminalDoneCount: 1
+        },
+        autoAnalysisAcceptance: {
+          created: false,
+          runId: "00000000-0000-4000-8000-000000000209",
+          threadId: "00000000-0000-4000-8000-00000000020a",
+          inputMessageId: "00000000-0000-4000-8000-00000000020b",
+          outputMessageId: "00000000-0000-4000-8000-00000000020c",
+          replySha256: ("b" * 64), eventCount: 4, terminalDoneCount: 1
+        }
+      }
+    ' >"$agent_receipt_fixture"
+  chmod 0400 "$agent_receipt_fixture"
+  stat() {
+    local target="${!#}"
+    if [[ "$target" == "$agent_receipt_fixture" && "$1" == -Lc && "$2" == '%u:%g:%a:%h' ]]; then
+      printf '%s\n' '0:0:400:1'
+      return
+    fi
+    command stat "$@"
+  }
+  check_root_owned_ancestry() { return 0; }
+  encrypted_credential_sha256() {
+    [[ "$1" == models_primary &&
+       "$2" == /etc/ascendany/credentials/models_primary.cred ]]
+    printf '%s\n' "$agent_provider_credential_sha256"
+  }
+  fixture_agent_database_match=1
+  run_runtime_psql() {
+    printf '%s\n' "$*" >"$WORK_ROOT/agent-acceptance-query.args"
+    command cat >"$WORK_ROOT/agent-acceptance-query.sql"
+    printf '%s\n' "$fixture_agent_database_match"
+  }
+  deployment_transition=initial
+  validation_phase=production
+  agent_acceptance_receipt_path="$agent_receipt_fixture"
+  runtime_provider_bindings=(
+    'ASCENDANY_CREDENTIAL_FILE_REF_HEX_6D6F64656C732E7072696D617279_AUTHORITY_HEX_6D6F64656C732E6578616D706C653A343433=models_primary'
+  )
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 0 ]]
+  grep -F -- '-v prompt_configuration_id=00000000-0000-4000-8000-000000000203' \
+    "$WORK_ROOT/agent-acceptance-query.args" >/dev/null
+  grep -F -- '-v model_version_id=42' "$WORK_ROOT/agent-acceptance-query.args" >/dev/null
+  grep -F -- '-v reply_run_id=00000000-0000-4000-8000-000000000205' \
+    "$WORK_ROOT/agent-acceptance-query.args" >/dev/null
+  grep -F -- '-v auto_created=false' "$WORK_ROOT/agent-acceptance-query.args" >/dev/null
+  grep -F "model_version.credential_ref = :'model_credential_ref'" \
+    "$WORK_ROOT/agent-acceptance-query.sql" >/dev/null
+  grep -F "run.analytics_generation_id = analytics.analytics_generation_id" \
+    "$WORK_ROOT/agent-acceptance-query.sql" >/dev/null
+  grep -F "tool.tool_name = 'analytics.get_self'" \
+    "$WORK_ROOT/agent-acceptance-query.sql" >/dev/null
+  jq -Sc \
+    '.promptConfiguration.state = "matched" | .modelConfiguration.state = "matched"' \
+    "$agent_receipt_fixture" >"$WORK_ROOT/agent-acceptance-retry.json"
+  mv -- "$WORK_ROOT/agent-acceptance-retry.json" "$agent_receipt_fixture"
+  chmod 0400 "$agent_receipt_fixture"
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 0 ]]
+  agent_provider_credential_sha256="$(printf 'd%.0s' {1..64})"
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 1 ]]
+  agent_provider_credential_sha256="$(printf 'c%.0s' {1..64})"
+  fixture_agent_database_match=0
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 1 ]]
+
   id() {
     [[ "$1" == -u ]]
     printf '%s\n' 0
   }
-  expected_runtime_feedback_credential_bindings=''
+  expected_runtime_provider_credential_bindings=''
   expected_forward_database_fingerprint=''
   expected_forward_business_fingerprint=''
   expected_forward_model_head_revision=''
   expected_forward_model_artifact_sha256=''
+  agent_acceptance_receipt_path=''
   deployment_transition=initial
   validation_phase=staged
   failures=0
   validate_input_contract
   [[ "$failures" == 0 ]]
+  agent_acceptance_receipt_path=/var/lib/ascendany-acceptance/forbidden.json
+  failures=0
+  validate_input_contract || true
+  [[ "$failures" == 1 ]]
+  agent_acceptance_receipt_path=''
   validation_phase=activation
   failures=0
   validate_input_contract
@@ -519,6 +649,15 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   validate_input_contract
   [[ "$failures" == 0 ]]
   validation_phase=activation
+  failures=0
+  validate_input_contract
+  [[ "$failures" == 0 ]]
+  validation_phase=production
+  agent_acceptance_receipt_path=''
+  failures=0
+  validate_input_contract || true
+  [[ "$failures" == 1 ]]
+  agent_acceptance_receipt_path=/var/lib/ascendany-acceptance/agent-acceptance-receipt.json
   failures=0
   validate_input_contract
   [[ "$failures" == 0 ]]

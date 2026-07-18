@@ -153,13 +153,57 @@ func validCurrentRecommendation(value recommendation.CurrentRecommendation) bool
 	case recommendation.RecommendationFresh:
 		return value.UnavailableReason == nil && value.CurrentAnalyticsGenerationID != nil &&
 			value.CurrentAnalyticsHeadRevision > 0 && value.Result != nil &&
-			validRecommendationResult(*value.Result)
+			validRecommendationResult(*value.Result) &&
+			validRecommendationKnowledgeActivity(value.KnowledgeActivity, value.Result.KnowledgeMastery)
 	case recommendation.RecommendationUnavailable:
 		return value.UnavailableReason != nil && validUnavailableReason(*value.UnavailableReason) &&
-			value.CurrentAnalyticsHeadRevision >= 0 && value.Result == nil
+			value.CurrentAnalyticsHeadRevision >= 0 && value.Result == nil && len(value.KnowledgeActivity) == 0
 	default:
 		return false
 	}
+}
+
+func validRecommendationKnowledgeActivity(
+	activity []recommendation.RecommendationKnowledgeActivity,
+	mastery []recommendation.RecommendationKnowledgeMastery,
+) bool {
+	if len(activity) != len(mastery) || len(activity) == 0 {
+		return false
+	}
+	expected := make(map[string]struct{}, len(mastery))
+	for _, item := range mastery {
+		expected[item.KnowledgePointID] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(activity))
+	for _, item := range activity {
+		if _, exists := expected[item.KnowledgePointID]; !exists ||
+			item.Attempted < 0 || item.Correct < 0 || item.Correct > item.Attempted {
+			return false
+		}
+		if _, duplicate := seen[item.KnowledgePointID]; duplicate {
+			return false
+		}
+		seen[item.KnowledgePointID] = struct{}{}
+		if item.LastTriedAt != nil {
+			_, offset := item.LastTriedAt.Zone()
+			if item.LastTriedAt.IsZero() || offset != 0 {
+				return false
+			}
+		}
+		if len(item.RecentSeries) > 8 {
+			return false
+		}
+		previousDate := ""
+		for _, day := range item.RecentSeries {
+			parsed, err := time.Parse(time.DateOnly, day.Date)
+			if err != nil || parsed.Format(time.DateOnly) != day.Date || day.Date <= previousDate ||
+				day.Attempted <= 0 || day.Correct < 0 || day.Correct > day.Attempted {
+				return false
+			}
+			previousDate = day.Date
+		}
+	}
+	return len(seen) == len(expected)
 }
 
 func validUnavailableReason(value recommendation.UnavailableReason) bool {

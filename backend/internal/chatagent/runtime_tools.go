@@ -63,6 +63,12 @@ var runtimeToolDefinitions = map[string]runtimeToolDefinition{
 		Description:     "Read one active durable note owned by the authenticated student.",
 		Parameters:      json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"noteId":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}},"required":["noteId"]}`),
 	},
+	ToolUpdateNotes: {
+		ArgumentsSchema: UpdateNotesArgumentsSchema,
+		ResultSchema:    UpdateNotesResultSchema,
+		Description:     "Modify the current Agent frontend notes. Use a notes.md unified diff for a small patch and complete Markdown content for a replacement. The call is rejected while the user is editing.",
+		Parameters:      json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"content":{"type":"string","maxLength":32768},"mode":{"type":"string","enum":["patch","replace"]},"patch":{"type":"string","maxLength":32768}},"required":["mode"]}`),
+	},
 }
 
 type BoundToolQuery struct {
@@ -219,6 +225,26 @@ func (executor *RuntimeToolExecutor) Execute(ctx context.Context, request ToolRe
 			return failedTool("tool_result_too_large"), nil
 		}
 		return successfulTool(AgentNotesGetActiveResultSchema, note)
+	case ToolUpdateNotes:
+		if request.FrontendNotes == nil {
+			return deniedTool(updateNotesUnavailableErrorCode), nil
+		}
+		if request.FrontendNotes.Locked {
+			return deniedTool(updateNotesLockedErrorCode), nil
+		}
+		input, err := decodeUpdateNotesArguments(arguments)
+		if err != nil {
+			return failedTool(updateNotesArgumentsErrorCode), nil
+		}
+		update, err := deriveNotesUpdate(*request.FrontendNotes, input)
+		if err != nil {
+			return failedTool(updateNotesArgumentsErrorCode), nil
+		}
+		result, err := encodeUpdateNotesResult(update)
+		if err != nil {
+			return ToolExecution{}, domainError(ErrorStoredDataInvalid, true, "encode update_notes result", err)
+		}
+		return ToolExecution{Outcome: ToolSucceeded, ResultSchema: runtimeStringPointer(UpdateNotesResultSchema), Result: result}, nil
 	default:
 		return deniedTool("tool_not_allowed"), nil
 	}

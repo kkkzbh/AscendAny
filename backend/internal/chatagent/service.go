@@ -180,7 +180,7 @@ func (service *Service) ReadRunEvents(ctx context.Context, query EventQuery) (Ru
 		if event.Sequence != previous+1 || !identifierPattern.MatchString(event.Type) || event.CreatedAt.IsZero() || !event.CreatedAt.Equal(event.CreatedAt.UTC()) {
 			return RunEventBatch{}, domainError(ErrorStoredDataInvalid, true, "validate agent run event page", errors.New("repository returned an invalid event"))
 		}
-		canonical, _, err := canonicaljson.Object(event.Payload, 32<<10)
+		canonical, _, err := canonicaljson.Object(event.Payload, MaxRunEventDocumentBytes)
 		if err != nil {
 			return RunEventBatch{}, domainError(ErrorStoredDataInvalid, true, "validate agent run event page", err)
 		}
@@ -247,6 +247,10 @@ func (service *Service) EnqueueAutoAnalysis(ctx context.Context, input AutoAnaly
 	if err := validateAutoAnalysisInput(ctx, input); err != nil {
 		return EnqueueResult{}, err
 	}
+	inputContent, err := canonicalAutoAnalysisInputContent(input.FrontendContext)
+	if err != nil {
+		return EnqueueResult{}, domainError(ErrorInvalidInput, true, "encode auto-analysis frontend context", err)
+	}
 	threadID, err := service.uuid()
 	if err != nil {
 		return EnqueueResult{}, domainError(ErrorInvalidConfiguration, false, "generate auto-analysis thread ID", err)
@@ -281,9 +285,11 @@ func (service *Service) EnqueueAutoAnalysis(ctx context.Context, input AutoAnaly
 		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis message", err)
 	}
 	if result.Run.Kind != RunAutoAnalysis || result.Run.InputMessageID != result.Message.ID ||
-		result.Run.ThreadID != result.Message.ThreadID || result.Message.Kind != MessageAutoAnalysisRequest ||
-		result.Message.Content != AutoAnalysisInputContent {
+		result.Run.ThreadID != result.Message.ThreadID || result.Message.Kind != MessageAutoAnalysisRequest {
 		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis run", errors.New("repository returned a run that violates the automatic analysis contract"))
+	}
+	if result.Created && result.Message.Content != inputContent {
+		return EnqueueResult{}, domainError(ErrorStoredDataInvalid, true, "validate auto-analysis run", errors.New("repository returned newly created automatic analysis with different content"))
 	}
 	if result.Created && (result.Run.ID != runID || result.Run.InputMessageID != messageID ||
 		result.Run.ClientRequestID != clientRequestID || result.Run.Status != RunQueued) {
@@ -298,12 +304,11 @@ func validateEnqueueInput(ctx context.Context, input EnqueueInput) error {
 	}
 	if !canonicalUUIDv4.MatchString(input.ThreadID) || !canonicalUUIDv4.MatchString(input.ClientRequestID) ||
 		!configurationKey.MatchString(input.PromptConfigurationKey) || !configurationKey.MatchString(input.ModelConfigurationKey) ||
-		len(input.Content) < 1 || len(input.Content) > MaxMessageBytes || !utf8.ValidString(input.Content) || strings.TrimSpace(input.Content) == "" ||
-		strings.IndexByte(input.Content, 0) >= 0 {
+		!validPersistedMessageContent(MessageUser, input.Content) {
 		return domainError(ErrorInvalidInput, true, "validate agent enqueue", errors.New("canonical IDs, configuration keys, and bounded content are required"))
 	}
-	if input.Kind != RunReply || input.ExpectedAnalyticsHeadRevision != nil {
-		return domainError(ErrorInvalidInput, true, "validate agent enqueue", errors.New("conversation enqueue requires a reply run without analytics"))
+	if input.Kind != RunReply || input.ExpectedAnalyticsHeadRevision != nil && *input.ExpectedAnalyticsHeadRevision < 1 {
+		return domainError(ErrorInvalidInput, true, "validate agent enqueue", errors.New("conversation enqueue requires a reply run and an optional positive analytics head revision"))
 	}
 	return nil
 }
@@ -316,6 +321,15 @@ func validateAutoAnalysisInput(ctx context.Context, input AutoAnalysisInput) err
 		!configurationKey.MatchString(input.ModelConfigurationKey) ||
 		input.ExpectedAnalyticsHeadRevision < 1 {
 		return domainError(ErrorInvalidInput, true, "validate auto-analysis enqueue", errors.New("configuration keys and a positive analytics head revision are required"))
+	}
+	if err := validateAutoAnalysisIdentity(input.Identity); err != nil {
+		return domainError(ErrorInvalidInput, true, "validate auto-analysis identity", err)
+	}
+	if input.FrontendContext.LatestExamID != input.Identity.ExamID || input.FrontendContext.RoleID != input.Identity.RoleID {
+		return domainError(ErrorInvalidInput, true, "validate auto-analysis enqueue", errors.New("automatic-analysis identity must equal the frozen frontend context"))
+	}
+	if _, err := canonicalAutoAnalysisInputContent(input.FrontendContext); err != nil {
+		return domainError(ErrorInvalidInput, true, "validate auto-analysis frontend context", err)
 	}
 	return nil
 }
@@ -343,8 +357,7 @@ func validateThread(thread Thread) error {
 
 func validateMessage(message Message) error {
 	if !canonicalUUIDv4.MatchString(message.ID) || !canonicalUUIDv4.MatchString(message.ThreadID) || message.Sequence < 1 ||
-		len(message.Content) < 1 || len(message.Content) > MaxMessageBytes || !utf8.ValidString(message.Content) ||
-		strings.TrimSpace(message.Content) == "" || strings.IndexByte(message.Content, 0) >= 0 || message.CreatedAt.IsZero() || !message.CreatedAt.Equal(message.CreatedAt.UTC()) {
+		!validPersistedMessageContent(message.Kind, message.Content) || message.CreatedAt.IsZero() || !message.CreatedAt.Equal(message.CreatedAt.UTC()) {
 		return errors.New("message violates its persisted contract")
 	}
 	switch message.Kind {
@@ -362,6 +375,30 @@ func validateMessage(message Message) error {
 		return errors.New("message kind is invalid")
 	}
 	return nil
+}
+
+func validPersistedMessageContent(kind MessageKind, content string) bool {
+	if len(content) < 1 || !utf8.ValidString(content) || strings.TrimSpace(content) == "" || strings.IndexByte(content, 0) >= 0 {
+		return false
+	}
+	switch kind {
+	case MessageUser:
+		_, found, err := decodeReplyFrontendNotes(content)
+		if found {
+			return err == nil && len(content) <= MaxFrontendContextDocumentBytes
+		}
+		return len(content) <= MaxMessageBytes
+	case MessageAutoAnalysisRequest:
+		if len(content) > MaxFrontendContextDocumentBytes {
+			return false
+		}
+		_, err := decodeAutoAnalysisInputContent(content)
+		return err == nil
+	case MessageAssistant:
+		return len(content) <= MaxMessageBytes
+	default:
+		return false
+	}
 }
 
 func validateRun(run Run) error {

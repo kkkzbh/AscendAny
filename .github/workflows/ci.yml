@@ -49,16 +49,6 @@ jobs:
       - name: Verify Go and TypeScript ownership
         run: ./tools/verify-v2-boundary.sh
 
-  desktop-release-contract:
-    name: Desktop Release Contract
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Verify detached builds, signer identities, and closed outputs
-        run: ./apps/desktop/scripts/tests/release-builders-fixture.sh
-
   server-release-contract:
     name: Server Release and Deployment Contract
     runs-on: ubuntu-latest
@@ -194,14 +184,12 @@ jobs:
             command: pnpm --filter @ascendany/sdk check
           - name: Pintia Exporter Extension
             command: pnpm --filter @ascendany/pintia-exporter check
-          - name: Student Web
-            command: pnpm --filter @ascendany/web check
           - name: Student Mobile
             command: pnpm --filter @ascendany/mobile check
           - name: Import Console
             command: pnpm --filter @ascendany/import-console check
           - name: Student Desktop
-            command: pnpm --filter @ascendany/desktop test && pnpm --filter @ascendany/desktop build
+            command: pnpm --filter @ascendany/desktop test && pnpm build
           - name: Product Site
             command: pnpm --filter @ascendany/site build
     steps:

@@ -20,15 +20,40 @@ import (
 )
 
 type achievementServiceStub struct {
-	getSelf func(context.Context, string) (achievement.Result, error)
-	calls   int
-	token   string
+	getSelf               func(context.Context, string) (achievement.Result, error)
+	getByStudentNumber    func(context.Context, string) (achievement.Result, error)
+	getByStudentIdentity  func(context.Context, string, string) (achievement.Result, error)
+	calls                 int
+	token                 string
+	studentNumberCalls    int
+	selectedStudentNumber string
+	studentIdentityCalls  int
+	selectedPTANickname   string
+}
+
+func (stub *achievementServiceStub) GetByStudentIdentity(ctx context.Context, studentNumber, ptaNickname string) (achievement.Result, error) {
+	stub.studentIdentityCalls++
+	stub.selectedStudentNumber = studentNumber
+	stub.selectedPTANickname = ptaNickname
+	if stub.getByStudentIdentity == nil {
+		panic("unexpected achievement student-identity read")
+	}
+	return stub.getByStudentIdentity(ctx, studentNumber, ptaNickname)
 }
 
 func (stub *achievementServiceStub) GetSelf(ctx context.Context, token string) (achievement.Result, error) {
 	stub.calls++
 	stub.token = token
 	return stub.getSelf(ctx, token)
+}
+
+func (stub *achievementServiceStub) GetByStudentNumber(ctx context.Context, studentNumber string) (achievement.Result, error) {
+	stub.studentNumberCalls++
+	stub.selectedStudentNumber = studentNumber
+	if stub.getByStudentNumber == nil {
+		panic("unexpected achievement student-number read")
+	}
+	return stub.getByStudentNumber(ctx, studentNumber)
 }
 
 func TestGetSelfAchievementsReturnsValidatedStudentResult(t *testing.T) {

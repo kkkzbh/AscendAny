@@ -32,6 +32,33 @@ func TestParseConfigProducesCanonicalOrderIndependentHash(t *testing.T) {
 	}
 }
 
+func TestVerifyParsedConfigReconstructsCanonicalValueAndRejectsIdentityDrift(t *testing.T) {
+	t.Parallel()
+	parsed, err := ParseConfig([]byte(validConfigJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Value.AcceptedVerdicts[0] = "MUTATED"
+	verified, err := VerifyParsedConfig(parsed)
+	if err != nil {
+		t.Fatalf("VerifyParsedConfig() error = %v", err)
+	}
+	if verified.Value.AcceptedVerdicts[0] != "ACCEPTED" {
+		t.Fatalf("verified accepted verdicts = %#v", verified.Value.AcceptedVerdicts)
+	}
+
+	digestDrift := parsed
+	digestDrift.SHA256 = strings.Repeat("f", 64)
+	if _, err := VerifyParsedConfig(digestDrift); err == nil || !strings.Contains(err.Error(), "SHA-256 differs") {
+		t.Fatalf("digest drift error = %v", err)
+	}
+	canonicalDrift := parsed
+	canonicalDrift.Canonical = append([]byte("\n"), canonicalDrift.Canonical...)
+	if _, err := VerifyParsedConfig(canonicalDrift); err == nil || !strings.Contains(err.Error(), "canonical analytics configuration") {
+		t.Fatalf("canonical drift error = %v", err)
+	}
+}
+
 func TestParseConfigRejectsUnknownMissingDuplicateAndOutOfRangeFields(t *testing.T) {
 	t.Parallel()
 

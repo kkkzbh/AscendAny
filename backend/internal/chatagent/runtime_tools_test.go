@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +77,7 @@ func TestRuntimeToolExecutorBindsAnalyticsToRunStudentAndImmutableGeneration(t *
 
 func TestRuntimeToolCatalogOwnsExactBoundedJSONSchemas(t *testing.T) {
 	t.Parallel()
-	if len(runtimeToolDefinitions) != 3 {
+	if len(runtimeToolDefinitions) != 4 {
 		t.Fatalf("definitions=%d", len(runtimeToolDefinitions))
 	}
 	for name, definition := range runtimeToolDefinitions {
@@ -91,10 +92,86 @@ func TestRuntimeToolCatalogOwnsExactBoundedJSONSchemas(t *testing.T) {
 		}
 		decoder := json.NewDecoder(strings.NewReader(string(definition.Parameters)))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&schema); err != nil || schema.Type != "object" || schema.AdditionalProperties || len(schema.Properties) != 1 || len(schema.Required) != 1 {
+		if err := decoder.Decode(&schema); err != nil || schema.Type != "object" || schema.AdditionalProperties || len(schema.Required) != 1 ||
+			(name == ToolUpdateNotes && len(schema.Properties) != 3) || (name != ToolUpdateNotes && len(schema.Properties) != 1) {
 			t.Fatalf("name=%q schema=%s decoded=%#v error=%v", name, definition.Parameters, schema, err)
 		}
 	}
+}
+
+func TestRuntimeToolExecutorUpdatesRunLocalNotesWithReplaceAndPatch(t *testing.T) {
+	t.Parallel()
+	executor, _ := NewRuntimeToolExecutor(&runtimeToolReaderStub{})
+	state := &FrontendNotesState{Content: "A\nB\nC", Title: "Notebook"}
+	replace, err := executor.Execute(context.Background(), ToolRequest{
+		RunID: testRunID, StudentNumber: "20260001", FrontendNotes: state,
+		Key: "notes:replace", Name: ToolUpdateNotes, ArgumentsSchema: UpdateNotesArgumentsSchema,
+		Arguments: json.RawMessage(`{"mode":"replace","content":"A\nB2\nC"}`),
+	})
+	if err != nil || replace.Outcome != ToolSucceeded || replace.ResultSchema == nil || *replace.ResultSchema != UpdateNotesResultSchema {
+		t.Fatalf("replace=%#v error=%v", replace, err)
+	}
+	replaceRecord, normalizeErr := normalizeProviderToolCall(ProviderToolCall{
+		Key: "notes:replace", Name: ToolUpdateNotes, ArgumentsSchema: UpdateNotesArgumentsSchema,
+		Arguments: json.RawMessage(`{"mode":"replace","content":"A\nB2\nC"}`),
+	})
+	if normalizeErr != nil {
+		t.Fatal(normalizeErr)
+	}
+	replaceRecord.Outcome = replace.Outcome
+	replaceRecord.ResultSchema = replace.ResultSchema
+	replaceRecord.Result = replace.Result
+	update, validateErr := validateUpdateNotesResult(replaceRecord, *state)
+	if validateErr != nil || update.Previous != "A\nB\nC" || update.Next != "A\nB2\nC" || update.Patch != nil {
+		t.Fatalf("update=%#v error=%v result=%s", update, validateErr, replace.Result)
+	}
+
+	state.Content = update.Next
+	patchText := "--- notes.md\n+++ notes.md\n@@ -1,3 +1,4 @@\n A\n B2\n+X\n C"
+	patched, err := executor.Execute(context.Background(), ToolRequest{
+		RunID: testRunID, StudentNumber: "20260001", FrontendNotes: state,
+		Key: "notes:patch", Name: ToolUpdateNotes, ArgumentsSchema: UpdateNotesArgumentsSchema,
+		Arguments: mustJSON(t, map[string]any{"mode": "patch", "patch": patchText}),
+	})
+	if err != nil || patched.Outcome != ToolSucceeded || !strings.Contains(string(patched.Result), `"updatedNotes":"A\nB2\nX\nC"`) {
+		t.Fatalf("patched=%#v error=%v", patched, err)
+	}
+}
+
+func TestRuntimeToolExecutorRejectsLockedInvalidAndOversizedNotesMutation(t *testing.T) {
+	t.Parallel()
+	executor, _ := NewRuntimeToolExecutor(&runtimeToolReaderStub{})
+	fixtures := []struct {
+		name    string
+		state   *FrontendNotesState
+		args    json.RawMessage
+		outcome ToolOutcome
+		code    string
+	}{
+		{name: "unavailable", args: json.RawMessage(`{"mode":"replace","content":"x"}`), outcome: ToolDenied, code: updateNotesUnavailableErrorCode},
+		{name: "locked", state: &FrontendNotesState{Content: "seed", Locked: true}, args: json.RawMessage(`{"mode":"replace","content":"x"}`), outcome: ToolDenied, code: updateNotesLockedErrorCode},
+		{name: "context mismatch", state: &FrontendNotesState{Content: "A\nB"}, args: json.RawMessage(`{"mode":"patch","patch":"--- notes.md\n+++ notes.md\n@@ -1,2 +1,2 @@\n A\n-X\n+Y"}`), outcome: ToolFailed, code: updateNotesArgumentsErrorCode},
+		{name: "oversized", state: &FrontendNotesState{}, args: mustJSON(t, map[string]any{"mode": "replace", "content": strings.Repeat("x", MaxFrontendNotesCharacters+1)}), outcome: ToolFailed, code: updateNotesArgumentsErrorCode},
+	}
+	for index, fixture := range fixtures {
+		execution, err := executor.Execute(context.Background(), ToolRequest{
+			RunID: testRunID, StudentNumber: "20260001", FrontendNotes: fixture.state,
+			Key: "notes:reject:" + strconv.Itoa(index), Name: ToolUpdateNotes, ArgumentsSchema: UpdateNotesArgumentsSchema,
+			Arguments: fixture.args,
+		})
+		if err != nil || execution.Outcome != fixture.outcome || execution.ErrorCode == nil || *execution.ErrorCode != fixture.code {
+			t.Fatalf("%s execution=%#v error=%v", fixture.name, execution, err)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func TestRuntimeToolExecutorDeniesAnalyticsWithoutEnqueueSnapshot(t *testing.T) {

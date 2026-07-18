@@ -19,10 +19,11 @@ type refreshSnapshotRow struct {
 }
 
 func (r refreshSnapshotRow) Scan(destinations ...any) error {
-	if len(destinations) != 22 {
+	if len(destinations) != 23 {
 		return errors.New("unexpected refresh snapshot destination count")
 	}
 	studentNumber := "20260001"
+	ptaNickname := "Student"
 	usedAt := r.now.Add(-time.Minute)
 	*destinations[0].(*int64) = 31
 	*destinations[1].(*string) = "123e4567-e89b-42d3-a456-426614174010"
@@ -43,9 +44,10 @@ func (r refreshSnapshotRow) Scan(destinations ...any) error {
 	*destinations[16].(*string) = "student_1"
 	*destinations[17].(*string) = "Student"
 	*destinations[18].(**string) = &studentNumber
-	*destinations[19].(*Role) = RoleStudent
-	*destinations[20].(*int64) = 1
-	*destinations[21].(**time.Time) = nil
+	*destinations[19].(**string) = &ptaNickname
+	*destinations[20].(*Role) = RoleStudent
+	*destinations[21].(*int64) = 1
+	*destinations[22].(**time.Time) = nil
 	return nil
 }
 

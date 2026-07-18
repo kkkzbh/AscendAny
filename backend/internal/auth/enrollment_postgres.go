@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const enrollmentAdvisoryLock int64 = 4706902253123607892
+const studentAccountProvisioningAdvisoryLock int64 = 4706902253123607892
 
 func (r *PostgresRepository) IssueEnrollment(
 	ctx context.Context,
@@ -30,7 +30,7 @@ func (r *PostgresRepository) IssueEnrollment(
 		if err != nil {
 			return err
 		}
-		if err := lockEnrollmentTransactions(ctx, tx); err != nil {
+		if err := lockStudentAccountProvisioning(ctx, tx); err != nil {
 			return err
 		}
 		transactionNow, err := enrollmentTransactionTime(ctx, tx)
@@ -172,7 +172,7 @@ func (r *PostgresRepository) RevokeEnrollment(
 		if err != nil {
 			return err
 		}
-		if err := lockEnrollmentTransactions(ctx, tx); err != nil {
+		if err := lockStudentAccountProvisioning(ctx, tx); err != nil {
 			return err
 		}
 		transactionNow, err := enrollmentTransactionTime(ctx, tx)
@@ -239,7 +239,7 @@ func (r *PostgresRepository) ClaimEnrollment(
 	}
 	result := ClaimEnrollmentResult{Status: EnrollmentClaimRejected}
 	err := r.transaction(ctx, "claim enrollment grant", func(tx postgresTx) error {
-		if err := lockEnrollmentTransactions(ctx, tx); err != nil {
+		if err := lockStudentAccountProvisioning(ctx, tx); err != nil {
 			return err
 		}
 		transactionNow, err := enrollmentTransactionTime(ctx, tx)
@@ -386,9 +386,9 @@ RETURNING account_id`,
 	return result, err
 }
 
-func lockEnrollmentTransactions(ctx context.Context, tx postgresTx) error {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, enrollmentAdvisoryLock); err != nil {
-		return databaseFailure("lock enrollment transactions", err)
+func lockStudentAccountProvisioning(ctx context.Context, tx postgresTx) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, studentAccountProvisioningAdvisoryLock); err != nil {
+		return databaseFailure("lock student account provisioning", err)
 	}
 	return nil
 }

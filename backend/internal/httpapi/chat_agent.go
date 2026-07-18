@@ -12,7 +12,14 @@ import (
 
 	"github.com/kkkzbh/AscendAny/backend/internal/auth"
 	"github.com/kkkzbh/AscendAny/backend/internal/chatagent"
+	"github.com/kkkzbh/AscendAny/backend/internal/studentanalytics"
 )
+
+type automaticAnalysisRequest struct {
+	PromptConfigurationKey        string `json:"promptConfigurationKey"`
+	ModelConfigurationKey         string `json:"modelConfigurationKey"`
+	ExpectedAnalyticsHeadRevision int64  `json:"expectedAnalyticsHeadRevision"`
+}
 
 const (
 	maxAgentRunJSONBytes   int64 = 512 << 10
@@ -142,7 +149,7 @@ func (handler *Handler) enqueueAutoAnalysis(writer http.ResponseWriter, request 
 		handler.writeAPIError(writer, request, http.StatusUnauthorized, "auth_authentication_rejected", "Authentication was rejected.")
 		return
 	}
-	var input chatagent.AutoAnalysisRequest
+	var input automaticAnalysisRequest
 	if err := decodeStrictJSONWithLimit(
 		writer,
 		request,
@@ -154,7 +161,32 @@ func (handler *Handler) enqueueAutoAnalysis(writer http.ResponseWriter, request 
 		handler.handleRequestContractError(writer, request, err)
 		return
 	}
-	result, err := handler.chatAgent.EnqueueAutoAnalysis(request.Context(), access, input)
+	analytics, err := handler.studentAnalytics.GetSelf(request.Context(), access, 1)
+	if err != nil {
+		handler.handleStudentAnalyticsError(writer, request, err)
+		return
+	}
+	if analytics.State != studentanalytics.StateReady || analytics.Ready == nil || analytics.HeadRevision < 1 ||
+		len(analytics.Ready.ExamHistory) == 0 {
+		handler.writeAPIError(writer, request, http.StatusConflict, "analytics_unavailable", "Published student analytics are unavailable.")
+		return
+	}
+	latestExamID := analytics.Ready.ExamHistory[len(analytics.Ready.ExamHistory)-1].ExamID
+	identity, err := chatagent.NewAutoAnalysisIdentity(latestExamID, "default")
+	if err != nil {
+		handler.writeAPIError(writer, request, http.StatusInternalServerError, "internal_error", "Request could not be completed.")
+		return
+	}
+	result, err := handler.chatAgent.EnqueueAutoAnalysis(request.Context(), access, chatagent.AutoAnalysisRequest{
+		PromptConfigurationKey:        input.PromptConfigurationKey,
+		ModelConfigurationKey:         input.ModelConfigurationKey,
+		ExpectedAnalyticsHeadRevision: input.ExpectedAnalyticsHeadRevision,
+		Identity:                      identity,
+		FrontendContext: chatagent.AutoAnalysisFrontendContext{
+			LatestExamID: identity.ExamID,
+			RoleID:       identity.RoleID,
+		},
+	})
 	if err != nil {
 		handler.handleChatAgentError(writer, request, err)
 		return

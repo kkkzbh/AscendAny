@@ -1,12 +1,27 @@
 package feedback
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	artifactstore "github.com/kkkzbh/AscendAny/backend/internal/artifact"
 )
+
+type artifactVerifierFunc func(context.Context, string, int64) (artifactstore.Artifact, error)
+
+func (verify artifactVerifierFunc) Verify(ctx context.Context, hash string, size int64) (artifactstore.Artifact, error) {
+	return verify(ctx, hash, size)
+}
+
+func unusedArtifactVerifier(context.Context, string, int64) (artifactstore.Artifact, error) {
+	panic("artifact verifier called without attachments")
+}
 
 type deliveryRepositoryStub struct {
 	request        DeliveryRequest
@@ -98,7 +113,7 @@ func TestDeliveryWorkerOwnsSuccessRetryAndPermanentFailureTransitions(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			repository := &deliveryRepositoryStub{request: DeliveryRequest{FeedbackID: testFeedbackID}}
-			worker, err := newDeliveryWorker(repository, test.provider, DeliveryWorkerConfig{
+			worker, err := newDeliveryWorker(repository, artifactVerifierFunc(unusedArtifactVerifier), test.provider, DeliveryWorkerConfig{
 				Owner: "worker", LeaseDuration: time.Minute, RetryDelay: time.Minute,
 			}, func() (string, error) { return testRequestID, nil })
 			if err != nil {
@@ -128,7 +143,7 @@ func TestDeliveryWorkerRejectsOpaqueProviderErrorAndBadReceipt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			repository := &deliveryRepositoryStub{request: DeliveryRequest{FeedbackID: testFeedbackID}}
-			worker, err := NewDeliveryWorker(repository, provider, DeliveryWorkerConfig{
+			worker, err := NewDeliveryWorker(repository, artifactVerifierFunc(unusedArtifactVerifier), provider, DeliveryWorkerConfig{
 				Owner: "worker", LeaseDuration: time.Minute, RetryDelay: time.Minute,
 			})
 			if err != nil {
@@ -139,6 +154,119 @@ func TestDeliveryWorkerRejectsOpaqueProviderErrorAndBadReceipt(t *testing.T) {
 			}
 			if repository.completedHash != "" || repository.requeuedReason != "" || repository.failedCode != "" {
 				t.Fatalf("repository transitioned invalid provider result: %#v", repository)
+			}
+		})
+	}
+}
+
+func TestDeliveryWorkerHydratesVerifiedAttachmentBeforeProvider(t *testing.T) {
+	content := []byte("verified screenshot")
+	store, err := artifactstore.NewStore(filepath.Join(t.TempDir(), "artifacts"), MaxImageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.Publish(context.Background(), bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := publication.Artifact
+	if err := publication.Release(); err != nil {
+		t.Fatal(err)
+	}
+	request := DeliveryRequest{
+		FeedbackID: testFeedbackID,
+		Attachments: []DeliveryAttachment{{
+			Sequence: 1, Filename: "screen.png", SHA256: artifact.Hash, SizeBytes: artifact.Size,
+			MediaType: "image/png", StorageKey: artifact.StorageKey,
+		}},
+	}
+	providerCalled := false
+	repository := &deliveryRepositoryStub{request: request}
+	worker, err := NewDeliveryWorker(repository, store, deliveryProviderFunc(func(_ context.Context, delivery DeliveryRequest) ([]byte, error) {
+		providerCalled = true
+		if len(delivery.Attachments) != 1 || !bytes.Equal(delivery.Attachments[0].Content, content) {
+			t.Fatalf("delivery attachments=%#v", delivery.Attachments)
+		}
+		return []byte("receipt"), nil
+	}), DeliveryWorkerConfig{Owner: "worker", LeaseDuration: time.Minute, RetryDelay: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := worker.Process(context.Background(), validDeliveryClaim())
+	if err != nil || outcome.Disposition != DeliverySucceeded || !providerCalled {
+		t.Fatalf("outcome=%#v providerCalled=%t error=%v", outcome, providerCalled, err)
+	}
+}
+
+func TestDeliveryWorkerClassifiesAttachmentArtifactFailures(t *testing.T) {
+	t.Parallel()
+	attachment := DeliveryAttachment{
+		Sequence: 1, Filename: "screen.png", SHA256: strings.Repeat("a", 64), SizeBytes: 3,
+		MediaType: "image/png", StorageKey: "sha256/aa/" + strings.Repeat("a", 64),
+	}
+	tests := []struct {
+		name        string
+		verifier    artifactVerifier
+		disposition string
+		failureCode string
+	}{
+		{
+			name: "not found",
+			verifier: artifactVerifierFunc(func(context.Context, string, int64) (artifactstore.Artifact, error) {
+				return artifactstore.Artifact{}, &artifactstore.StoreError{Code: artifactstore.ErrorNotFound, Op: "verify", Err: os.ErrNotExist}
+			}),
+			disposition: DeliveryFailed, failureCode: "attachment_artifact_invalid",
+		},
+		{
+			name: "corrupt",
+			verifier: artifactVerifierFunc(func(context.Context, string, int64) (artifactstore.Artifact, error) {
+				return artifactstore.Artifact{}, &artifactstore.StoreError{Code: artifactstore.ErrorCorrupt, Op: "verify", Err: errors.New("digest mismatch")}
+			}),
+			disposition: DeliveryFailed, failureCode: "attachment_artifact_invalid",
+		},
+		{
+			name: "transient IO",
+			verifier: artifactVerifierFunc(func(context.Context, string, int64) (artifactstore.Artifact, error) {
+				return artifactstore.Artifact{}, &artifactstore.StoreError{Code: artifactstore.ErrorIO, Op: "verify", Err: errors.New("temporary read failure")}
+			}),
+			disposition: DeliveryRetry, failureCode: "attachment_artifact_unavailable",
+		},
+		{
+			name: "metadata mismatch",
+			verifier: artifactVerifierFunc(func(context.Context, string, int64) (artifactstore.Artifact, error) {
+				return artifactstore.Artifact{
+					Hash: attachment.SHA256, Size: attachment.SizeBytes,
+					StorageKey: "sha256/bb/" + attachment.SHA256, Path: "/unreachable",
+				}, nil
+			}),
+			disposition: DeliveryFailed, failureCode: "attachment_artifact_invalid",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			providerCalled := false
+			repository := &deliveryRepositoryStub{request: DeliveryRequest{
+				FeedbackID: testFeedbackID, Attachments: []DeliveryAttachment{attachment},
+			}}
+			worker, err := NewDeliveryWorker(repository, test.verifier, deliveryProviderFunc(func(context.Context, DeliveryRequest) ([]byte, error) {
+				providerCalled = true
+				return nil, errors.New("provider must not run")
+			}), DeliveryWorkerConfig{Owner: "worker", LeaseDuration: time.Minute, RetryDelay: time.Minute})
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := worker.Process(context.Background(), validDeliveryClaim())
+			if err != nil || outcome.Disposition != test.disposition || outcome.FailureCode == nil ||
+				*outcome.FailureCode != test.failureCode || providerCalled {
+				t.Fatalf("outcome=%#v providerCalled=%t repository=%#v error=%v", outcome, providerCalled, repository, err)
+			}
+			if test.disposition == DeliveryFailed && repository.failedCode != test.failureCode {
+				t.Fatalf("failed code=%q", repository.failedCode)
+			}
+			if test.disposition == DeliveryRetry && repository.requeuedReason != test.failureCode {
+				t.Fatalf("retry code=%q", repository.requeuedReason)
 			}
 		})
 	}

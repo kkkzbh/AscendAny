@@ -57,7 +57,7 @@ forward catalog publication creates one immutable publication/receipt for the
 registered target release and atomically reserves it as the current head's
 single pending publication. Runtime startup and recommendation reads reject a
 pending head. `ascendany-model-activate.service` consumes that exact publication,
-clears the pending state, and advances the head exactly once. The schema-v7 ownership is
+clears the pending state, and advances the head exactly once. The schema-v10 ownership is
 closed over `recommendation_model_releases`,
 `knowledge_catalog_publications`, `recommendation_model_activation_events`, and
 `recommendation_model_head`. Each activation binds the model SHA-256, catalog
@@ -819,7 +819,7 @@ podman exec -i --user postgres ascendany-postgres \
   < /opt/ascendany/v2/db/roles/verify_v2_roles.sql
 ```
 
-Use the container-local `postgres` peer DBA channel for the two direct `psql` invocations. Migration readiness must report schema version 7.
+Use the container-local `postgres` peer DBA channel for the two direct `psql` invocations. Migration readiness must report schema version 10.
 
 ## 6. Cloudflare ingress
 
@@ -852,7 +852,7 @@ Each gate must exit zero and its complete stdout/stderr must be retained with th
 
 ### 7.1 Staged
 
-Requirements: `ascendanyd.service` disabled/inactive, backup timer disabled/inactive, smoke drop-in installed, port 18000 unused, and Cloudflared active. The database must contain exactly the schema-v7 set of 54 base tables and 32 sequences; only the seven migration rows, zero-revision analytics singleton, and immutable migration-v4 achievement seed may be populated. Every other table is empty and every non-seed sequence is uncalled. The published artifact namespace, incoming/lock namespaces, catalog receipt namespace, backup root and acceptance/restore-evidence root are empty.
+Requirements: `ascendanyd.service` disabled/inactive, backup timer disabled/inactive, smoke drop-in installed, port 18000 unused, and Cloudflared active. The database must contain exactly the schema-v10 set of 54 base tables and 31 sequences; only the ten migration rows, zero-revision analytics singleton, and immutable migration-v4 achievement seed may be populated. Every other table is empty and every non-seed sequence is uncalled. The published artifact namespace, incoming/lock namespaces, catalog receipt namespace, backup root and acceptance/restore-evidence root are empty.
 
 Create one temporary root-owned mode-`0600` `PGPASSFILE` containing only the `ascendanyd_login` entry, then run:
 
@@ -878,10 +878,10 @@ ASCENDANY_VALIDATION_PHASE=smoke \
 systemctl stop ascendanyd.service
 ```
 
-The gate requires exact health/version/capability responses, schema version 7,
+The gate requires exact health/version/capability responses, schema version 10,
 `writesEnabled=false`, byte-identical loopback/public/shadow version responses,
 and no business, durable-job or model-state mutation. The same
-54-table/32-sequence canonical fresh-state and empty durable-namespace gate runs
+54-table/31-sequence canonical fresh-state and empty durable-namespace gate runs
 again. `recommendation_model_releases`, `recommendation_model_head` and
 `recommendation_model_activation_events` remain empty, and
 `recommendation_model_release_ids_seq` remains uncalled. Read-only startup uses
@@ -911,7 +911,7 @@ the head. The successful bootstrap binding creates head/event revision `1` with 
 catalog-publication reference. This initial-only H1 state supplies the immutable
 current-model anchor used by the reviewed publication request. The static
 one-shot returns to inactive/dead with a successful result.
-`ascendanyd serve` requires this exact schema-v7 release/head binding whenever
+`ascendanyd serve` requires this exact schema-v10 release/head binding whenever
 writes are enabled and never creates or advances it. Recommendation reads return the explicit
 `knowledge_catalog_unavailable` domain result until section 7.4 publishes the
 catalog.
@@ -923,7 +923,10 @@ acceptance directory. `snapshot_path` is the real exporter output from the
 currently loaded Pintia problem set. It must already be a complete
 `ascendany.pintia.snapshot.v2`. `admin_password_path` contains 12..128 unpadded
 bytes without a trailing newline. `acceptance_student_number` names one unique
-enrollable participant in that snapshot.
+enrollable participant in that snapshot. `provider_credential_path` contains
+the unpadded DeepSeek bearer credential. It is encrypted with the host key,
+removed immediately, and exposed to `ascendanyd` only through the exact runtime
+provider credential drop-in.
 
 Create the one-time administrator credential, run the bootstrap unit, and retain
 the protected plaintext password only until the release operator finishes its
@@ -939,12 +942,15 @@ admin_password_path="$acceptance_dir/admin.password"
 acceptance_student_number='REPLACE_WITH_EXACT_STUDENT_NUMBER'
 student_username=release_acceptance
 student_credentials="$acceptance_dir/student-credentials"
+provider_credential_path="$acceptance_dir/deepseek.bearer"
 
 [[ -d "$acceptance_dir" && ! -L "$acceptance_dir" ]]
 [[ "$(stat -Lc '%u:%g:%a' -- "$acceptance_dir")" == 0:0:700 ]]
 [[ -f "$snapshot_path" && ! -L "$snapshot_path" ]]
 [[ -f "$admin_password_path" && ! -L "$admin_password_path" ]]
 [[ "$(stat -Lc '%u:%g:%a:%h' -- "$admin_password_path")" == 0:0:400:1 ]]
+[[ -f "$provider_credential_path" && ! -L "$provider_credential_path" ]]
+[[ "$(stat -Lc '%u:%g:%a:%h' -- "$provider_credential_path")" == 0:0:400:1 ]]
 
 install -d -o root -g root -m 0700 /run/ascendany-admin-bootstrap-input
 systemd-creds encrypt --with-key=host --name=admin_password \
@@ -1076,14 +1082,39 @@ PGPASSFILE=/run/ascendany-validation/runtime.pgpass \
   /opt/ascendany/v2/scripts/validate-production.sh
 ```
 
-Bind the exact publication into H2, remove the smoke drop-in, start the target application, and run `verify` through
-loopback while the Tunnel remains active. The first run creates one persistent
-root-only acceptance-student credential directory and proves single-use
-enrollment, current analytics/leaderboard state, receipt/audit provenance and
-online inference bound to the exact model, catalog and application identity.
+Bind the exact publication into H2, install the host-encrypted DeepSeek runtime
+provider credential and its exact generic credential binding, remove the smoke
+drop-in, start the target application, and run `verify` through loopback while
+the Tunnel remains active. The first run creates one persistent root-only
+acceptance-student credential directory and proves single-use enrollment,
+current analytics/leaderboard state, receipt/audit provenance and online
+inference bound to the exact model, catalog and application identity.
 
 ```bash
 systemctl start ascendany-model-activate.service
+
+provider_credential_ref=deepseek.chat.bearer
+provider_credential_id=deepseek_chat_bearer
+provider_endpoint=https://api.deepseek.com/chat/completions
+provider_authority=api.deepseek.com:443
+provider_model=deepseek-v4-flash
+provider_environment=ASCENDANY_CREDENTIAL_FILE_REF_HEX_646565707365656B2E636861742E626561726572_AUTHORITY_HEX_6170692E646565707365656B2E636F6D3A343433
+runtime_provider_binding="$provider_environment=$provider_credential_id"
+
+systemd-creds encrypt --with-key=host --name="$provider_credential_id" \
+  "$provider_credential_path" \
+  "/etc/ascendany/credentials/${provider_credential_id}.cred"
+chown root:root "/etc/ascendany/credentials/${provider_credential_id}.cred"
+chmod 0400 "/etc/ascendany/credentials/${provider_credential_id}.cred"
+install -d -o root -g root -m 0755 /etc/systemd/system/ascendanyd.service.d
+install -o root -g root -m 0644 /dev/stdin \
+  /etc/systemd/system/ascendanyd.service.d/50-runtime-provider-credentials.conf <<EOF
+[Service]
+LoadCredentialEncrypted=${provider_credential_id}:/etc/ascendany/credentials/${provider_credential_id}.cred
+Environment=${provider_environment}=%d/${provider_credential_id}
+EOF
+rm -f -- "$provider_credential_path"
+
 rm -- /etc/systemd/system/ascendanyd.service.d/40-read-only-smoke.conf
 systemctl daemon-reload
 systemctl start ascendanyd.service
@@ -1115,9 +1146,99 @@ ASCENDANY_INITIALIZATION_STUDENT_CREDENTIAL_DIRECTORY="$student_credentials" \
 chmod 0400 "$verify_receipt"
 jq -e '.schema == "ascendany.production-initialization.verify-receipt.v1"' \
   "$verify_receipt" >/dev/null
+
+agent_receipt="$acceptance_dir/agent-acceptance-receipt.json"
+[[ ! -e "$agent_receipt" ]]
+provider_credential_file="/run/credentials/ascendanyd.service/${provider_credential_id}"
+provider_credential_sha256="$(sha256sum -- "$provider_credential_file" | awk '{print $1}')"
+agent_receipt_candidate="$(mktemp --tmpdir="$acceptance_dir" .agent-acceptance-receipt.XXXXXX)"
+if ! ASCENDANY_AGENT_BASE_URL=http://127.0.0.1:18000/ \
+    ASCENDANY_AGENT_ORIGIN=https://ascendany.kkkzbh.cn \
+    ASCENDANY_AGENT_ADMIN_PASSWORD_FILE="$admin_password_path" \
+    ASCENDANY_AGENT_STUDENT_CREDENTIAL_DIRECTORY="$student_credentials" \
+    ASCENDANY_AGENT_MODEL_ENDPOINT="$provider_endpoint" \
+    ASCENDANY_AGENT_MODEL="$provider_model" \
+    ASCENDANY_AGENT_MODEL_CREDENTIAL_REF="$provider_credential_ref" \
+    ASCENDANY_AGENT_MODEL_CREDENTIAL_FILE="$provider_credential_file" \
+    ASCENDANY_AGENT_TARGET_APPLICATION_VERSION="$target_version" \
+    ASCENDANY_AGENT_TARGET_APPLICATION_COMMIT="$target_commit" \
+    ASCENDANY_AGENT_TARGET_APPLICATION_BUILD_TIME="$target_build_time" \
+      /usr/bin/node-22 "$operator" agent >"$agent_receipt_candidate"; then
+  rm -f -- "$agent_receipt_candidate"
+  exit 1
+fi
+if ! jq -e \
+  --arg authority "$provider_authority" \
+  --arg model "$provider_model" \
+  --arg targetVersion "$target_version" \
+  --arg targetCommit "$target_commit" \
+  --arg targetBuildTime "$target_build_time" \
+  --arg providerCredentialSha256 "$provider_credential_sha256" '
+  def uuid_v4:
+    type == "string" and
+    test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+  def acceptance:
+    (.runId | uuid_v4) and (.threadId | uuid_v4) and
+    (.inputMessageId | uuid_v4) and (.outputMessageId | uuid_v4) and
+    (.replySha256 | test("^[0-9a-f]{64}$")) and
+    (.eventCount | type == "number" and floor == . and . >= 1) and
+    .terminalDoneCount == 1;
+  .schema == "ascendany.production-agent-acceptance-receipt.v1" and
+  .targetApplicationVersion == $targetVersion and
+  .targetApplicationCommit == $targetCommit and
+  .targetApplicationBuildTime == $targetBuildTime and
+  .providerCredentialSha256 == $providerCredentialSha256 and
+  .promptConfiguration.key == "agent.prompt.default" and
+  (.promptConfiguration.headRevision | type == "number" and floor == . and . >= 1) and
+  .promptConfiguration.versionNumber == .promptConfiguration.headRevision and
+  .promptConfiguration.schemaId == "ascendany.prompt.chat.v1" and
+  .promptConfiguration.credentialRef == null and
+  (.promptConfiguration.state == "advanced" or .promptConfiguration.state == "created" or .promptConfiguration.state == "matched") and
+  .modelConfiguration.key == "agent.model.default" and
+  (.modelConfiguration.headRevision | type == "number" and floor == . and . >= 1) and
+  .modelConfiguration.versionNumber == .modelConfiguration.headRevision and
+  .modelConfiguration.schemaId == "ascendany.model_connection.openai_compatible.v1" and
+  .modelConfiguration.credentialRef == "deepseek.chat.bearer" and
+  (.modelConfiguration.state == "advanced" or .modelConfiguration.state == "created" or .modelConfiguration.state == "matched") and
+  .modelProbe.configurationKey == .modelConfiguration.key and
+  .modelProbe.configurationHeadRevision == .modelConfiguration.headRevision and
+  .modelProbe.configurationVersion == .modelConfiguration.versionNumber and
+  .modelProbe.configurationSha256 == .modelConfiguration.documentSha256 and
+  .modelProbe.authority == $authority and
+  .modelProbe.model == $model and
+  (.replyAcceptance | acceptance and .created == true) and
+  (.autoAnalysisAcceptance | acceptance and (.created | type == "boolean")) and
+  ([
+    .replyAcceptance.runId, .replyAcceptance.threadId,
+    .replyAcceptance.inputMessageId, .replyAcceptance.outputMessageId,
+    .autoAnalysisAcceptance.runId, .autoAnalysisAcceptance.threadId,
+    .autoAnalysisAcceptance.inputMessageId, .autoAnalysisAcceptance.outputMessageId
+  ] | unique | length == 8)
+' "$agent_receipt_candidate" >/dev/null; then
+  rm -f -- "$agent_receipt_candidate"
+  exit 1
+fi
+chown root:root "$agent_receipt_candidate"
+chmod 0400 "$agent_receipt_candidate"
+mv -T -- "$agent_receipt_candidate" "$agent_receipt"
 rm -f -- "$admin_password_path"
 systemctl enable ascendanyd.service
 ```
+
+The `agent` phase is independent from `prepare` and `verify`. It logs in with
+the protected administrator and existing acceptance-student credentials,
+creates the missing fixed head-1 `agent.prompt.default` and
+`agent.model.default` documents through compare-and-swap or matches their exact
+active immutable versions on a clean retry. It probes the configured
+authority/model with the runtime credential resolver and exercises the original
+Agent frontend's real reply and automatic-analysis SSE routes. Each invocation
+creates a target-bound reply run. Automatic analysis creates its current
+analytics singleton once and may return that immutable run on a clean retry.
+The canonical receipt is published only after the probe and both SSE streams
+finish. It records target application identity, the current provider credential
+SHA-256, configuration/probe provenance, durable run/thread/message identities,
+creation state and SHA-256 digests of both nonempty replies; it contains no
+reply body, bearer credential, access token or password.
 
 The real snapshot import is the sole production import in this sequence. Schema
 negative fixtures, duplicate identities, dangling references, partial
@@ -1128,7 +1249,7 @@ the deployed route, process, unit, credential and database-role closures.
 
 ### 7.5 Backup and restore
 
-Create the first schema-v7 backup, verify it, run the sole restore operator, then enable the timer:
+Create the first schema-v10 backup, verify it, run the sole restore operator, then enable the timer:
 
 ```bash
 systemctl start ascendany-backup.service
@@ -1150,17 +1271,29 @@ systemctl start "ascendany-restore-verify@${backup_id}.service"
 systemctl enable --now ascendany-backup.timer
 ```
 
-The restore unit must publish `/var/lib/ascendany-acceptance/restore-verify.json` only after dropping its scratch database and removing scratch credentials/artifacts. Evidence must bind the active release and newest schema-v7 backup and be at most 31 days old.
+The restore unit must publish `/var/lib/ascendany-acceptance/restore-verify.json` only after dropping its scratch database and removing scratch credentials/artifacts. Evidence must bind the active release and newest schema-v10 backup and be at most 31 days old.
 
 ### 7.6 Final production gate
 
 ```bash
 ASCENDANY_DEPLOYMENT_TRANSITION=initial \
 ASCENDANY_VALIDATION_PHASE=production \
+ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS="$runtime_provider_binding" \
+ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH="$agent_receipt" \
   /opt/ascendany/v2/scripts/validate-production.sh
 ```
 
 Production requires the smoke drop-in absent, `ascendanyd` enabled/active, `writesEnabled=true`, public and shadow routes byte-identical to loopback v2, exact model artifact and database activation binding, a successful current backup/restore evidence pair, and a future backup timer elapse.
+The explicit Agent receipt must be a canonical root-owned mode-`0400`
+single-link file. The gate closes its schema and prompt/model/probe hashes,
+binds its target identity to the installed release, binds the current decrypted
+provider credential SHA-256 and logical authority to the reviewed host-encrypted
+runtime provider drop-in, and resolves both configuration identities to the
+exact active PostgreSQL item/version rows. It also resolves both SSE acceptances
+to their durable run, thread, input, output, session, analytics generation, tool
+call and event rows. The probe must precede acceptance by at most 15 minutes;
+the finished receipt must be no more than 24 hours old and no more than five
+minutes in the future.
 
 Remove any offline retirement evidence from the production runtime tree after this gate. Production retains only the v2 release, v2 database/artifacts, encrypted credentials, backups and acceptance evidence.
 
@@ -1198,12 +1331,16 @@ cutover_dir="$target_trust/forward-initialization"
 snapshot_path="$previous_trust/initialization/pintia.snapshot.v2.json"
 student_credentials="$previous_trust/initialization/student-credentials"
 admin_password_path="$cutover_dir/admin.password"
+provider_credential_path="$cutover_dir/deepseek.bearer"
 acceptance_student_number='REPLACE_WITH_EXACT_STUDENT_NUMBER'
 student_username=release_acceptance
+runtime_provider_binding=ASCENDANY_CREDENTIAL_FILE_REF_HEX_646565707365656B2E636861742E626561726572_AUTHORITY_HEX_6170692E646565707365656B2E636F6D3A343433=deepseek_chat_bearer
 
 install -d -o root -g root -m 0700 "$cutover_dir"
 [[ -f "$admin_password_path" && ! -L "$admin_password_path" ]]
 [[ "$(stat -Lc '%u:%g:%a:%h' -- "$admin_password_path")" == 0:0:400:1 ]]
+[[ -f "$provider_credential_path" && ! -L "$provider_credential_path" ]]
+[[ "$(stat -Lc '%u:%g:%a:%h' -- "$provider_credential_path")" == 0:0:400:1 ]]
 [[ "$(sha256sum "$target_release/release-manifest.json" | awk '{print $1}')" == \
    "$(<"$target_trust/manifest.sha256")" ]]
 
@@ -1402,6 +1539,29 @@ systemctl disable --now ascendanyd.service ascendany-backup.timer
 install -o root -g root -m 0644 \
   /opt/ascendany/v2/systemd/ascendanyd.service.d/40-read-only-smoke.conf \
   /etc/systemd/system/ascendanyd.service.d/40-read-only-smoke.conf
+
+provider_credential_ref=deepseek.chat.bearer
+provider_credential_id=deepseek_chat_bearer
+provider_endpoint=https://api.deepseek.com/chat/completions
+provider_authority=api.deepseek.com:443
+provider_model=deepseek-v4-flash
+provider_environment=ASCENDANY_CREDENTIAL_FILE_REF_HEX_646565707365656B2E636861742E626561726572_AUTHORITY_HEX_6170692E646565707365656B2E636F6D3A343433
+runtime_provider_binding="$provider_environment=$provider_credential_id"
+
+systemd-creds encrypt --with-key=host --name="$provider_credential_id" \
+  "$provider_credential_path" \
+  "/etc/ascendany/credentials/${provider_credential_id}.cred"
+chown root:root "/etc/ascendany/credentials/${provider_credential_id}.cred"
+chmod 0400 "/etc/ascendany/credentials/${provider_credential_id}.cred"
+install -d -o root -g root -m 0755 /etc/systemd/system/ascendanyd.service.d
+install -o root -g root -m 0644 /dev/stdin \
+  /etc/systemd/system/ascendanyd.service.d/50-runtime-provider-credentials.conf <<EOF
+[Service]
+LoadCredentialEncrypted=${provider_credential_id}:/etc/ascendany/credentials/${provider_credential_id}.cred
+Environment=${provider_environment}=%d/${provider_credential_id}
+EOF
+rm -f -- "$provider_credential_path"
+
 systemctl daemon-reload
 systemctl start ascendany-pgbouncer.service
 systemctl start ascendany-migrate.service
@@ -1418,6 +1578,7 @@ forward_staged_log="$target_trust/forward-staged.log"
 forward_staged_state="$target_trust/forward-staged-state.env"
 ASCENDANY_DEPLOYMENT_TRANSITION=forward \
 ASCENDANY_VALIDATION_PHASE=staged \
+ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS="$runtime_provider_binding" \
 PGPASSFILE=/run/ascendany-validation/runtime.pgpass \
   /opt/ascendany/v2/scripts/validate-production.sh | tee "$forward_staged_log"
 awk '/^ASCENDANY_FORWARD_(DATABASE_FINGERPRINT_SHA256|BUSINESS_FINGERPRINT_SHA256|MODEL_HEAD_REVISION|MODEL_ARTIFACT_SHA256)=/' \
@@ -1439,6 +1600,7 @@ artifact. Start the disabled service in read-only mode and consume all four:
 systemctl start ascendanyd.service
 ASCENDANY_DEPLOYMENT_TRANSITION=forward \
 ASCENDANY_VALIDATION_PHASE=smoke \
+ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS="$runtime_provider_binding" \
 ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_MODEL_HEAD_REVISION="$ASCENDANY_FORWARD_MODEL_HEAD_REVISION" \
@@ -1506,6 +1668,7 @@ staged_model_head="$ASCENDANY_FORWARD_MODEL_HEAD_REVISION"
 staged_model_sha256="$ASCENDANY_FORWARD_MODEL_ARTIFACT_SHA256"
 ASCENDANY_DEPLOYMENT_TRANSITION=forward \
 ASCENDANY_VALIDATION_PHASE=catalog \
+ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS="$runtime_provider_binding" \
 ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_MODEL_HEAD_REVISION="$ASCENDANY_FORWARD_MODEL_HEAD_REVISION" \
@@ -1532,6 +1695,7 @@ post-catalog business fingerprint:
 systemctl start ascendany-model-activate.service
 ASCENDANY_DEPLOYMENT_TRANSITION=forward \
 ASCENDANY_VALIDATION_PHASE=activation \
+ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS="$runtime_provider_binding" \
 ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_MODEL_HEAD_REVISION="$ASCENDANY_FORWARD_MODEL_HEAD_REVISION" \
@@ -1581,8 +1745,92 @@ ASCENDANY_INITIALIZATION_STUDENT_CREDENTIAL_DIRECTORY="$student_credentials" \
 chmod 0400 "$verify_receipt"
 jq -e '.schema == "ascendany.production-initialization.verify-receipt.v1" and .deploymentKind == "forward"' \
   "$verify_receipt" >/dev/null
+
+agent_receipt="$cutover_dir/agent-acceptance-receipt.json"
+[[ ! -e "$agent_receipt" ]]
+provider_credential_file="/run/credentials/ascendanyd.service/${provider_credential_id}"
+provider_credential_sha256="$(sha256sum -- "$provider_credential_file" | awk '{print $1}')"
+agent_receipt_candidate="$(mktemp --tmpdir="$cutover_dir" .agent-acceptance-receipt.XXXXXX)"
+if ! ASCENDANY_AGENT_BASE_URL=http://127.0.0.1:18000/ \
+    ASCENDANY_AGENT_ORIGIN=https://ascendany.kkkzbh.cn \
+    ASCENDANY_AGENT_ADMIN_PASSWORD_FILE="$admin_password_path" \
+    ASCENDANY_AGENT_STUDENT_CREDENTIAL_DIRECTORY="$student_credentials" \
+    ASCENDANY_AGENT_MODEL_ENDPOINT="$provider_endpoint" \
+    ASCENDANY_AGENT_MODEL="$provider_model" \
+    ASCENDANY_AGENT_MODEL_CREDENTIAL_REF="$provider_credential_ref" \
+    ASCENDANY_AGENT_MODEL_CREDENTIAL_FILE="$provider_credential_file" \
+    ASCENDANY_AGENT_TARGET_APPLICATION_VERSION="$target_version" \
+    ASCENDANY_AGENT_TARGET_APPLICATION_COMMIT="$target_commit" \
+    ASCENDANY_AGENT_TARGET_APPLICATION_BUILD_TIME="$target_build_time" \
+      /usr/bin/node-22 "$installed_operator" agent >"$agent_receipt_candidate"; then
+  rm -f -- "$agent_receipt_candidate"
+  exit 1
+fi
+if ! jq -e \
+  --arg authority "$provider_authority" \
+  --arg model "$provider_model" \
+  --arg targetVersion "$target_version" \
+  --arg targetCommit "$target_commit" \
+  --arg targetBuildTime "$target_build_time" \
+  --arg providerCredentialSha256 "$provider_credential_sha256" '
+  def uuid_v4:
+    type == "string" and
+    test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+  def acceptance:
+    (.runId | uuid_v4) and (.threadId | uuid_v4) and
+    (.inputMessageId | uuid_v4) and (.outputMessageId | uuid_v4) and
+    (.replySha256 | test("^[0-9a-f]{64}$")) and
+    (.eventCount | type == "number" and floor == . and . >= 1) and
+    .terminalDoneCount == 1;
+  .schema == "ascendany.production-agent-acceptance-receipt.v1" and
+  .targetApplicationVersion == $targetVersion and
+  .targetApplicationCommit == $targetCommit and
+  .targetApplicationBuildTime == $targetBuildTime and
+  .providerCredentialSha256 == $providerCredentialSha256 and
+  .promptConfiguration.key == "agent.prompt.default" and
+  (.promptConfiguration.headRevision | type == "number" and floor == . and . >= 1) and
+  .promptConfiguration.versionNumber == .promptConfiguration.headRevision and
+  .promptConfiguration.schemaId == "ascendany.prompt.chat.v1" and
+  .promptConfiguration.credentialRef == null and
+  (.promptConfiguration.state == "advanced" or .promptConfiguration.state == "created" or .promptConfiguration.state == "matched") and
+  .modelConfiguration.key == "agent.model.default" and
+  (.modelConfiguration.headRevision | type == "number" and floor == . and . >= 1) and
+  .modelConfiguration.versionNumber == .modelConfiguration.headRevision and
+  .modelConfiguration.schemaId == "ascendany.model_connection.openai_compatible.v1" and
+  .modelConfiguration.credentialRef == "deepseek.chat.bearer" and
+  (.modelConfiguration.state == "advanced" or .modelConfiguration.state == "created" or .modelConfiguration.state == "matched") and
+  .modelProbe.configurationKey == .modelConfiguration.key and
+  .modelProbe.configurationHeadRevision == .modelConfiguration.headRevision and
+  .modelProbe.configurationVersion == .modelConfiguration.versionNumber and
+  .modelProbe.configurationSha256 == .modelConfiguration.documentSha256 and
+  .modelProbe.authority == $authority and
+  .modelProbe.model == $model and
+  (.replyAcceptance | acceptance and .created == true) and
+  (.autoAnalysisAcceptance | acceptance and (.created | type == "boolean")) and
+  ([
+    .replyAcceptance.runId, .replyAcceptance.threadId,
+    .replyAcceptance.inputMessageId, .replyAcceptance.outputMessageId,
+    .autoAnalysisAcceptance.runId, .autoAnalysisAcceptance.threadId,
+    .autoAnalysisAcceptance.inputMessageId, .autoAnalysisAcceptance.outputMessageId
+  ] | unique | length == 8)
+' "$agent_receipt_candidate" >/dev/null; then
+  rm -f -- "$agent_receipt_candidate"
+  exit 1
+fi
+chown root:root "$agent_receipt_candidate"
+chmod 0400 "$agent_receipt_candidate"
+mv -T -- "$agent_receipt_candidate" "$agent_receipt"
 rm -f -- "$admin_password_path"
 ```
+
+The forward Agent phase must complete against the replacement runtime before
+the administrator password is removed. Both fixed head-1 configurations must
+match their immutable active versions on the normal forward path. A clean retry
+records `state=matched`; creation state remains explicit if an interrupted
+initial attempt left either configuration absent. The provider probe and reply
+SSE route execute against the replacement application. Reply acceptance always
+creates a target-bound run. Automatic-analysis acceptance either creates the
+current analytics singleton or verifies and returns its immutable durable run.
 
 Create and restore-verify a target-bound backup, enable the timer, and run the
 production gate with the post-catalog prior-model anchors:
@@ -1607,6 +1855,8 @@ systemctl start "ascendany-restore-verify@${backup_id}.service"
 systemctl enable --now ascendany-backup.timer
 ASCENDANY_DEPLOYMENT_TRANSITION=forward \
 ASCENDANY_VALIDATION_PHASE=production \
+ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS="$runtime_provider_binding" \
+ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH="$agent_receipt" \
 ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_DATABASE_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256="$ASCENDANY_FORWARD_BUSINESS_FINGERPRINT_SHA256" \
 ASCENDANY_FORWARD_MODEL_HEAD_REVISION="$ASCENDANY_FORWARD_MODEL_HEAD_REVISION" \
@@ -1629,13 +1879,14 @@ Any item below blocks deployment:
 - missing independent manifest or model SHA-256 trust anchor;
 - any model-construction source, executable, runtime, unit, credential or accelerator payload in the release;
 - release closed-set, ownership, mode, path, mount, size or hash drift;
-- schema version other than 7 or migration hash drift;
+- schema version other than 10 or migration hash drift;
 - model semantic, golden-vector, release-manifest or DB activation drift;
 - missing release-owned knowledge-catalog artifact or missing isolated catalog-publication operator phase;
 - plaintext secret, password in a database URL, undeclared systemd credential or manager environment drift;
 - public/shadow/global-404 ingress drift or any additional AscendAny ingress rule;
 - partial Pintia pagination or malformed snapshot acceptance;
 - Judge/LSP database credential or network capability;
+- missing root-only Agent acceptance receipt or active prompt/model configuration provenance;
 - missing current backup/restore verification evidence.
 
 `OJ_JUDGE_CONTRACT.md` and `LSP_CONTROL_CONTRACT.md` define the worker protocols. `doc/重写v2架构与验收.md` defines the complete architecture and final product-level acceptance boundary.

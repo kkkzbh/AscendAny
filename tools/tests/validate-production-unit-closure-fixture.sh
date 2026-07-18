@@ -42,7 +42,7 @@ if env \
     BASH_ENV_MARKER="$fixture_root/bash-env-executed" \
     SHELLOPTS=xtrace \
     ASCENDANY_VALIDATION_PHASE=invalid \
-    ASCENDANY_EXPECTED_RUNTIME_FEEDBACK_CREDENTIAL_BINDINGS=DO_NOT_TRACE_THIS_VALUE \
+    ASCENDANY_EXPECTED_RUNTIME_PROVIDER_CREDENTIAL_BINDINGS=DO_NOT_TRACE_THIS_VALUE \
     "$validator" >"$fixture_root/clean-env.out" 2>"$fixture_root/clean-env.err"; then
   printf 'invalid clean-environment validation unexpectedly passed\n' >&2
   exit 1
@@ -71,6 +71,28 @@ if ASCENDANY_VALIDATION_PHASE='' \
 fi
 grep -Fx 'FAIL ASCENDANY_VALIDATION_PHASE must be exactly staged, smoke, activation, catalog, or production' \
   "$fixture_root/phase-empty.err" >/dev/null
+if ASCENDANY_DEPLOYMENT_TRANSITION=initial \
+    ASCENDANY_VALIDATION_PHASE=production \
+    "$validator" >"$fixture_root/production-receipt-missing.out" \
+      2>"$fixture_root/production-receipt-missing.err"; then
+  printf 'production validation without an Agent acceptance receipt unexpectedly passed\n' >&2
+  exit 1
+fi
+grep -Fx 'FAIL production phase requires ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH' \
+  "$fixture_root/production-receipt-missing.err" >/dev/null
+for receipt_forbidden_phase in staged smoke catalog activation; do
+  if ASCENDANY_DEPLOYMENT_TRANSITION=initial \
+      ASCENDANY_VALIDATION_PHASE="$receipt_forbidden_phase" \
+      ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH=/var/lib/ascendany-acceptance/agent.json \
+      "$validator" >"$fixture_root/${receipt_forbidden_phase}-receipt.out" \
+        2>"$fixture_root/${receipt_forbidden_phase}-receipt.err"; then
+    printf '%s validation with an Agent acceptance receipt unexpectedly passed\n' \
+      "$receipt_forbidden_phase" >&2
+    exit 1
+  fi
+  grep -Fx 'FAIL staged, smoke, catalog, and activation phases forbid ASCENDANY_AGENT_ACCEPTANCE_RECEIPT_PATH' \
+    "$fixture_root/${receipt_forbidden_phase}-receipt.err" >/dev/null
+done
 if grep -F 'ASCENDANY_CLOUDFLARE_ACCOUNT_ID' "$validator" >/dev/null ||
    grep -F 'ASCENDANY_CLOUDFLARE_TUNNEL_ID' "$validator" >/dev/null; then
   printf 'production validator retains a remotely managed Cloudflare input\n' >&2
@@ -179,9 +201,9 @@ fi
       */livez) printf '%s\n' '{"status":"alive"}' ;;
       */readyz)
         if [[ "$health_fixture_mode" == "valid" ]]; then
-          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":7,"expectedVersion":7}}}'
+          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":10,"expectedVersion":10}}}'
         else
-          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":6,"expectedVersion":7}}}'
+          printf '%s\n' '{"status":"ready","checks":{"database":{"status":"pass"},"migrations":{"status":"pass","currentVersion":9,"expectedVersion":10}}}'
         fi
         ;;
       *) return 1 ;;
@@ -194,25 +216,25 @@ fi
   check_active_ascendanyd_health
   [[ "$failures" == "1" ]]
 
-  expected_runtime_feedback_credential_bindings='ASCENDANY_CREDENTIAL_FILE_REF_HEX_42_AUTHORITY_HEX_44=feedback_second ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=feedback_first'
+  expected_runtime_provider_credential_bindings='ASCENDANY_CREDENTIAL_FILE_REF_HEX_42_AUTHORITY_HEX_44=provider_second ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=provider_first'
   failures=0
-  parse_runtime_feedback_bindings
+  parse_runtime_provider_bindings
   [[ "$failures" == "0" ]]
-  render_runtime_feedback_dropin >"$fixture_root/canonical.conf"
+  render_runtime_provider_dropin >"$fixture_root/canonical.conf"
   printf '%s\n' \
     '[Service]' \
-    'LoadCredentialEncrypted=feedback_first:/etc/ascendany/credentials/feedback_first.cred' \
-    'Environment=ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=%d/feedback_first' \
-    'LoadCredentialEncrypted=feedback_second:/etc/ascendany/credentials/feedback_second.cred' \
-    'Environment=ASCENDANY_CREDENTIAL_FILE_REF_HEX_42_AUTHORITY_HEX_44=%d/feedback_second' \
+    'LoadCredentialEncrypted=provider_first:/etc/ascendany/credentials/provider_first.cred' \
+    'Environment=ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=%d/provider_first' \
+    'LoadCredentialEncrypted=provider_second:/etc/ascendany/credentials/provider_second.cred' \
+    'Environment=ASCENDANY_CREDENTIAL_FILE_REF_HEX_42_AUTHORITY_HEX_44=%d/provider_second' \
     >"$fixture_root/expected.conf"
   cmp --silent -- "$fixture_root/expected.conf" "$fixture_root/canonical.conf"
 
   failures=0
-  check_runtime_feedback_dropin_bytes "$fixture_root/canonical.conf"
+  check_runtime_provider_dropin_bytes "$fixture_root/canonical.conf"
   [[ "$failures" == "0" ]]
   printf '# unauthorized directive\n' >>"$fixture_root/canonical.conf"
-  check_runtime_feedback_dropin_bytes "$fixture_root/canonical.conf"
+  check_runtime_provider_dropin_bytes "$fixture_root/canonical.conf"
   [[ "$failures" == "1" ]]
 
   printf '%s\n' \
@@ -228,14 +250,14 @@ fi
   check_fedora_global_service_dropin_bytes "$fixture_root/global-service.conf"
   [[ "$failures" == "1" ]]
 
-  expected_runtime_feedback_credential_bindings='ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=db_password'
+  expected_runtime_provider_credential_bindings='ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=db_password'
   failures=0
-  parse_runtime_feedback_bindings || true
+  parse_runtime_provider_bindings || true
   [[ "$failures" == "1" ]]
 
-  expected_runtime_feedback_credential_bindings='ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=feedback_one ASCENDANY_CREDENTIAL_FILE_REF_HEX_42_AUTHORITY_HEX_44=feedback_one'
+  expected_runtime_provider_credential_bindings='ASCENDANY_CREDENTIAL_FILE_REF_HEX_41_AUTHORITY_HEX_43=provider_one ASCENDANY_CREDENTIAL_FILE_REF_HEX_42_AUTHORITY_HEX_44=provider_one'
   failures=0
-  parse_runtime_feedback_bindings || true
+  parse_runtime_provider_bindings || true
   [[ "$failures" == "1" ]]
 
   fixture_fragment='/etc/systemd/system/example.service'
@@ -653,9 +675,9 @@ fi
     esac
   }
 
-  runtime_feedback_bindings=()
-  runtime_feedback_credential_ids=()
-  runtime_feedback_environment=()
+  runtime_provider_bindings=()
+  runtime_provider_credential_ids=()
+  runtime_provider_environment=()
   release_model_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   release_catalog_sha256='cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
   release_manifest_purpose=production
@@ -1395,6 +1417,147 @@ fi
   grep -F '/opt/ascendany/infra/pgbouncer/pgbouncer-hba.conf' "$validator" >/dev/null
   grep -F 'config/pgbouncer.ini' "$validator" >/dev/null
   grep -F '/opt/ascendany/infra/pgbouncer/pgbouncer.ini' "$validator" >/dev/null
+
+  agent_receipt_fixture="$fixture_root/agent-acceptance-receipt.json"
+  agent_model_document_sha256=ad58a2558e7a27fc624cf6d4166363d4ec0459072a015bc7f41fbc6e15cd4fc2
+  agent_provider_credential_sha256="$(printf 'c%.0s' {1..64})"
+  agent_probe_checked_at="$(date -u -d '1 second ago' '+%Y-%m-%dT%H:%M:%SZ')"
+  agent_accepted_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  release_manifest_version=2.0.1
+  release_manifest_commit="$(printf 'b%.0s' {1..40})"
+  release_manifest_build_time=2026-07-13T08:00:00Z
+  jq -n -Sc \
+    --arg promptDocumentSHA256 "$agent_prompt_document_sha256" \
+    --arg modelDocumentSHA256 "$agent_model_document_sha256" \
+    --arg providerCredentialSHA256 "$agent_provider_credential_sha256" \
+    --arg acceptedAt "$agent_accepted_at" \
+    --arg probeCheckedAt "$agent_probe_checked_at" \
+    --arg targetApplicationVersion "$release_manifest_version" \
+    --arg targetApplicationCommit "$release_manifest_commit" \
+    --arg targetApplicationBuildTime "$release_manifest_build_time" '
+      {
+        schema: "ascendany.production-agent-acceptance-receipt.v1",
+        acceptedAt: $acceptedAt,
+        administratorAccountId: "00000000-0000-4000-8000-000000000201",
+        acceptanceStudentAccountId: "00000000-0000-4000-8000-000000000202",
+        acceptanceStudentUsername: "acceptance_student",
+        acceptanceStudentNumber: "20260001",
+        targetApplicationVersion: $targetApplicationVersion,
+        targetApplicationCommit: $targetApplicationCommit,
+        targetApplicationBuildTime: $targetApplicationBuildTime,
+        providerCredentialSha256: $providerCredentialSHA256,
+        promptConfiguration: {
+          key: "agent.prompt.default",
+          configurationId: "00000000-0000-4000-8000-000000000203",
+          headRevision: 1,
+          versionId: "41",
+          versionNumber: 1,
+          schemaId: "ascendany.prompt.chat.v1",
+          documentSha256: $promptDocumentSHA256,
+          credentialRef: null,
+          state: "matched"
+        },
+        modelConfiguration: {
+          key: "agent.model.default",
+          configurationId: "00000000-0000-4000-8000-000000000204",
+          headRevision: 1,
+          versionId: "42",
+          versionNumber: 1,
+          schemaId: "ascendany.model_connection.openai_compatible.v1",
+          documentSha256: $modelDocumentSHA256,
+          credentialRef: "models.primary",
+          state: "matched"
+        },
+        modelProbe: {
+          configurationKey: "agent.model.default",
+          configurationHeadRevision: 1,
+          configurationVersion: 1,
+          configurationSha256: $modelDocumentSHA256,
+          authority: "models.example:443",
+          model: "reasoner-v1",
+          checkedAt: $probeCheckedAt,
+          latencyMilliseconds: 25
+        },
+        replyAcceptance: {
+          created: true,
+          runId: "00000000-0000-4000-8000-000000000205",
+          threadId: "00000000-0000-4000-8000-000000000206",
+          inputMessageId: "00000000-0000-4000-8000-000000000207",
+          outputMessageId: "00000000-0000-4000-8000-000000000208",
+          replySha256: ("a" * 64), eventCount: 4, terminalDoneCount: 1
+        },
+        autoAnalysisAcceptance: {
+          created: false,
+          runId: "00000000-0000-4000-8000-000000000209",
+          threadId: "00000000-0000-4000-8000-00000000020a",
+          inputMessageId: "00000000-0000-4000-8000-00000000020b",
+          outputMessageId: "00000000-0000-4000-8000-00000000020c",
+          replySha256: ("b" * 64), eventCount: 4, terminalDoneCount: 1
+        }
+      }
+    ' >"$agent_receipt_fixture"
+  chmod 0400 "$agent_receipt_fixture"
+  agent_receipt_mode=400
+  stat() {
+    local target="${!#}"
+    if [[ "$target" == "$agent_receipt_fixture" && "$1" == -Lc && "$2" == '%u:%g:%a:%h' ]]; then
+      printf '0:0:%s:1\n' "$agent_receipt_mode"
+      return
+    fi
+    command stat "$@"
+  }
+  encrypted_credential_sha256() {
+    [[ "$1" == models_primary &&
+       "$2" == /etc/ascendany/credentials/models_primary.cred ]]
+    printf '%s\n' "$agent_provider_credential_sha256"
+  }
+  run_runtime_psql() {
+    command cat >"$fixture_root/agent-acceptance-query.sql"
+    printf '%s\n' 1
+  }
+  validation_phase=production
+  deployment_transition=initial
+  agent_acceptance_receipt_path="$agent_receipt_fixture"
+  runtime_provider_bindings=(
+    'ASCENDANY_CREDENTIAL_FILE_REF_HEX_6D6F64656C732E7072696D617279_AUTHORITY_HEX_6D6F64656C732E6578616D706C653A343433=models_primary'
+  )
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 0 ]]
+  grep -F '/* ascendany-validator:agent-acceptance-receipt */' \
+    "$fixture_root/agent-acceptance-query.sql" >/dev/null
+  grep -F "prompt_item.active_version_id" "$fixture_root/agent-acceptance-query.sql" >/dev/null
+  grep -F "model_item.active_version_id" "$fixture_root/agent-acceptance-query.sql" >/dev/null
+  grep -F "run.analytics_generation_id = analytics.analytics_generation_id" \
+    "$fixture_root/agent-acceptance-query.sql" >/dev/null
+  grep -F "tool.tool_name = 'analytics.get_self'" \
+    "$fixture_root/agent-acceptance-query.sql" >/dev/null
+
+  agent_provider_credential_sha256="$(printf 'd%.0s' {1..64})"
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 1 ]]
+  agent_provider_credential_sha256="$(printf 'c%.0s' {1..64})"
+
+  jq -Sc '.unexpected = true' "$agent_receipt_fixture" >"$fixture_root/agent-open-schema.json"
+  mv -- "$fixture_root/agent-open-schema.json" "$agent_receipt_fixture"
+  chmod 0400 "$agent_receipt_fixture"
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 1 ]]
+  jq -Sc 'del(.unexpected)' "$agent_receipt_fixture" >"$fixture_root/agent-closed-schema.json"
+  mv -- "$fixture_root/agent-closed-schema.json" "$agent_receipt_fixture"
+  chmod 0400 "$agent_receipt_fixture"
+
+  agent_receipt_mode=600
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 1 ]]
+  agent_receipt_mode=400
+  runtime_provider_bindings=()
+  failures=0
+  check_agent_acceptance_receipt
+  [[ "$failures" == 1 ]]
 
   release_copy_fixture="$fixture_root/release-copy"
   install -d -m 0755 \

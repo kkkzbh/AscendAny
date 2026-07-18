@@ -58,7 +58,7 @@ func (r *PostgresRepository) ImportSnapshot(
 		if err := insertSnapshotContents(ctx, tx, request.Snapshot, exam.ID, snapshotID, actorIDs); err != nil {
 			return err
 		}
-		if err := compareAndSwapExamHead(ctx, tx, exam, snapshotID, revision); err != nil {
+		if err := publishExamHead(ctx, tx, exam, snapshotID, revision); err != nil {
 			return err
 		}
 
@@ -78,6 +78,20 @@ func (r *PostgresRepository) ImportSnapshot(
 		return nil
 	})
 	return outcome, resultErr
+}
+
+func lockParticipantIdentityPublication(ctx context.Context, tx dbTx) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, pintia.ParticipantIdentityAdvisoryLockID); err != nil {
+		return databaseError("lock participant identity publication", err)
+	}
+	return nil
+}
+
+func publishExamHead(ctx context.Context, tx dbTx, exam lockedExam, snapshotID, revision int64) error {
+	if err := lockParticipantIdentityPublication(ctx, tx); err != nil {
+		return err
+	}
+	return compareAndSwapExamHead(ctx, tx, exam, snapshotID, revision)
 }
 
 type lockedExam struct {

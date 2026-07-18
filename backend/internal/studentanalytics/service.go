@@ -127,6 +127,14 @@ func validateResultShape(result Result, historyLimit int) error {
 		if ready.Rating != ready.RatingHistory[len(ready.RatingHistory)-1].NewRating {
 			return errors.New("ready canonical rating differs from rating history")
 		}
+		if ready.LatestPeer != nil {
+			if err := validateLatestExamPeer(*ready.LatestPeer); err != nil {
+				return fmt.Errorf("ready latest peer: %w", err)
+			}
+			if ready.LatestPeer.Rank != ready.RatingHistory[len(ready.RatingHistory)-1].Rank {
+				return errors.New("ready latest peer rank differs from rating history")
+			}
+		}
 	default:
 		return fmt.Errorf("unknown result state %q", result.State)
 	}

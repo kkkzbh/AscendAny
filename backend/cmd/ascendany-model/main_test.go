@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const syntheticContractArtifactSHA256 = "5182ed451d74a4e10d8384f3a4d9fcb2a8d2ad7d043e3721f2247e10c029bf58"
+const syntheticContractArtifactSHA256 = "392c9470556af563de09a971d501ab507d87b055847dcd78c5aaafc8cb452619"
 
 func TestRunRequiresExactVerifyCommand(t *testing.T) {
 	t.Parallel()
@@ -46,7 +46,7 @@ func TestRunVerifiesCatalogBoundToSyntheticModel(t *testing.T) {
 	code := run([]string{
 		"verify-catalog",
 		"--catalog", catalogPath,
-		"--catalog-sha256", "a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c",
+		"--catalog-sha256", "c164a2a0af654574a3855d6937dd888bbd9212c8081d50e4292cd05521f72351",
 		"--model", modelPath,
 		"--model-sha256", syntheticContractArtifactSHA256,
 		"--expected-purpose", "acceptance_test",
@@ -72,11 +72,11 @@ func TestRunVerifiesCatalogBoundToSyntheticModel(t *testing.T) {
 	}
 	if response.Schema != "ascendany.knowledge_catalog.recommendation.v1" ||
 		response.TaxonomyID != "synthetic_test_only" ||
-		response.CatalogSHA256 != "a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c" ||
-		response.ArtifactSizeBytes != 358 || response.ArtifactMode != 0o644 ||
+		response.CatalogSHA256 != "c164a2a0af654574a3855d6937dd888bbd9212c8081d50e4292cd05521f72351" ||
+		response.ArtifactSizeBytes != 596 || response.ArtifactMode != 0o644 ||
 		response.ModelID != "00000000-0000-4000-8000-000000000001" ||
 		response.ModelArtifactSHA256 != syntheticContractArtifactSHA256 ||
-		response.ProblemAssignmentCount != 0 ||
+		response.ProblemAssignmentCount != 1 ||
 		len(response.KnowledgePointIDs) != 2 || response.KnowledgePointIDs[0] != "arrays" || response.KnowledgePointIDs[1] != "graphs" {
 		t.Fatalf("verification response = %+v", response)
 	}
@@ -169,7 +169,7 @@ func TestRunVerifiesSyntheticExternalContractArtifact(t *testing.T) {
 		response.ArtifactSHA256 != syntheticContractArtifactSHA256 ||
 		response.ArtifactSizeBytes != int64(len(raw)) ||
 		response.FeatureSchemaSHA256 != "09c18717b8de4b3dba6c8bd9341fb237176c6d22ab7f99e2e937bf7b387a060f" ||
-		response.CatalogSHA256 != "a58370ec66def22b13a0bd64acf195e9fa28530e81481e7ade2545aaaa9bfe3c" ||
+		response.CatalogSHA256 != "c164a2a0af654574a3855d6937dd888bbd9212c8081d50e4292cd05521f72351" ||
 		response.ArtifactMode != 0o644 || response.Algorithm != "knowledge_mirt_feature_v1" ||
 		response.InferenceContract != "ascendany.recommendation.inference.v1" ||
 		response.TrainedAt != "2000-01-01T00:00:00.123456Z" {

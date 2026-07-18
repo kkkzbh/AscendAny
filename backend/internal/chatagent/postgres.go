@@ -128,7 +128,7 @@ func appendRunEvent(ctx context.Context, tx postgresTx, runDatabaseID int64, eve
 	if err != nil {
 		return domainError(ErrorInvalidInput, true, "encode agent run event", err)
 	}
-	canonical, _, err := canonicaljson.Object(encoded, 32<<10)
+	canonical, _, err := canonicaljson.Object(encoded, MaxRunEventDocumentBytes)
 	if err != nil {
 		return domainError(ErrorInvalidInput, true, "canonicalize agent run event", err)
 	}

@@ -34,6 +34,28 @@ type CreateSessionResult struct {
 	Account AccountRecord
 }
 
+type RegisterStudentCommand struct {
+	Account       AccountRecord
+	SessionID     string
+	RefreshToken  NewRefreshToken
+	Now           time.Time
+	SessionExpiry time.Time
+}
+
+type RegisterStudentStatus uint8
+
+const (
+	StudentRegistered RegisterStudentStatus = iota + 1
+	RegistrationUsernameUnavailable
+	RegistrationIdentityUnavailable
+)
+
+type RegisterStudentResult struct {
+	Status          RegisterStudentStatus
+	Account         AccountRecord
+	AuthenticatedAt time.Time
+}
+
 type PrincipalSnapshot struct {
 	Found   bool
 	Account AccountRecord
@@ -73,6 +95,7 @@ type RefreshDecision struct {
 type RefreshDecider func(RefreshSnapshot) RefreshDecision
 
 type Repository interface {
+	RegisterStudent(context.Context, RegisterStudentCommand) (RegisterStudentResult, error)
 	FindLoginAccount(context.Context, string) (AccountRecord, bool, error)
 	CreateSession(context.Context, CreateSessionCommand) (CreateSessionResult, error)
 	TransactRefresh(context.Context, string, time.Time, RefreshDecider) (RefreshDecisionKind, error)

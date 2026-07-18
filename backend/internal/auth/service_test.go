@@ -267,6 +267,69 @@ func loginTestAccount(t *testing.T, repository *memoryRepository, service *Servi
 	return result
 }
 
+func TestAgentClosedAuthCapabilitiesValidateAtTheServiceBoundary(t *testing.T) {
+	now := time.Date(2026, 7, 10, 3, 30, 0, 0, time.UTC)
+	repository := newMemoryRepository()
+	service := newTestService(t, repository, now)
+
+	for _, token := range []string{strings.Repeat("s", 32), strings.Repeat("s", 4096)} {
+		if _, err := service.ExchangeSSO(context.Background(), SSOExchangeInput{Token: token}); errorCode(err) != ErrorSSODisabled {
+			t.Fatalf("valid SSO input error = %v", err)
+		}
+	}
+	for _, token := range []string{
+		strings.Repeat("s", 31),
+		strings.Repeat("s", 4097),
+		strings.Repeat("s", 32) + "\x00",
+		string([]byte{0xff, 0xfe}) + strings.Repeat("s", 32),
+	} {
+		if _, err := service.ExchangeSSO(context.Background(), SSOExchangeInput{Token: token}); errorCode(err) != ErrorInvalidInput {
+			t.Fatalf("invalid SSO token error = %v", err)
+		}
+	}
+
+	initial := loginTestAccount(t, repository, service, "student_closed_auth")
+	for _, password := range []string{"passw0rd", strings.Repeat("p", 128)} {
+		if err := service.BootstrapLocalPassword(context.Background(), LocalPasswordBootstrapInput{
+			AccessToken: initial.AccessToken,
+			NewPassword: password,
+		}); errorCode(err) != ErrorLocalPasswordEnabled {
+			t.Fatalf("local-password capability error = %v", err)
+		}
+	}
+	for _, password := range []string{
+		"short7",
+		strings.Repeat("p", 129),
+		string([]byte{0xff, 0xfe}) + strings.Repeat("p", 8),
+	} {
+		if err := service.BootstrapLocalPassword(context.Background(), LocalPasswordBootstrapInput{
+			AccessToken: initial.AccessToken,
+			NewPassword: password,
+		}); errorCode(err) != ErrorInvalidInput {
+			t.Fatalf("invalid bootstrap password error = %v", err)
+		}
+	}
+	if err := service.BootstrapLocalPassword(context.Background(), LocalPasswordBootstrapInput{
+		AccessToken: "invalid-access-token",
+		NewPassword: "passw0rd",
+	}); errorCode(err) != ErrorAuthentication {
+		t.Fatalf("invalid bootstrap principal error = %v", err)
+	}
+	if err := service.Logout(context.Background(), LogoutInput{
+		AccessToken:  initial.AccessToken,
+		RefreshToken: initial.RefreshCookieValue,
+		CSRFToken:    initial.CSRFToken,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.BootstrapLocalPassword(context.Background(), LocalPasswordBootstrapInput{
+		AccessToken: initial.AccessToken,
+		NewPassword: "passw0rd",
+	}); errorCode(err) != ErrorAuthentication {
+		t.Fatalf("revoked bootstrap principal error = %v", err)
+	}
+}
+
 func TestLoginDoesNotRevealUsernameExistence(t *testing.T) {
 	now := time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC)
 	repository := newMemoryRepository()

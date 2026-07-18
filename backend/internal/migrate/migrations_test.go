@@ -17,14 +17,17 @@ func TestEmbeddedMigrationsHaveFixedContiguousManifestAndHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embedded() error = %v", err)
 	}
-	if len(definitions) != 7 ||
+	if len(definitions) != 10 ||
 		definitions[0].Version != 1 || definitions[0].Name != "fresh_schema" ||
 		definitions[1].Version != 2 || definitions[1].Name != "product_domains" ||
 		definitions[2].Version != 3 || definitions[2].Name != "recommendation_catalog_contract" ||
 		definitions[3].Version != 4 || definitions[3].Name != "achievement_rules" ||
 		definitions[4].Version != 5 || definitions[4].Name != "auto_analysis_once" ||
 		definitions[5].Version != 6 || definitions[5].Name != "inference_model_runtime" ||
-		definitions[6].Version != 7 || definitions[6].Name != "catalog_publication_provenance" {
+		definitions[6].Version != 7 || definitions[6].Name != "catalog_publication_provenance" ||
+		definitions[7].Version != 8 || definitions[7].Name != "auto_analysis_frontend_context" ||
+		definitions[8].Version != 9 || definitions[8].Name != "auth_pta_nickname" ||
+		definitions[9].Version != 10 || definitions[9].Name != "feedback_duplicate_attachments" {
 		t.Fatalf("definitions = %#v", definitions)
 	}
 	for index := range definitions {
@@ -32,8 +35,113 @@ func TestEmbeddedMigrationsHaveFixedContiguousManifestAndHashes(t *testing.T) {
 			t.Fatalf("definition %d hash = %q, manifest = %q", index, definitions[index].SHA256, embeddedManifest[index].SHA256)
 		}
 	}
-	if CurrentVersion() != 7 {
+	if CurrentVersion() != 10 {
 		t.Fatalf("CurrentVersion() = %d", CurrentVersion())
+	}
+}
+
+func TestFeedbackDuplicateAttachmentsMigrationRemovesOnlyDigestUniqueness(t *testing.T) {
+	t.Parallel()
+
+	definitions, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := definitions[9].SQL
+	for _, fragment := range []string{
+		"requires schema version 9",
+		"ALTER TABLE ascendany.feedback_attachments",
+		"DROP CONSTRAINT feedback_attachments_feedback_artifact_unique",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("feedback duplicate attachment migration is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{"IF EXISTS", "IF NOT EXISTS", "DELETE FROM", "UPDATE ascendany.feedback_attachments", "legacy_"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("feedback duplicate attachment migration contains forbidden fragment %q", forbidden)
+		}
+	}
+}
+
+func TestAuthPTANicknameMigrationAddsDurableAccountOwnership(t *testing.T) {
+	t.Parallel()
+
+	definitions, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := definitions[8].SQL
+	for _, fragment := range []string{
+		"requires schema version 8",
+		"ALTER TABLE ascendany.auth_accounts",
+		"ADD COLUMN pta_nickname text",
+		"ADD CONSTRAINT auth_accounts_pta_nickname_consistent",
+		"pta_nickname = btrim(pta_nickname)",
+		"octet_length(pta_nickname) BETWEEN 1 AND 256",
+		"role = 'admin' AND pta_nickname IS NULL",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("auth PTA nickname migration is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{"IF NOT EXISTS", "NOT VALID", "UPDATE ascendany.auth_accounts", "current_participant"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("auth PTA nickname migration contains forbidden fragment %q", forbidden)
+		}
+	}
+}
+
+func TestAutomaticAnalysisFrontendContextMigrationReplacesFixedContentContract(t *testing.T) {
+	t.Parallel()
+
+	definitions, err := Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := definitions[7].SQL
+	for _, fragment := range []string{
+		"requires zero existing automatic analysis requests",
+		"DROP CONSTRAINT chat_messages_auto_analysis_content_fixed",
+		"ADD CONSTRAINT chat_messages_auto_analysis_content_fixed",
+		"pg_input_is_valid(content, 'jsonb')",
+		"content::jsonb - ARRAY['context', 'instruction', 'schema']::text[] <> '{}'::jsonb",
+		"(content::jsonb -> 'context') - ARRAY[",
+		"ascendany.agent.auto-analysis.frontend-context.v1",
+		"content::jsonb ->> 'instruction' = 'Analyze the student''s current published analytics snapshot",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'studentId') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'ptaNickname') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'roleId') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'roleName') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'roleSystemPrompt') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'latestExamId') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'notes') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'notesTitle') = 'string'",
+		"jsonb_typeof(content::jsonb -> 'context' -> 'notesLocked') = 'boolean'",
+		"ADD COLUMN auto_analysis_exam_id uuid",
+		"ADD COLUMN auto_analysis_role_id text",
+		"ADD CONSTRAINT agent_runs_auto_analysis_exam_fk",
+		"REFERENCES ascendany.logical_exams (public_id)",
+		"DROP INDEX ascendany.agent_runs_owner_analytics_auto_analysis_unique",
+		"ADD CONSTRAINT agent_runs_auto_analysis_identity_consistent",
+		"CREATE UNIQUE INDEX agent_runs_owner_exam_role_auto_analysis_unique",
+		"owner_account_id,",
+		"auto_analysis_exam_id,",
+		"auto_analysis_role_id",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("automatic analysis frontend context migration is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		"OR content = 'Analyze the student''s current published analytics snapshot",
+		"NOT VALID",
+		"ON DELETE CASCADE",
+		"legacy_",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("automatic analysis frontend context migration contains forbidden fragment %q", forbidden)
+		}
 	}
 }
 

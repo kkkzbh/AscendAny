@@ -111,7 +111,20 @@ WHERE analytics_generation_id = $1
 		if err != nil {
 			return err
 		}
+		latestMetric := metrics.ExamHistory[len(metrics.ExamHistory)-1]
+		peer, err := loadLatestExamPeer(
+			ctx,
+			tx,
+			*resolved.GenerationID,
+			resolved.ActorID,
+			latestMetric.ExamID,
+			latestMetric.SnapshotID,
+		)
+		if err != nil {
+			return err
+		}
 		ready := buildReadyResult(rating, metrics, start, metadata)
+		ready.LatestPeer = peer
 		result = Result{State: StateReady, HeadRevision: resolved.HeadRevision, Ready: &ready}
 		return nil
 	})

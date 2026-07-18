@@ -150,7 +150,7 @@ async function assertElectronRuntimeClosure() {
 
 const serverBaseURL = parseArguments(process.argv.slice(2));
 await smokeDocument(serverBaseURL, "/", "site");
-await smokeDocument(serverBaseURL, "/app/", "student web");
+await smokeDocument(serverBaseURL, "/app/", "Agent frontend");
 await smokeDocument(serverBaseURL, "/admin/", "import console");
 await withStaticServer(path.join(repositoryRoot, "apps/mobile/dist"), async (baseURL) => {
   await smokeDocument(baseURL, "/", "mobile preview");

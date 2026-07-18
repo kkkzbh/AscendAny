@@ -4,8 +4,8 @@ set -Eeuo pipefail
 export LC_ALL=C
 
 # This digest is generated from the canonical PostgreSQL 17 catalog stream
-# emitted below after all embedded schema-v7 migrations have committed.
-readonly EXPECTED_SCHEMA_SHA256='92b84cb8f870fa921ead412dd1f6fbd76a5ba9f32a8e19022f15993f0e348d65'
+# emitted below after all embedded schema-v10 migrations have committed.
+readonly EXPECTED_SCHEMA_SHA256='82c76c7b67638ac99e839df72f40ad7181a3ff2a317d682ee86a446af965f651'
 
 usage() {
   /usr/bin/printf '%s\n' \

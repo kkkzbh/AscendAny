@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/kkkzbh/AscendAny/backend/internal/analytics"
 	"github.com/kkkzbh/AscendAny/backend/internal/inferencemodel"
 	"github.com/kkkzbh/AscendAny/backend/internal/modelrelease"
 )
@@ -35,21 +36,34 @@ type recommendationQuery interface {
 type beginTransaction func(context.Context, pgx.TxOptions) (recommendationTx, error)
 
 type PostgresRepository struct {
-	begin   beginTransaction
-	model   *inferencemodel.Model
-	binding modelrelease.Binding
+	begin                     beginTransaction
+	model                     *inferencemodel.Model
+	binding                   modelrelease.Binding
+	analyticsAlgorithmVersion string
+	analyticsConfigSHA256     string
+	acceptedVerdicts          []string
 }
 
-func NewPostgresRepository(pool PgxBeginner, model *inferencemodel.Model, binding modelrelease.Binding) (*PostgresRepository, error) {
+func NewPostgresRepository(
+	pool PgxBeginner,
+	model *inferencemodel.Model,
+	binding modelrelease.Binding,
+	analyticsConfiguration analytics.ParsedConfig,
+) (*PostgresRepository, error) {
 	if pool == nil {
 		return nil, domainError(ErrorInvalidConfiguration, true, "construct recommendation repository", errors.New("database pool is required"))
 	}
 	return newPostgresRepository(func(ctx context.Context, options pgx.TxOptions) (recommendationTx, error) {
 		return pool.BeginTx(ctx, options)
-	}, model, binding)
+	}, model, binding, analyticsConfiguration)
 }
 
-func newPostgresRepository(begin beginTransaction, model *inferencemodel.Model, binding modelrelease.Binding) (*PostgresRepository, error) {
+func newPostgresRepository(
+	begin beginTransaction,
+	model *inferencemodel.Model,
+	binding modelrelease.Binding,
+	analyticsConfiguration analytics.ParsedConfig,
+) (*PostgresRepository, error) {
 	if begin == nil {
 		return nil, domainError(ErrorInvalidConfiguration, true, "construct recommendation repository", errors.New("transaction beginner and inference model are required"))
 	}
@@ -59,8 +73,17 @@ func newPostgresRepository(begin beginTransaction, model *inferencemodel.Model, 
 	if err := validateRuntimeBinding(model, binding); err != nil {
 		return nil, domainError(ErrorInvalidConfiguration, true, "construct recommendation repository", err)
 	}
+	parsedAnalytics, err := analytics.VerifyParsedConfig(analyticsConfiguration)
+	if err != nil {
+		return nil, domainError(ErrorInvalidConfiguration, true, "construct recommendation repository", fmt.Errorf("analytics configuration: %w", err))
+	}
 	binding.ManifestJSON = append(json.RawMessage(nil), binding.ManifestJSON...)
-	return &PostgresRepository{begin: begin, model: model, binding: binding}, nil
+	return &PostgresRepository{
+		begin: begin, model: model, binding: binding,
+		analyticsAlgorithmVersion: parsedAnalytics.Value.AlgorithmVersion,
+		analyticsConfigSHA256:     parsedAnalytics.SHA256,
+		acceptedVerdicts:          slices.Clone(parsedAnalytics.Value.AcceptedVerdicts),
+	}, nil
 }
 
 // ValidateInferenceModel applies the online runtime's fixed feature contract to

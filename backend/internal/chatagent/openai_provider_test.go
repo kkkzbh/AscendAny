@@ -74,6 +74,83 @@ func TestOpenAICompatibleProviderSendsBoundedHTTPSRequestAndReturnsAssistant(t *
 	}
 }
 
+func TestOpenAICompatibleProviderBindsDurableAutoAnalysisContextToPrompt(t *testing.T) {
+	t.Parallel()
+	frontendContext := testAutoAnalysisFrontendContext()
+	inputContent := mustAutoAnalysisInputContent(t, frontendContext)
+	request := validProviderRequest()
+	request.Kind = RunAutoAnalysis
+	request.Analytics = &AnalyticsSnapshot{GenerationDatabaseID: 41, HeadRevision: 9}
+	request.AutoAnalysisContext = &frontendContext
+	request.Conversation[0].Kind = MessageAutoAnalysisRequest
+	request.Conversation[0].Content = inputContent
+
+	provider := mustOpenAIProvider(t, &providerCredentialResolver{secret: "token"}, providerRoundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(httpRequest.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload.Messages) != 2 || payload.Messages[1].Role != "user" || payload.Messages[1].Content != inputContent {
+			t.Fatalf("payload=%s", body)
+		}
+		decoded, err := decodeAutoAnalysisInputContent(payload.Messages[1].Content)
+		if err != nil || decoded != frontendContext {
+			t.Fatalf("decoded=%#v error=%v", decoded, err)
+		}
+		return providerHTTPResponse(200, `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Review ready"}}]}`), nil
+	}))
+	if _, err := provider.Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenAICompatibleProviderRejectsAutoAnalysisContextDifferentFromDurableInput(t *testing.T) {
+	t.Parallel()
+	frontendContext := testAutoAnalysisFrontendContext()
+	request := validProviderRequest()
+	request.Kind = RunAutoAnalysis
+	request.Analytics = &AnalyticsSnapshot{GenerationDatabaseID: 41, HeadRevision: 9}
+	requestContext := frontendContext
+	request.AutoAnalysisContext = &requestContext
+	request.Conversation[0].Kind = MessageAutoAnalysisRequest
+	frontendContext.Notes = "different durable notes"
+	request.Conversation[0].Content = mustAutoAnalysisInputContent(t, frontendContext)
+
+	credentials := &providerCredentialResolver{secret: "token"}
+	provider := mustOpenAIProvider(t, credentials, providerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("transport must not run")
+		return nil, nil
+	}))
+	_, err := provider.Generate(context.Background(), request)
+	var failure *ProviderFailure
+	if !errors.As(err, &failure) || failure.Code != "provider_request_invalid" || credentials.calls != 0 {
+		t.Fatalf("error=%v credentials=%d", err, credentials.calls)
+	}
+}
+
+func TestOpenAICompatibleProviderAllowsGeneralReplyWithoutBoundAnalytics(t *testing.T) {
+	t.Parallel()
+	request := validProviderRequest()
+	request.Analytics = nil
+	credentials := &providerCredentialResolver{secret: "token"}
+	provider := mustOpenAIProvider(t, credentials, providerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return providerHTTPResponse(200, `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"General answer"}}]}`), nil
+	}))
+	response, err := provider.Generate(context.Background(), request)
+	if err != nil || response.Assistant == nil || response.Assistant.Content != "General answer" || credentials.calls != 1 {
+		t.Fatalf("response=%#v error=%v credentials=%d", response, err, credentials.calls)
+	}
+}
+
 func TestOpenAICompatibleProviderProbesExactModelWithoutReturningCredential(t *testing.T) {
 	t.Parallel()
 	credentials := &providerCredentialResolver{secret: "probe-secret"}
@@ -334,8 +411,12 @@ func TestOpenAICompatibleProviderRejectsOversizedRequestBeforeCredentialResoluti
 	request := validProviderRequest()
 	request.Conversation = make([]Message, 20)
 	for index := range request.Conversation {
+		messageID := testRunID
+		if index == 0 {
+			messageID = testMessageID
+		}
 		request.Conversation[index] = Message{
-			ID: testMessageID, ThreadID: testThreadID, Sequence: int64(index + 1), Kind: MessageUser,
+			ID: messageID, ThreadID: testThreadID, Sequence: int64(index + 1), Kind: MessageUser,
 			Content: strings.Repeat("x", MaxMessageBytes), CreatedAt: time.Date(2026, 7, 11, 0, 0, 0, index, time.UTC),
 		}
 	}
@@ -392,7 +473,8 @@ func validProviderRequest() ProviderRequest {
 	credentialReference := "models.primary"
 	now := time.Date(2026, 7, 11, 1, 2, 3, 0, time.UTC)
 	return ProviderRequest{
-		RunID: testRunID, Kind: RunReply, ThreadID: testThreadID, StudentNumber: "20260001",
+		RunID: testRunID, Kind: RunReply, ThreadID: testThreadID, StudentNumber: "20260001", InputMessageID: testMessageID,
+		Analytics: &AnalyticsSnapshot{GenerationDatabaseID: 41, HeadRevision: 9},
 		Prompt: ConfigurationSnapshot{
 			Key: "prompts.chat", SchemaID: ChatPromptSchema,
 			Document: json.RawMessage(`{"systemPrompt":"You are a precise student coach.","enabledTools":["analytics.get_self","agent_notes.list_active","agent_notes.get_active"]}`),

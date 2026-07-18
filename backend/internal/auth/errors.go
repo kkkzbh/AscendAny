@@ -13,6 +13,10 @@ const (
 	ErrorInvalidInput           ErrorCode = "auth_invalid_input"
 	ErrorAdminAlreadyExists     ErrorCode = "auth_admin_already_exists"
 	ErrorPasswordWorkSaturated  ErrorCode = "auth_password_work_saturated"
+	ErrorRegistrationUsername   ErrorCode = "auth_registration_username_unavailable"
+	ErrorRegistrationIdentity   ErrorCode = "auth_registration_identity_unavailable"
+	ErrorSSODisabled            ErrorCode = "AUTH_SSO_DISABLED"
+	ErrorLocalPasswordEnabled   ErrorCode = "AUTH_LOCAL_PASSWORD_ALREADY_ENABLED"
 	ErrorAuthentication         ErrorCode = "auth_authentication_rejected"
 	ErrorRefreshReuse           ErrorCode = "auth_refresh_reuse_detected"
 	ErrorForbidden              ErrorCode = "auth_forbidden"
@@ -80,6 +84,22 @@ func adminAlreadyExists() error {
 
 func passwordWorkSaturated() error {
 	return authError(ErrorPasswordWorkSaturated, "Password verification capacity is exhausted.", nil)
+}
+
+func registrationUsernameUnavailable() error {
+	return authError(ErrorRegistrationUsername, "Registration username is unavailable.", nil)
+}
+
+func registrationIdentityUnavailable() error {
+	return authError(ErrorRegistrationIdentity, "Registration identity is unavailable.", nil)
+}
+
+func ssoDisabled() error {
+	return authError(ErrorSSODisabled, "SSO is disabled on this server.", nil)
+}
+
+func localPasswordAlreadyEnabled() error {
+	return authError(ErrorLocalPasswordEnabled, "Local password login is already enabled for this account.", nil)
 }
 
 func refreshReuseDetected() error {

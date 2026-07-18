@@ -23,6 +23,11 @@ whose schema explicitly admits `null`; exporters must not omit it.
   `problemId` identifies the underlying Pintia problem.
 - `userId` is the sole participant key and the actor reference used by every
   submission. `studentUserId` and `studentNumber` are nullable attributes.
+- Official exporter provenance accepted by the registration nickname capability
+  (strict SemVer `>=2.2.3` within major `2`) guarantees that
+  `participants[].displayName` is the exact nullable PTA `user.nickname`.
+  Earlier snapshot-v2 exporter releases remain valid import and analytics input,
+  but their `displayName` cannot prove a registration nickname.
 - Ranking rows are normalized into `participants[].ranking`. There is no
   top-level `rankings` array.
 - `acceptTimeSeconds` is Pintia's non-negative elapsed ranking time in seconds.

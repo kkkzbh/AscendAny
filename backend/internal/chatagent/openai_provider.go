@@ -112,9 +112,13 @@ func (provider *OpenAICompatibleProvider) Generate(ctx context.Context, request 
 		return ProviderResponse{}, failure
 	}
 	if !canonicalUUIDv4.MatchString(request.RunID) || !canonicalUUIDv4.MatchString(request.ThreadID) ||
+		!canonicalUUIDv4.MatchString(request.InputMessageID) ||
 		request.Kind != RunReply && request.Kind != RunAutoAnalysis || strings.TrimSpace(request.StudentNumber) != request.StudentNumber ||
 		request.StudentNumber == "" || len(request.StudentNumber) > auth.MaxStudentNumberBytes || !utf8.ValidString(request.StudentNumber) {
 		return ProviderResponse{}, providerError("provider_request_invalid", "provider request is invalid", errors.New("run identity is invalid"))
+	}
+	if err := validateRunExecutionContext(request.Kind, request.Analytics, request.AutoAnalysisContext); err != nil {
+		return ProviderResponse{}, providerError("provider_request_invalid", "provider request is invalid", err)
 	}
 
 	body, failure := encodeOpenAIRequest(request, model, prompt)
@@ -424,9 +428,27 @@ func encodeOpenAIRequest(request ProviderRequest, model modelConnectionConfigura
 	for _, name := range prompt.EnabledTools {
 		enabledTools[name] = struct{}{}
 	}
+	inputMessageFound := false
 	for _, message := range request.Conversation {
 		if err := validateMessage(message); err != nil || message.ThreadID != request.ThreadID {
 			return nil, providerError("provider_request_invalid", "provider request is invalid", errors.New("conversation is invalid"))
+		}
+		if message.Kind == MessageAutoAnalysisRequest {
+			frontendContext, err := decodeAutoAnalysisInputContent(message.Content)
+			if err != nil {
+				return nil, providerError("provider_request_invalid", "provider request is invalid", errors.New("automatic analysis conversation is invalid"))
+			}
+			if message.ID == request.InputMessageID && (request.Kind != RunAutoAnalysis ||
+				request.AutoAnalysisContext == nil || frontendContext != *request.AutoAnalysisContext) {
+				return nil, providerError("provider_request_invalid", "provider request is invalid", errors.New("automatic analysis context differs from the durable input"))
+			}
+		}
+		if message.ID == request.InputMessageID {
+			if inputMessageFound || request.Kind == RunReply && message.Kind != MessageUser ||
+				request.Kind == RunAutoAnalysis && message.Kind != MessageAutoAnalysisRequest {
+				return nil, providerError("provider_request_invalid", "provider request is invalid", errors.New("run input message is invalid"))
+			}
+			inputMessageFound = true
 		}
 		role := "user"
 		if message.Kind == MessageAssistant {
@@ -434,6 +456,9 @@ func encodeOpenAIRequest(request ProviderRequest, model modelConnectionConfigura
 		}
 		content := message.Content
 		messages = append(messages, openAIRequestMessage{Role: role, Content: &content})
+	}
+	if !inputMessageFound {
+		return nil, providerError("provider_request_invalid", "provider request is invalid", errors.New("run input message is absent"))
 	}
 	for _, record := range request.ToolCalls {
 		definition, exists := runtimeToolDefinitions[record.Name]

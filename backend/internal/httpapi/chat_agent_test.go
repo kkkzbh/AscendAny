@@ -12,6 +12,7 @@ import (
 
 	"github.com/kkkzbh/AscendAny/backend/internal/chatagent"
 	"github.com/kkkzbh/AscendAny/backend/internal/health"
+	"github.com/kkkzbh/AscendAny/backend/internal/studentanalytics"
 )
 
 const (
@@ -101,7 +102,9 @@ func TestChatAgentHTTPReadAndMutationContracts(t *testing.T) {
 		},
 		autoAnalysis: func(_ context.Context, token string, input chatagent.AutoAnalysisRequest) (chatagent.EnqueueResult, error) {
 			if token != "chat-token" || input.PromptConfigurationKey != "agent.prompt.default" ||
-				input.ModelConfigurationKey != "agent.model.default" || input.ExpectedAnalyticsHeadRevision != 7 {
+				input.ModelConfigurationKey != "agent.model.default" || input.ExpectedAnalyticsHeadRevision != 7 ||
+				input.Identity != (chatagent.AutoAnalysisIdentity{ExamID: testExamID, RoleID: "default"}) ||
+				input.FrontendContext.LatestExamID != testExamID || input.FrontendContext.RoleID != "default" {
 				t.Fatalf("auto-analysis token=%q input=%#v", token, input)
 			}
 			autoRun := run
@@ -243,6 +246,12 @@ func TestAutomaticAnalysisHTTPReplayAndOpaqueConfigurationConflict(t *testing.T)
 	if unknown.Code != http.StatusBadRequest {
 		t.Fatalf("unknown-field status=%d body=%s", unknown.Code, unknown.Body.String())
 	}
+	frontendContext := newTestResponseRecorder()
+	handler.ServeHTTP(frontendContext, chatAgentRequest(http.MethodPost, "/api/v2/students/me/auto-analysis",
+		`{"promptConfigurationKey":"agent.prompt.default","modelConfigurationKey":"agent.model.default","expectedAnalyticsHeadRevision":7,"frontendContext":{}}`))
+	if frontendContext.Code != http.StatusBadRequest {
+		t.Fatalf("frontend-context status=%d body=%s", frontendContext.Code, frontendContext.Body.String())
+	}
 }
 
 func TestChatAgentHTTPRejectsNonCanonicalRequestsAndOpaqueErrors(t *testing.T) {
@@ -320,6 +329,12 @@ func newChatAgentTestHandler(t *testing.T, service ChatAgentService, writes bool
 	t.Helper()
 	options := testHandlerOptions(healthReadyReport())
 	options.ChatAgent = service
+	options.StudentAnalytics = agentFrontendV1AnalyticsStub{getSelf: func(context.Context, string, int) (studentanalytics.Result, error) {
+		return studentanalytics.Result{
+			State: studentanalytics.StateReady, HeadRevision: 7,
+			Ready: &studentanalytics.ReadyResult{ExamHistory: []studentanalytics.ExamHistoryPoint{{ExamID: testExamID}}},
+		}, nil
+	}}
 	options.Capabilities = testCapabilities(writes)
 	if !writes {
 		options.Artifacts = nil

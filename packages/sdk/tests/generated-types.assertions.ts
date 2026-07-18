@@ -494,7 +494,7 @@ export type ChatMessagePageUsesDiscriminatedMessages = Assert<
 export type AgentRunEnqueueBodyIsRequired = Assert<
   Equal<EnqueueAgentRunData["body"], ReplyAgentRunEnqueueRequest>
 >;
-export type ReplyAgentRunRequiresExplicitNullAnalytics = Assert<
+export type ReplyAgentRunRequiresNullAnalyticsRevision = Assert<
   Equal<ReplyAgentRunEnqueueRequest["expectedAnalyticsHeadRevision"], null>
 >;
 export type AgentRunEnqueueSharesReplayEnvelope = Assert<

@@ -45,6 +45,32 @@ type problemFact struct {
 	MaxScore          *float64
 }
 
+type problemInstanceIdentity struct {
+	SnapshotID          int64
+	ProblemSetProblemID string
+}
+
+type problemFactIndex map[problemInstanceIdentity]problemFact
+
+func buildProblemFactIndex(rows []problemRow) (problemFactIndex, error) {
+	index := make(problemFactIndex, len(rows))
+	for rowIndex, row := range rows {
+		identity := problemInstanceIdentity{
+			SnapshotID:          row.SnapshotID,
+			ProblemSetProblemID: row.ProblemSetProblemID,
+		}
+		if _, duplicate := index[identity]; duplicate {
+			return nil, fmt.Errorf("problem %d duplicates snapshot problem identity", rowIndex)
+		}
+		fact, err := buildProblemFact(row)
+		if err != nil {
+			return nil, fmt.Errorf("problem %d: %w", rowIndex, err)
+		}
+		index[identity] = fact
+	}
+	return index, nil
+}
+
 func buildProblemFact(row problemRow) (problemFact, error) {
 	if row.SnapshotID <= 0 || !pintia.ValidID(row.ProblemSetID) || !pintia.ValidID(row.ProblemSetProblemID) ||
 		!canonicalPintiaURL(row.SourceURL) || row.Platform != "pintia" || !pintia.ValidID(row.ProblemID) || !canonicalText(row.Title, 4096) {

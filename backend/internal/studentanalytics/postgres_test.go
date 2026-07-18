@@ -124,6 +124,19 @@ func TestPostgresLoadSelfMapsLimitedHistoryInRepeatableReadSnapshot(t *testing.T
 		rows: []pgx.Row{
 			resolvedRow(&manifest, 77, 1, "succeeded"),
 			metricsRow(1506, metricsJSON),
+			testRow(func(destinations ...any) error {
+				if len(destinations) != 22 {
+					return fmt.Errorf("peer scan destination count = %d", len(destinations))
+				}
+				*(destinations[0].(*int64)) = 1
+				*(destinations[1].(*int64)) = 1
+				*(destinations[2].(*int64)) = 1
+				*(destinations[3].(*int64)) = 1
+				*(destinations[5].(*int64)) = 0
+				zero := 0.0
+				*(destinations[7].(**float64)) = &zero
+				return nil
+			}),
 		},
 		queryRows: &metadataRows{values: []metadataRow{
 			{ordinal: 1, examID: 2, snapshotID: 22, domainHash: strings.Repeat("b", 64), examPublicID: "22222222-2222-4222-8222-222222222222", snapshotPublicID: "55555555-5555-4555-8555-555555555555", title: "Exam 2"},
@@ -152,11 +165,15 @@ func TestPostgresLoadSelfMapsLimitedHistoryInRepeatableReadSnapshot(t *testing.T
 	if result.Ready.Rating != 1506 || len(result.Ready.ExamHistory) != 2 || result.Ready.ExamHistory[0].Title != "Exam 2" || result.Ready.RatingHistory[1].ExamID != "33333333-3333-4333-8333-333333333333" {
 		t.Fatalf("ready = %#v", result.Ready)
 	}
-	if len(tx.queries) != 3 || !strings.Contains(tx.queries[0], "JOIN ascendany.auth_sessions") || !strings.Contains(tx.queries[0], "session.revoked_at IS NULL") || !strings.Contains(tx.queries[0], "session.expires_at > transaction_timestamp()") || !strings.Contains(tx.queries[0], "pintia_actor_identifiers") || !strings.Contains(tx.queries[0], "analytics_head") || !strings.Contains(tx.queries[0], "analytics_generations") || !strings.Contains(tx.queries[0], "base_analytics_generation_id") || !strings.Contains(tx.queries[0], "target_exam_head_revision") ||
+	if result.Ready.LatestPeer == nil || result.Ready.LatestPeer.TotalParticipants != 1 ||
+		result.Ready.LatestPeer.BandMedian.Solved == nil {
+		t.Fatalf("latest peer = %#v", result.Ready.LatestPeer)
+	}
+	if len(tx.queries) != 4 || !strings.Contains(tx.queries[0], "JOIN ascendany.auth_sessions") || !strings.Contains(tx.queries[0], "session.revoked_at IS NULL") || !strings.Contains(tx.queries[0], "session.expires_at > transaction_timestamp()") || !strings.Contains(tx.queries[0], "pintia_actor_identifiers") || !strings.Contains(tx.queries[0], "analytics_head") || !strings.Contains(tx.queries[0], "analytics_generations") || !strings.Contains(tx.queries[0], "base_analytics_generation_id") || !strings.Contains(tx.queries[0], "target_exam_head_revision") ||
 		!strings.Contains(tx.queries[2], "unnest($3::bigint[], $4::bigint[])") || !strings.Contains(tx.queries[2], "analytics_generation_snapshots") || !strings.Contains(tx.queries[2], "pintia_snapshot_participants") || !strings.Contains(tx.queries[2], "ORDER BY requested.ordinal") {
 		t.Fatalf("queries = %#v", tx.queries)
 	}
-	if len(tx.arguments) != 3 || len(tx.arguments[0]) != 4 || tx.arguments[0][0] != testAccountID || tx.arguments[0][1] != int64(5) || tx.arguments[0][2] != string(auth.RoleStudent) || tx.arguments[0][3] != testSessionID {
+	if len(tx.arguments) != 4 || len(tx.arguments[0]) != 4 || tx.arguments[0][0] != testAccountID || tx.arguments[0][1] != int64(5) || tx.arguments[0][2] != string(auth.RoleStudent) || tx.arguments[0][3] != testSessionID {
 		t.Fatalf("principal arguments = %#v", tx.arguments)
 	}
 	if got := tx.arguments[2][2].([]int64); fmt.Sprint(got) != "[2 3]" {

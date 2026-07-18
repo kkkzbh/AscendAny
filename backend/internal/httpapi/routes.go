@@ -155,10 +155,30 @@ func apiRouteContracts(handler *Handler, authBodyTimeout, uploadBodyTimeout time
 		return routePolicy{requestHeaders: headers, rateScope: rateScope}
 	}
 
-	return []routeContract{
+	return append(agentFrontendV1ChatRouteContracts(handler, authBodyTimeout), []routeContract{
 		plain(http.MethodGet, "/livez", "/livez", handler.livez),
 		plain(http.MethodGet, "/readyz", "/readyz", handler.readyz),
 		plain(http.MethodGet, "/version", "/version", handler.buildVersion),
+
+		api(http.MethodGet, "/api/v1/auth/policy", "/api/v1/auth/policy", handler.agentV1AuthPolicy, read(map[string]string{"content-type": "Content-Type"}, "agent.auth.policy")),
+		api(http.MethodPost, "/api/v1/auth/register", "/api/v1/auth/register", handler.agentV1Register, write(map[string]string{"content-type": "Content-Type"}, "agent.auth.register", authBodyTimeout)),
+		api(http.MethodPost, "/api/v1/auth/login", "/api/v1/auth/login", handler.agentV1Login, write(map[string]string{"content-type": "Content-Type"}, "agent.auth.login", authBodyTimeout)),
+		api(http.MethodPost, "/api/v1/auth/sso/exchange", "/api/v1/auth/sso/exchange", handler.agentV1SSOExchange, write(map[string]string{"content-type": "Content-Type"}, "agent.auth.sso.exchange", authBodyTimeout)),
+		api(http.MethodPost, "/api/v1/auth/refresh", "/api/v1/auth/refresh", handler.agentV1Refresh, write(map[string]string{"content-type": "Content-Type"}, "agent.auth.refresh", authBodyTimeout)),
+		api(http.MethodPost, "/api/v1/auth/logout", "/api/v1/auth/logout", handler.agentV1Logout, write(authorizationJSON(), "agent.auth.logout", authBodyTimeout)),
+		api(http.MethodGet, "/api/v1/auth/me", "/api/v1/auth/me", handler.agentV1Me, read(authorizationJSON(), "agent.auth.me")),
+		api(http.MethodPut, "/api/v1/auth/profile", "/api/v1/auth/profile", handler.agentV1UpdateProfile, write(authorizationJSON(), "agent.auth.profile", authBodyTimeout)),
+		api(http.MethodPost, "/api/v1/auth/local-password/bootstrap", "/api/v1/auth/local-password/bootstrap", handler.agentV1BootstrapLocalPassword, write(authorizationJSON(), "agent.auth.local-password.bootstrap", authBodyTimeout)),
+		api(http.MethodGet, "/api/v1/students/dashboard", "/api/v1/students/dashboard", handler.agentV1StudentDashboard, read(authorizationJSON(), "agent.students.dashboard")),
+		api(http.MethodGet, "/api/v1/students/achievements", "/api/v1/students/achievements", handler.agentV1StudentAchievements, read(authorizationJSON(), "agent.students.achievements")),
+		api(http.MethodGet, "/api/v1/students/leaderboard", "/api/v1/students/leaderboard", handler.agentV1StudentLeaderboard, read(authorizationJSON(), "agent.students.leaderboard")),
+		api(http.MethodGet, "/api/v1/meta/latest_exam_imported_at", "/api/v1/meta/latest_exam_imported_at", handler.agentV1LatestExamImportedAt, read(map[string]string{"content-type": "Content-Type"}, "agent.meta.latest-exam")),
+		api(http.MethodGet, "/api/v1/meta/data-events/stream", "/api/v1/meta/data-events/stream", handler.agentV1DataEvents, read(map[string]string{"accept": "Accept"}, "agent.meta.data-events")),
+		api(http.MethodGet, "/api/v1/recommendations/path/me", "/api/v1/recommendations/path/me", handler.agentV1LearningPath, read(authorizationJSON(), "agent.recommendations.path")),
+		api(http.MethodGet, "/api/v1/recommendations/path/me/status", "/api/v1/recommendations/path/me/status", handler.agentV1LearningPathStatus, read(authorizationJSON(), "agent.recommendations.path-status")),
+		api(http.MethodGet, "/api/v1/recommendations/knowledge/{point}", "/api/v1/recommendations/knowledge/arrays", handler.agentV1KnowledgeNode, read(authorizationJSON(), "agent.recommendations.knowledge")),
+		api(http.MethodPost, "/api/v1/feedback", "/api/v1/feedback", handler.agentV1SubmitFeedback, write(authorizationJSON(), "agent.feedback.submit", uploadBodyTimeout)),
+		plain("", "/api/v1/", "/api/v1/unknown", handler.apiNotFound),
 
 		api(http.MethodGet, "/api/v2/capabilities", "/api/v2/capabilities", handler.getCapabilities, read(noHeaders(), "api.capabilities")),
 		api(http.MethodPost, "/api/v2/auth/login", "/api/v2/auth/login", handler.login, routePolicy{
@@ -243,5 +263,5 @@ func apiRouteContracts(handler *Handler, authBodyTimeout, uploadBodyTimeout time
 		api(http.MethodGet, "/api/v2/imports/{jobId}/events", "/api/v2/imports/123e4567-e89b-42d3-a456-426614174030/events", handler.streamImportEvents, read(authorizationEvents(), "imports.events")),
 
 		plain("", "/api/v2/", "/api/v2/unknown", handler.apiNotFound),
-	}
+	}...)
 }

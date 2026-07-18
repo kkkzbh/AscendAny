@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -77,6 +78,11 @@ func run(args []string) int {
 			"configured", configuration.Database.ExpectedSchemaVersion,
 			"embedded", migrate.CurrentVersion(),
 		)
+		return 1
+	}
+	parsedAnalytics, err := runtimeapp.LoadAnalyticsConfig(configuration.Analytics.ConfigPath)
+	if err != nil {
+		bootstrapLogger.Error("analytics configuration rejected", "error", err)
 		return 1
 	}
 
@@ -207,6 +213,7 @@ func run(args []string) int {
 			pool,
 			loadedRecommendationModel.Model,
 			modelBinding,
+			parsedAnalytics,
 		)
 		if repositoryErr != nil {
 			logger.Error("recommendation repository initialization failed", "code", recommendation.CodeOf(repositoryErr))
@@ -389,11 +396,6 @@ func run(args []string) int {
 		logger.Error("feedback service initialization failed", "code", feedback.CodeOf(err))
 		return 1
 	}
-	feedbackApplication, err := feedback.NewApplicationService(authService, feedbackService)
-	if err != nil {
-		logger.Error("feedback application initialization failed", "code", feedback.CodeOf(err))
-		return 1
-	}
 	ojPolicy := productionOJPolicy(configuration)
 	ojRepository, err := oj.NewPostgresRepository(pool)
 	if err != nil {
@@ -443,7 +445,7 @@ func run(args []string) int {
 			logger.Error("credential resolver initialization failed", "error", resolverErr)
 			return 1
 		}
-		feedbackProvider, providerErr := feedback.NewWebhookDeliveryProvider(credentialResolver)
+		feedbackProvider, providerErr := feedback.NewDeliveryProvider(credentialResolver)
 		if providerErr != nil {
 			logger.Error("feedback delivery provider initialization failed", "code", feedback.CodeOf(providerErr))
 			return 1
@@ -458,7 +460,7 @@ func run(args []string) int {
 			logger.Error("model connection probe initialization failed", "code", modelprobe.CodeOf(err))
 			return 1
 		}
-		writeRuntime, err = runtimeapp.New(pool, configuration, feedbackProvider, logger)
+		writeRuntime, err = runtimeapp.New(pool, configuration, parsedAnalytics, feedbackProvider, logger)
 		if err != nil {
 			logger.Error("write runtime initialization failed", "error", err)
 			return 1
@@ -527,6 +529,16 @@ func run(args []string) int {
 	}
 	if err != nil {
 		logger.Error("OJ application initialization failed", "code", oj.CodeOf(err))
+		return 1
+	}
+	var feedbackApplication *feedback.ApplicationService
+	if writeRuntime != nil {
+		feedbackApplication, err = feedback.NewApplicationService(authService, feedbackService, writeRuntime.Artifacts)
+	} else {
+		feedbackApplication, err = feedback.NewReadOnlyApplicationService(authService, feedbackService)
+	}
+	if err != nil {
+		logger.Error("feedback application initialization failed", "code", feedback.CodeOf(err))
 		return 1
 	}
 	httpDependencies := httpRuntimeDependencies{
@@ -696,6 +708,9 @@ func buildHTTPHandlerOptions(configuration config.Config, dependencies httpRunti
 		AllowedOrigins:            configuration.Auth.AllowedOrigins,
 		RateLimiter:               dependencies.rateLimiter,
 		RequestIDRandom:           dependencies.requestIDRandom,
+		AgentV1EnvelopeKey:        deriveAgentV1EnvelopeKey(configuration.Auth.JWTSigningPrivateKey),
+		AgentV1AccessTTL:          configuration.Auth.AccessTTL,
+		AgentV1RefreshTTL:         configuration.Auth.RefreshTTL,
 		TrustedProxyCIDRs:         configuration.HTTP.TrustedProxyCIDRs,
 		ClientIPHeader:            configuration.HTTP.ClientIPHeader,
 		Artifacts:                 dependencies.artifacts,
@@ -734,6 +749,13 @@ func buildHTTPHandlerOptions(configuration config.Config, dependencies httpRunti
 			WritesEnabled:        configuration.Write.Enabled,
 		},
 	}
+}
+
+func deriveAgentV1EnvelopeKey(signingKey []byte) []byte {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("AscendAny Agent API v1 refresh envelope key\x00"))
+	_, _ = digest.Write(signingKey)
+	return digest.Sum(nil)
 }
 
 func productionOJPolicy(configuration config.Config) oj.Policy {

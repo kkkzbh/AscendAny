@@ -84,12 +84,18 @@ func buildActorFeatures(ratingRaw string, metricsRaw json.RawMessage) ([]inferen
 	return features, rating, nil
 }
 
-func buildCandidates(rows []problemRow, catalog knowledgeCatalog, knowledgeIDs []string, passed map[string]struct{}) ([]inferenceCandidate, error) {
+func buildCandidates(
+	rows []problemRow,
+	facts problemFactIndex,
+	catalog knowledgeCatalog,
+	knowledgeIDs []string,
+	passed map[string]struct{},
+) ([]inferenceCandidate, error) {
 	aggregates := make(map[string]*problemAggregate)
 	for index, row := range rows {
-		fact, err := buildProblemFact(row)
-		if err != nil {
-			return nil, fmt.Errorf("problem %d: %w", index, err)
+		fact, exists := facts[problemInstanceIdentity{SnapshotID: row.SnapshotID, ProblemSetProblemID: row.ProblemSetProblemID}]
+		if !exists {
+			return nil, fmt.Errorf("problem %d has no prevalidated fact", index)
 		}
 		metrics, err := parseProblemMetrics(row.MetricsJSON)
 		if err != nil {

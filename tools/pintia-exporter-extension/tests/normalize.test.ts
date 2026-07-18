@@ -131,7 +131,7 @@ describe("Pintia snapshot v2 normalization", () => {
     const snapshot = await buildSnapshot(input, EXPORTED_AT);
     expect(snapshot.participants.find((participant) => participant.userId === "user-alpha")).toMatchObject({
       studentNumber: "SYNTHETIC-001",
-      displayName: "Learner Alpha",
+      displayName: "Alpha",
       groupName: "Synthetic Group",
     });
   });

@@ -205,7 +205,7 @@ func TestLoadAdminBootstrapRequiresOnlyOwnedConfiguration(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":             "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":       "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":   databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":  "10",
 		"ASCENDANY_PASSWORD_PEPPER_FILE":     passwordPepperPath,
 		"ASCENDANY_DATABASE_MIN_CONNECTIONS": "0",
 		"ASCENDANY_DATABASE_MAX_CONNECTIONS": "4",
@@ -215,7 +215,7 @@ func TestLoadAdminBootstrapRequiresOnlyOwnedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAdminBootstrap() error = %v", err)
 	}
-	if got.Database.ExpectedSchemaVersion != 7 || got.Database.MinConnections != 0 ||
+	if got.Database.ExpectedSchemaVersion != 10 || got.Database.MinConnections != 0 ||
 		got.Database.MaxConnections != 4 || got.Database.HealthTimeout != 750*time.Millisecond {
 		t.Fatalf("bootstrap database config = %#v", got.Database)
 	}
@@ -230,7 +230,7 @@ func TestLoadAdminBootstrapRequiresPasswordPepper(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":            "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":      "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":  databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION": "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION": "10",
 	}
 	_, err := LoadAdminBootstrap(mapLookup(env), testReadFile)
 	if err == nil || err.Error() != "ASCENDANY_PASSWORD_PEPPER_FILE is required" {
@@ -244,7 +244,7 @@ func TestLoadModelActivationRequiresOnlyOwnedConfiguration(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":                      "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":                "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":            databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":           "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":           "10",
 		"ASCENDANY_DATABASE_CONNECT_TIMEOUT":          "4s",
 		"ASCENDANY_DATABASE_HEALTH_TIMEOUT":           "750ms",
 		"ASCENDANY_RECOMMENDATION_MODEL_PATH":         "/opt/ascendany/v2/models/recommendation-model.json",
@@ -270,7 +270,7 @@ func TestLoadModelActivationRequiresOnlyOwnedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadModelActivation() error = %v", err)
 	}
-	if got.Database.ExpectedSchemaVersion != 7 || got.Database.MaxConnections != 1 ||
+	if got.Database.ExpectedSchemaVersion != 10 || got.Database.MaxConnections != 1 ||
 		got.Database.MinConnections != 0 || got.Database.ConnectTimeout != 4*time.Second ||
 		got.Database.HealthTimeout != 750*time.Millisecond || got.Database.Password != strings.Repeat("d", minimumDatabasePasswordBytes) {
 		t.Fatalf("activation database config = %#v", got.Database)
@@ -288,7 +288,7 @@ func TestLoadModelActivationRequiresOnlyDatabaseCredential(t *testing.T) {
 	env := map[string]string{
 		"ASCENDANY_DATABASE_URL":                 "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":           "transaction",
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":      "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":      "10",
 		"ASCENDANY_RECOMMENDATION_MODEL_PATH":    "/opt/ascendany/v2/models/recommendation-model.json",
 		"ASCENDANY_RECOMMENDATION_MODEL_SHA256":  strings.Repeat("a", 64),
 		"ASCENDANY_RECOMMENDATION_MODEL_PURPOSE": "production",
@@ -307,7 +307,7 @@ func TestLoadCatalogPublicationRequiresOnlyOwnedConfiguration(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":                     "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":               "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":           databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "10",
 		"ASCENDANY_DATABASE_CONNECT_TIMEOUT":         "4s",
 		"ASCENDANY_DATABASE_HEALTH_TIMEOUT":          "750ms",
 		"ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE": jwtVerificationPublicKeyPath,
@@ -337,7 +337,7 @@ func TestLoadCatalogPublicationRequiresOnlyOwnedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCatalogPublication() error = %v", err)
 	}
-	if got.Database.ExpectedSchemaVersion != 7 || got.Database.MaxConnections != 1 ||
+	if got.Database.ExpectedSchemaVersion != 10 || got.Database.MaxConnections != 1 ||
 		got.Database.MinConnections != 0 || got.Database.ConnectTimeout != 4*time.Second ||
 		got.Database.HealthTimeout != 750*time.Millisecond {
 		t.Fatalf("publication database config = %#v", got.Database)
@@ -360,7 +360,7 @@ func TestLoadCatalogPublicationRequiresVerifierConfiguration(t *testing.T) {
 		"ASCENDANY_DATABASE_URL":                     "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":               "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":           databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "10",
 		"ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE": jwtVerificationPublicKeyPath,
 		"ASCENDANY_AUTH_ISSUER":                      "ascendany",
 		"ASCENDANY_AUTH_AUDIENCE":                    "ascendany-v2",
@@ -394,7 +394,7 @@ func TestLoadCatalogPublicationRejectsPrivateOrNoncanonicalVerificationKey(t *te
 		"ASCENDANY_DATABASE_URL":                     "postgres://ascendany@127.0.0.1:6432/ascendany",
 		"ASCENDANY_DATABASE_POOL_MODE":               "transaction",
 		"ASCENDANY_DATABASE_PASSWORD_FILE":           databasePasswordPath,
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":          "10",
 		"ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE": jwtVerificationPublicKeyPath,
 		"ASCENDANY_AUTH_ISSUER":                      "ascendany",
 		"ASCENDANY_AUTH_AUDIENCE":                    "ascendany-v2",
@@ -462,7 +462,7 @@ func TestLoadReturnsValidatedConfiguration(t *testing.T) {
 	if got.Database.HealthTimeout != 750*time.Millisecond {
 		t.Fatalf("health timeout = %s", got.Database.HealthTimeout)
 	}
-	if got.Database.ExpectedSchemaVersion != 7 {
+	if got.Database.ExpectedSchemaVersion != 10 {
 		t.Fatalf("schema version = %d", got.Database.ExpectedSchemaVersion)
 	}
 	if got.Database.Password != strings.Repeat("d", minimumDatabasePasswordBytes) {
@@ -474,7 +474,7 @@ func TestLoadReturnsValidatedConfiguration(t *testing.T) {
 	if got.Auth.PasswordPepper != strings.Repeat("p", minimumPasswordPepperBytes) {
 		t.Fatal("password pepper was not loaded from its credential file")
 	}
-	wantOrigins := "ascendany-app://bundle,capacitor://localhost,http://127.0.0.1:5173,https://ascendany.kkkzbh.cn,https://localhost"
+	wantOrigins := "ascendany-app://bundle,capacitor://localhost,http://127.0.0.1:5173,http://localhost:5173,https://ascendany.kkkzbh.cn,https://localhost"
 	if got.Auth.Issuer != "ascendany" || got.Auth.Audience != "ascendany-v2" ||
 		strings.Join(got.Auth.AllowedOrigins, ",") != wantOrigins {
 		t.Fatalf("auth issuer/audience/origins = %q/%q/%q", got.Auth.Issuer, got.Auth.Audience, got.Auth.AllowedOrigins)
@@ -915,12 +915,12 @@ func validEnvironment() map[string]string {
 		"ASCENDANY_PASSWORD_PEPPER_FILE":                   passwordPepperPath,
 		"ASCENDANY_AUTH_ISSUER":                            "ascendany",
 		"ASCENDANY_AUTH_AUDIENCE":                          "ascendany-v2",
-		"ASCENDANY_AUTH_ALLOWED_ORIGINS":                   "https://ascendany.kkkzbh.cn,ascendany-app://bundle,capacitor://localhost,https://localhost,http://127.0.0.1:5173",
+		"ASCENDANY_AUTH_ALLOWED_ORIGINS":                   "https://ascendany.kkkzbh.cn,ascendany-app://bundle,capacitor://localhost,https://localhost,http://127.0.0.1:5173,http://localhost:5173",
 		"ASCENDANY_AUTH_ACCESS_TTL":                        "15m",
 		"ASCENDANY_AUTH_REFRESH_TTL":                       "720h",
 		"ASCENDANY_HTTP_TRUSTED_PROXY_CIDRS":               "127.0.0.1/32",
 		"ASCENDANY_HTTP_CLIENT_IP_HEADER":                  "CF-Connecting-IP",
-		"ASCENDANY_DATABASE_SCHEMA_VERSION":                "7",
+		"ASCENDANY_DATABASE_SCHEMA_VERSION":                "10",
 		"ASCENDANY_ARTIFACT_ROOT":                          "/var/lib/ascendany/artifacts",
 		"ASCENDANY_ARTIFACT_MAX_BYTES":                     "134217728",
 		"ASCENDANY_ARTIFACT_ORPHAN_MIN_AGE":                "24h",

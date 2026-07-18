@@ -711,7 +711,7 @@ if ! /usr/bin/env -i \
     ASCENDANY_DATABASE_ROLE="${SCHEMA_OWNER}" \
     ASCENDANY_DATABASE_SCHEMA=ascendany \
     ASCENDANY_MIGRATION_HISTORY_TABLE=ascendany.schema_migrations_v2 \
-    ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=10 \
     ASCENDANY_MIGRATION_LOCK_TIMEOUT=30s \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
     "${MIGRATOR_BINARY}" up >/dev/null 2>"${LOG_DIR}/migrate.json"; then
@@ -769,7 +769,7 @@ run_admin_bootstrap() {
     ASCENDANY_DATABASE_URL="postgresql://${RUNTIME_LOGIN}@${DIRECT_HOST}:5432/${SOURCE_DATABASE}?sslmode=disable" \
     ASCENDANY_DATABASE_POOL_MODE=transaction \
     ASCENDANY_DATABASE_PASSWORD_FILE="${RUNTIME_PASSWORD_FILE}" \
-    ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=10 \
     ASCENDANY_DATABASE_MAX_CONNECTIONS=1 \
     ASCENDANY_DATABASE_MIN_CONNECTIONS=0 \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
@@ -1454,7 +1454,7 @@ SELECT
     (SELECT count(*) FROM ascendany.knowledge_catalog_publications)::text;
 SQL
 )"
-[[ "${RESTORED_DATABASE_SUMMARY}" == "7|1|1|1|1|1|1|1|1|1" ]] ||
+[[ "${RESTORED_DATABASE_SUMMARY}" == "10|1|1|1|1|1|1|1|1|1" ]] ||
   fail 'restored migration, artifact, administrator, model, authorization, or publication state differs from the source manifest'
 readonly RESTORED_MODEL_PROVENANCE="$(admin_psql "${SCRATCH_DATABASE}" --tuples-only --no-align <<'SQL'
 SELECT jsonb_build_object(
@@ -1530,7 +1530,7 @@ JOIN pg_roles AS owner ON owner.oid = database.datdba
 WHERE database.datname = '${SOURCE_DATABASE}'")"
 [[ "${SOURCE_OWNER}" == "${DATABASE_OWNER}" ]] || fail 'source database owner isolation changed'
 
-printf 'BACKUP_RESTORE_REHEARSAL_RESULT postgres_major=17 backup_commands=3 artifact_count=1 catalog_publication_count=1 catalog_receipt_count=1 bundle_files=5 source_bytes=%s migrations=7 model_releases=1 model_activations=1 model_head_exact=true model_provenance_exact=true admin_bootstrap_exact=true second_admin_bootstrap_rejected=true restored_admin_bootstrap_exact=true scratch_owner=%s scratch_acl_exact=true restored_full_role_verifier=true xtrace_disabled_before_secrets=true repeated_role_bootstrap_verified=true scratch_cleanup=%s restore_credentials_removed=%s preexisting_containers=%s preexisting_pods=%s\n' \
+printf 'BACKUP_RESTORE_REHEARSAL_RESULT postgres_major=17 backup_commands=3 artifact_count=1 catalog_publication_count=1 catalog_receipt_count=1 bundle_files=5 source_bytes=%s migrations=10 model_releases=1 model_activations=1 model_head_exact=true model_provenance_exact=true admin_bootstrap_exact=true second_admin_bootstrap_rejected=true restored_admin_bootstrap_exact=true scratch_owner=%s scratch_acl_exact=true restored_full_role_verifier=true xtrace_disabled_before_secrets=true repeated_role_bootstrap_verified=true scratch_cleanup=%s restore_credentials_removed=%s preexisting_containers=%s preexisting_pods=%s\n' \
   "${SOURCE_SIZE}" \
   "${SCHEMA_OWNER}" \
   "$([[ "${SCRATCH_CLEANED}" == "1" ]] && printf true || printf false)" \

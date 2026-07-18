@@ -15,6 +15,8 @@ type existingEnqueue struct {
 	modelKey              string
 	analyticsID           *int64
 	analyticsHeadRevision *int64
+	analyticsBaseRevision *int64
+	analyticsStatus       *string
 }
 
 func (repository *PostgresRepository) Enqueue(ctx context.Context, command EnqueueCommand) (result EnqueueResult, resultErr error) {
@@ -36,15 +38,30 @@ func (repository *PostgresRepository) Enqueue(ctx context.Context, command Enque
 		if found {
 			if existing.result.Run.ThreadID != command.ThreadID || existing.result.Run.Kind != command.Kind ||
 				existing.result.Message.Content != command.Content || existing.promptKey != command.PromptConfigurationKey ||
-				existing.modelKey != command.ModelConfigurationKey || command.Kind == RunReply && existing.analyticsID != nil ||
-				command.Kind == RunReply && existing.analyticsHeadRevision != nil ||
-				command.Kind == RunAutoAnalysis && (existing.analyticsID == nil || existing.analyticsHeadRevision == nil ||
-					*existing.analyticsHeadRevision != *command.ExpectedAnalyticsHeadRevision) {
+				existing.modelKey != command.ModelConfigurationKey ||
+				(existing.analyticsHeadRevision == nil) != (command.ExpectedAnalyticsHeadRevision == nil) ||
+				command.ExpectedAnalyticsHeadRevision != nil && *existing.analyticsHeadRevision != *command.ExpectedAnalyticsHeadRevision {
 				return domainError(ErrorIdempotencyConflict, true, "replay agent enqueue", errors.New("client request ID already owns a different immutable request"))
+			}
+			if command.ExpectedAnalyticsHeadRevision == nil {
+				if existing.analyticsID != nil || existing.analyticsBaseRevision != nil || existing.analyticsStatus != nil {
+					return domainError(ErrorStoredDataInvalid, true, "validate stored agent enqueue", errors.New("unbound reply run unexpectedly references analytics provenance"))
+				}
+			} else if existing.analyticsID == nil || existing.analyticsBaseRevision == nil || existing.analyticsStatus == nil ||
+				*existing.analyticsStatus != "succeeded" || *existing.analyticsBaseRevision+1 != *existing.analyticsHeadRevision {
+				return domainError(ErrorStoredDataInvalid, true, "validate stored agent enqueue", errors.New("stored analytics binding violates its immutable publication contract"))
 			}
 			result = existing.result
 			result.Created = false
 			return nil
+		}
+		var analyticsGenerationID *int64
+		if command.ExpectedAnalyticsHeadRevision != nil {
+			resolvedGenerationID, err := resolveAnalyticsSnapshot(ctx, tx, *command.ExpectedAnalyticsHeadRevision)
+			if err != nil {
+				return err
+			}
+			analyticsGenerationID = &resolvedGenerationID
 		}
 
 		var threadDatabaseID, headRevision int64
@@ -68,6 +85,10 @@ FOR UPDATE`, command.ThreadID, resolved.AccountDatabaseID).Scan(&threadDatabaseI
 			return err
 		}
 		modelVersionID, err := resolveActiveConfiguration(ctx, tx, command.ModelConfigurationKey, "model_connection")
+		if err != nil {
+			return err
+		}
+		providerMetadata, hasProviderMetadata, err := loadFrontendProviderMetadata(ctx, tx, modelVersionID)
 		if err != nil {
 			return err
 		}
@@ -130,12 +151,18 @@ INSERT INTO ascendany.agent_runs (
 VALUES ($1::uuid, $2, $3, $4, $5::uuid, $6, $7, $8, $9, $10, $11, 'queued', $12, $12)
 RETURNING agent_run_id`, command.RunID, threadDatabaseID, resolved.AccountDatabaseID, resolved.SessionDatabaseID,
 			command.ClientRequestID, string(command.Kind), messageDatabaseID, string(messageKind), promptVersionID,
-			modelVersionID, nil, mutationTime).Scan(&runDatabaseID); err != nil {
+			modelVersionID, analyticsGenerationID, mutationTime).Scan(&runDatabaseID); err != nil {
 			return databaseFailure("insert agent run", err)
 		}
 		queuedPayload := map[string]any{
 			"messageSequence": messageSequence,
 			"runKind":         command.Kind,
+		}
+		if command.ExpectedAnalyticsHeadRevision != nil {
+			queuedPayload["analyticsHeadRevision"] = *command.ExpectedAnalyticsHeadRevision
+		}
+		if hasProviderMetadata {
+			addFrontendProviderMetadata(queuedPayload, providerMetadata)
 		}
 		if err := appendRunEvent(ctx, tx, runDatabaseID, "queued", queuedPayload); err != nil {
 			return err
@@ -231,7 +258,9 @@ SELECT run.public_id::text,
        prompt_item.configuration_key,
 	       model_item.configuration_key,
 	       run.analytics_generation_id,
-	       NULLIF(queued_event.payload ->> 'analyticsHeadRevision', '')::bigint
+	       NULLIF(queued_event.payload ->> 'analyticsHeadRevision', '')::bigint,
+	       generation.base_head_revision,
+	       generation.status
 FROM ascendany.agent_runs AS run
 JOIN ascendany.chat_threads AS thread
   ON thread.chat_thread_id = run.chat_thread_id
@@ -251,6 +280,8 @@ JOIN ascendany.agent_run_events AS queued_event
   ON queued_event.agent_run_id = run.agent_run_id
  AND queued_event.event_sequence = 1
  AND queued_event.event_type = 'queued'
+LEFT JOIN ascendany.analytics_generations AS generation
+  ON generation.analytics_generation_id = run.analytics_generation_id
 WHERE run.owner_account_id = $1
   AND run.client_request_id = $2::uuid`, ownerDatabaseID, clientRequestID)
 	err := row.Scan(
@@ -276,6 +307,8 @@ WHERE run.owner_account_id = $1
 		&existing.modelKey,
 		&existing.analyticsID,
 		&existing.analyticsHeadRevision,
+		&existing.analyticsBaseRevision,
+		&existing.analyticsStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return existingEnqueue{}, false, nil

@@ -49,8 +49,8 @@ AscendAny 把 Pintia 程序设计题目集的完整快照转换为可追溯的�
 | 路径 | 内容 |
 | --- | --- |
 | `backend/` | Go 服务、worker、CLI、migration 与领域测试。 |
-| `apps/web/` | 学生 Web 应用。 |
-| `apps/desktop/` | Electron 学生端。 |
+| `apps/web/` | 已停用的替换版 Web package，不进入产品发布。 |
+| `apps/desktop/` | Agent 前端，同时生成 Electron 与 production `/app/` Web。 |
 | `apps/mobile/` | Capacitor 移动端。 |
 | `apps/import-console/` | 管理员控制台。 |
 | `apps/site/` | 产品官网。 |
@@ -73,11 +73,12 @@ cd ..
 pnpm install --frozen-lockfile
 pnpm --filter @ascendany/sdk check
 pnpm --filter @ascendany/pintia-exporter check
-pnpm --filter @ascendany/web check
+pnpm public-assets:test
+pnpm public-assets:check
 pnpm --filter @ascendany/mobile check
 pnpm --filter @ascendany/import-console check
 pnpm --filter @ascendany/desktop test
-pnpm --filter @ascendany/desktop build
+pnpm build
 ```
 
 ### Rootless PostgreSQL 演练

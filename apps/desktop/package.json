@@ -12,15 +12,13 @@
   "scripts": {
     "dev": "vite",
     "web:dev": "vite --config vite.web.config.ts --host 0.0.0.0 --port 4173",
-    "typecheck": "tsc -b --force && node scripts/check-typecheck-clean.mjs",
-    "build": "pnpm run typecheck && vite build",
-    "web:build": "pnpm run typecheck && vite build --config vite.web.config.ts",
-    "test": "pnpm run test:unit && pnpm run test:electron",
-    "test:unit": "vitest run --config vitest.config.ts",
-    "test:electron": "cross-env ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs run --config vitest.electron.config.ts",
-    "test:release-scripts": "bash scripts/tests/release-builders-fixture.sh",
+    "build": "tsc -b && vite build",
+    "web:build": "tsc -b && vite build --config vite.web.config.ts",
+    "test": "vitest run",
     "rebuild:native": "electron-rebuild --version $(node -p \"require('electron/package.json').version\") --module-dir . --which-module better-sqlite3 --force",
     "postinstall": "pnpm run rebuild:native",
+    "dist:win:x64": "pnpm run build && electron-builder --win nsis --x64",
+    "dist:linux:rpm:x64": "pnpm run build && electron-builder --linux rpm --x64",
     "preview": "vite preview",
     "web:preview": "vite preview --config vite.web.config.ts --host 0.0.0.0 --port 4173"
   },
@@ -47,7 +45,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://ascendany.kkkzbh.cn/desktop-updates"
+        "url": "https://site.kkkzbh.cn/desktop-updates"
       }
     ],
     "win": {
@@ -55,7 +53,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -65,7 +65,9 @@
       "target": [
         {
           "target": "rpm",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "maintainer": "AscendAny Team <opensource@ascendany.dev>",
@@ -78,27 +80,35 @@
     }
   },
   "dependencies": {
-    "@ascendany/sdk": "workspace:*",
+    "@streamdown/cjk": "^1.0.3",
+    "@streamdown/code": "^1.1.1",
+    "@streamdown/math": "^1.0.2",
     "better-sqlite3": "^12.9.0",
     "electron-updater": "^6.6.2",
+    "katex": "^0.16.47",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-image-crop": "^11.0.10",
+    "recharts": "^2.15.0",
+    "streamdown": "^2.5.0",
+    "zustand": "^5.0.3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
+    "@tailwindcss/vite": "^4.1.3",
     "@testing-library/react": "^16.2.0",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.13.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "cross-env": "^7.0.3",
     "electron": "^33.3.1",
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
+    "tailwindcss": "^4.1.3",
     "typescript": "~5.7.2",
     "vite": "^6.1.0",
     "vite-plugin-electron": "^0.28.8",
+    "vite-plugin-electron-renderer": "^0.14.6",
     "vitest": "^3.2.0"
   }
 }

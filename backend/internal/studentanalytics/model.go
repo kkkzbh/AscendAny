@@ -40,6 +40,31 @@ type ReadyResult struct {
 	Current       analytics.MetricValues
 	ExamHistory   []ExamHistoryPoint
 	RatingHistory []RatingHistoryPoint
+	LatestPeer    *LatestExamPeer
+}
+
+type LatestExamPeer struct {
+	TotalParticipants int64
+	Position          int64
+	Rank              int64
+	Score             *float64
+	Solved            int64
+	BandMedian        PeerValues
+	Previous          *PeerParticipant
+}
+
+type PeerParticipant struct {
+	Position int64
+	Rank     int64
+	Score    *float64
+	Solved   int64
+	Values   analytics.MetricValues
+}
+
+type PeerValues struct {
+	Score  *float64
+	Solved *float64
+	Values analytics.MetricValues
 }
 
 type ExamHistoryPoint struct {

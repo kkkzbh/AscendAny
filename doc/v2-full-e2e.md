@@ -14,7 +14,7 @@ reviewed commit
   -> generated SDK immutable knowledge-catalog publication
   -> generated SDK byte replay, typed-domain duplicate, new snapshot sequence
   -> analytics/enrollment/student reads and deterministic Go recommendation inference
-  -> embedded site/web/admin HTTP assets + mobile/desktop build smoke
+  -> embedded site/Agent/admin HTTP assets + mobile/desktop build smoke
   -> backup create/verify/restore-verify
   -> exact source/restored migration, model release/head/activation, and catalog SQL assertions
   -> complete source/restored table + sequence fingerprints
@@ -115,7 +115,7 @@ The client publishes the supplied catalog through the generated SDK, then
 requires `getSelfRecommendation` to return `state=fresh`, schema
 `ascendany.recommendation.inference-result.v1`, nonempty strictly ordered
 knowledge output, and the exact supplied model/catalog digests. Source and
-restored SQL checks require migration count/max `6`, one model release with the
+restored SQL checks require migration count/max `10`, one model release with the
 expected artifact digest, one current head, at least one immutable activation,
 one exact activation for the current head, and one active catalog with the
 exact key, kind, head revision, version, schema, digest, and null credential

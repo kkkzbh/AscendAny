@@ -3,7 +3,7 @@ package auth
 import "time"
 
 const (
-	MinPasswordBytes      = 12
+	MinPasswordBytes      = 8
 	MaxPasswordBytes      = 128
 	MinUsernameBytes      = 3
 	MaxUsernameBytes      = 32
@@ -11,6 +11,8 @@ const (
 	MaxDisplayNameBytes   = 64
 	MinStudentNumberBytes = 1
 	MaxStudentNumberBytes = 64
+	MinPTANicknameBytes   = 1
+	MaxPTANicknameBytes   = 256
 )
 
 type Role string
@@ -25,6 +27,7 @@ type Account struct {
 	Username      string  `json:"username"`
 	DisplayName   string  `json:"displayName"`
 	StudentNumber *string `json:"studentNumber"`
+	PTANickname   *string `json:"-"`
 	Role          Role    `json:"role"`
 	AuthRevision  int64   `json:"authRevision"`
 }
@@ -49,6 +52,22 @@ type SessionRecord struct {
 type LoginInput struct {
 	Username string
 	Password string
+}
+
+type RegistrationInput struct {
+	Username      string
+	Password      string
+	StudentNumber string
+	PTANickname   string
+}
+
+type SSOExchangeInput struct {
+	Token string
+}
+
+type LocalPasswordBootstrapInput struct {
+	AccessToken string
+	NewPassword string
 }
 
 type RefreshInput struct {

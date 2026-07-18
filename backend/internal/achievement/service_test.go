@@ -18,15 +18,33 @@ const (
 )
 
 type fakeRepository struct {
-	snapshot RepositorySnapshot
-	err      error
-	calls    int
-	query    SelfQuery
+	snapshot               RepositorySnapshot
+	err                    error
+	calls                  int
+	query                  SelfQuery
+	studentNumberQuery     StudentNumberQuery
+	studentNumberQueried   bool
+	studentIdentityQuery   StudentIdentityQuery
+	studentIdentityQueried bool
 }
 
 func (repository *fakeRepository) LoadSelf(_ context.Context, query SelfQuery) (RepositorySnapshot, error) {
 	repository.calls++
 	repository.query = query
+	return repository.snapshot, repository.err
+}
+
+func (repository *fakeRepository) LoadByStudentNumber(_ context.Context, query StudentNumberQuery) (RepositorySnapshot, error) {
+	repository.calls++
+	repository.studentNumberQueried = true
+	repository.studentNumberQuery = query
+	return repository.snapshot, repository.err
+}
+
+func (repository *fakeRepository) LoadByStudentIdentity(_ context.Context, query StudentIdentityQuery) (RepositorySnapshot, error) {
+	repository.calls++
+	repository.studentIdentityQueried = true
+	repository.studentIdentityQuery = query
 	return repository.snapshot, repository.err
 }
 
@@ -105,6 +123,104 @@ func TestServiceReturnsAllRulesAndLiveDialogueForEmptyAnalyticsStates(t *testing
 			}
 			if result.State != test.state || len(result.Items) != 2 || result.Items[0].Progress != 0 || result.Items[1].Progress != 2 || result.Items[1].Tier != 2 {
 				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestServiceStudentNumberReadUsesSameSnapshotValidationAndResultProjection(t *testing.T) {
+	t.Parallel()
+
+	repository := &fakeRepository{snapshot: RepositorySnapshot{
+		RuleSetVersion: 1, RuleHeadRevision: 1, AnalyticsHeadRevision: 4,
+		Rules: testRules(), Metrics: testMetrics(), AIDialogueCount: 15,
+	}}
+	service, err := NewService(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.GetByStudentNumber(context.Background(), StudentNumberQuery{StudentNumber: "20260001"})
+	if err != nil || result.State != StateReady || repository.calls != 1 || !repository.studentNumberQueried ||
+		repository.studentNumberQuery.StudentNumber != "20260001" {
+		t.Fatalf("result/error/repository = %#v/%v/%#v", result, err, repository)
+	}
+
+	repository.snapshot.Rules = nil
+	if _, err := service.GetByStudentNumber(context.Background(), StudentNumberQuery{StudentNumber: "20260001"}); CodeOf(err) != ErrorStoredDataInvalid {
+		t.Fatalf("corrupt selector snapshot error = %v", err)
+	}
+}
+
+func TestServiceExactStudentIdentityReadUsesDurableSelector(t *testing.T) {
+	t.Parallel()
+
+	repository := &fakeRepository{snapshot: RepositorySnapshot{
+		RuleSetVersion: 1, RuleHeadRevision: 1,
+		Rules: []Rule{{
+			Code: "exam", Title: "Exam", Description: "Exam progress", ProgressKey: ProgressExamCount,
+			BronzeTarget: 1, SilverTarget: 2, GoldTarget: 3, SortOrder: 1,
+		}},
+	}}
+	service, err := NewService(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := StudentIdentityQuery{StudentNumber: "20260001", PTANickname: "Alice"}
+	result, err := service.GetByStudentIdentity(context.Background(), query)
+	if err != nil || result.State != StateNotGenerated || repository.calls != 1 ||
+		!repository.studentIdentityQueried || repository.studentIdentityQuery != query {
+		t.Fatalf("result/error/repository = %#v/%v/%#v", result, err, repository)
+	}
+}
+
+func TestServiceRejectsInvalidExactStudentIdentityBeforeRepository(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []StudentIdentityQuery{
+		{StudentNumber: "", PTANickname: "Alice"},
+		{StudentNumber: "20260001", PTANickname: ""},
+		{StudentNumber: "20260001", PTANickname: " Alice"},
+		{StudentNumber: "20260001", PTANickname: string([]byte{0xff})},
+		{StudentNumber: "20260001", PTANickname: "Ali\x00ce"},
+		{StudentNumber: "20260001", PTANickname: string(make([]byte, auth.MaxPTANicknameBytes+1))},
+	} {
+		repository := &fakeRepository{}
+		service, err := NewService(repository)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.GetByStudentIdentity(context.Background(), query); CodeOf(err) != ErrorInvalidQuery || repository.calls != 0 {
+			t.Fatalf("query/error/calls = %#v/%v/%d", query, err, repository.calls)
+		}
+	}
+}
+
+func TestServiceRejectsInvalidStudentNumberBeforeRepository(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		ctx   context.Context
+		value string
+	}{
+		{name: "nil context", value: "20260001"},
+		{name: "empty", ctx: context.Background()},
+		{name: "surrounding space", ctx: context.Background(), value: " 20260001"},
+		{name: "too long", ctx: context.Background(), value: string(make([]byte, auth.MaxStudentNumberBytes+1))},
+		{name: "invalid UTF-8", ctx: context.Background(), value: string([]byte{0xff})},
+		{name: "NUL", ctx: context.Background(), value: "2026\x0001"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository := &fakeRepository{}
+			service, err := NewService(repository)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.GetByStudentNumber(test.ctx, StudentNumberQuery{StudentNumber: test.value})
+			if CodeOf(err) != ErrorInvalidQuery || repository.calls != 0 {
+				t.Fatalf("error/calls = %v/%d", err, repository.calls)
 			}
 		})
 	}

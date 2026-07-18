@@ -85,6 +85,45 @@ SELECT EXISTS (
 		result.RuleSetVersion != 1 || result.RuleHeadRevision != 1 || len(result.Items) != 17 || result.Summary.Total != 17 {
 		t.Fatalf("result metadata = %#v", result)
 	}
+	var studentNumber string
+	if err := pool.QueryRow(ctx, `
+SELECT identifier_value
+FROM ascendany.pintia_actor_identifiers
+WHERE identifier_kind = 'student_number'
+  AND actor_id = $1`, actorID).Scan(&studentNumber); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := service.GetByStudentNumber(ctx, StudentNumberQuery{StudentNumber: studentNumber})
+	if err != nil {
+		t.Fatalf("GetByStudentNumber() error = %v", err)
+	}
+	if selected.State != result.State || selected.AnalyticsHeadRevision != result.AnalyticsHeadRevision ||
+		selected.RuleSetVersion != result.RuleSetVersion || selected.RuleHeadRevision != result.RuleHeadRevision ||
+		selected.Summary != result.Summary || len(selected.Items) != len(result.Items) {
+		t.Fatalf("selector result = %#v, self result = %#v", selected, result)
+	}
+	var ptaNickname *string
+	if err := pool.QueryRow(ctx, `
+SELECT pta_nickname
+FROM ascendany.auth_accounts
+WHERE account_id = $1`, accountDatabaseID).Scan(&ptaNickname); err != nil {
+		t.Fatal(err)
+	}
+	if ptaNickname != nil {
+		exact, err := service.GetByStudentIdentity(ctx, StudentIdentityQuery{
+			StudentNumber: studentNumber,
+			PTANickname:   *ptaNickname,
+		})
+		if err != nil || exact.State != result.State || exact.Summary != result.Summary || len(exact.Items) != len(result.Items) {
+			t.Fatalf("exact selector result/error = %#v/%v, self result = %#v", exact, err, result)
+		}
+		if _, err := service.GetByStudentIdentity(ctx, StudentIdentityQuery{
+			StudentNumber: studentNumber,
+			PTANickname:   *ptaNickname + "-wrong",
+		}); CodeOf(err) != ErrorStudentNotFound {
+			t.Fatalf("mismatched exact selector error = %v", err)
+		}
+	}
 	foundDialogue := false
 	for _, item := range result.Items {
 		if item.Code == "any_metric_top1_count" || item.ProgressKey == "any_metric_top1_count" {
@@ -153,6 +192,7 @@ INSERT INTO ascendany.auth_accounts (
     password_phc,
     display_name,
     student_number,
+    pta_nickname,
     actor_id,
     role,
     auth_revision,
@@ -165,6 +205,7 @@ VALUES (
     'integration-password-phc',
     'Achievement Integration',
     'achievement-integration-student',
+    'achievement-pta-nickname',
     $2,
     'student',
     1,

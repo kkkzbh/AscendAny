@@ -17,6 +17,8 @@ var achievementCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 type AchievementService interface {
 	GetSelf(context.Context, string) (achievement.Result, error)
+	GetByStudentNumber(context.Context, string) (achievement.Result, error)
+	GetByStudentIdentity(context.Context, string, string) (achievement.Result, error)
 }
 
 func (handler *Handler) getSelfAchievements(writer http.ResponseWriter, request *http.Request) {
@@ -171,6 +173,9 @@ func (handler *Handler) handleAchievementError(writer http.ResponseWriter, reque
 		return
 	case achievement.ErrorPrincipalRejected:
 		handler.writeAPIError(writer, request, http.StatusUnauthorized, "auth_authentication_rejected", "Authentication was rejected.")
+		return
+	case achievement.ErrorStudentNotFound:
+		handler.writeAPIError(writer, request, http.StatusNotFound, "student_not_found", "Student was not found.")
 		return
 	case achievement.ErrorCanceled:
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(context.Cause(request.Context()), context.DeadlineExceeded) {

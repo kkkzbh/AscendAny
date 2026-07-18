@@ -40,7 +40,15 @@ func (constructionReadiness) Check(context.Context) health.Report {
 
 type constructionAuth struct{}
 
+func (constructionAuth) Register(context.Context, auth.RegistrationInput) (auth.AuthResult, error) {
+	return auth.AuthResult{}, nil
+}
+
 func (constructionAuth) Login(context.Context, auth.LoginInput) (auth.AuthResult, error) {
+	panic("unused")
+}
+
+func (constructionAuth) ExchangeSSO(context.Context, auth.SSOExchangeInput) (auth.AuthResult, error) {
 	panic("unused")
 }
 
@@ -50,6 +58,10 @@ func (constructionAuth) Refresh(context.Context, auth.RefreshInput) (auth.AuthRe
 
 func (constructionAuth) Logout(context.Context, auth.LogoutInput) error { panic("unused") }
 func (constructionAuth) Me(context.Context, string) (auth.Account, error) {
+	panic("unused")
+}
+
+func (constructionAuth) BootstrapLocalPassword(context.Context, auth.LocalPasswordBootstrapInput) error {
 	panic("unused")
 }
 
@@ -114,6 +126,14 @@ func (constructionStudentAnalytics) GetLeaderboard(context.Context, string, int)
 type constructionAchievement struct{}
 
 func (constructionAchievement) GetSelf(context.Context, string) (achievement.Result, error) {
+	panic("unused")
+}
+
+func (constructionAchievement) GetByStudentNumber(context.Context, string) (achievement.Result, error) {
+	panic("unused")
+}
+
+func (constructionAchievement) GetByStudentIdentity(context.Context, string, string) (achievement.Result, error) {
 	panic("unused")
 }
 
@@ -336,7 +356,11 @@ func TestProductionHTTPOptionsConstructHandler(t *testing.T) {
 			SSEWriteTimeout:   5 * time.Second,
 			MaxActiveSSE:      64,
 		},
-		Auth: config.AuthConfig{AllowedOrigins: []string{"https://ascendany.example"}},
+		Auth: config.AuthConfig{
+			AllowedOrigins: []string{"https://ascendany.example"},
+			AccessTTL:      15 * time.Minute,
+			RefreshTTL:     24 * time.Hour,
+		},
 		Artifact: config.ArtifactConfig{
 			MaxBytes: 64 << 20,
 		},
@@ -386,6 +410,18 @@ func TestProductionHTTPOptionsConstructHandler(t *testing.T) {
 		lspPolicy: lsp.DefaultPolicy(),
 	}); err == nil {
 		t.Fatal("disabled write dependency binding accepted an LSP policy")
+	}
+}
+
+func TestAgentV1EnvelopeKeyDerivationIsStableAndDomainSeparated(t *testing.T) {
+	t.Parallel()
+
+	first := deriveAgentV1EnvelopeKey([]byte("signing-key-a"))
+	again := deriveAgentV1EnvelopeKey([]byte("signing-key-a"))
+	second := deriveAgentV1EnvelopeKey([]byte("signing-key-b"))
+	if len(first) != 32 || !bytes.Equal(first, again) || bytes.Equal(first, second) ||
+		bytes.Equal(first, []byte("signing-key-a")) {
+		t.Fatalf("derived keys are not stable, separated SHA-256 values")
 	}
 }
 

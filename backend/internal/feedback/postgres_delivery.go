@@ -130,6 +130,7 @@ func (repository *PostgresRepository) LoadDelivery(ctx context.Context, claim De
 	}
 	resultErr = repository.transaction(ctx, "load feedback delivery", func(tx feedbackTx) error {
 		var configurationJSON string
+		var attachmentsJSON string
 		err := tx.QueryRow(ctx, `
 SELECT feedback.public_id::text,
        feedback.title,
@@ -140,10 +141,37 @@ SELECT feedback.public_id::text,
        version.configuration_version_id,
        version.schema_id,
        version.document::text,
-       version.credential_ref
+       version.credential_ref,
+       account.public_id::text,
+       account.username,
+       account.display_name,
+       account.student_number,
+       account.pta_nickname,
+       account.role,
+       (
+           SELECT COALESCE(
+               jsonb_agg(
+                   jsonb_build_object(
+                       'sequence', attachment.attachment_sequence,
+                       'filename', attachment.filename,
+                       'sha256', artifact.sha256,
+                       'sizeBytes', artifact.size_bytes,
+                       'mediaType', artifact.media_type,
+                       'storageKey', artifact.storage_key
+                   ) ORDER BY attachment.attachment_sequence
+               ),
+               '[]'::jsonb
+           )
+           FROM ascendany.feedback_attachments AS attachment
+           JOIN ascendany.artifacts AS artifact
+             ON artifact.artifact_id = attachment.artifact_id
+           WHERE attachment.feedback_id = feedback.feedback_id
+       )::text
 FROM ascendany.feedback_delivery_jobs AS job
 JOIN ascendany.feedback_submissions AS feedback
   ON feedback.feedback_id = job.feedback_id
+JOIN ascendany.auth_accounts AS account
+  ON account.account_id = feedback.account_id
 JOIN ascendany.configuration_versions AS version
   ON version.configuration_version_id = job.delivery_configuration_version_id
  AND version.configuration_kind = 'feedback_delivery'
@@ -164,6 +192,13 @@ WHERE job.feedback_delivery_job_id = $1
 			&request.ConfigurationSchema,
 			&configurationJSON,
 			&request.CredentialRef,
+			&request.Sender.AccountID,
+			&request.Sender.Username,
+			&request.Sender.DisplayName,
+			&request.Sender.StudentNumber,
+			&request.Sender.PTANickname,
+			&request.Sender.Role,
+			&attachmentsJSON,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return feedbackError(ErrorLeaseLost, false, "load feedback delivery", errors.New("delivery attempt is no longer active"))
@@ -175,6 +210,13 @@ WHERE job.feedback_delivery_job_id = $1
 		var object map[string]json.RawMessage
 		if !json.Valid(request.Configuration) || json.Unmarshal(request.Configuration, &object) != nil || object == nil {
 			return feedbackError(ErrorStoredDataInvalid, true, "load feedback delivery", errors.New("delivery configuration is not a JSON object"))
+		}
+		if validateDeliverySender(request.Sender) != nil {
+			return feedbackError(ErrorStoredDataInvalid, true, "load feedback delivery", errors.New("delivery sender identity is invalid"))
+		}
+		if !json.Valid([]byte(attachmentsJSON)) || json.Unmarshal([]byte(attachmentsJSON), &request.Attachments) != nil ||
+			validateDeliveryAttachmentManifest(request.Attachments) != nil {
+			return feedbackError(ErrorStoredDataInvalid, true, "load feedback delivery", errors.New("delivery attachment manifest is invalid"))
 		}
 		return nil
 	})

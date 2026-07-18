@@ -22,7 +22,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
     local table sequence count
     while IFS= read -r table; do
       case "$table" in
-        schema_migrations_v2) count=7 ;;
+        schema_migrations_v2) count=10 ;;
         achievement_rule_sets|achievement_rule_head|analytics_head) count=1 ;;
         achievement_rules) count=17 ;;
         *) count=0 ;;
@@ -194,7 +194,7 @@ trap 'rm -rf -- "$WORK_ROOT"' EXIT
   retired_trainer_log_root="$WORK_ROOT/host/var/log/ascendany-trainer"
   retired_process_root="$WORK_ROOT/host/proc"
   pgbouncer_config_root="$production_namespace_root/infra/pgbouncer"
-  runtime_feedback_credential_ids=()
+  runtime_provider_credential_ids=()
 
   install -d -m 0755 \
     "$production_namespace_root/v2" \

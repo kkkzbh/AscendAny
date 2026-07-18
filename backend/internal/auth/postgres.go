@@ -157,16 +157,17 @@ func (r *PostgresRepository) FindLoginAccount(ctx context.Context, username stri
 	}
 	account, err := scanAccount(r.queryRow(ctx, `
 SELECT
-    public_id::text,
-    username,
-    display_name,
-    student_number,
-    role,
-    auth_revision,
-    password_phc,
-    disabled_at
-FROM ascendany.auth_accounts
-WHERE username = $1`, username))
+    account.public_id::text,
+    account.username,
+    account.display_name,
+    account.student_number,
+    account.pta_nickname,
+    account.role,
+    account.auth_revision,
+    account.password_phc,
+    account.disabled_at
+FROM ascendany.auth_accounts AS account
+WHERE account.username = $1`, username))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AccountRecord{}, false, nil
 	}
@@ -184,17 +185,18 @@ func (r *PostgresRepository) CreateSession(ctx context.Context, command CreateSe
 	err := r.transaction(ctx, "create auth session", func(tx postgresTx) error {
 		account, accountDatabaseID, err := scanAccountStateWithDatabaseID(tx.QueryRow(ctx, `
 SELECT
-    account_id,
-    public_id::text,
-    username,
-    display_name,
-    student_number,
-    role,
-    auth_revision,
-    disabled_at
-FROM ascendany.auth_accounts
-WHERE public_id = $1::uuid
-FOR UPDATE`, command.AccountID))
+    account.account_id,
+    account.public_id::text,
+    account.username,
+    account.display_name,
+    account.student_number,
+    account.pta_nickname,
+    account.role,
+    account.auth_revision,
+    account.disabled_at
+FROM ascendany.auth_accounts AS account
+WHERE account.public_id = $1::uuid
+FOR UPDATE OF account`, command.AccountID))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -292,6 +294,7 @@ SELECT
     account.username,
     account.display_name,
     account.student_number,
+    account.pta_nickname,
     account.role,
     account.auth_revision,
     account.disabled_at,
@@ -414,6 +417,7 @@ SELECT
     account.username,
     account.display_name,
     account.student_number,
+    account.pta_nickname,
     account.role,
     account.auth_revision,
     account.disabled_at
@@ -443,6 +447,7 @@ FOR UPDATE OF refresh, session, account`, tokenID).Scan(
 		&snapshot.Account.Username,
 		&snapshot.Account.DisplayName,
 		&snapshot.Account.StudentNumber,
+		&snapshot.Account.PTANickname,
 		&snapshot.Account.Role,
 		&snapshot.Account.AuthRevision,
 		&snapshot.Account.DisabledAt,
@@ -593,9 +598,12 @@ func validateAccountRecord(account AccountRecord) error {
 		len(*account.StudentNumber) <= MaxStudentNumberBytes &&
 		strings.TrimSpace(*account.StudentNumber) == *account.StudentNumber
 	adminIdentityValid := account.Role == RoleAdmin && account.StudentNumber == nil
+	ptaIdentityValid := (account.Role == RoleStudent && (account.PTANickname == nil ||
+		validEnrollmentStoredField(*account.PTANickname, MinPTANicknameBytes, MaxPTANicknameBytes))) ||
+		(account.Role == RoleAdmin && account.PTANickname == nil)
 	if len(account.DisplayName) < MinDisplayNameBytes || len(account.DisplayName) > MaxDisplayNameBytes ||
 		strings.TrimSpace(account.DisplayName) != account.DisplayName ||
-		(!studentIdentityValid && !adminIdentityValid) ||
+		(!studentIdentityValid && !adminIdentityValid) || !ptaIdentityValid ||
 		!validRole(account.Role) || account.AuthRevision < 1 || account.PasswordPHC == "" {
 		return authError(ErrorInternal, "Account record is invalid.", nil)
 	}
@@ -641,6 +649,7 @@ func scanAccount(row pgx.Row) (AccountRecord, error) {
 		&account.Username,
 		&account.DisplayName,
 		&account.StudentNumber,
+		&account.PTANickname,
 		&account.Role,
 		&account.AuthRevision,
 		&account.PasswordPHC,
@@ -658,6 +667,7 @@ func scanAccountStateWithDatabaseID(row pgx.Row) (AccountRecord, int64, error) {
 		&account.Username,
 		&account.DisplayName,
 		&account.StudentNumber,
+		&account.PTANickname,
 		&account.Role,
 		&account.AuthRevision,
 		&account.DisabledAt,
@@ -673,6 +683,7 @@ func scanPrincipal(row pgx.Row) (AccountRecord, SessionRecord, error) {
 		&account.Username,
 		&account.DisplayName,
 		&account.StudentNumber,
+		&account.PTANickname,
 		&account.Role,
 		&account.AuthRevision,
 		&account.DisabledAt,

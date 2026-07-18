@@ -16,6 +16,7 @@ import test from "node:test";
 import {
   advisoryLockArguments,
   composeAssetTree,
+  productionApplicationBuildPlan,
   publishGeneratedTree,
 } from "./build-v2-public-assets.mjs";
 
@@ -30,6 +31,64 @@ const sourceDefinitions = [
 function htmlDocument(content) {
   return `<!doctype html><html lang="en"><head>${content}</head><body></body></html>`;
 }
+
+test("production app assets are owned by the desktop Agent web build", () => {
+  const outputRoot = join(tmpdir(), "ascendany-agent-web-output");
+  const plan = productionApplicationBuildPlan(outputRoot);
+
+  assert.deepEqual(
+    plan.map(({ packageName, target }) => ({ packageName, target })),
+    [
+      { packageName: "@ascendany/site", target: "site" },
+      { packageName: "@ascendany/desktop", target: "app" },
+      { packageName: "@ascendany/import-console", target: "admin" },
+    ],
+  );
+  assert.equal(plan.some(({ packageName }) => packageName === "@ascendany/web"), false);
+
+  const desktop = plan.find(({ target }) => target === "app");
+  assert.equal(desktop.source, outputRoot);
+  assert.deepEqual(desktop.commands, [
+    [
+      "pnpm",
+      "--dir",
+      "apps/desktop",
+      "exec",
+      "tsc",
+      "--noEmit",
+      "-p",
+      "tsconfig.json",
+      "--preserveSymlinks",
+    ],
+    [
+      "pnpm",
+      "--dir",
+      "apps/desktop",
+      "exec",
+      "vite",
+      "build",
+      "--config",
+      "vite.web.config.ts",
+      "--base",
+      "/app/",
+      "--outDir",
+      outputRoot,
+      "--emptyOutDir",
+    ],
+  ]);
+});
+
+test("root app-web commands target the desktop Agent source", async () => {
+  const rootPackage = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  for (const name of ["dev:app-web", "build:app-web"]) {
+    assert.match(rootPackage.scripts[name], /apps\/desktop/u);
+    assert.match(rootPackage.scripts[name], /vite\.web\.config\.ts/u);
+    assert.match(rootPackage.scripts[name], /--base \/app\//u);
+    assert.doesNotMatch(rootPackage.scripts[name], /@ascendany\/web/u);
+  }
+});
 
 async function createFixture() {
   const root = await mkdtemp(join(tmpdir(), "ascendany-public-assets-test-"));
@@ -267,6 +326,41 @@ test("CSS comment cannot conceal a resource function", async () => {
     await assert.rejects(
       composeAssetTree(fixture.outputRoot, sourceDefinitions, fixture.sourceRoot),
       /comment outside the closed CSS grammar/u,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("canonical Tailwind selector escapes and license comment remain closed", async () => {
+  const fixture = await createFixture();
+  try {
+    await writeFile(
+      join(fixture.sourceRoot, "app", "assets", "font-12345678.ttf"),
+      "font\n",
+    );
+    await writeFile(
+      join(fixture.sourceRoot, "app", "assets", "main-12345678.css"),
+      "/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */"
+        + ".w-\\[40px\\]{width:40px}"
+        + "@font-face{font-family:test;src:url('/app/assets/font-12345678.ttf')}\n",
+    );
+    await composeAssetTree(fixture.outputRoot, sourceDefinitions, fixture.sourceRoot);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("encoded CSS resource token fails closed", async () => {
+  const fixture = await createFixture();
+  try {
+    await writeFile(
+      join(fixture.sourceRoot, "site", "assets", "main-12345678.css"),
+      String.raw`body { background: u\72l('https://example.test/image.png'); }` + "\n",
+    );
+    await assert.rejects(
+      composeAssetTree(fixture.outputRoot, sourceDefinitions, fixture.sourceRoot),
+      /encoded token outside the closed CSS grammar/u,
     );
   } finally {
     await fixture.cleanup();

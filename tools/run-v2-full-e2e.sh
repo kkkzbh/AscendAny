@@ -606,11 +606,14 @@ PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}"
 PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/pintia-exporter check >"${LOG_ROOT}/pintia-exporter-check.log"
 PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" public-assets:check >"${LOG_ROOT}/public-assets-check.log"
 PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/site build >"${LOG_ROOT}/site-build.log"
-PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/web check >"${LOG_ROOT}/web-check.log"
 PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/import-console check >"${LOG_ROOT}/import-console-check.log"
 PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/mobile check >"${LOG_ROOT}/mobile-check.log"
 PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/desktop test >"${LOG_ROOT}/desktop-test.log"
-PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/desktop build >"${LOG_ROOT}/desktop-build.log"
+{
+  PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}/apps/desktop" exec tsc \
+    --noEmit -p tsconfig.json --preserveSymlinks
+  PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}/apps/desktop" exec vite build
+} >"${LOG_ROOT}/desktop-build.log"
 PATH="${TOOL_PATH}" "${NODE_BINARY}" "${PNPM_BINARY}" --dir "${REPOSITORY_ROOT}" --filter @ascendany/sdk exec tsc \
   --noEmit --strict --target ES2022 --module ESNext --moduleResolution Bundler \
   --lib ES2022,DOM --types node --allowImportingTsExtensions \
@@ -1052,7 +1055,7 @@ assert_database_model_state() {
     --arg application_version "${VERSION}" \
     --arg application_commit "${REQUESTED_COMMIT}" \
     --arg application_build_time "${expected_build_time}" '
-      .schemaMigrationCount == 7 and .schemaMigrationMax == 7 and
+      .schemaMigrationCount == 10 and .schemaMigrationMax == 10 and
       ($receipt | length) == 1 and
       .modelReleaseCount == 1 and .modelHeadCount == 1 and
       .activationCount == 2 and .currentActivationCount == 1 and
@@ -1215,7 +1218,7 @@ chmod 0400 -- "${PGBOUNCER_USERLIST_FILE}"
   ASCENDANY_DATABASE_PASSWORD_FILE="${MIGRATOR_PASSWORD_FILE}" \
   ASCENDANY_DATABASE_ROLE="${SCHEMA_OWNER}" \
   ASCENDANY_DATABASE_SCHEMA=ascendany \
-  ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
+  ASCENDANY_DATABASE_SCHEMA_VERSION=10 \
   ASCENDANY_MIGRATION_HISTORY_TABLE=ascendany.schema_migrations_v2 \
   ASCENDANY_MIGRATION_LOCK_TIMEOUT=30s \
   ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
@@ -1448,7 +1451,7 @@ prepare_server_environment "${SERVER_ENV}" enabled
   ASCENDANY_DATABASE_URL="postgresql://${RUNTIME_LOGIN}@${POOL_HOST}:6432/${SOURCE_DATABASE}?sslmode=disable" \
   ASCENDANY_DATABASE_POOL_MODE=transaction \
   ASCENDANY_DATABASE_PASSWORD_FILE="${RUNTIME_PASSWORD_FILE}" \
-  ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
+  ASCENDANY_DATABASE_SCHEMA_VERSION=10 \
   ASCENDANY_DATABASE_MAX_CONNECTIONS=1 \
   ASCENDANY_DATABASE_MIN_CONNECTIONS=0 \
   ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
@@ -1641,7 +1644,7 @@ mkdir -m 0750 -- "${CATALOG_PUBLISHER_STATE_ROOT}/receipts"
     ASCENDANY_JWT_VERIFICATION_PUBLIC_KEY_FILE="${JWT_VERIFICATION_PUBLIC_KEY_FILE}" \
     ASCENDANY_AUTH_ISSUER=ascendany \
     ASCENDANY_AUTH_AUDIENCE=ascendany-v2 \
-    ASCENDANY_DATABASE_SCHEMA_VERSION=7 \
+    ASCENDANY_DATABASE_SCHEMA_VERSION=10 \
     ASCENDANY_DATABASE_CONNECT_TIMEOUT=5s \
     ASCENDANY_DATABASE_HEALTH_TIMEOUT=5s \
     ASCENDANY_RECOMMENDATION_MODEL_PATH="${INSTALLED_RELEASE}/models/recommendation-model.json" \
