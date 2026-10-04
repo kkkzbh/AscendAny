@@ -44,3 +44,9 @@
 - 仓库 policy scan 必须证明 production tree、release manifest、systemd units、scripts 与 runtime closure 没有 Python 或 trainer execution path。
 
 使用 `ssh km6` 连接生产服务器。唯一生产部署入口和 acceptance sequence 位于 `deploy/v2/README.md`；架构与最终验收边界位于 `doc/重写v2架构与验收.md`。
+
+## Local research data and workspace closure
+
+- Keep local datasets, Pintia exports, research outputs and inference artifacts under `~/data/ascendany/`; keep production source in this repository. Pass explicit external input/output paths to research tools instead of placing datasets in the checkout.
+- Existing local collections are organized as `practice/`, `data/`, `tmp/`, `output/` and `var/` under that data root. `tmp/` here is a preserved research-output collection, not disposable system temporary storage.
+- Workspace recovery material for the 2026-10-04 closure is stored privately in `~/data/ascendany/workspace-closure-20261004/`: verified Git bundle, worktree archives, local settings and a SHA-256 file manifest. Never commit these archives or credentials to GitHub.
